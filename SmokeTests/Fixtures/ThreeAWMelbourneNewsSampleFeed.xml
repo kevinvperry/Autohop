@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+  <title>3AW Melbourne News</title>
+  <description>Latest local news updates from Melbourne radio station 3AW.</description>
+  <itunes:author>3AW Melbourne</itunes:author>
+  <itunes:image href="https://www.omnycontent.com/image.jpg?t=1673225975&size=Large"/>
+  <item>
+    <guid isPermaLink="false">b40588af-6037-410c-987d-b45b0086d643</guid>
+    <pubDate>Sun, 31 May 2026 08:11:34 +0000</pubDate>
+    <media:content url="https://pdst.fm/e/traffic.omny.fm/audio.mp3?utm_source=Podcast&amp;amp;in_playlist=e2540967" type="audio/mpeg"/>
+    <media:content url="https://www.omnycontent.com/image.jpg?t=1673225975&size=Large" type="image/jpeg"/>
+    <enclosure url="https://pdst.fm/e/traffic.omny.fm/audio.mp3?utm_source=Podcast&amp;amp;in_playlist=e2540967" length="3614728" type="audio/mpeg" />
+    <enclosure url="https://www.omnycontent.com/image.jpg?t=1673225975&size=Large" length="0" type="image/jpeg" />
+    <title>3AW Melbourne News 6:00pm - Sunday, 31st May 2026</title>
+    <itunes:duration>00:03:43</itunes:duration>
+  </item>
+</channel>
+</rss>

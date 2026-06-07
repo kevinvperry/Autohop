@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:podcast="https://podcastindex.org/namespace/1.0"
+  xmlns:psc="https://podlove.org/simple-chapters">
+  <channel>
+    <title>774 ABC Melbourne Breakfast</title>
+    <itunes:author>774 ABC Radio Melbourne</itunes:author>
+    <itunes:image href="https://tvblackbox.com.au/wp-content/uploads/2025/01/Sharnelle-and-Bob.jpg"/>
+    <item>
+      <guid>abc-breakfast-2026-05-29</guid>
+      <title>Breakfast - Friday, 29th May 2026</title>
+      <description>Kick start your morning with irreverent musings and all the information you need for the day ahead.</description>
+      <itunes:subtitle>Breakfast with Sharnelle Vella and Bob Murphy</itunes:subtitle>
+      <itunes:author>774 ABC Radio Melbourne</itunes:author>
+      <pubDate>Fri, 29 May 2026 08:00:00 +1000</pubDate>
+      <itunes:duration>2:25:00</itunes:duration>
+      <enclosure url="https://example.com/audio/abc-breakfast-2026-05-29.aac" length="210763776" type="audio/aac"/>
+      <podcast:chapters url="https://example.com/chapters/abc-breakfast-2026-05-29.json" type="application/json+chapters"/>
+      <psc:chapters version="1.2">
+        <psc:chapter start="00:00:00.000" title="Welcome To Country"/>
+        <psc:chapter start="00:00:50.000" title="774 ABC Breakfast 5:35am-6:00am"/>
+        <psc:chapter start="00:24:45.000" title="6:00AM News and Early AM"/>
+        <psc:chapter start="00:41:10.000" title="774 ABC Breakfast 6:15am-6:30am"/>
+        <psc:chapter start="00:55:00.000" title="6:30AM News"/>
+      </psc:chapters>
+    </item>
+  </channel>
+</rss>
+

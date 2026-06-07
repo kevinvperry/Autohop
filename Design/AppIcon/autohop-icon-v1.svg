@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Autohop App Icon</title>
+  <desc>Autohop podcast player app icon - waveform split design for prioritized audio and video podcast playback.</desc>
+
+  <rect width="1024" height="1024" fill="#2D2680"/>
+  <rect width="1024" height="1024" fill="none" stroke="#ffffff" stroke-width="6" opacity="0.08"/>
+
+  <rect x="102" y="426" width="72" height="222" rx="36" fill="#A89EE8"/>
+  <rect x="204" y="290" width="72" height="494" rx="36" fill="#C4BDEF"/>
+  <rect x="306" y="366" width="72" height="340" rx="36" fill="#B0A8EC"/>
+  <rect x="408" y="468" width="72" height="154" rx="36" fill="#9890E2"/>
+
+  <path
+    d="M530 340 L600 512 L530 684"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="18"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.22"
+  />
+
+  <rect x="632" y="452" width="72" height="188" rx="36" fill="#1DB954"/>
+  <rect x="734" y="298" width="72" height="494" rx="36" fill="#25D062"/>
+  <rect x="836" y="384" width="72" height="306" rx="36" fill="#1DB954"/>
+  <rect x="938" y="486" width="56" height="120" rx="28" fill="#18A84A" opacity="0.7"/>
+
+  <line x1="80" y1="800" x2="944" y2="800" stroke="#1a1260" stroke-width="4" opacity="0.6"/>
+</svg>
