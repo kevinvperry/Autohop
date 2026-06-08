@@ -238,7 +238,7 @@ final class AppState: ObservableObject {
 
     private func startNetworkMonitor() {
         networkMonitor.pathUpdateHandler = { [weak self] path in
-            self?.latestNetworkPath = path
+            Task { @MainActor [weak self] in self?.latestNetworkPath = path }
         }
         networkMonitor.start(queue: DispatchQueue(label: "au.com.autohop.networkmonitor", qos: .utility))
     }
