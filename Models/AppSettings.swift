@@ -2,6 +2,7 @@ import Foundation
 
 struct AppSettings: Equatable, Codable {
     var podcastPollMinutes: Int
+    var downloadOverWifi: Bool
     var downloadOverCellular: Bool
     var notifyNewEpisodes: Bool
     var skipBackSeconds: TimeInterval
@@ -18,6 +19,7 @@ struct AppSettings: Equatable, Codable {
 
     static let `default` = AppSettings(
         podcastPollMinutes: 5,
+        downloadOverWifi: true,
         downloadOverCellular: false,
         notifyNewEpisodes: true,
         skipBackSeconds: 15,
@@ -35,6 +37,7 @@ struct AppSettings: Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case podcastPollMinutes
+        case downloadOverWifi
         case downloadOverCellular
         case notifyNewEpisodes
         case skipBackSeconds
@@ -52,6 +55,7 @@ struct AppSettings: Equatable, Codable {
 
     init(
         podcastPollMinutes: Int,
+        downloadOverWifi: Bool,
         downloadOverCellular: Bool,
         notifyNewEpisodes: Bool,
         skipBackSeconds: TimeInterval,
@@ -67,6 +71,7 @@ struct AppSettings: Equatable, Codable {
         autoArchiveSettingsMigrated: Bool
     ) {
         self.podcastPollMinutes = podcastPollMinutes
+        self.downloadOverWifi = downloadOverWifi
         self.downloadOverCellular = downloadOverCellular
         self.notifyNewEpisodes = notifyNewEpisodes
         self.skipBackSeconds = skipBackSeconds
@@ -85,6 +90,7 @@ struct AppSettings: Equatable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         podcastPollMinutes = try container.decodeIfPresent(Int.self, forKey: .podcastPollMinutes) ?? Self.default.podcastPollMinutes
+        downloadOverWifi = try container.decodeIfPresent(Bool.self, forKey: .downloadOverWifi) ?? Self.default.downloadOverWifi
         downloadOverCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular) ?? Self.default.downloadOverCellular
         notifyNewEpisodes = try container.decodeIfPresent(Bool.self, forKey: .notifyNewEpisodes) ?? Self.default.notifyNewEpisodes
         skipBackSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .skipBackSeconds) ?? Self.default.skipBackSeconds

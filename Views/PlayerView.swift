@@ -126,15 +126,12 @@ struct PlayerView: View {
         .sheet(isPresented: $showSleepTimer) {
             SleepTimerSheetView(sleepTimer: appState.sleepTimerService)
         }
-        .confirmationDialog("Archive Episode?", isPresented: $showArchiveConfirmation, titleVisibility: .visible) {
-            Button("Archive", role: .destructive) {
+        .sheet(isPresented: $showArchiveConfirmation) {
+            ArchiveConfirmationSheet {
                 if let episode {
                     Task { await appState.archiveEpisodeAndPlayNext(episode) }
                 }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will remove the episode from Up Next and delete its downloaded file.")
         }
     }
 
@@ -512,18 +509,12 @@ struct PlayerView: View {
 
     private var audioRowView: some View {
         HStack(spacing: 10) {
-            // Leading cluster: Audio Controls + Sleep Timer
+            // Leading cluster: Sound Settings + Sleep Timer
             HStack(spacing: 8) {
                 Button {
                     showAudioControlMenu = true
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(Color.purple.opacity(0.85))
-                        .frame(width: 44, height: 32)
-                        .background(Color.purple.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 9))
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                    playerActionIcon("slider.horizontal.3")
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
@@ -540,24 +531,38 @@ struct PlayerView: View {
             audioSourceButton
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Button {
-                showArchiveConfirmation = true
-            } label: {
-                Text("Archive")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.purple.opacity(0.9))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .background(Color.purple.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+            // Trailing cluster: Share + Archive
+            HStack(spacing: 8) {
+                Button {
+                    // Share — not yet implemented
+                } label: {
+                    playerActionIcon("square.and.arrow.up")
+                }
+                .buttonStyle(.plain)
+                .disabled(episode == nil)
+
+                Button {
+                    showArchiveConfirmation = true
+                } label: {
+                    playerActionIcon("archivebox")
+                }
+                .buttonStyle(.plain)
+                .disabled(episode == nil)
             }
-            .buttonStyle(.plain)
-            .disabled(episode == nil)
             .frame(width: 96, alignment: .trailing)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
+    }
+
+    private func playerActionIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(Color.purple.opacity(0.85))
+            .frame(width: 44, height: 32)
+            .background(Color.purple.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
     }
 
     @ViewBuilder
@@ -565,14 +570,12 @@ struct PlayerView: View {
         let timer = appState.sleepTimerService
         ZStack(alignment: .topTrailing) {
             Image(systemName: timer.isActive ? "moon.zzz.fill" : "moon.zzz")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(timer.isActive ? Color.purple : Color.purple.opacity(0.50))
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(timer.isActive ? Color.white : Color.purple.opacity(0.85))
                 .frame(width: 44, height: 32)
-                .background(timer.isActive ? Color.purple.opacity(0.18) : Color.purple.opacity(0.07))
+                .background(Color.purple.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9)
-                    .stroke(timer.isActive ? Color.purple.opacity(0.45) : Color.purple.opacity(0.18),
-                            lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
 
             // Badge: countdown or episode count
             if timer.isDurationMode, let badge = sleepTimerBadge {
@@ -859,23 +862,28 @@ struct PlayerView: View {
         let isCurrentlyPlaying = appState.currentChapter?.position == chapter.position && appState.currentPlayerEpisode != nil
 
         return Button {
-            guard let sub = subscription, !isCurrentlyPlaying else { return }
-            appState.subscriptionStore.toggleChapter(subscriptionID: sub.id, position: chapter.position)
+            appState.seek(to: chapter.startSeconds)
         } label: {
             HStack(spacing: 11) {
-                ZStack {
-                    Circle()
-                        .fill(isSkipped ? .clear : Color.purple)
-                        .frame(width: 24, height: 24)
-                    if !isSkipped {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
+                Button {
+                    guard let sub = subscription else { return }
+                    appState.subscriptionStore.toggleChapter(subscriptionID: sub.id, position: chapter.position)
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(isSkipped ? .clear : Color.purple)
+                            .frame(width: 24, height: 24)
+                        if !isSkipped {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                        Circle()
+                            .stroke(isSkipped ? Color(white: 0.33) : Color.purple, lineWidth: 1.5)
+                            .frame(width: 24, height: 24)
                     }
-                    Circle()
-                        .stroke(isSkipped ? Color(white: 0.33) : Color.purple, lineWidth: 1.5)
-                        .frame(width: 24, height: 24)
                 }
+                .buttonStyle(.plain)
 
                 Text("\(chapter.position)")
                     .font(.system(size: 12, weight: .bold))
@@ -1432,6 +1440,78 @@ private struct SkipIntervalIcon: View {
 
     private var textSize: CGFloat {
         Int(seconds) >= 100 ? 12 : 15
+    }
+}
+
+// MARK: - Archive Confirmation Sheet
+
+private struct ArchiveConfirmationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let onConfirm: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color(white: 0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
+
+            Image(systemName: "archivebox")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Color.purple.opacity(0.85))
+                .padding(.bottom, 12)
+
+            Text("Archive Episode?")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.bottom, 6)
+
+            Text("This will archive the currently playing episode and delete its downloaded file.")
+                .font(.system(size: 14))
+                .foregroundStyle(Color(white: 0.55))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 28)
+
+            Button {
+                dismiss()
+                onConfirm()
+            } label: {
+                Text("Archive")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.purple.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.55))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(white: 0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+
+            Spacer(minLength: 16)
+        }
+        .background(Color(red: 0.10, green: 0.10, blue: 0.13).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(320)])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(20)
     }
 }
 

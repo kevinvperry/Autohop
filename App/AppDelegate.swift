@@ -21,6 +21,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         VideoOrientationController.supportedOrientations
     }
 
+    // MARK: - File open handling
+
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        guard (ext == "opml" || ext == "xml"), let appState else { return false }
+        Task { await appState.importOPML(from: url) }
+        return true
+    }
+
     // MARK: - Background URLSession
 
     func application(

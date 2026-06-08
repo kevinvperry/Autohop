@@ -7,7 +7,7 @@ public protocol DownloadManaging: AnyObject {
     var onBackgroundDownloadCompleted: ((UUID, UUID, URL) -> Void)? { get set }
     /// `(episodeID, fractionCompleted, bytesWritten, bytesExpected)` — called on the main queue while downloading.
     var onProgressUpdate: ((UUID, Double, Int64, Int64) -> Void)? { get set }
-    func download(_ episode: Episode) async throws -> URL
+    func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL
     func pauseDownload(episodeID: UUID)
     func cancelDownload(episodeID: UUID)
     /// Discards any stored resume data for the episode so the next download call starts fresh.
@@ -95,7 +95,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     // MARK: - DownloadManaging
 
-    public func download(_ episode: Episode) async throws -> URL {
+    public func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -105,7 +105,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
                 guard let suspectedTaskID else {
                     // No in-memory map entry — safe to start immediately.
-                    self.startDownloadTask(episode: episode, continuation: continuation)
+                    self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                     return
                 }
 
@@ -129,7 +129,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                                 "staleTaskID": "\(suspectedTaskID)"
                             ])
                             self.clearZombieMapEntries(taskID: suspectedTaskID, episodeID: episode.id, audioURL: episode.audioURL)
-                            self.startDownloadTask(episode: episode, continuation: continuation)
+                            self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                         }
                     }
                 }
@@ -137,7 +137,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         }
     }
 
-    private func startDownloadTask(episode: Episode, continuation: CheckedContinuation<URL, Error>) {
+    private func startDownloadTask(episode: Episode, allowsCellular: Bool, continuation: CheckedContinuation<URL, Error>) {
         let task: URLSessionDownloadTask
         if let resumeData = resumeDataByEpisodeID.removeValue(forKey: episode.id) {
             task = session.downloadTask(withResumeData: resumeData)
@@ -146,7 +146,9 @@ public final class DownloadManager: NSObject, DownloadManaging {
                 "episodeID": episode.id.uuidString
             ])
         } else {
-            task = session.downloadTask(with: episode.audioURL)
+            var request = URLRequest(url: episode.audioURL)
+            request.allowsCellularAccess = allowsCellular
+            task = session.downloadTask(with: request)
         }
         task.taskDescription = encodeTaskMeta(
             episodeID: episode.id,

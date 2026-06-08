@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import Network
 import UIKit
 
 @MainActor
@@ -39,6 +40,7 @@ final class AppState: ObservableObject {
     // User-facing messages
     @Published var downloadMessage: String?
     @Published var playbackMessage: String?
+    @Published private(set) var opmlImportProgress: (current: Int, total: Int)?
 
     // Download concurrency cap — at most 3 active downloads; extras wait in pendingDownloadQueue.
     private let maxConcurrentDownloads = 3
@@ -54,6 +56,10 @@ final class AppState: ObservableObject {
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
     private let autoArchiveInterval: TimeInterval = 2 * 60 * 60
+
+    // Network path monitor — tracks current interface type for download enforcement.
+    private let networkMonitor = NWPathMonitor()
+    private var latestNetworkPath: NWPath?
 
     // Persisted position file
     private static let positionFileURL: URL? = {
@@ -227,6 +233,22 @@ final class AppState: ObservableObject {
         }
 
         refreshUpNextEpisode()
+        startNetworkMonitor()
+    }
+
+    private func startNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            self?.latestNetworkPath = path
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "au.com.autohop.networkmonitor", qos: .utility))
+    }
+
+    private func isDownloadAllowed() -> Bool {
+        let settings = settingsStore.appSettings
+        guard let path = latestNetworkPath, path.status == .satisfied else { return true }
+        if path.usesInterfaceType(.wifi) && !settings.downloadOverWifi { return false }
+        if path.usesInterfaceType(.cellular) && !settings.downloadOverCellular { return false }
+        return true
     }
 
     static func bootstrap() -> AppState {
@@ -861,6 +883,15 @@ final class AppState: ObservableObject {
             "episode": episode.title,
             "podcast": podcastTitle
         ]))
+        guard isDownloadAllowed() else {
+            logger.info("download.blocked", "Download blocked by network settings", metadata: [
+                "episode": episode.title,
+                "podcast": podcastTitle
+            ])
+            downloadMessage = "Downloads are disabled on the current network."
+            return
+        }
+
         if let activeActivity = downloadActivityStore.activeActivities.first(where: {
             $0.episodeID == episode.id || $0.mediaURL == episode.audioURL
         }), activeActivity.status == .downloading {
@@ -937,7 +968,7 @@ final class AppState: ObservableObject {
         subscriptionStore.markEpisodeDownloading(subscriptionID: subscriptionID, episodeID: episode.id)
 
         do {
-            let localFileURL = try await downloadManager.download(episode)
+            let localFileURL = try await downloadManager.download(episode, allowsCellular: settingsStore.appSettings.downloadOverCellular)
             let fileDuration = await localAudioDuration(from: localFileURL)
             subscriptionStore.markEpisodeDownloaded(
                 subscriptionID: subscriptionID,
@@ -1815,7 +1846,9 @@ final class AppState: ObservableObject {
         }
 
         var imported = 0; var failed = 0
-        for url in newURLs {
+        let total = newURLs.count
+        for (index, url) in newURLs.enumerated() {
+            opmlImportProgress = (current: index + 1, total: total)
             let subscriptionID = UUID()
             do {
                 let result = try await feedService.refresh(
@@ -1848,6 +1881,7 @@ final class AppState: ObservableObject {
             }
         }
 
+        opmlImportProgress = nil
         downloadMessage = imported > 0
             ? "Imported \(imported) podcast\(imported == 1 ? "" : "s")."
             : "No podcasts could be imported (\(failed) failed)."

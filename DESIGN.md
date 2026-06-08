@@ -61,7 +61,9 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `EpisodeCopy-Player` | Centred episode title (16pt bold) + tappable subscription name (12pt gray) |
 | `Scrubber-Player` | Purple `Slider` + elapsed (left) / remaining (right) time labels |
 | `Controls-Player` | Skip-back icon · 76pt purple circle play/pause button · skip-forward icon |
-| `AudioRow-Player` | Three-zone row: audio controls button · AirPlay route picker · Archive button |
+| `AudioRow-Player` | Five-button row: Sound Settings · Sleep Timer · AirPlay route picker (centre) · Share · Archive |
+| `Button-PlayerAction` | Bordered icon button used in `AudioRow-Player`: purple icon, `purple.opacity(0.12)` background, `cornerRadius 9`, `purple.opacity(0.3)` border |
+| `ArchiveConfirmationSheet` | Bottom sheet confirming archive of the currently playing episode — matches dark card style of Sleep Timer and Audio Controls sheets |
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
@@ -1577,19 +1579,64 @@ HStack(alignment: .center) {
 
 **Label: `AudioRow-Player`**
 
-A three-zone `HStack` below the controls, providing access to audio settings, output routing, and episode archiving.
+A five-button `HStack` below the controls, providing access to audio settings, output routing, sharing, and episode archiving.
 
 | Zone | Width | Content |
 |---|---|---|
-| Leading | 96 pt (leading-aligned) | Audio controls button |
+| Leading | 96 pt (leading-aligned) | Sound Settings button + Sleep Timer button |
 | Centre | expands | AirPlay / audio route picker |
-| Trailing | 96 pt (trailing-aligned) | Archive button |
+| Trailing | 96 pt (trailing-aligned) | Share button + Archive button |
 
-**Audio controls button** (`slider.horizontal.3`) — `size 18, weight .bold`, `Color.purple.opacity(0.85)` foreground, `44×32` frame, `Color.purple.opacity(0.12)` background, `cornerRadius 9`, `Color.purple.opacity(0.3)` stroke. Opens `AudioControlsSheetView`.
+**Sound Settings button** (`slider.horizontal.3`) — `Button-PlayerAction` style. Opens `AudioControlsSheetView`.
+
+**Sleep Timer button** (`moon.zzz` / `moon.zzz.fill`) — `Button-PlayerAction` style. When the sleep timer is **inactive**, icon is `Color.purple.opacity(0.85)` (matches all other player action buttons). When **active**, icon turns `.white` — same purple background and border unchanged. A small badge capsule (purple background, white text) overlays the top-trailing corner showing either a countdown (`"m:ss"` / `"Xh"`) for duration mode or `"Nep"` for episode mode. Opens `SleepTimerSheetView`.
 
 **AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the current audio output name from `AVAudioSession.currentRoute.outputs.first`.
 
-**Archive button** — small text pill: `"Archive"`, `size 10, weight .bold`, `Color.purple.opacity(0.9)`, `purple.opacity(0.12)` background, `cornerRadius 7`. Triggers a `.confirmationDialog` before calling `archiveEpisodeAndPlayNext`.
+**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. **Not yet implemented** — button is present and tappable but performs no action. Disabled when no episode is loaded. Future implementation should present a `ShareLink` or `UIActivityViewController` with the episode URL/title.
+
+**Archive button** (`archivebox`) — `Button-PlayerAction` style. Opens `ArchiveConfirmationSheet` (a bottom sheet). On confirm, calls `archiveEpisodeAndPlayNext` to archive the currently playing episode and advance to the next. Icon matches `SwipeActions-EpisodeRow` (`archivebox`).
+
+---
+
+## Main Player — Archive Confirmation Sheet
+
+**Label: `ArchiveConfirmationSheet`**
+
+A bottom sheet presented when the Archive button is tapped in `AudioRow-Player`. Matches the dark card style of `SleepTimerSheetView` and `AudioControlsSheetView`.
+
+- **Background** — `Color(red: 0.10, green: 0.10, blue: 0.13)`, `presentationCornerRadius(20)`, drag indicator hidden
+- **Height** — fixed `320 pt` (`presentationDetents([.height(320)])`)
+- **Icon** — `archivebox` at `size 28, weight .semibold`, `Color.purple.opacity(0.85)`
+- **Title** — `"Archive Episode?"`, `size 17, weight .bold`, white
+- **Message** — `"This will archive the currently playing episode and delete its downloaded file."`, `size 14, Color(white: 0.55)`, centre-aligned
+- **Archive button** — full-width, `Color.purple.opacity(0.85)` background, `cornerRadius 14`, white bold label. Dismisses sheet then calls `onConfirm`.
+- **Cancel button** — full-width, `Color(white: 0.12)` background, `cornerRadius 14`, `Color(white: 0.55)` semibold label. Dismisses sheet only.
+
+---
+
+## Player Action Button
+
+**Label: `Button-PlayerAction`**
+
+The shared button style used for all four flanking buttons in `AudioRow-Player`. Extracted as a `playerActionIcon(_:)` helper function.
+
+- **Icon** — SF Symbol at `size 18, weight .bold`, `Color.purple.opacity(0.85)` foreground (white when Sleep Timer is active)
+- **Frame** — `44×32 pt`
+- **Background** — `Color.purple.opacity(0.12)`, `cornerRadius 9`
+- **Border** — `Color.purple.opacity(0.3)`, `lineWidth 0.5`
+
+```swift
+private func playerActionIcon(_ systemName: String) -> some View {
+    Image(systemName: systemName)
+        .font(.system(size: 18, weight: .bold))
+        .foregroundStyle(Color.purple.opacity(0.85))
+        .frame(width: 44, height: 32)
+        .background(Color.purple.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+}
+```
 
 ---
 

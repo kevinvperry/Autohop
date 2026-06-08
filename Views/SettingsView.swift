@@ -12,6 +12,11 @@ struct SettingsView: View {
     @State private var editingSkipControl: SkipControl?
     @State private var draftSkipSeconds: TimeInterval = 15
 
+    // Developer tools gate — unlocked by tapping the version number 5 times.
+    // Resets on next app launch. Not persisted.
+    @State private var developerTapCount = 0
+    @State private var developerModeUnlocked = false
+
     var body: some View {
         Form {
             pollingSection
@@ -20,7 +25,9 @@ struct SettingsView: View {
             controlsSection
             subscriptionsSection
             storageSection
-            diagnosticsSection
+            if developerModeUnlocked {
+                diagnosticsSection
+            }
             acknowledgementsSection
         }
         .listSectionSpacing(28)
@@ -33,7 +40,7 @@ struct SettingsView: View {
         }
         .fileImporter(
             isPresented: $showOPMLImporter,
-            allowedContentTypes: [.xml, .plainText],
+            allowedContentTypes: [.xml, .plainText, UTType(filenameExtension: "opml") ?? .xml],
             allowsMultipleSelection: false
         ) { result in
             guard let url = (try? result.get())?.first else { return }
@@ -115,9 +122,8 @@ struct SettingsView: View {
     private var downloadingSection: some View {
         Section("Downloading") {
             NavigationLink("Downloads") { DownloadsView() }
+            Toggle("Download over WiFi", isOn: wifiBinding)
             Toggle("Download over cellular", isOn: cellularBinding)
-            LabeledContent("Episodes per show", value: "Latest only")
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -172,7 +178,11 @@ struct SettingsView: View {
             } label: {
                 if isImporting {
                     HStack {
-                        Text("Importing…")
+                        if let progress = appState.opmlImportProgress {
+                            Text("Importing \(progress.current) of \(progress.total)…")
+                        } else {
+                            Text("Importing…")
+                        }
                         Spacer()
                         ProgressView()
                     }
@@ -200,9 +210,36 @@ struct SettingsView: View {
             NavigationLink("Open Source Acknowledgements") {
                 AcknowledgementsView()
             }
+            // Version row — tap 5 times to unlock developer tools for this session.
+            HStack {
+                Text("Version")
+                Spacer()
+                Text(appVersion)
+                    .foregroundStyle(developerModeUnlocked ? .purple : .secondary)
+                    .monospacedDigit()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                developerTapCount += 1
+                if developerTapCount >= 5 {
+                    developerModeUnlocked = true
+                    developerTapCount = 0
+                }
+            }
         } header: {
             Text("About")
+        } footer: {
+            if developerModeUnlocked {
+                Text("Developer tools unlocked.")
+                    .foregroundStyle(.purple)
+            }
         }
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
     }
 
     @ViewBuilder
@@ -236,6 +273,13 @@ struct SettingsView: View {
         Binding(
             get: { appState.settingsStore.appSettings.downloadOverCellular },
             set: { appState.settingsStore.appSettings.downloadOverCellular = $0 }
+        )
+    }
+
+    private var wifiBinding: Binding<Bool> {
+        Binding(
+            get: { appState.settingsStore.appSettings.downloadOverWifi },
+            set: { appState.settingsStore.appSettings.downloadOverWifi = $0 }
         )
     }
 
