@@ -1,16 +1,66 @@
 # Autohop
 
-Autohop is an iOS podcast player focused on automatically maintaining a prioritized listening queue from RSS subscriptions. It supports audio and video podcast enclosures, manual and automatic feed refresh, downloaded playback, queue management, per-show playback settings, chapter filtering, vocal boost, listening history, diagnostics, and download monitoring.
+**The podcast player for people who are serious about listening.**
 
-## Current Product Direction
+Autohop is a native iOS podcast player built around a single idea: your time is the finite resource, not your content. Most podcast apps treat your queue like a to-do list you manage manually. Autohop manages it for you — automatically, intelligently, and indefinitely — so you can focus on everything else.
 
-- Podcast-first RSS playback with support for audio and video episodes.
-- A priority list controls the order in which subscriptions feed the queue.
-- The player resumes incomplete episodes, tracks listening history, and advances to the next queued episode.
-- Feed refresh can run manually, on an active foreground timer, and opportunistically through iOS background refresh.
-- Downloads are tracked on a dedicated page with progress, pause/resume, failed downloads, and recent successful downloads.
-- Diagnostic logging records feed refresh, downloads, queue updates, playback, and resource metrics to help investigate bugs.
-- Per-subscription settings include title override, priority rank, playback speed, vocal boost, start/end skip, notifications, auto archive, chapter filtering, and auto-refresh exclusion.
+## Product Vision
+
+Autohop is a **priority-playlist focused podcast player** aimed at serious, high-volume podcast listeners who want a premium, low-friction experience. The goal is an "endless" listening experience that requires minimal engagement from the user once set up, allowing them to stay present in whatever they're actually doing — driving, exercising, working — while the app keeps their listening moving forward without interruption.
+
+Autohop is not trying to help users discover podcasts. It is built for people who already know what they love, subscribe to more shows than they can easily keep up with, and want a player that respects both their taste and their time. No discovery algorithm. No editorial charts. No social features. Just their shows, in their order, played exactly the way they want them.
+
+## Core Design Goals
+
+**1. Set your priorities once. Listen indefinitely.**
+The Priority Stack is a ranked list of subscriptions the user orders once. Autohop works down that list, surfaces only downloaded episodes, and flows from one to the next without any user input. Finish an episode mid-commute and the next one starts automatically — no decisions required.
+
+**2. Audio that is actually comfortable to listen to.**
+Per-podcast Trim Silence (four levels), per-podcast Vocal Boost (four intensities), per-podcast playback speed, and per-podcast start/end skip let users dial in the right listening experience for every show independently. A dense interview podcast can be compressed and crisp; a narrative show can stay natural and relaxed.
+
+**3. Surgical queue control when you want it.**
+The priority system handles everything automatically, but when a user wants to override it — Play Next or Play Last — two swipe gestures put them back in control instantly. The queue always shows exactly where things stand via color-coded status pills and pin badges.
+
+**4. Downloads first, always.**
+Autohop is a download-first player. The queue only ever plays files already on the device: no buffering mid-episode, no stalling on a poor signal. Background downloads keep the queue stocked quietly. Auto-archive policies clean up finished episodes per-podcast on a configurable schedule.
+
+**5. Built for the serious listener, not the median user.**
+Autohop's positioning is deliberately premium and niche. The target user subscribes to 10–30+ podcasts, listens several hours a day, and is frustrated that every mainstream app makes them manage their queue manually. This is the gap Autohop fills.
+
+## Key Differentiators vs. Competing Apps
+
+| Differentiator | Autohop | Apple Podcasts | Pocket Casts | Overcast |
+|---|:---:|:---:|:---:|:---:|
+| Priority-ranked queue (automatic, subscription-level) | ✅ | ❌ | ❌ | ❌ |
+| Per-podcast Trim Silence levels (4) | ✅ | ❌ | on/off only | on/off only |
+| Per-podcast Vocal Boost levels (4) | ✅ | ❌ | on/off only | on/off only |
+| Chapter filtering / skip disabled chapters | ✅ | ❌ | ❌ | ❌ |
+| Play Last queue demotion | ✅ | ❌ | ✅ | ❌ |
+| Per-podcast exclude from auto-refresh | ✅ | ❌ | ❌ | ❌ |
+| Per-podcast auto-archive policy | ✅ | ❌ | ✅ | ❌ |
+| Download-first playback model | ✅ | ❌ | optional | optional |
+| Pin badge visual system (Next/Last) | ✅ | ❌ | ❌ | ❌ |
+| Audio + video podcast support | ✅ | ✅ | ✅ | ❌ |
+
+## Current Feature Set
+
+- Priority Stack: drag-ranked subscriptions feed the queue automatically in order
+- Endless auto-advancing queue with Play Next / Play Last manual overrides
+- Download-first playback; background downloads via URLSession
+- Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
+- Vocal Boost (Off / Light / Standard / Strong, per-podcast) via AVAudioUnitEQ
+- Per-podcast playback speed (1.0–2.5x), start skip, and end skip
+- Chapter support with active-chapter filtering and disabled-chapter skipping
+- Audio and video podcast support with landscape unlock for full-screen video
+- Background feed refresh (BGAppRefreshTask, cursor-based round-robin)
+- Configurable foreground poll interval and per-podcast exclude-from-refresh
+- Auto-archive policies per subscription (off / 24h / 7d / 30d)
+- Episode status tracking: Queued / Midway / Playing / Played / Archived / Inactive
+- Listening history store
+- New episode push notifications (per-podcast)
+- Keep screen awake during playback option
+- Lock screen / Now Playing controls (MPRemoteCommandCenter)
+- Diagnostic logging for feeds, downloads, queue, playback, and resource metrics
 
 ## Build Notes
 
@@ -20,4 +70,4 @@ Autohop is an iOS podcast player focused on automatically maintaining a prioriti
 
 ## Scope
 
-Spotify integration is no longer part of the Autohop project. The app should remain focused on podcast queue automation, downloaded media playback, video podcast support, and clear diagnostic tooling.
+Spotify integration is not part of the Autohop project. The app remains focused on podcast queue automation, downloaded media playback, video podcast support, and clear diagnostic tooling. Discovery features (charts, search, recommendations) are explicitly out of scope — the target user already knows what they want to listen to.
