@@ -58,6 +58,7 @@ struct SleepTimerSheetView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()),
                                 GridItem(.flexible())], spacing: 10) {
                 presetButton(label: "5 min",  seconds: 5 * 60)
+                presetButton(label: "10 min", seconds: 10 * 60)
                 presetButton(label: "15 min", seconds: 15 * 60)
                 presetButton(label: "30 min", seconds: 30 * 60)
                 presetButton(label: "45 min", seconds: 45 * 60)

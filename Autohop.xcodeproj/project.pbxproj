@@ -24,6 +24,7 @@
 		A1B2C3D4E5F60002A2B3C4D5 /* SilenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */; };
 		3006EDF53ACB47E39BAA6D18 /* SleepTimerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */; };
 		42D33698B3304FD7874821A8 /* SleepTimerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE430978939F404495E493F5 /* SleepTimerSheetView.swift */; };
+		DC5FF75DBD4D4CFAB3F80616 /* AcknowledgementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84BE4FC18F24D38BC3CC73E /* AcknowledgementsView.swift */; };
 		33B562963DD6313B592802F5 /* OPMLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 016F1F5D536EEC59138B6CDE /* OPMLService.swift */; };
 		34D89E97DD5170651921E1E9 /* FeedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44B088E668A73445F8D13B4 /* FeedService.swift */; };
 		44BEB63E377B429766ABA020 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDA523B5BEADDB7ED7CC077 /* SettingsStore.swift */; };
@@ -84,6 +85,7 @@
 		A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilenceDetector.swift; sourceTree = "<group>"; };
 		40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerService.swift; sourceTree = "<group>"; };
 		CE430978939F404495E493F5 /* SleepTimerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerSheetView.swift; sourceTree = "<group>"; };
+		C84BE4FC18F24D38BC3CC73E /* AcknowledgementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsView.swift; sourceTree = "<group>"; };
 		1EE50021DF85C88351E2E401 /* RSSParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSParserTests.swift; sourceTree = "<group>"; };
 		1F2EF890D48B249CD312B14C /* Chapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chapter.swift; sourceTree = "<group>"; };
 		21BC32637767178331176C36 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -128,6 +130,7 @@
 		FAF6869CDF5E12D17427C2D2 /* ParsedFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParsedFeed.swift; sourceTree = "<group>"; };
 		"TEMP_98A4DF88-E24B-4F85-B4F9-943A249948BD" /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		"TEMP_E2ACB274-ED60-473B-8EA4-EF5913EDA14E" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AH00000000000000000000001 /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +164,7 @@
 		2DEDE9350DEB11C0D41ACB50 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				C84BE4FC18F24D38BC3CC73E /* AcknowledgementsView.swift */,
 				AB5C2524C530DA21A6495034 /* AddFeedView.swift */,
 				9ED876B306752D5EC2F481E6 /* AudioRoutePickerView.swift */,
 				DB2ED604AA0A6EB3A81D6405 /* MenuSheetView.swift */,
@@ -286,6 +290,7 @@
 			children = (
 				"TEMP_E2ACB274-ED60-473B-8EA4-EF5913EDA14E" /* Assets.xcassets */,
 				"TEMP_98A4DF88-E24B-4F85-B4F9-943A249948BD" /* PrivacyInfo.xcprivacy */,
+				AH00000000000000000000001 /* Autohop.entitlements */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -476,6 +481,7 @@
 				A1B2C3D4E5F60002A2B3C4D5 /* SilenceDetector.swift in Sources */,
 				3006EDF53ACB47E39BAA6D18 /* SleepTimerService.swift in Sources */,
 				42D33698B3304FD7874821A8 /* SleepTimerSheetView.swift in Sources */,
+				DC5FF75DBD4D4CFAB3F80616 /* AcknowledgementsView.swift in Sources */,
 				83A915229022E951DD94E0EB /* PlaybackPreference.swift in Sources */,
 				59BDFF3933ED86A7C14C9069 /* PlayerView.swift in Sources */,
 				C57E1D3F2D15855909D0F3A2 /* PodcastsView.swift in Sources */,
@@ -517,6 +523,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -563,6 +570,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

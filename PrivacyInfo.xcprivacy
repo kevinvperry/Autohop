@@ -13,24 +13,33 @@
     <key>NSPrivacyCollectedDataTypes</key>
     <array/>
 
-    <!--
-        Required reason API declarations.
-        Add entries here before App Store submission if additional
-        system APIs with required reasons are used.
-    -->
     <key>NSPrivacyAccessedAPITypes</key>
     <array>
         <!--
             File timestamp APIs: used by FileManager when moving downloaded
             audio files into app-managed storage.
+            DDA9.1: Access file timestamps of files the app created.
         -->
         <dict>
             <key>NSPrivacyAccessedAPIType</key>
             <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
             <key>NSPrivacyAccessedAPITypeReasons</key>
             <array>
-                <!-- DDA9.1: Access file timestamps of files the app created -->
                 <string>DDA9.1</string>
+            </array>
+        </dict>
+        <!--
+            UserDefaults: used exclusively to persist the background feed-refresh
+            cursor (a single UUID identifying the last-refreshed subscription).
+            This is the only UserDefaults key written by Autohop.
+            1C8F.1: Read/write information used only to provide primary functionality.
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>1C8F.1</string>
             </array>
         </dict>
     </array>

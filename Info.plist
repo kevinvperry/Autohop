@@ -28,6 +28,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!--
+		Autohop fetches RSS feeds and media files from user-configured third-party
+		podcast hosting providers (Libsyn, Megaphone, Buzzsprout, Anchor, Simplecast,
+		and thousands of independent feeds). These providers serve content over
+		arbitrary domains, many of which use HTTP only. The app cannot enumerate or
+		predict these domains at build time. Autohop operates no proprietary backend;
+		all data remains on-device. NSAllowsArbitraryLoads is required for the same
+		reason it is required by all third-party podcast clients.
+		See App Review Notes for full justification.
+	-->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
