@@ -27,20 +27,6 @@ Autohop is a download-first player. The queue only ever plays files already on t
 **5. Built for the serious listener, not the median user.**
 Autohop's positioning is deliberately premium and niche. The target user subscribes to 10–30+ podcasts, listens several hours a day, and is frustrated that every mainstream app makes them manage their queue manually. This is the gap Autohop fills.
 
-## Key Differentiators vs. Competing Apps
-
-| Differentiator | Autohop | Apple Podcasts | Pocket Casts | Overcast |
-|---|:---:|:---:|:---:|:---:|
-| Priority-ranked queue (automatic, subscription-level) | ✅ | ❌ | ❌ | ❌ |
-| Per-podcast Trim Silence levels (4) | ✅ | ❌ | on/off only | on/off only |
-| Per-podcast Vocal Boost levels (4) | ✅ | ❌ | on/off only | on/off only |
-| Chapter filtering / skip disabled chapters | ✅ | ❌ | ❌ | ❌ |
-| Play Last queue demotion | ✅ | ❌ | ✅ | ❌ |
-| Per-podcast exclude from auto-refresh | ✅ | ❌ | ❌ | ❌ |
-| Per-podcast auto-archive policy | ✅ | ❌ | ✅ | ❌ |
-| Download-first playback model | ✅ | ❌ | optional | optional |
-| Pin badge visual system (Next/Last) | ✅ | ❌ | ❌ | ❌ |
-| Audio + video podcast support | ✅ | ✅ | ✅ | ❌ |
 
 ## Current Feature Set
 
