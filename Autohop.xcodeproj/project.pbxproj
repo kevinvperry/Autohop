@@ -22,6 +22,8 @@
 		32612A7A83338C90F88DAB66 /* RSSParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3565F21462B26325EB4EB477 /* RSSParser.swift */; };
 		335337163D0A2505CB51E1C0 /* PlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FD6DE750266E615081EA09 /* PlaybackEngine.swift */; };
 		A1B2C3D4E5F60002A2B3C4D5 /* SilenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */; };
+		3006EDF53ACB47E39BAA6D18 /* SleepTimerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */; };
+		42D33698B3304FD7874821A8 /* SleepTimerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE430978939F404495E493F5 /* SleepTimerSheetView.swift */; };
 		33B562963DD6313B592802F5 /* OPMLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 016F1F5D536EEC59138B6CDE /* OPMLService.swift */; };
 		34D89E97DD5170651921E1E9 /* FeedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44B088E668A73445F8D13B4 /* FeedService.swift */; };
 		44BEB63E377B429766ABA020 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDA523B5BEADDB7ED7CC077 /* SettingsStore.swift */; };
@@ -80,6 +82,8 @@
 		1669AC404FB7A65C54DF4052 /* ABCBreakfastSampleFeed.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = ABCBreakfastSampleFeed.xml; sourceTree = "<group>"; };
 		16FD6DE750266E615081EA09 /* PlaybackEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackEngine.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilenceDetector.swift; sourceTree = "<group>"; };
+		40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerService.swift; sourceTree = "<group>"; };
+		CE430978939F404495E493F5 /* SleepTimerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerSheetView.swift; sourceTree = "<group>"; };
 		1EE50021DF85C88351E2E401 /* RSSParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSParserTests.swift; sourceTree = "<group>"; };
 		1F2EF890D48B249CD312B14C /* Chapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chapter.swift; sourceTree = "<group>"; };
 		21BC32637767178331176C36 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -169,6 +173,7 @@
 				37C2D2BA2408F2EF182B3B32 /* PlayerView.swift */,
 				7AB0B44C31CC81B5877BE5EF /* PodcastsView.swift */,
 				CA5E51118F25B1259016B282 /* QueueSheetView.swift */,
+				CE430978939F404495E493F5 /* SleepTimerSheetView.swift */,
 				A314D3A788F1F62E2CC094A5 /* RootView.swift */,
 				E4640CA53FD6C9A99BBE0875 /* SettingsView.swift */,
 				35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */,
@@ -307,6 +312,7 @@
 			children = (
 				16FD6DE750266E615081EA09 /* PlaybackEngine.swift */,
 				A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */,
+				40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */,
 			);
 			path = Playback;
 			sourceTree = "<group>";
@@ -468,6 +474,8 @@
 				F72A57E0197B4353A7964C2D /* AppLogger.swift in Sources */,
 				335337163D0A2505CB51E1C0 /* PlaybackEngine.swift in Sources */,
 				A1B2C3D4E5F60002A2B3C4D5 /* SilenceDetector.swift in Sources */,
+				3006EDF53ACB47E39BAA6D18 /* SleepTimerService.swift in Sources */,
+				42D33698B3304FD7874821A8 /* SleepTimerSheetView.swift in Sources */,
 				83A915229022E951DD94E0EB /* PlaybackPreference.swift in Sources */,
 				59BDFF3933ED86A7C14C9069 /* PlayerView.swift in Sources */,
 				C57E1D3F2D15855909D0F3A2 /* PodcastsView.swift in Sources */,

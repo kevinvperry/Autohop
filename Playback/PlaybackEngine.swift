@@ -36,6 +36,8 @@ protocol PlaybackControlling {
     func updateVocalBoost(_ level: VocalBoostLevel)
     func updateTrimSilence(_ amount: TrimSilenceAmount)
     func stop()
+    /// Set the output volume on the active playback path. 0 = silent, 1 = full.
+    func setVolume(_ volume: Float)
 }
 
 final class PlaybackEngine: PlaybackControlling {
@@ -354,6 +356,14 @@ final class PlaybackEngine: PlaybackControlling {
             "episode": currentEpisode?.title ?? "none",
             "amount": amount.title
         ])
+    }
+
+    // MARK: - Volume
+
+    func setVolume(_ volume: Float) {
+        let v = min(1, max(0, volume))
+        player?.volume = v
+        audioPlayerNode?.volume = v
     }
 
     // MARK: - Stop

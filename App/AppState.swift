@@ -33,6 +33,9 @@ final class AppState: ObservableObject {
     @Published private(set) var listeningHistoryGroups: [(String, [ListeningHistoryEntry])] = []
     @Published private(set) var completedEpisodeCount: Int = 0
 
+    // Sleep timer
+    let sleepTimerService = SleepTimerService()
+
     // User-facing messages
     @Published var downloadMessage: String?
     @Published var playbackMessage: String?
@@ -210,6 +213,10 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
+        sleepTimerService.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
         if let observableSettingsStore = settingsStore as? SettingsStore {
             observableSettingsStore.objectWillChange
                 .sink { [weak self] _ in
@@ -247,6 +254,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 guard let state else { return }
                 state.currentPlayerTime = time
+                state.sleepTimerService.tick()
 
                 // Update lock-screen position (cheap — just updates two keys)
                 if let ep = state.currentPlayerEpisode,
@@ -346,6 +354,27 @@ final class AppState: ObservableObject {
             }
         }
 
+        // Sleep timer callbacks
+        state.sleepTimerService.onPause = { [weak state] in
+            Task { @MainActor in
+                guard let state, state.isPlaying else { return }
+                state.playbackEngine.pause()
+                state.isPlaying = false
+                if let ep = state.currentPlayerEpisode,
+                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
+                    NowPlayingService.shared.updateTime(
+                        currentTime: state.currentPlayerTime,
+                        isPlaying: false,
+                        speed: sub.playbackPreference.speed
+                    )
+                }
+                state.logger.info("sleepTimer.fired", "Sleep timer paused playback")
+            }
+        }
+        state.sleepTimerService.onFadeVolume = { [weak state] volume in
+            state?.playbackEngine.setVolume(volume)
+        }
+
         // Remote command centre (AirPods, lock screen, CarPlay)
         NowPlayingService.shared.configure(
             onPlayPause:    { Task { @MainActor in await state.togglePlayPause() } },
@@ -423,8 +452,12 @@ final class AppState: ObservableObject {
             }
         } else if let ep = currentPlayerEpisode {
             if playbackEngine.currentEpisode?.id == ep.id {
+                playbackEngine.setVolume(1.0)
                 playbackEngine.resume()
                 isPlaying = true
+                if sleepTimerService.checkAutoRestart() {
+                    logger.info("sleepTimer.autoRestart", "Sleep timer auto-restarted on manual resume")
+                }
             } else if ep.downloadState == .downloaded, ep.localFileURL != nil {
                 _ = await startPlayback(episode: ep, resumeFrom: currentPlayerTime)
                 return
@@ -1281,6 +1314,9 @@ final class AppState: ObservableObject {
         }
 
         do {
+            // Reset volume to full before starting — clears any residual sleep-timer fade.
+            playbackEngine.setVolume(1.0)
+
             try await playbackEngine.play(
                 playableEpisode,
                 preference: subscription.playbackPreference,
@@ -1302,6 +1338,12 @@ final class AppState: ObservableObject {
             historyTrackingEpisodeID = playableEpisode.id
             historyTrackingLastTime = currentPlayerTime
             playbackMessage = nil
+
+            // Auto-restart the sleep timer if it fired recently and the user has resumed.
+            if sleepTimerService.checkAutoRestart() {
+                logger.info("sleepTimer.autoRestart", "Sleep timer auto-restarted on playback resume")
+            }
+
             logger.info("player.started", "Playback started", metadata: [
                 "episode": playableEpisode.title,
                 "podcast": subscription.title,
@@ -1343,6 +1385,11 @@ final class AppState: ObservableObject {
         logger.info("player.finished", "Episode finished playback", metadata: [
             "episode": episode.title
         ])
+
+        // Check sleep timer before advancing. `episodeFinished()` decrements the counter;
+        // returns true on the last episode — in which case we stop rather than advance.
+        let sleepTimerFired = sleepTimerService.episodeFinished()
+
         // Episode reached EOF: use its full duration as the position.
         let finishedPos = episode.durationSeconds
         clearPlaybackPosition(for: episode)
@@ -1365,6 +1412,14 @@ final class AppState: ObservableObject {
 
         isPlaying = false
         currentPlayerTime = 0
+
+        if sleepTimerFired {
+            logger.info("sleepTimer.episodeEnd", "Sleep timer stopped playback after episode finished", metadata: [
+                "episode": episode.title
+            ])
+            NowPlayingService.shared.clear()
+            return
+        }
 
         try? await Task.sleep(for: .seconds(0.4))
         await playNextEpisode(excluding: [episode.id])

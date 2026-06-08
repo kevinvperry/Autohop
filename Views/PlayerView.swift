@@ -13,6 +13,7 @@ struct PlayerView: View {
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
     @State private var showAudioControlMenu = false
+    @State private var showSleepTimer = false
     @State private var showArchiveConfirmation = false
     @State private var showFullScreenVideo = false
     @State private var pictureInPictureStartToken = 0
@@ -121,6 +122,9 @@ struct PlayerView: View {
         .sheet(isPresented: $showAudioControlMenu) {
             AudioControlsSheetView()
                 .environmentObject(appState)
+        }
+        .sheet(isPresented: $showSleepTimer) {
+            SleepTimerSheetView(sleepTimer: appState.sleepTimerService)
         }
         .confirmationDialog("Archive Episode?", isPresented: $showArchiveConfirmation, titleVisibility: .visible) {
             Button("Archive", role: .destructive) {
@@ -508,19 +512,29 @@ struct PlayerView: View {
 
     private var audioRowView: some View {
         HStack(spacing: 10) {
-            Button {
-                showAudioControlMenu = true
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color.purple.opacity(0.85))
-                    .frame(width: 44, height: 32)
-                    .background(Color.purple.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+            // Leading cluster: Audio Controls + Sleep Timer
+            HStack(spacing: 8) {
+                Button {
+                    showAudioControlMenu = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.purple.opacity(0.85))
+                        .frame(width: 44, height: 32)
+                        .background(Color.purple.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(episode == nil)
+
+                Button {
+                    showSleepTimer = true
+                } label: {
+                    sleepTimerButtonLabel
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(episode == nil)
             .frame(width: 96, alignment: .leading)
 
             audioSourceButton
@@ -544,6 +558,57 @@ struct PlayerView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
+    }
+
+    @ViewBuilder
+    private var sleepTimerButtonLabel: some View {
+        let timer = appState.sleepTimerService
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: timer.isActive ? "moon.zzz.fill" : "moon.zzz")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(timer.isActive ? Color.purple : Color.purple.opacity(0.50))
+                .frame(width: 44, height: 32)
+                .background(timer.isActive ? Color.purple.opacity(0.18) : Color.purple.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9)
+                    .stroke(timer.isActive ? Color.purple.opacity(0.45) : Color.purple.opacity(0.18),
+                            lineWidth: 0.5))
+
+            // Badge: countdown or episode count
+            if timer.isDurationMode, let badge = sleepTimerBadge {
+                Text(badge)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Color.purple)
+                    .clipShape(Capsule())
+                    .offset(x: 4, y: -4)
+            } else if timer.isEpisodeMode {
+                Text("\(timer.episodesRemaining)ep")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Color.purple)
+                    .clipShape(Capsule())
+                    .offset(x: 4, y: -4)
+            }
+        }
+    }
+
+    private var sleepTimerBadge: String? {
+        let remaining = appState.sleepTimerService.timeRemaining
+        guard remaining >= 0 else { return nil }
+        let total = Int(remaining)
+        let m = total / 60
+        let s = total % 60
+        // Show "m:ss" when < 1 hour, "Xh" otherwise
+        if total >= 3600 {
+            return "\(total / 3600)h"
+        }
+        return String(format: "%d:%02d", m, s)
     }
 
     private var audioSourceButton: some View {

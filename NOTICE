@@ -29,12 +29,24 @@ architecturally based on Pocket Casts for iOS:
       system Audio Units) follows the architecture of the Pocket Casts
       implementation. No source code is copied verbatim.
 
+  - Autohop/Playback/SleepTimerService.swift
+  - Autohop/Views/SleepTimerSheetView.swift
+      Derived from: (none — original Autohop code)
+      Nature: The concept and general feature set of the sleep timer (duration
+      presets, end-of-episode mode, episode count, 5-second fade-out, and
+      5-minute auto-restart window) were informed by studying the Pocket Casts
+      iOS implementation. No source code, constants, or algorithms have been
+      ported. The countdown tick, linear volume fade, and auto-restart logic are
+      independently authored. These files are NOT subject to the MPL-2.0.
+
 Pocket Casts for iOS is copyright © Automattic, Inc. and contributors.
 Repository: https://github.com/Automattic/pocket-casts-ios
 
-The above files are subject to the Mozilla Public License, Version 2.0.
-A copy of the MPL-2.0 is included in this repository as LICENSE-MPL-2.0,
-and is also available at: https://mozilla.org/MPL/2.0/
+The files marked "Derived from: podcasts/AudioReadTask.swift" and
+"Derived from: podcasts/EffectsPlayer.swift" above are subject to the
+Mozilla Public License, Version 2.0. A copy of the MPL-2.0 is included
+in this repository as LICENSE-MPL-2.0, and is also available at:
+https://mozilla.org/MPL/2.0/
 
 In accordance with MPL-2.0 Section 3.2, the source code of the above files
 is made available as part of the Autohop project source distribution.
