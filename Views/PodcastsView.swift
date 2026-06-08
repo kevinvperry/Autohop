@@ -5,6 +5,7 @@ struct PodcastsView: View {
     @State private var editMode: EditMode = .inactive
     @State private var isRefreshingAll = false
     @State private var showMenu = false
+    @State private var showSearch = false
 
     var body: some View {
         Group {
@@ -12,7 +13,7 @@ struct PodcastsView: View {
                 ContentUnavailableView(
                     "No Podcasts",
                     systemImage: "dot.radiowaves.left.and.right",
-                    description: Text("Use Add RSS Feed to subscribe to a podcast.")
+                    description: Text("Tap + to search for a podcast or add an RSS feed.")
                 )
             } else {
                 VStack(alignment: .leading, spacing: 12) {
@@ -74,10 +75,10 @@ struct PodcastsView: View {
                         .disabled(isRefreshingAll)
                     }
 
-                    NavigationLink {
-                        AddFeedView()
+                    Button {
+                        showSearch = true
                     } label: {
-                        Label("Add Feed", systemImage: "plus")
+                        Label("Add Podcast", systemImage: "plus")
                     }
                 }
             }
@@ -102,6 +103,7 @@ struct PodcastsView: View {
             }
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
+        .sheet(isPresented: $showSearch) { PodcastSearchView() }
     }
 
     private func refreshAll() {

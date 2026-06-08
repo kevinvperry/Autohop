@@ -5,6 +5,7 @@ struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showSearch = false
     @State private var showOPMLImporter = false
     @State private var isImporting = false
     @State private var appearTime: Date?
@@ -21,10 +22,11 @@ struct MenuSheetView: View {
                         .foregroundStyle(.primary)
                 }
 
-                NavigationLink {
-                    AddFeedView()
+                Button {
+                    showSearch = true
                 } label: {
-                    Label("Add RSS Feed", systemImage: "plus")
+                    Label("Find Podcasts", systemImage: "magnifyingglass")
+                        .foregroundStyle(.primary)
                 }
 
                 NavigationLink {
@@ -83,6 +85,7 @@ struct MenuSheetView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSearch) { PodcastSearchView() }
         .preferredColorScheme(.dark)
         .onAppear {
             let t = Date()

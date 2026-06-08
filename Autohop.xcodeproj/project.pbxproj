@@ -22,6 +22,8 @@
 		32612A7A83338C90F88DAB66 /* RSSParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3565F21462B26325EB4EB477 /* RSSParser.swift */; };
 		335337163D0A2505CB51E1C0 /* PlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FD6DE750266E615081EA09 /* PlaybackEngine.swift */; };
 		A1B2C3D4E5F60002A2B3C4D5 /* SilenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */; };
+		B1C2D3E4F5061728394A5B6D /* PodcastSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B6C /* PodcastSearch.swift */; };
+		C1D2E3F4051628374A5B6C7E /* PodcastSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D2E3F4051628374A5B6C7D /* PodcastSearchView.swift */; };
 		3006EDF53ACB47E39BAA6D18 /* SleepTimerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */; };
 		42D33698B3304FD7874821A8 /* SleepTimerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE430978939F404495E493F5 /* SleepTimerSheetView.swift */; };
 		DC5FF75DBD4D4CFAB3F80616 /* AcknowledgementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84BE4FC18F24D38BC3CC73E /* AcknowledgementsView.swift */; };
@@ -83,6 +85,8 @@
 		1669AC404FB7A65C54DF4052 /* ABCBreakfastSampleFeed.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = ABCBreakfastSampleFeed.xml; sourceTree = "<group>"; };
 		16FD6DE750266E615081EA09 /* PlaybackEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackEngine.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001A2B3C4D5 /* SilenceDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilenceDetector.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5061728394A5B6C /* PodcastSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastSearch.swift; sourceTree = "<group>"; };
+		C1D2E3F4051628374A5B6C7D /* PodcastSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastSearchView.swift; sourceTree = "<group>"; };
 		40867B6C91FC40F6A8C69E3F /* SleepTimerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerService.swift; sourceTree = "<group>"; };
 		CE430978939F404495E493F5 /* SleepTimerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerSheetView.swift; sourceTree = "<group>"; };
 		C84BE4FC18F24D38BC3CC73E /* AcknowledgementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsView.swift; sourceTree = "<group>"; };
@@ -176,6 +180,7 @@
 				24F501795FA1420A8F4C2011 /* DownloadsView.swift */,
 				37C2D2BA2408F2EF182B3B32 /* PlayerView.swift */,
 				7AB0B44C31CC81B5877BE5EF /* PodcastsView.swift */,
+				C1D2E3F4051628374A5B6C7D /* PodcastSearchView.swift */,
 				CA5E51118F25B1259016B282 /* QueueSheetView.swift */,
 				CE430978939F404495E493F5 /* SleepTimerSheetView.swift */,
 				A314D3A788F1F62E2CC094A5 /* RootView.swift */,
@@ -228,6 +233,7 @@
 			children = (
 				4131E590B934F14C0BAE6997 /* FeedPreviewViewModel.swift */,
 				C44B088E668A73445F8D13B4 /* FeedService.swift */,
+				B1C2D3E4F5061728394A5B6C /* PodcastSearch.swift */,
 				016F1F5D536EEC59138B6CDE /* OPMLService.swift */,
 				FAF6869CDF5E12D17427C2D2 /* ParsedFeed.swift */,
 				3565F21462B26325EB4EB477 /* RSSParser.swift */,
@@ -485,6 +491,8 @@
 				83A915229022E951DD94E0EB /* PlaybackPreference.swift in Sources */,
 				59BDFF3933ED86A7C14C9069 /* PlayerView.swift in Sources */,
 				C57E1D3F2D15855909D0F3A2 /* PodcastsView.swift in Sources */,
+				B1C2D3E4F5061728394A5B6D /* PodcastSearch.swift in Sources */,
+				C1D2E3F4051628374A5B6C7E /* PodcastSearchView.swift in Sources */,
 				90E60676218DF06C64AB3A02 /* QueueService.swift in Sources */,
 				27C9E6A6DDB84D41A42EF812 /* ResourceMonitor.swift in Sources */,
 				C7C054400CFD003E292473C6 /* QueueSheetView.swift in Sources */,
