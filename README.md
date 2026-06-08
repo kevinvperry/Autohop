@@ -70,4 +70,4 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Scope
 
-Spotify integration is not part of the Autohop project. The app remains focused on podcast queue automation, downloaded media playback, video podcast support, and clear diagnostic tooling. Discovery features (charts, search, recommendations) are explicitly out of scope — the target user already knows what they want to listen to.
+The app remains focused on podcast queue automation, downloaded media playback, video podcast support, and clear diagnostic tooling.
