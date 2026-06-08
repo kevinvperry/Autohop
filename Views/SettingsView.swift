@@ -21,6 +21,7 @@ struct SettingsView: View {
             subscriptionsSection
             storageSection
             diagnosticsSection
+            acknowledgementsSection
         }
         .listSectionSpacing(28)
         .navigationTitle("Settings")
@@ -190,6 +191,17 @@ struct SettingsView: View {
                 Label("Export OPML", systemImage: "square.and.arrow.up")
             }
             .disabled(appState.subscriptionStore.subscriptions.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private var acknowledgementsSection: some View {
+        Section {
+            NavigationLink("Open Source Acknowledgements") {
+                AcknowledgementsView()
+            }
+        } header: {
+            Text("About")
         }
     }
 

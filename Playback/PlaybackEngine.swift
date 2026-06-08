@@ -1,3 +1,17 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Portions of this file are architecturally derived from Pocket Casts for iOS
+// (https://github.com/Automattic/pocket-casts-ios), © Automattic, Inc.
+// Used under the Mozilla Public License, v. 2.0.
+//
+// Specifically, the vocal boost signal chain — high-pass filter → dynamics processor
+// → peak limiter, assembled from Apple system Audio Units — follows the architecture
+// of EffectsPlayer.swift in the Pocket Casts iOS project. No Pocket Casts source code
+// is copied verbatim; the derivation is architectural. The notice is included out of
+// caution and transparency.
+
 import Accelerate
 import AudioToolbox
 import AVFoundation

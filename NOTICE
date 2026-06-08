@@ -1,0 +1,40 @@
+Autohop
+=======
+
+Copyright © 2026 Kevin Perry. All rights reserved.
+
+This product includes software derived from third-party open-source projects,
+as detailed below.
+
+
+-------------------------------------------------------------------------------
+Pocket Casts for iOS
+-------------------------------------------------------------------------------
+
+Portions of the following Autohop source files are derived from or
+architecturally based on Pocket Casts for iOS:
+
+  - Autohop/Playback/SilenceDetector.swift
+      Derived from: podcasts/AudioReadTask.swift
+      Nature: Direct algorithmic port. The RMS threshold constants, gap-size
+      thresholds, re-insert counts, last-5-seconds guard, overflow safety cap,
+      and fade-in/fade-out join logic are ported from the Pocket Casts
+      implementation. The code has been restructured into a Swift value-type
+      struct and adapted to the Autohop buffer pipeline.
+
+  - Autohop/Playback/PlaybackEngine.swift
+      Derived from: podcasts/EffectsPlayer.swift
+      Nature: Architectural derivation. The vocal boost signal chain
+      (high-pass filter → dynamics processor → peak limiter, using Apple
+      system Audio Units) follows the architecture of the Pocket Casts
+      implementation. No source code is copied verbatim.
+
+Pocket Casts for iOS is copyright © Automattic, Inc. and contributors.
+Repository: https://github.com/Automattic/pocket-casts-ios
+
+The above files are subject to the Mozilla Public License, Version 2.0.
+A copy of the MPL-2.0 is included in this repository as LICENSE-MPL-2.0,
+and is also available at: https://mozilla.org/MPL/2.0/
+
+In accordance with MPL-2.0 Section 3.2, the source code of the above files
+is made available as part of the Autohop project source distribution.

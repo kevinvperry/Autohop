@@ -1,9 +1,24 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Portions of this file are derived from Pocket Casts for iOS
+// (https://github.com/Automattic/pocket-casts-ios), © Automattic, Inc.
+// Used under the Mozilla Public License, v. 2.0.
+//
+// Specifically, the silence-detection algorithm — including the RMS threshold
+// constants, gap-size thresholds, re-insert counts, last-5-seconds guard, safety
+// cap, and fade-in/fade-out join logic — is ported from AudioReadTask.swift in the
+// Pocket Casts iOS project. The implementation has been restructured into a Swift
+// value-type struct and adapted to the Autohop buffer pipeline, but the algorithm
+// and its tuning parameters originate from Pocket Casts.
+
 import Accelerate
 import AVFoundation
 
 /// Detects and removes silent gaps from a stream of audio buffers.
 ///
-/// Algorithm is a faithful port of Pocket Casts' AudioReadTask silence-trimming logic.
+/// The core algorithm is ported from Pocket Casts' AudioReadTask (MPL-2.0).
 /// Call `process(buffer:currentFrame:totalFrames:sampleRate:)` for each buffer read from
 /// AVAudioFile, then call `flush()` after reaching end-of-file to drain any trailing gap.
 struct SilenceDetector {
