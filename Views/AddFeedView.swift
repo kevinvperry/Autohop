@@ -31,9 +31,13 @@ struct AddFeedView: View {
         }
         .navigationTitle("Add RSS Feed")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
         }
     }

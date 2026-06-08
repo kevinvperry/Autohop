@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
@@ -26,9 +27,13 @@ struct DownloadsView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Downloads")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -367,7 +372,7 @@ private struct DownloadActivityRow: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 16) {
             switch activity.status {
             case .downloading:
                 Button {

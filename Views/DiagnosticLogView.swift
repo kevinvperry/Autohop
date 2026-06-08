@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiagnosticLogView: View {
     @ObservedObject private var logger = AppLogger.shared
+    @Environment(\.dismiss) private var dismiss
     @State private var logLines: [String] = []
     @State private var showClearConfirmation = false
 
@@ -30,9 +31,13 @@ struct DiagnosticLogView: View {
         }
         .navigationTitle("Diagnostic Log")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
 
             ToolbarItemGroup(placement: .topBarTrailing) {

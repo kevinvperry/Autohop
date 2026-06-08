@@ -97,9 +97,13 @@ struct SubscriptionSettingsView: View {
         }
         .navigationTitle(subscription?.title ?? "Subscription")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -553,6 +557,7 @@ private struct EditPrioritySheet: View {
 struct SubscriptionEpisodesView: View {
     let subscriptionID: UUID
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
     @State private var isRefreshing = false
     @State private var isLoadingOlderEpisodes = false
 
@@ -709,10 +714,14 @@ struct SubscriptionEpisodesView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
 
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -915,6 +924,7 @@ private struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
@@ -934,10 +944,14 @@ private struct EpisodeDetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
         }
     }

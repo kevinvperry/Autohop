@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AcknowledgementsView: View {
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         List {
@@ -22,9 +23,13 @@ struct AcknowledgementsView: View {
         }
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
         }
     }

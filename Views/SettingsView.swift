@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showOPMLImporter = false
     @State private var showOPMLExporter = false
@@ -33,9 +34,13 @@ struct SettingsView: View {
         .listSectionSpacing(28)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
+                HStack(spacing: 16) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    ReturnToPlayerButton()
+                }
             }
         }
         .fileImporter(
@@ -519,7 +524,7 @@ private struct ListeningHistoryRow: View {
                 Text(entry.episodeTitle)
                     .font(.body.weight(.semibold))
                     .lineLimit(2)
-                HStack(spacing: 8) {
+                HStack(spacing: 16) {
                     Label(entry.status.title, systemImage: statusIcon)
                     Text("•")
                     Text(formattedDuration(entry.listenedSeconds))
