@@ -813,7 +813,7 @@ struct SubscriptionEpisodesView: View {
                 let showExplicit = sub.isExplicit == true
                 if showVideo || showExplicit {
                     HStack(spacing: 6) {
-                        if showVideo { VideoBadge() }
+                        if showVideo { VideoBadgeLarge() }
                         if showExplicit { ExplicitPill() }
                     }
                 }
@@ -866,13 +866,6 @@ struct SubscriptionEpisodesView: View {
                     }
                     .frame(width: 44, height: 44)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
-
-                    if episode.mediaKind == .video || episode.isExplicit == true {
-                        VStack(spacing: 3) {
-                            if episode.mediaKind == .video { VideoBadge() }
-                            if episode.isExplicit == true { ExplicitPill() }
-                        }
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -921,6 +914,14 @@ struct SubscriptionEpisodesView: View {
             }
         }
         .padding(.vertical, 6)
+        .overlay(alignment: .topTrailing) {
+            if episode.mediaKind == .video || episode.isExplicit == true {
+                HStack(spacing: 3) {
+                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.isExplicit == true { ExplicitPillSmall() }
+                }
+            }
+        }
     }
 
     private func statusKind(for episode: Episode) -> EpisodeStatusKind {
@@ -1023,7 +1024,7 @@ struct EpisodeDetailView: View {
                         let showExplicit = ep.isExplicit == true
                         if showVideo || showExplicit {
                             HStack(spacing: 6) {
-                                if showVideo { VideoBadge() }
+                                if showVideo { VideoBadgeLarge() }
                                 if showExplicit { ExplicitPill() }
                             }
                         }

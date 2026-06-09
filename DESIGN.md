@@ -32,8 +32,10 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Text-MetadataAdaptive` | Duration shows "Xm left remaining" when partially played, full duration otherwise |
 | `Text-Duration` | Total duration: `.caption`, `.secondary`, `.monospacedDigit()` |
 | `EpisodeStatusPill` | Colour-coded capsule pill showing episode state — 7 states, each a unique colour |
-| `Badge-VideoBadge` | Clear glass TV-icon pill centred below 44pt episode artwork, stacked vertically above ExplicitPill (and RankPill on Priority page) |
-| `Badge-ExplicitPill` | Clear glass "Explicit" text pill centred below 44pt episode artwork, stacked vertically below VideoBadge (and above RankPill on Priority page) |
+| `Badge-VideoBadge` | Small clear glass TV-icon pill — used in episode list rows via `.overlay(alignment: .topTrailing)` |
+| `Badge-VideoBadgeLarge` | Large clear glass "Video" text pill — used in detail page headers alongside `Badge-ExplicitPill` |
+| `Badge-ExplicitPill` | Large clear glass "Explicit" text pill — used in detail page headers alongside `Badge-VideoBadgeLarge` |
+| `Badge-ExplicitPillSmall` | Small clear glass "E in square" icon pill (iTunes-style) — used in episode list rows via `.overlay(alignment: .topTrailing)` |
 | `Badge-RankPill` | Liquid glass capsule pill centred below artwork on Priority page, stacked vertically below VideoBadge and ExplicitPill |
 | `Button-DownloadInline` | Bordered small "Download" button inline in the metadata row for undownloaded episodes |
 | `Badge-Pin` | `pin.fill` icon in trailing stack: blue = Play Next, orange = Play Last |
@@ -224,7 +226,7 @@ The centred header shown at the top of every Individual Subscription episodes pa
 Structure (top to bottom):
 1. **Artwork** — 120×120 pt, `cornerRadius 20`, subtle stroke overlay (`white.opacity(0.08), lineWidth: 0.5`)
 2. **Channel title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
-3. **Video + Explicit pills** — `HStack(spacing: 6)` of `VideoBadge` and/or `ExplicitPill`, shown only when applicable. Placed **between the title and the description**. `VideoBadge` triggered by `sub.latestEpisode?.mediaKind == .video`; `ExplicitPill` triggered by `sub.isExplicit == true` (channel-level RSS `<itunes:explicit>` tag).
+3. **Video + Explicit pills** — `HStack(spacing: 6)` of `VideoBadgeLarge` and/or `ExplicitPill`, shown only when applicable. Placed **between the title and the description**. `VideoBadgeLarge` triggered by `sub.latestEpisode?.mediaKind == .video`; `ExplicitPill` triggered by `sub.isExplicit == true` (channel-level RSS `<itunes:explicit>` tag).
 4. **Channel description** — `.footnote`, `.secondary`, `lineLimit(2)`, `multilineTextAlignment(.center)`, HTML stripped via `stripHTML(_:)`. Hidden when empty.
 5. **Author · Categories** — single `HStack`, `.caption`, `.secondary`, both text values **bold** (`.fontWeight(.bold)`). Categories are the comma-separated `sub.categories` array from the channel-level RSS `<itunes:category>` tags — replaces the old episode count.
 
@@ -247,7 +249,7 @@ VStack(spacing: 12) {
         let showExplicit = sub.isExplicit == true
         if showVideo || showExplicit {
             HStack(spacing: 6) {
-                if showVideo { VideoBadge() }
+                if showVideo   { VideoBadgeLarge() }
                 if showExplicit { ExplicitPill() }
             }
         }
@@ -287,8 +289,9 @@ VStack(spacing: 12) {
 The episode row used in the Individual Subscription episodes list. Differs from `ListRow-Standard` (Queue) in that it shows episode-level artwork (falling back to channel artwork), includes an episode description preview, uses no queue position number, and shows a download progress bar when actively downloading.
 
 Structure:
-- **Artwork column** — `VStack(alignment: .center, spacing: 4)` containing: 44×44 pt artwork (`cornerRadius 9`, `episode.artworkURL ?? sub.artworkURL`, falls back to `Artwork-Placeholder`) followed by a `VStack(spacing: 3)` of `VideoBadge` (if video) and `ExplicitPill` (if explicit), min-width 44.
+- **Artwork column** — 44×44 pt artwork (`cornerRadius 9`, `episode.artworkURL ?? sub.artworkURL`, falls back to `Artwork-Placeholder`). No badges below artwork.
 - **Title** — plain `Text(episode.title)`, `.subheadline.weight(.semibold)`, `.primary`, `lineLimit(2)` — no inline pill.
+- **Status/Video/Explicit pills** — `VideoBadge` and/or `ExplicitPillSmall` float in the **top-right corner** of the row via `.overlay(alignment: .topTrailing)` on the outer `VStack`. This avoids compressing the text column.
 - **Description preview** — `.caption`, `.secondary`, `lineLimit(3)`. HTML stripped via `stripHTML(_:)`. Hidden when empty.
 - **Metadata row** — date · `•` · adaptive duration (`Text-MetadataAdaptive`) · `Spacer` · `EpisodeStatusPill`. `.caption`, `.tertiary`.
 - **Download progress bar** (`ProgressBar-Download`) — shown below the HStack, indented 56 pt, only when `downloadState == .downloading`.
@@ -300,11 +303,6 @@ VStack(alignment: .leading, spacing: 0) {
             CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL) { placeholderArtwork }
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
-            VStack(spacing: 3) {
-                if episode.mediaKind == .video { VideoBadge() }
-                if episode.isExplicit == true  { ExplicitPill() }
-            }
-            .frame(minWidth: 44)
         }
 
         VStack(alignment: .leading, spacing: 3) {
@@ -348,6 +346,14 @@ VStack(alignment: .leading, spacing: 0) {
     }
 }
 .padding(.vertical, 6)
+.overlay(alignment: .topTrailing) {
+    if episode.mediaKind == .video || episode.isExplicit == true {
+        HStack(spacing: 3) {
+            if episode.mediaKind == .video { VideoBadge() }
+            if episode.isExplicit == true  { ExplicitPillSmall() }
+        }
+    }
+}
 ```
 
 Row background follows `ListRow-ActiveBackground` / `ListRow-IdleBackground`:
@@ -461,20 +467,15 @@ HStack(spacing: 12) {
 
 The row layout used on the Priority page. Differs from `ListRow-Standard` in three ways: (1) the podcast name is the **primary** bold title, (2) the episode title is **secondary** and not bold, (3) there is no trailing metadata stack — the status pill sits inline in the metadata row at the bottom.
 
-The left column is a `VStack(alignment: .center)` with the artwork on top, `VideoBadge` and `ExplicitPill` stacked below it, and `rankPill` in a separate bottom band row below that — all three pills stack vertically: Video → Explicit → Rank. Episode title is plain text (no inline pill).
+The left column has the artwork only. `VideoBadge` and `ExplicitPillSmall` float in the top-right corner via `.overlay(alignment: .topTrailing)` on the outer row `VStack`. `rankPill` sits in a separate bottom band row below the top HStack. Episode title is plain text (no inline pill).
 
 ```swift
 HStack(alignment: .top, spacing: 12) {
-    // Left column: artwork + badge VStack (Video → Explicit), then rank pill in bottom band
+    // Left column: artwork only — no badges below
     VStack(alignment: .center, spacing: 4) {
         CachedArtworkImage(url: sub.artworkURL) { placeholderArtwork }
             .frame(width: 44, height: 44)
             .clipShape(RoundedRectangle(cornerRadius: 9))
-        VStack(spacing: 3) {
-            if episode.mediaKind == .video { VideoBadge() }
-            if episode.isExplicit == true  { ExplicitPill() }
-        }
-        .frame(minWidth: 44)
     }
 
     // Text stack
@@ -513,6 +514,14 @@ HStack(alignment: .top, spacing: 12) {
     .frame(maxWidth: .infinity, alignment: .leading)
 }
 .padding(.vertical, 6)
+.overlay(alignment: .topTrailing) {
+    if episode.mediaKind == .video || episode.isExplicit == true {
+        HStack(spacing: 3) {
+            if episode.mediaKind == .video { VideoBadge() }
+            if episode.isExplicit == true  { ExplicitPillSmall() }
+        }
+    }
+}
 ```
 
 ---
@@ -731,66 +740,84 @@ rankPill(sub.priorityRank)
 
 ---
 
-## Video Badge
+## Video Badge (Small)
 
 **Label: `Badge-VideoBadge`**
 
-A small TV-icon pill displayed **centred below** any 44×44 episode artwork when `episode.mediaKind == .video`. Stacked vertically above `ExplicitPill` (and both above `Badge-RankPill` on the Priority page). Clear glass — no colour tint.
+The small variant of the video indicator. A TV-icon pill shown in the **top-right corner** of episode list rows when `episode.mediaKind == .video`. Placed via `.overlay(alignment: .topTrailing)` on the outer row container — never below artwork.
 
-- **iOS 26+:** `.glassEffect(in: Capsule())` — no colour tint (matches `Badge-RankPill`)
-- **iOS 17–25 fallback:** `.ultraThinMaterial` background (matches `Badge-RankPill`)
+- **iOS 26+:** `.glassEffect(in: Capsule())`
+- **iOS 17–25 fallback:** `.ultraThinMaterial` background
 - **Icon:** `tv.fill`, `.caption.bold()`, white foreground
-- **Padding:** `.horizontal: 8, .vertical: 5` (matches `Badge-RankPill`)
-- **Placement:** `VStack(alignment: .center, spacing: 4)` wrapping the artwork above and a `VStack(spacing: 3)` of badges below. The badge VStack is `minWidth: 44` so it stays centred under the artwork.
+- **Padding:** `.horizontal: 8, .vertical: 5`
+- **Placement:** `.overlay(alignment: .topTrailing)` on the row's outer view, in an `HStack(spacing: 3)` alongside `ExplicitPillSmall` when both apply.
 
 ```swift
-// Artwork column pattern used on all episode listing pages:
-VStack(alignment: .center, spacing: 4) {
-    CachedArtworkImage(url: artworkURL) { placeholderArtwork }
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-
-    VStack(spacing: 3) {
-        if episode.mediaKind == .video { VideoBadge() }
-        if episode.isExplicit == true  { ExplicitPill() }
-        // On Priority page, RankPill is rendered in the bottom band below this VStack
+.overlay(alignment: .topTrailing) {
+    if episode.mediaKind == .video || episode.isExplicit == true {
+        HStack(spacing: 3) {
+            if episode.mediaKind == .video { VideoBadge() }
+            if episode.isExplicit == true  { ExplicitPillSmall() }
+        }
     }
-    .frame(minWidth: 44)
 }
 ```
 
-Pages covered: Priority (PodcastsView), Queue (QueueSheetView), Individual Subscription (SubscriptionSettingsView), Downloads (both active and archived rows), Player Up Next row.
+Pages covered (list rows): Priority (PodcastsView), Queue (QueueSheetView), Individual Subscription (SubscriptionSettingsView), Downloads (both active and archived rows), Player Up Next row.
 
 ---
 
-## Explicit Pill
+## Video Badge Large
+
+**Label: `Badge-VideoBadgeLarge`**
+
+The large variant of the video indicator. A "Video" text pill used in **detail page headers** when `episode.mediaKind == .video` (or `sub.latestEpisode?.mediaKind == .video` for channel headers). Placed in an `HStack(spacing: 6)` below the title alongside `ExplicitPill`.
+
+- **iOS 26+:** `.glassEffect(in: Capsule())`
+- **iOS 17–25 fallback:** `.ultraThinMaterial` background
+- **Text:** `"Video"`, `.caption.bold()`, white foreground
+- **Padding:** `.horizontal: 8, .vertical: 5`
+
+```swift
+// Detail header — below title:
+HStack(spacing: 6) {
+    if showVideo   { VideoBadgeLarge() }
+    if showExplicit { ExplicitPill() }
+}
+```
+
+Pages covered (detail headers): Individual Subscription channel header, Individual Episode detail header.
+
+---
+
+## Explicit Pill (Large)
 
 **Label: `Badge-ExplicitPill`**
 
-A small "Explicit" text pill displayed **centred below** any 44×44 episode artwork when `episode.isExplicit == true`. Stacked vertically below `VideoBadge` (and both above `Badge-RankPill` on the Priority page). Clear glass — no colour tint.
+The large variant of the explicit indicator. An "Explicit" text pill used in **detail page headers** when `episode.isExplicit == true`. Placed in an `HStack(spacing: 6)` below the title alongside `VideoBadgeLarge`.
 
-- **iOS 26+:** `.glassEffect(in: Capsule())` — no colour tint (matches `Badge-RankPill`)
-- **iOS 17–25 fallback:** `.ultraThinMaterial` background (matches `Badge-RankPill`)
+- **iOS 26+:** `.glassEffect(in: Capsule())`
+- **iOS 17–25 fallback:** `.ultraThinMaterial` background
 - **Text:** `"Explicit"`, `.caption.bold()`, white foreground
-- **Padding:** `.horizontal: 8, .vertical: 5` (matches `Badge-RankPill`)
-- **Placement:** Inside the shared `VStack(spacing: 3)` below the artwork, below `VideoBadge`. See `Badge-VideoBadge` for the full artwork column pattern.
-- **Episode title** is plain `Text(episode.title)` — the pill no longer appears inline with the title.
+- **Padding:** `.horizontal: 8, .vertical: 5`
 
-```swift
-// Inside the badge VStack below artwork:
-VStack(spacing: 3) {
-    if episode.mediaKind == .video { VideoBadge() }
-    if episode.isExplicit == true  { ExplicitPill() }
-}
+Pages covered (detail headers): Individual Subscription channel header, Individual Episode detail header.
 
-// Episode title — plain text, no inline pill:
-Text(episode.title)
-    .font(.subheadline.bold())
-    .foregroundStyle(.primary)
-    .lineLimit(2)
-```
+---
 
-Pages covered: Priority (PodcastsView), Queue (QueueSheetView), Individual Subscription (SubscriptionSettingsView), Downloads (both active and archived rows), Player Up Next row.
+## Explicit Pill Small
+
+**Label: `Badge-ExplicitPillSmall`**
+
+The small variant of the explicit indicator. An iTunes-style "E in a square" icon pill shown in the **top-right corner** of episode list rows when `episode.isExplicit == true`. Placed via `.overlay(alignment: .topTrailing)` alongside `VideoBadge`.
+
+- **iOS 26+:** `.glassEffect(in: Capsule())`
+- **iOS 17–25 fallback:** `.ultraThinMaterial` background
+- **Icon:** 11×11 pt white `RoundedRectangle(cornerRadius: 2)` with a black bold "E" (`size: 8, weight: .bold`) overlaid
+- **Padding:** `.horizontal: 8, .vertical: 5`
+- **Placement:** same `.overlay(alignment: .topTrailing)` pattern as `Badge-VideoBadge` — see that section for the full snippet.
+
+Pages covered (list rows): Priority (PodcastsView), Queue (QueueSheetView), Individual Subscription (SubscriptionSettingsView), Downloads (both active and archived rows), Player Up Next row.
 
 ---
 
@@ -1910,7 +1937,7 @@ Centred header at the top of the scroll content. All content is centre-aligned.
 Structure (top to bottom):
 1. **Artwork** — 120×120 pt, `cornerRadius 20`, subtle stroke overlay (`white.opacity(0.08), lineWidth: 0.5`). Uses `episode.artworkURL` with fallback to `subscription.artworkURL`, then `Artwork-Placeholder`.
 2. **Episode title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
-3. **Video + Explicit pills** — `HStack(spacing: 6)` of `VideoBadge` and/or `ExplicitPill`, shown only when applicable. `VideoBadge` triggered by `ep.mediaKind == .video`; `ExplicitPill` triggered by `ep.isExplicit == true`.
+3. **Video + Explicit pills** — `HStack(spacing: 6)` of `VideoBadgeLarge` and/or `ExplicitPill`, shown only when applicable. `VideoBadgeLarge` triggered by `ep.mediaKind == .video`; `ExplicitPill` triggered by `ep.isExplicit == true`.
 4. **Feed title** — `.subheadline`, `.secondary`, `multilineTextAlignment(.center)`
 5. **Categories** — `sub.categories.joined(separator: " · ")`, `.caption`, `.tertiary`, `multilineTextAlignment(.center)`. Hidden when `sub.categories` is empty.
 
@@ -1931,7 +1958,7 @@ VStack(spacing: 12) {
         let showExplicit = ep.isExplicit == true
         if showVideo || showExplicit {
             HStack(spacing: 6) {
-                if showVideo { VideoBadge() }
+                if showVideo    { VideoBadgeLarge() }
                 if showExplicit { ExplicitPill() }
             }
         }

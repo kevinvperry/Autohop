@@ -1344,12 +1344,6 @@ private struct UpNextRow: View {
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
 
-                if episode.mediaKind == .video || episode.isExplicit == true {
-                    VStack(spacing: 3) {
-                        if episode.mediaKind == .video { VideoBadge() }
-                        if episode.isExplicit == true { ExplicitPill() }
-                    }
-                }
             }
 
             // Text stack (Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow)
@@ -1390,6 +1384,16 @@ private struct UpNextRow: View {
         .background(Color(white: 0.09))
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        .overlay(alignment: .topTrailing) {
+            if episode.mediaKind == .video || episode.isExplicit == true {
+                HStack(spacing: 3) {
+                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.isExplicit == true { ExplicitPillSmall() }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+        }
     }
 
     // Text-MetadataAdaptive

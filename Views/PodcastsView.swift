@@ -127,13 +127,6 @@ struct PodcastsView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .center, spacing: 4) {
                     artwork(url: sub.artworkURL)
-                    if let episode = sub.latestEpisode,
-                       episode.mediaKind == .video || episode.isExplicit == true {
-                        VStack(spacing: 3) {
-                            if episode.mediaKind == .video { VideoBadge() }
-                            if episode.isExplicit == true { ExplicitPill() }
-                        }
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -154,6 +147,7 @@ struct PodcastsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
             }
 
             // Bottom band: rank pill (under artwork) + metadata row (under titles)
@@ -215,6 +209,15 @@ struct PodcastsView: View {
             }
         }
         .padding(.vertical, 6)
+        .overlay(alignment: .topTrailing) {
+            if let episode = sub.latestEpisode,
+               episode.mediaKind == .video || episode.isExplicit == true {
+                HStack(spacing: 3) {
+                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.isExplicit == true { ExplicitPillSmall() }
+                }
+            }
+        }
     }
 
     private func statusKind(for episode: Episode) -> EpisodeStatusKind {

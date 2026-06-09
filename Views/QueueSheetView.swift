@@ -43,12 +43,6 @@ struct QueueSheetView: View {
 
                                 VStack(alignment: .center, spacing: 4) {
                                     artwork(url: sub?.artworkURL, pinnedNext: pinnedNext, pinnedLast: pinnedLast)
-                                    if episode.mediaKind == .video || episode.isExplicit == true {
-                                        VStack(spacing: 3) {
-                                            if episode.mediaKind == .video { VideoBadge() }
-                                            if episode.isExplicit == true { ExplicitPill() }
-                                        }
-                                    }
                                 }
 
                                 VStack(alignment: .leading, spacing: 2) {
@@ -87,6 +81,14 @@ struct QueueSheetView: View {
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                             .monospacedDigit()
+                                    }
+                                }
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if episode.mediaKind == .video || episode.isExplicit == true {
+                                    HStack(spacing: 3) {
+                                        if episode.mediaKind == .video { VideoBadge() }
+                                        if episode.isExplicit == true { ExplicitPillSmall() }
                                     }
                                 }
                             }

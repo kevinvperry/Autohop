@@ -135,12 +135,6 @@ private struct ArchivedEpisodeRow: View {
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
 
-                if archivedEpisode?.mediaKind == .video || archivedEpisode?.isExplicit == true {
-                    VStack(spacing: 3) {
-                        if archivedEpisode?.mediaKind == .video { VideoBadge() }
-                        if archivedEpisode?.isExplicit == true { ExplicitPill() }
-                    }
-                }
             }
 
             // Text stack — Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow
@@ -185,6 +179,14 @@ private struct ArchivedEpisodeRow: View {
             .disabled(isRedownloading)
         }
         .padding(14)
+        .overlay(alignment: .topTrailing) {
+            if archivedEpisode?.mediaKind == .video || archivedEpisode?.isExplicit == true {
+                HStack(spacing: 3) {
+                    if archivedEpisode?.mediaKind == .video { VideoBadge() }
+                    if archivedEpisode?.isExplicit == true { ExplicitPillSmall() }
+                }
+            }
+        }
     }
 
     private var archivedEpisode: Episode? {
@@ -238,12 +240,6 @@ private struct DownloadActivityRow: View {
                     .frame(width: 44, height: 44)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
-                    if activity.mediaKind == .video || episode?.isExplicit == true {
-                        VStack(spacing: 3) {
-                            if activity.mediaKind == .video { VideoBadge() }
-                            if episode?.isExplicit == true { ExplicitPill() }
-                        }
-                    }
                 }
 
                 // Text stack — Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow
@@ -309,6 +305,14 @@ private struct DownloadActivityRow: View {
             }
         }
         .padding(14)
+        .overlay(alignment: .topTrailing) {
+            if activity.mediaKind == .video || episode?.isExplicit == true {
+                HStack(spacing: 3) {
+                    if activity.mediaKind == .video { VideoBadge() }
+                    if episode?.isExplicit == true { ExplicitPillSmall() }
+                }
+            }
+        }
     }
 
     private var placeholderArtwork: some View {
