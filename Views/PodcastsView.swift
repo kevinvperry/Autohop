@@ -7,9 +7,16 @@ struct PodcastsView: View {
     @State private var showMenu = false
     @State private var showSearch = false
 
+    /// Subscriptions visible in the Priority Sort list.
+    /// Browse-only subscriptions (browseDate != nil) are invisible here —
+    /// they only become visible once the user explicitly presses Subscribe.
+    private var visibleSubscriptions: [Subscription] {
+        appState.subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+    }
+
     var body: some View {
         Group {
-            if appState.subscriptionStore.subscriptions.isEmpty {
+            if visibleSubscriptions.isEmpty {
                 ContentUnavailableView(
                     "No Podcasts",
                     systemImage: "dot.radiowaves.left.and.right",
@@ -30,7 +37,7 @@ struct PodcastsView: View {
                     .padding(.top, 18)
 
                     List {
-                        ForEach(appState.subscriptionStore.subscriptions) { subscription in
+                        ForEach(visibleSubscriptions) { subscription in
                             let isPlaying = subscription.latestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
                             NavigationLink {
                                 SubscriptionEpisodesView(subscriptionID: subscription.id)
@@ -62,7 +69,7 @@ struct PodcastsView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 HStack {
-                    if !appState.subscriptionStore.subscriptions.isEmpty {
+                    if !visibleSubscriptions.isEmpty {
                         Button {
                             refreshAll()
                         } label: {
@@ -83,7 +90,7 @@ struct PodcastsView: View {
                 }
             }
             ToolbarItem(placement: .navigationBarLeading) {
-                if !appState.subscriptionStore.subscriptions.isEmpty {
+                if !visibleSubscriptions.isEmpty {
                     HStack(spacing: 8) {
                         ReturnToPlayerButton()
 

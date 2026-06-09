@@ -69,6 +69,7 @@ struct SubscriptionSettingsView: View {
     @State private var showPriorityEditor = false
     @State private var draftTitle = ""
     @State private var draftPriorityRank = 1
+    @State private var episodeToShare: Episode?
     @Environment(\.dismiss) private var dismiss
 
     private var subscription: Subscription? {
@@ -123,6 +124,18 @@ struct SubscriptionSettingsView: View {
                 }
                 .disabled(subscription == nil || isRefreshing)
             }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    episodeToShare = subscription?.latestEpisode
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(subscription?.latestEpisode == nil)
+            }
+        }
+        .sheet(item: $episodeToShare) { ep in
+            EpisodeShareSheet(episode: ep, subscription: subscription)
         }
         .confirmationDialog(
             "Unsubscribe from \(subscription?.title ?? "this podcast")?",
@@ -560,6 +573,7 @@ struct SubscriptionEpisodesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isRefreshing = false
     @State private var isLoadingOlderEpisodes = false
+    @State private var episodeToShare: Episode?
 
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
@@ -670,6 +684,13 @@ struct SubscriptionEpisodesView: View {
                                             Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
                                         }
                                         .tint(.orange)
+
+                                        Button {
+                                            episodeToShare = episode
+                                        } label: {
+                                            Label("Share", systemImage: "square.and.arrow.up")
+                                        }
+                                        .tint(.indigo)
                                     }
                                 }
                             }
@@ -740,6 +761,13 @@ struct SubscriptionEpisodesView: View {
                     }
                 }
                 .disabled(subscription == nil || isRefreshing)
+
+                Button {
+                    episodeToShare = subscription?.latestEpisode
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(subscription?.latestEpisode == nil)
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -750,6 +778,9 @@ struct SubscriptionEpisodesView: View {
                 }
                 .disabled(subscription == nil)
             }
+        }
+        .sheet(item: $episodeToShare) { ep in
+            EpisodeShareSheet(episode: ep, subscription: subscription)
         }
     }
 
@@ -920,11 +951,12 @@ struct SubscriptionEpisodesView: View {
     }
 }
 
-private struct EpisodeDetailView: View {
+struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var showShareSheet = false
 
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
@@ -952,6 +984,20 @@ private struct EpisodeDetailView: View {
                     Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
                     ReturnToPlayerButton()
                 }
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showShareSheet = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(episode == nil)
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let ep = episode {
+                EpisodeShareSheet(episode: ep, subscription: subscription)
             }
         }
     }
@@ -1078,6 +1124,7 @@ private struct EpisodeDetailView: View {
                         Task { await appState.archiveEpisode(ep) }
                     }
                 }
+
             }
 
             if isDownloading, let progress = appState.downloadProgress[ep.id] {

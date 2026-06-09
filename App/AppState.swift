@@ -234,6 +234,7 @@ final class AppState: ObservableObject {
 
         refreshUpNextEpisode()
         startNetworkMonitor()
+        subscriptionStore.cleanupExpiredPreviewSubscriptions()
     }
 
     private func startNetworkMonitor() {
@@ -1190,6 +1191,20 @@ final class AppState: ObservableObject {
         logger.info("queue.playNextOverride", "Episode moved to play next", metadata: [
             "episode": episode.title,
             "current": currentPlayerEpisode?.title ?? "none"
+        ])
+    }
+
+    func unpinEpisode(_ episode: Episode) {
+        let wasOverride = queueOverrideEpisodeIDs.contains(episode.id)
+        let wasDemoted = queueDemotedEpisodeIDs.contains(episode.id)
+        guard wasOverride || wasDemoted else { return }
+        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
+        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
+        saveQueuePins()
+        refreshUpNextEpisode(reason: "queue.unpin")
+        logger.info("queue.unpin", "Episode unpinned", metadata: [
+            "episode": episode.title,
+            "wasOverride": "\(wasOverride)"
         ])
     }
 

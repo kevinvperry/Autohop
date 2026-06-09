@@ -100,3 +100,56 @@ final class PodcastSearchViewModel: ObservableObject {
         }
     }
 }
+
+// MARK: - Preview ViewModel
+
+@MainActor
+final class PodcastPreviewViewModel: ObservableObject {
+    enum FeedPhase {
+        case loading
+        case loaded(ParsedFeed)
+        case failed(String)
+    }
+
+    @Published private(set) var feedPhase: FeedPhase = .loading
+    @Published private(set) var isLoadingFullHistory = false
+
+    var loadedFeed: ParsedFeed? {
+        if case .loaded(let feed) = feedPhase { return feed }
+        return nil
+    }
+
+    private let feedURL: URL
+    private let loader = EpisodeFeedLoader()
+
+    init(feedURL: URL) {
+        self.feedURL = feedURL
+    }
+
+    /// Fetches the feed (up to 50 episodes).  Call once on view appear.
+    func load() async {
+        feedPhase = .loading
+        do {
+            let feed = try await loader.fetch(feedURL: feedURL, limit: 50)
+            feedPhase = .loaded(feed)
+        } catch {
+            feedPhase = .failed("Couldn't load episodes. Check your connection and try again.")
+        }
+    }
+
+    /// Re-fetches with no episode limit.  Only used when there is no subscription yet.
+    func loadFullHistory() async {
+        guard !isLoadingFullHistory else { return }
+        isLoadingFullHistory = true
+        do {
+            let feed = try await loader.fetch(feedURL: feedURL, limit: nil)
+            feedPhase = .loaded(feed)
+        } catch {
+            // Keep existing loaded data if available; otherwise surface the error.
+            if case .loaded = feedPhase { /* leave as-is */ } else {
+                feedPhase = .failed("Couldn't load full episode history.")
+            }
+        }
+        isLoadingFullHistory = false
+    }
+}

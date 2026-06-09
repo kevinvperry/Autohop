@@ -163,6 +163,68 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
+    /// Creates an inactive, browse-only subscription from a search preview.
+    /// Sets `browseDate` to now so it appears in the 30-day search history
+    /// and can be swept by `cleanupExpiredPreviewSubscriptions()`.
+    @discardableResult
+    public func addPreviewSubscription(parsedFeed: ParsedFeed, feedURL: URL) throws -> Subscription {
+        // If a subscription already exists (active or inactive), don't create a duplicate.
+        guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
+            throw SubscriptionStoreError.duplicateFeed
+        }
+        var subscription = try add(parsedFeed: parsedFeed, feedURL: feedURL)
+        // Move to bottom and mark inactive + browsed.
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscription.id }) else { return subscription }
+        subscriptions[index].excludeFromAutoFeedRefresh = true
+        subscriptions[index].browseDate = Date()
+        subscription = subscriptions[index]
+        enforceInactiveSubscriptionsAtBottom()
+        reindexPriority()
+        save()
+        return subscription
+    }
+
+    /// Removes browse-only subscriptions whose `browseDate` is older than 30 days,
+    /// provided no episode has been played or downloaded (i.e. truly unacted-on).
+    public func cleanupExpiredPreviewSubscriptions() {
+        let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
+        let toRemove = subscriptions.filter { sub in
+            guard let date = sub.browseDate, date < cutoff else { return false }
+            let hasPlayedEpisode = sub.episodes.contains { $0.playedState != .unplayed }
+            let hasDownloadedEpisode = sub.episodes.contains { $0.downloadState == .downloaded }
+            return !hasPlayedEpisode && !hasDownloadedEpisode
+        }
+        guard !toRemove.isEmpty else { return }
+        let removeIDs = Set(toRemove.map(\.id))
+        subscriptions.removeAll { removeIDs.contains($0.id) }
+        reindexPriority()
+        save()
+    }
+
+    /// Resets the 30-day browse clock to now.
+    /// Call this whenever the user re-opens a browse-only preview page.
+    public func refreshBrowseDate(subscriptionID: UUID) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].browseDate != nil
+        else { return }
+        subscriptions[index].browseDate = Date()
+        save()
+    }
+
+    /// Activates an inactive subscription and moves it to the top of the Priority Stack.
+    /// Clears `browseDate` — the subscription is now a full active subscription.
+    public func activateAndMoveToTop(subscriptionID: UUID) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].excludeFromAutoFeedRefresh
+        else { return }
+        var subscription = subscriptions.remove(at: index)
+        subscription.excludeFromAutoFeedRefresh = false
+        subscription.browseDate = nil
+        subscriptions.insert(subscription, at: 0)
+        reindexPriority()
+        save()
+    }
+
     public func updateExcludeFromAutoFeedRefresh(subscriptionID: UUID, excluded: Bool) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         guard subscriptions[index].excludeFromAutoFeedRefresh != excluded else { return }

@@ -15,6 +15,7 @@ struct PlayerView: View {
     @State private var showAudioControlMenu = false
     @State private var showSleepTimer = false
     @State private var showArchiveConfirmation = false
+    @State private var showShareSheet = false
     @State private var showFullScreenVideo = false
     @State private var pictureInPictureStartToken = 0
     @State private var isPlayerVisible = false
@@ -131,6 +132,12 @@ struct PlayerView: View {
                 if let episode {
                     Task { await appState.archiveEpisodeAndPlayNext(episode) }
                 }
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let ep = episode {
+                let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID)
+                EpisodeShareSheet(episode: ep, subscription: sub)
             }
         }
     }
@@ -534,7 +541,7 @@ struct PlayerView: View {
             // Trailing cluster: Share + Archive
             HStack(spacing: 8) {
                 Button {
-                    // Share — not yet implemented
+                    showShareSheet = true
                 } label: {
                     playerActionIcon("square.and.arrow.up")
                 }

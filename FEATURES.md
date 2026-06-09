@@ -3,6 +3,8 @@
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
 
+> **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
+
 > When any Swift model, view, or setting changes, update this file first, then propagate to
 > the website support page and any other consumer.
 
@@ -12,6 +14,11 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 1. [Priority Stack](#1-priority-stack)
 2. [Find Podcasts (Search)](#2-find-podcasts-search)
+   - [Search](#21-search)
+   - [Podcast Preview Page](#22-podcast-preview-page)
+   - [Subscribe Button Behaviour](#23-subscribe-button-behaviour)
+   - [Browse Subscriptions](#24-browse-subscriptions)
+   - [Recently Viewed](#25-recently-viewed)
 3. [Queue](#3-queue)
 4. [Player](#4-player)
 5. [Audio Controls](#5-audio-controls)
@@ -77,18 +84,21 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 ## 2. Find Podcasts (Search)
 
-**What it is:** A full-screen sheet for discovering and subscribing to podcasts. The primary way to add new podcasts to Autohop.
+**What it is:** A full-screen sheet for finding and subscribing to podcasts. The primary way to add new podcasts to Autohop.
 
 **Access:** Tap the `+` button on the Priority Stack toolbar, or **Find Podcasts** in the hamburger menu (☰).
+
+---
+
+### 2.1 Search
 
 **How it works:**
 1. User types a search term. Results appear automatically after a short debounce (400ms).
 2. Results are fetched from the iTunes podcast catalog — no account or API key required.
-3. Tapping a result opens a **podcast preview card** showing artwork, title, author, genre, and episode count.
-4. Tapping **Subscribe** fetches the podcast's RSS feed and adds the subscription using the same pipeline as manual RSS entry.
+3. Tapping a result opens the **Podcast Preview** page.
 
 **Search states:**
-- **Idle** — prompt to search, with an "Enter RSS URL" button for direct feed URL entry
+- **Idle** — prompt to search + Recently Viewed history list (if any) + "Enter RSS URL" button
 - **Loading** — spinner while results are fetching
 - **Results** — list of matching podcasts; "Enter RSS URL" link at the bottom of the list
 - **Empty** — `ContentUnavailableView` when the search returns no matches
@@ -96,9 +106,73 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **RSS URL entry:** Available from both the idle state and the results list footer. Navigates to the Add RSS Feed screen for users who have a direct feed URL.
 
-**Subscribe flow:** On tapping Subscribe, Autohop fetches the podcast's RSS feed, parses it, and adds the subscription. Duplicate-feed detection prevents adding the same podcast twice.
-
 **Results filtering:** Podcasts with no RSS feed URL (Apple Podcasts exclusives) are silently excluded from results.
+
+**Already subscribed:** If the user taps a result for a podcast they are already actively subscribed to, they are redirected straight to the existing Podcast Episodes page — no duplicate subscription is created.
+
+---
+
+### 2.2 Podcast Preview Page
+
+Tapping a search result (or a Recently Viewed row) opens the Podcast Preview page. The RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load.
+
+**Page structure:**
+1. **Header** — 120×120pt artwork, title, explicit/video pills, description (2-line truncated), author · categories
+2. **Subscribe button** — full-width, purple, always labelled "Subscribe". See §2.3 for behaviour.
+3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
+
+**Episode list:**
+- Shows up to 50 most recent episodes on first load.
+- Full status pills (Unplayed, Queued, Paused, Playing, Played, Archived), download progress bar, date, duration — identical to the Podcast Episodes page.
+- Every episode row is a `NavigationLink` to Episode Detail.
+- **Load Older Episodes** button appears when 50+ episodes are loaded. Fetches full episode history.
+
+**Episode swipe actions** — identical to Podcast Episodes page:
+- Leading: **Play** (green), **Play Next** (blue)
+- Trailing: **Archive / Unarchive** (purple), **Play Last** (orange)
+
+---
+
+### 2.3 Subscribe Button Behaviour
+
+The Subscribe button on the Podcast Preview page always shows the label "Subscribe". Its action depends on the current subscription state for that feed:
+
+| Current state | Action |
+|---|---|
+| No subscription exists | Creates a new active subscription, inserts at top of Priority Stack |
+| Browse subscription exists (auto-created, inactive) | Activates it, clears browse status, moves to top of Priority Stack |
+| Already actively subscribed | User is redirected at search level — Subscribe button is never shown |
+
+---
+
+### 2.4 Browse Subscriptions
+
+When a user opens a Podcast Preview page, Autohop silently creates a **browse subscription** in the background. This enables the fully interactive episode list from first load without requiring the user to explicitly subscribe.
+
+**Browse subscriptions are invisible to the user** — they do not appear in the Priority Stack or anywhere else in the app. They are only visible in the Search sheet's Recently Viewed history.
+
+**Behaviour:**
+- Marked `excludeFromAutoFeedRefresh = true` (not polled for new episodes)
+- Stored with a `browseDate` timestamp
+- Retained for **30 days** from the most recent visit
+- On revisit: episodes are refreshed (new content appears) and the 30-day clock resets
+- **Automatically deleted** after 30 days if no episode has been played or downloaded
+- Converted to a full active subscription when the user taps **Subscribe**
+
+**If a user plays, queues, or archives an episode** from the preview page without subscribing, the browse subscription is retained (episodes have been acted on) but the podcast remains invisible in the Priority Stack until the user explicitly subscribes.
+
+---
+
+### 2.5 Recently Viewed
+
+The Search idle state shows a **Recently Viewed** section listing all browse subscriptions, sorted by most recent visit.
+
+Each row shows:
+- Podcast artwork (44×44pt)
+- Title and author
+- "Viewed [date]" caption
+
+Tapping a row navigates back to the Podcast Preview page for that podcast, refreshing episodes and resetting the 30-day clock.
 
 ---
 
@@ -535,3 +609,4 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 | excludeFromAutoFeedRefresh | false |
 | autoArchiveSettings | AutoArchiveSettings.default |
 | playbackPreference | PlaybackPreference.default |
+| browseDate | nil (nil = real subscription; non-nil = auto-created browse subscription) |

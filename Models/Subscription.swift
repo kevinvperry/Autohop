@@ -146,6 +146,9 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     public var excludeFromAutoFeedRefresh: Bool
     public var categories: [String]
     public var isExplicit: Bool?
+    /// Non-nil when this subscription was auto-created by opening a search preview.
+    /// Used for 30-day browse history retention and cleanup.
+    public var browseDate: Date?
 
     public init(
         id: UUID = UUID(),
@@ -179,6 +182,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         self.excludeFromAutoFeedRefresh = excludeFromAutoFeedRefresh
         self.categories = categories
         self.isExplicit = isExplicit
+        self.browseDate = nil
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -200,6 +204,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         case excludeFromAutoFeedRefresh
         case categories
         case isExplicit
+        case browseDate
     }
 
     public init(from decoder: Decoder) throws {
@@ -221,6 +226,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         excludeFromAutoFeedRefresh = try container.decodeIfPresent(Bool.self, forKey: .excludeFromAutoFeedRefresh) ?? false
         categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
         isExplicit = try container.decodeIfPresent(Bool.self, forKey: .isExplicit)
+        browseDate = try container.decodeIfPresent(Date.self, forKey: .browseDate)
 
         autoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .autoArchiveSettings) ?? .default
     }

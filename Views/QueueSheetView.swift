@@ -5,6 +5,8 @@ struct QueueSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isRefreshing = false
     @State private var appearTime: Date?
+    @State private var rowOffsets: [UUID: CGFloat] = [:]
+    @State private var rowOpacities: [UUID: Double] = [:]
 
     private let logger = AppLogger.shared
 
@@ -88,6 +90,8 @@ struct QueueSheetView: View {
                                     }
                                 }
                             }
+                            .offset(y: rowOffsets[episode.id] ?? 0)
+                            .opacity(rowOpacities[episode.id] ?? 1)
                             .contentShape(Rectangle())
                             .listRowBackground(isCurrent ? Color.purple.opacity(0.08) : Color.clear)
                             .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -100,6 +104,7 @@ struct QueueSheetView: View {
                                 .tint(.green)
 
                                 Button {
+                                    animateRow(id: episode.id, direction: .up)
                                     appState.playEpisodeNext(episode)
                                 } label: {
                                     Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
@@ -116,7 +121,18 @@ struct QueueSheetView: View {
                                 }
                                 .tint(.purple)
 
+                                if pinnedNext || pinnedLast {
+                                    Button {
+                                        animateRow(id: episode.id, direction: .down)
+                                        appState.unpinEpisode(episode)
+                                    } label: {
+                                        Label("Unpin", systemImage: "pin.slash.fill")
+                                    }
+                                    .tint(.teal)
+                                }
+
                                 Button {
+                                    animateRow(id: episode.id, direction: .down)
                                     appState.playEpisodeLast(episode)
                                 } label: {
                                     Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
@@ -223,6 +239,28 @@ struct QueueSheetView: View {
             return "Yesterday"
         }
         return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private enum RowMoveDirection { case up, down }
+
+    private func animateRow(id: UUID, direction: RowMoveDirection) {
+        let targetOffset: CGFloat = direction == .up ? -10 : 10
+        rowOffsets[id] = 0
+        rowOpacities[id] = 1
+        withAnimation(.easeIn(duration: 0.18)) {
+            rowOffsets[id] = targetOffset
+            rowOpacities[id] = 0.5
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
+                rowOffsets[id] = 0
+                rowOpacities[id] = 1
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            rowOffsets.removeValue(forKey: id)
+            rowOpacities.removeValue(forKey: id)
+        }
     }
 
     private func artwork(url: URL?, pinnedNext: Bool, pinnedLast: Bool) -> some View {

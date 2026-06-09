@@ -8,7 +8,7 @@ Autohop is a native iOS podcast player built around a single idea: your time is 
 
 Autohop is a **priority-playlist focused podcast player** aimed at serious, high-volume podcast listeners who want a premium, low-friction experience. The goal is an "endless" listening experience that requires minimal engagement from the user once set up, allowing them to stay present in whatever they're actually doing — driving, exercising, working — while the app keeps their listening moving forward without interruption.
 
-Autohop is not trying to help users discover podcasts. It is built for people who already know what they love, subscribe to more shows than they can easily keep up with, and want a player that respects both their taste and their time. No discovery algorithm. No editorial charts. No social features. Just their shows, in their order, played exactly the way they want them.
+Autohop is built for people who already know what they love — who subscribe to more shows than they can easily keep up with and want a player that respects both their taste and their time. It keeps their shows organised, always in the right order, played exactly the way they want them.
 
 ## Core Design Goals
 
@@ -32,6 +32,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
+- Podcast search via the iTunes catalog — search by name, author, or keyword; browse episode list before subscribing; 30-day recently viewed history
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
 - Vocal Boost (Off / Light / Standard / Strong, per-podcast) via AVAudioUnitEQ

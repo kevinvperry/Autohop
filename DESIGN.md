@@ -1,5 +1,7 @@
 # Autohop Design System
 
+> **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
+
 The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **Individual Episode** pages are the canonical design references for Autohop. All other pages must match the patterns defined here. Each pattern has a **label** so it can be referenced directly in future instructions (e.g. "apply `EpisodeStatusPill` to the History page").
 
 ---
@@ -1292,11 +1294,12 @@ ContentUnavailableView(
 
 A full-screen sheet containing its own `NavigationStack`. Presented from `PodcastsView` (`+` button) and `MenuSheetView` ("Find Podcasts"). Forced dark mode.
 
-**Four display phases:**
-- **Idle** — centered magnifying glass icon + prompt copy + "Enter RSS URL" bordered button at the bottom
-- **Loading** — centered `ProgressView("Searching…")`
+**Five display phases:**
+- **Idle** — centred magnifying glass icon + prompt copy + Recently Viewed history list (if any) + "Enter RSS URL" bordered button at the bottom
+- **Loading** — centred `ProgressView("Searching…")`
 - **Results** — `List` of podcast rows + "Enter RSS URL" footer row (navigates to `AddFeedView`)
-- **Empty / Failed** — `ContentUnavailableView`
+- **Empty** — `ContentUnavailableView.search(text:)`
+- **Failed** — `ContentUnavailableView` with error message
 
 **Search bar:** `.searchable(placement: .navigationBarDrawer(displayMode: .always))`. Debounce: 400ms via `Task.sleep` in `PodcastSearchViewModel`. Results update automatically as the user types.
 
@@ -1306,33 +1309,48 @@ A full-screen sheet containing its own `NavigationStack`. Presented from `Podcas
 - **Author** — `.subheadline`, `.secondary`, `lineLimit(1)`
 - **Genre** — `.caption`, `.tertiary`, `lineLimit(1)`
 
-Result rows use `NavigationLink(value: result)` with `navigationDestination(for: PodcastSearchResult.self)` pushing `PodcastPreviewView`.
+**Navigation destinations:**
+- `navigationDestination(for: PodcastSearchResult.self)` — checks for an existing active subscription at the tapped feed URL; if found, pushes `SubscriptionEpisodesView`; otherwise pushes `PodcastPreviewView`.
+- `navigationDestination(for: UUID.self)` — used by Recently Viewed rows. Routes to `PodcastPreviewView` (browse/inactive) or `SubscriptionEpisodesView` (active) by subscription ID.
+
+**Recently Viewed row layout:**
+- **Artwork** — 44×44, `cornerRadius 9`
+- **Title** — `.headline.weight(.semibold)`, `.primary`, `lineLimit(1)`
+- **Author** — `.subheadline`, `.secondary`, `lineLimit(1)`
+- **Browse date** — `.caption`, `.tertiary` — "Viewed today / yesterday / [abbreviated date]"
 
 **Cancel button:** `.topBarLeading` toolbar item — dismisses the sheet.
 
 ---
 
-## Podcast Preview / Subscribe View
+## Podcast Preview Page
 
 **Label: `View-PodcastPreview`**
 
-Pushed onto the `PodcastSearchView` navigation stack when a search result is tapped. A `ScrollView` centred layout.
+Pushed onto the `PodcastSearchView` navigation stack when a search result or Recently Viewed row is tapped. A `VStack` layout (not `ScrollView`) — the episode list is a `List` that fills remaining vertical space.
 
-Structure (top to bottom):
-1. **Artwork** — 130×130 pt, `cornerRadius 22`, `shadow(color: black.opacity(0.45), radius: 20, y: 10)`, `Artwork-Placeholder` fallback. Top padding `32 pt`.
-2. **Title** — `.title2.weight(.bold)`, `multilineTextAlignment(.center)`
-3. **Author** — `.subheadline`, `.secondary`, `multilineTextAlignment(.center)`
-4. **Genre + episode count** — `HStack` of `Label` views, `.caption`, `.tertiary`. Genre uses `tag` icon; episode count uses `waveform` icon.
-5. **Subscribe button** — full-width, height `50 pt`, `.borderedProminent` style, `.purple` tint. Shows `ProgressView` while fetching. Disabled during fetch. Label: `Label("Subscribe", systemImage: "plus.circle.fill")`, `.headline` font.
-6. **Error message** — `.caption`, `.red`, `multilineTextAlignment(.center)`. Shown below the button on failure.
+A browse subscription is created automatically in the background when the feed finishes loading (`.task`). This means the episode list is always fully interactive from first load. See FEATURES.md §2.4 for the full browse subscription lifecycle.
 
-**Subscribe flow:**
-1. Taps Subscribe → fetches RSS via `URLSession.shared.data(from: feedURL)`
-2. Parses with `RSSParser().parse(data:)`
-3. Calls `subscriptionStore.add(parsedFeed:feedURL:)`
-4. On success: `dismiss()` (pops back to search)
-5. On `duplicateFeed` error: inline error message, button re-enabled
-6. On other error: inline error message prompting RSS URL fallback, button re-enabled
+**Toolbar:** Back button (`chevron.left.circle.fill`) + `ReturnToPlayerButton` — leading placement. Matches all other pushed pages.
+
+**Header** — matches `Header-SubscriptionPage` with the addition of a Subscribe button:
+1. **Artwork** — 120×120 pt, `cornerRadius 20`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
+2. **Title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
+3. **Explicit / Video pills** — shown when applicable, centred below title
+4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, `lineLimit(2)`, HTML-stripped
+5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
+6. **Subscribe button** — full-width, height `50 pt`, `.borderedProminent`, `.purple` tint. Label always `Label("Subscribe", systemImage: "plus.circle.fill")`, `.headline`. Shows `ProgressView` while active. See FEATURES.md §2.3 for action behaviour.
+
+**Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary` — matches `SubscriptionEpisodesView`.
+
+**Episode list** — a `List` in a `RoundedRectangle(cornerRadius: 16)` card with `Color.white.opacity(0.08)` background. Identical layout, swipe actions, and status pills to `SubscriptionEpisodesView`:
+- `NavigationLink` to `EpisodeDetailView` for each row
+- Leading swipe: Play (green), Play Next (blue)
+- Trailing swipe: Archive/Unarchive (purple), Play Last (orange)
+- Download progress bar
+- **Load Older Episodes** button at ≥50 episodes — calls `appState.loadFullEpisodeHistory(for:)`
+
+**Loading state:** While the feed is fetching and no subscription exists yet, a centred `ProgressView("Loading feed…")` is shown in place of the content view.
 
 ---
 
