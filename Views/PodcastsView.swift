@@ -179,10 +179,12 @@ struct PodcastsView: View {
 
                         if sub.excludeFromAutoFeedRefresh {
                             EpisodeStatusPill(kind: .inactive)
-                        } else if episode.playedState == .archived {
-                            EpisodeStatusPill(kind: .archived)
                         } else if episode.playedState == .played {
                             EpisodeStatusPill(kind: .played)
+                        } else if episode.playedState == .archived {
+                            let position = appState.effectivePlaybackTime(for: episode)
+                            let completed = episode.durationSeconds.map { position >= $0 * 0.95 } ?? false
+                            EpisodeStatusPill(kind: completed ? .played : .archived)
                         } else if episode.downloadState == .notDownloaded || episode.downloadState == .failed {
                             Button("Download") {
                                 Task { await appState.downloadLatestEpisode(for: sub) }

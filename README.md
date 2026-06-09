@@ -41,9 +41,10 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Audio and video podcast support with landscape unlock for full-screen video
 - Background feed refresh (BGAppRefreshTask, cursor-based round-robin)
 - Configurable foreground poll interval and per-podcast exclude-from-refresh
-- Auto-archive policies per subscription (off / 24h / 7d / 30d)
-- Episode status tracking: Queued / Midway / Playing / Played / Archived / Inactive
-- Listening history store
+- Auto-archive policies per subscription (Never / After Playing / 24h / 2d / 7d; inactive timeout; episode limit)
+- Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
+- Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
+- Playback Stats: lifetime totals for listening time and time saved by Variable Speed, Trim Silence, Skipping, and Auto Skip
 - New episode push notifications (per-podcast)
 - Keep screen awake during playback option
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)

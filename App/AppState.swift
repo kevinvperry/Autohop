@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     let settingsStore: SettingsStoring
     let subscriptionStore: SubscriptionStore
     let listeningHistoryStore = ListeningHistoryStore()
+    let playbackStatsStore = PlaybackStatsStore()
     let downloadActivityStore = DownloadActivityStore()
 
     // Player state
@@ -295,6 +296,12 @@ final class AppState: ObservableObject {
                 if state.positionSaveCounter % 20 == 0 {
                     state.savePlaybackPosition()
                 }
+
+                // Accumulate playback stats every tick (0.5 s interval).
+                if let ep = state.currentPlayerEpisode,
+                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
+                    state.playbackStatsStore.addListeningTime(0.5, speed: sub.playbackPreference.speed)
+                }
             }
         }
 
@@ -331,6 +338,17 @@ final class AppState: ObservableObject {
                     )
                 }
             }
+        }
+
+        // Playback stats
+        playbackEngine.onManualSkipForward = { [weak state] seconds in
+            Task { @MainActor in state?.playbackStatsStore.addManualSkipForward(seconds) }
+        }
+        playbackEngine.onAutoSkip = { [weak state] seconds in
+            Task { @MainActor in state?.playbackStatsStore.addAutoSkip(seconds) }
+        }
+        playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
+            Task { @MainActor in state?.playbackStatsStore.addTrimSilenceSaved(seconds) }
         }
 
         // Background download completion (post app-relaunch path)
@@ -1099,7 +1117,8 @@ final class AppState: ObservableObject {
 
     func refreshListeningHistory() {
         let calendar = Calendar.current
-        let grouped = Dictionary(grouping: listeningHistoryStore.entries) { entry -> String in
+        let commenced = listeningHistoryStore.entries.filter { $0.listenedSeconds >= 60 || $0.lastPositionSeconds >= 60 }
+        let grouped = Dictionary(grouping: commenced) { entry -> String in
             if calendar.isDateInToday(entry.lastListenedAt) { return "Today" }
             if calendar.isDateInYesterday(entry.lastListenedAt) { return "Yesterday" }
             return entry.lastListenedAt.formatted(date: .abbreviated, time: .omitted)
@@ -1109,7 +1128,7 @@ final class AppState: ObservableObject {
             .sorted { lhs, rhs in
                 (lhs.1.first?.lastListenedAt ?? .distantPast) > (rhs.1.first?.lastListenedAt ?? .distantPast)
             }
-        completedEpisodeCount = listeningHistoryStore.entries.filter { $0.status == .played }.count
+        completedEpisodeCount = commenced.filter { $0.status == .played || $0.status == .archived }.count
     }
 
     private func drainDownloadQueue() {
@@ -2654,5 +2673,95 @@ final class ListeningHistoryStore: ObservableObject {
             return "\(subscriptionPrefix)|title-date:\(episode.title.lowercased())|\(Int(publishedAt.timeIntervalSince1970))"
         }
         return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
+    }
+}
+
+// MARK: - PlaybackStatsStore
+
+struct PlaybackStats: Codable {
+    var totalListeningSeconds: TimeInterval = 0
+    var timeSavedVariableSpeed: TimeInterval = 0
+    var timeSavedTrimSilence: TimeInterval = 0
+    var timeSavedManualSkip: TimeInterval = 0
+    var timeSavedAutoSkip: TimeInterval = 0
+    var startedAt: Date = Date()
+
+    var totalTimeSaved: TimeInterval {
+        timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
+    }
+}
+
+@MainActor
+final class PlaybackStatsStore: ObservableObject {
+    @Published private(set) var stats = PlaybackStats()
+
+    private var lastSavedAt: Date?
+
+    private static let fileURL: URL? = {
+        guard let appSupport = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        return appSupport.appendingPathComponent("Autohop/playback-stats.json")
+    }()
+
+    init() { load() }
+
+    func addListeningTime(_ seconds: TimeInterval, speed: Double) {
+        guard seconds > 0 else { return }
+        stats.totalListeningSeconds += seconds
+        if speed > 1.0 {
+            // Time that would have elapsed at 1× minus time actually elapsed.
+            stats.timeSavedVariableSpeed += seconds * (speed - 1.0) / speed
+        }
+        saveThrottled()
+    }
+
+    func addManualSkipForward(_ seconds: TimeInterval) {
+        guard seconds > 0 else { return }
+        stats.timeSavedManualSkip += seconds
+        saveThrottled()
+    }
+
+    func addAutoSkip(_ seconds: TimeInterval) {
+        guard seconds > 0 else { return }
+        stats.timeSavedAutoSkip += seconds
+        saveThrottled()
+    }
+
+    func addTrimSilenceSaved(_ seconds: TimeInterval) {
+        guard seconds > 0 else { return }
+        stats.timeSavedTrimSilence += seconds
+        saveThrottled()
+    }
+
+    func save() {
+        guard let url = Self.fileURL else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(stats)
+            try data.write(to: url, options: [.atomic])
+            lastSavedAt = Date()
+        } catch {
+            AppLogger.shared.warning("stats.saveFailed", "Could not save playback stats", metadata: [
+                "error": String(describing: error)
+            ])
+        }
+    }
+
+    private func saveThrottled() {
+        if let lastSavedAt, Date().timeIntervalSince(lastSavedAt) < 10 { return }
+        save()
+    }
+
+    private func load() {
+        guard let url = Self.fileURL,
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let loaded = try? JSONDecoder().decode(PlaybackStats.self, from: data)
+        else { return }
+        stats = loaded
     }
 }

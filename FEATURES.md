@@ -38,16 +38,17 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
     - [Feed section](#106-feed-section)
     - [Danger section](#107-danger-section)
 11. [Listening History](#11-listening-history)
-12. [OPML Import & Export](#12-opml-import--export)
-13. [Notifications](#13-notifications)
-14. [App Settings](#14-app-settings)
-    - [Podcast Polling](#141-podcast-polling)
-    - [Auto Archive](#142-auto-archive)
-    - [Downloading](#143-downloading)
-    - [Controls](#144-controls)
-    - [Subscriptions](#145-subscriptions)
-    - [Storage](#146-storage)
-    - [About](#147-about)
+12. [Stats](#12-stats)
+13. [OPML Import & Export](#13-opml-import--export)
+14. [Notifications](#14-notifications)
+15. [App Settings](#15-app-settings)
+    - [Podcast Polling](#151-podcast-polling)
+    - [Auto Archive](#152-auto-archive)
+    - [Downloading](#153-downloading)
+    - [Controls](#154-controls)
+    - [Subscriptions](#155-subscriptions)
+    - [Storage](#156-storage)
+    - [About](#157-about)
 
 ---
 
@@ -75,7 +76,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Toolbar buttons (left to right):**
 - Return to Player (play.circle.fill)
-- Hamburger menu (☰) → Find Podcasts, Downloads, Listening History, Import OPML, Settings
+- Hamburger menu (☰) → Find Podcasts, Downloads, Listening History, Stats, Import OPML, Settings
 - Reorder toggle ("Reorder" / "Done")
 - Refresh all feeds (arrow.clockwise)
 - Add Podcast / Find Podcasts (+) — opens the podcast search sheet
@@ -435,14 +436,16 @@ Only shown when the podcast's latest episode has chapter data.
 
 ## 11. Listening History
 
-**Access:** Settings → Subscriptions → Listening History.
+**Access:** Hamburger menu (☰) on the Priority page → Listening History. Also accessible from Settings → Subscriptions → Listening History.
 
 **What it tracks:** Every episode the user has listened to, recorded in `ListeningHistoryStore` → `listening-history.json`.
 
+**Minimum threshold:** Episodes where `listenedSeconds < 60 AND lastPositionSeconds < 60` are excluded from all lists. Episodes played or archived without at least 1 minute of actual playback are not shown.
+
 ### Stats header
 Two summary cards at the top of the page:
-- **Listening Time** — total hours and minutes across all recorded history.
-- **Episodes** — total count of completed episodes (`AppState.completedEpisodeCount`).
+- **Listening Time** — total hours and minutes across all recorded history entries that meet the minimum threshold.
+- **Episodes** — total count of episodes with status `.played` or `.archived` that meet the minimum threshold (i.e., all finished episodes, including auto-archived ones that were genuinely listened to).
 
 ### History list
 Episodes grouped by date: Today, Yesterday, then older dates (abbreviated format). Within each group, sorted most recent first. Each row shows:
@@ -458,16 +461,41 @@ Episodes grouped by date: Today, Yesterday, then older dates (abbreviated format
 | Archived | Episode was archived. |
 
 ### Search
-Filters by episode title or podcast name. Results update as the user types. Search bar is always visible (`.navigationBarDrawer(displayMode: .always)`).
+Filters by episode title or podcast name. Results update as the user types. Same 60-second minimum threshold applies to search results. Search bar is always visible (`.navigationBarDrawer(displayMode: .always)`).
 
 ---
 
-## 12. OPML Import & Export
+## 12. Stats
+
+**Access:** Hamburger menu (☰) on the Priority page → Stats.
+
+**What it is:** A lifetime summary of the user's listening activity and time saved by Autohop's audio processing features. Data is persisted in `PlaybackStatsStore` → `playback-stats.json`.
+
+### Header
+Displays total listening time since the user first launched the app, in the format `"Since [date] you've listened for [days/hours]"`.
+
+### Time Saved breakdown
+Four rows showing how much time has been saved by each feature:
+
+| Stat | How it's calculated |
+|---|---|
+| **Skipping** | Sum of all manual skip-forward taps (skip amount, not wall clock). Backward skips are not counted. |
+| **Variable Speed** | Each playback tick: `tickInterval × (speed − 1.0) / speed`. Represents the difference between listening at 1× vs. the user's set speed. |
+| **Trim Silence** | Frames dropped by `SilenceDetector` per buffer chunk, converted to seconds. Accumulated during the buffer-read loop. |
+| **Auto Skipping** | Start skip and end skip amounts at the moment they fire (real file time, not wall clock). |
+
+### Total
+Sum of all four time-saved categories, displayed in purple.
+
+---
+
+## 13. OPML Import & Export
+
+**Access:** Hamburger menu (☰) → Settings → Subscriptions → Import OPML / Export OPML. Also accessible from within the Subscriptions section of App Settings.
 
 **What it is:** OPML (Outline Processor Markup Language) is the standard format for transferring podcast subscription lists between apps.
 
 ### Import
-**Access:** Settings → Subscriptions → Import OPML (or Settings page directly).
 1. Tap Import OPML.
 2. Select an `.opml` or `.xml` file from Files or Downloads.
 3. Autohop subscribes to each feed URL found in the file.
@@ -476,16 +504,16 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 **Accepted file types:** `.opml`, `.xml`, plain text.
 
 ### Export
-**Access:** Settings → Subscriptions → Export OPML.
 - Exports all current feed URLs and subscription order.
 - Default filename: `autohop-subscriptions.opml`.
 - Disabled when the subscription list is empty.
 
 ---
 
-## 13. Notifications
+## 14. Notifications
 
 **Two levels of control:**
+
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
@@ -498,13 +526,13 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-## 14. App Settings
+## 15. App Settings
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
 ---
 
-### 14.1 Podcast Polling
+### 15.1 Podcast Polling
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
@@ -513,7 +541,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 14.2 Auto Archive
+### 15.2 Auto Archive
 
 | Setting | Description |
 |---|---|
@@ -521,7 +549,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 14.3 Downloading
+### 15.3 Downloading
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
@@ -531,7 +559,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 14.4 Controls
+### 15.4 Controls
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
@@ -542,19 +570,19 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 14.5 Subscriptions
+### 15.5 Subscriptions
 
 | Setting | Type | Description |
 |---|---|---|
 | Manage podcasts | Navigation link | Opens the Priority Stack (PodcastsView) to reorder, add, or remove subscriptions. |
-| Find Podcasts | Navigation link | Opens the podcast search sheet. Search the iTunes catalog or enter an RSS feed URL directly. See [Section 2](#2-find-podcasts-search). |
+| Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
 | Listening History | Navigation link | Opens Listening History. See [Section 11](#11-listening-history). |
-| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 12](#12-opml-import--export). |
+| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
 | Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
 
 ---
 
-### 14.6 Storage
+### 15.6 Storage
 
 | Display | Description |
 |---|---|
@@ -562,7 +590,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 14.7 About
+### 15.7 About
 
 | Item | Description |
 |---|---|

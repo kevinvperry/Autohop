@@ -428,8 +428,9 @@ struct ListeningHistoryView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return appState.listeningHistoryGroups }
         let filtered = appState.listeningHistoryStore.entries.filter {
-            $0.episodeTitle.lowercased().contains(query)
-                || $0.podcastTitle.lowercased().contains(query)
+            ($0.listenedSeconds >= 60 || $0.lastPositionSeconds >= 60)
+                && ($0.episodeTitle.lowercased().contains(query)
+                    || $0.podcastTitle.lowercased().contains(query))
         }
         return groupByDate(filtered)
     }
@@ -570,4 +571,103 @@ private func formattedDuration(_ seconds: TimeInterval) -> String {
         return "\(minutes)m"
     }
     return "\(seconds)s"
+}
+
+private func formattedLongDuration(_ seconds: TimeInterval) -> String {
+    let totalSeconds = max(0, Int(seconds.rounded()))
+    let days = totalSeconds / 86400
+    let hours = (totalSeconds % 86400) / 3600
+    let minutes = (totalSeconds % 3600) / 60
+
+    if days > 0 {
+        if hours > 0 { return "\(days)d \(hours)h" }
+        return "\(days)d"
+    }
+    if hours > 0 {
+        if minutes > 0 { return "\(hours)h \(minutes)m" }
+        return "\(hours)h"
+    }
+    if minutes > 0 { return "\(minutes)m" }
+    return "\(totalSeconds % 60)s"
+}
+
+// MARK: - StatsView
+
+struct StatsView: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var stats: PlaybackStats { appState.playbackStatsStore.stats }
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Since \(stats.startedAt.formatted(date: .abbreviated, time: .omitted)) you've listened for")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(formattedLongDuration(stats.totalListeningSeconds))
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundStyle(.purple)
+                }
+                .padding(.vertical, 8)
+                .listRowBackground(Color.clear)
+            }
+
+            Section("TIME SAVED BY") {
+                StatRow(
+                    icon: "arrow.uturn.forward",
+                    label: "Skipping",
+                    value: formattedLongDuration(stats.timeSavedManualSkip)
+                )
+                StatRow(
+                    icon: "gauge.with.needle",
+                    label: "Variable Speed",
+                    value: formattedLongDuration(stats.timeSavedVariableSpeed)
+                )
+                StatRow(
+                    icon: "scissors",
+                    label: "Trim Silence",
+                    value: formattedLongDuration(stats.timeSavedTrimSilence)
+                )
+                StatRow(
+                    icon: "forward.end",
+                    label: "Auto Skipping",
+                    value: formattedLongDuration(stats.timeSavedAutoSkip)
+                )
+            }
+
+            Section {
+                HStack {
+                    Text("Total")
+                        .font(.body.weight(.semibold))
+                    Spacer()
+                    Text(formattedLongDuration(stats.totalTimeSaved))
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.purple)
+                }
+            }
+        }
+        .navigationTitle("Stats")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                ReturnToPlayerButton()
+            }
+        }
+    }
+}
+
+private struct StatRow: View {
+    let icon: String
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Label(label, systemImage: icon)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
+    }
 }

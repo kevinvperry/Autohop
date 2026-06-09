@@ -22,6 +22,12 @@ protocol PlaybackControlling {
     var onTimeUpdate: ((TimeInterval) -> Void)? { get set }
     var onPlaybackInterrupted: (() -> Void)? { get set }
     var onPlaybackResumed: (() -> Void)? { get set }
+    /// Called when the user taps skip-forward. Parameter is seconds actually skipped.
+    var onManualSkipForward: ((TimeInterval) -> Void)? { get set }
+    /// Called when start/end skip fires automatically. Parameter is seconds skipped.
+    var onAutoSkip: ((TimeInterval) -> Void)? { get set }
+    /// Called from the buffer-read loop (background thread) with seconds of silence removed.
+    var onTrimSilenceSaved: ((TimeInterval) -> Void)? { get set }
     var currentEpisode: Episode? { get }
     var isPlaying: Bool { get }
     var videoPlayer: AVPlayer? { get }
@@ -107,6 +113,9 @@ final class PlaybackEngine: PlaybackControlling {
     var onTimeUpdate: ((TimeInterval) -> Void)?
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
+    var onManualSkipForward: ((TimeInterval) -> Void)?
+    var onAutoSkip: ((TimeInterval) -> Void)?
+    var onTrimSilenceSaved: ((TimeInterval) -> Void)?
 
     var isPlaying: Bool {
         engineIsPlaying || (player?.rate ?? 0 > 0)
@@ -180,6 +189,10 @@ final class PlaybackEngine: PlaybackControlling {
             durationSeconds = loadedDuration.isFinite && loadedDuration > 0 ? loadedDuration : episode.durationSeconds ?? 0
             pausedAtSeconds = preference.startSkipSeconds
             didFinishCurrentEpisode = false
+
+            if preference.startSkipSeconds > 0 {
+                onAutoSkip?(preference.startSkipSeconds)
+            }
 
             installPlayerObservers(for: item)
             if pausedAtSeconds > 0 {
@@ -264,7 +277,10 @@ final class PlaybackEngine: PlaybackControlling {
         ])
     }
 
-    func skipForward(seconds: TimeInterval) { seekBy(seconds) }
+    func skipForward(seconds: TimeInterval) {
+        onManualSkipForward?(seconds)
+        seekBy(seconds)
+    }
     func skipBackward(seconds: TimeInterval) { seekBy(-seconds) }
 
     // MARK: - Seek
@@ -484,6 +500,10 @@ final class PlaybackEngine: PlaybackControlling {
         pausedAtSeconds = preference.startSkipSeconds
         didFinishCurrentEpisode = false
 
+        if preference.startSkipSeconds > 0 {
+            onAutoSkip?(preference.startSkipSeconds)
+        }
+
         try engine.start()
         let now = CFAbsoluteTimeGetCurrent()
         resumedAt = now
@@ -599,6 +619,15 @@ final class PlaybackEngine: PlaybackControlling {
                     totalFrames: totalFrames,
                     sampleRate: sampleRate
                 )
+
+                // Accumulate silence savings: frames read minus frames scheduled for playback.
+                let inputFrames = AVAudioFrameCount(buffer.frameLength)
+                let outputFrames = outputBuffers.reduce(AVAudioFrameCount(0)) { $0 + $1.frameLength }
+                if outputFrames < inputFrames && sampleRate > 0 {
+                    let savedSeconds = Double(inputFrames - outputFrames) / sampleRate
+                    let cb = self.onTrimSilenceSaved
+                    DispatchQueue.main.async { cb?(savedSeconds) }
+                }
 
                 for (i, buf) in outputBuffers.enumerated() {
                     if self.engineReadCancelled { break }
@@ -1031,6 +1060,7 @@ final class PlaybackEngine: PlaybackControlling {
               seconds >= max(0, duration - preference.endSkipSeconds)
         else { return false }
 
+        onAutoSkip?(preference.endSkipSeconds)
         finishCurrentEpisode()
         logger.info("playback.endSkip", "End skip reached", metadata: ["episode": episode.title])
         return true

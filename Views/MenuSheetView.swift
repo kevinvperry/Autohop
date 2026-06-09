@@ -41,6 +41,12 @@ struct MenuSheetView: View {
                     Label("Listening History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                 }
 
+                NavigationLink {
+                    StatsView()
+                } label: {
+                    Label("Stats", systemImage: "chart.bar")
+                }
+
                 Button {
                     showOPMLImporter = true
                 } label: {

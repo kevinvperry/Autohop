@@ -26,8 +26,9 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Sleep Timer** | `SleepTimerSheetView` | Sheet | Set a timer to stop playback after a fixed duration or at the end of the current episode. |
 | **Downloads** | `DownloadsView` | Page | All episodes currently downloaded to the device. Shows file sizes and allows deletion. |
 | **App Settings** | `SettingsView` | Page | Global app configuration — default playback preferences, download behaviour, notifications, OPML import/export. |
-| **Listening History** | `ListeningHistoryView` | Page (inside App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. |
-| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Priority List toolbar. Shortcuts to Find Podcasts, Add RSS Feed, Downloads, and App Settings. |
+| **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
+| **Stats** | `StatsView` | Page (inside Menu) | Lifetime listening stats — total listening time and time saved by Variable Speed, Trim Silence, Skipping, and Auto Skip. |
+| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Priority List toolbar. Shortcuts to Find Podcasts, Downloads, Listening History, Stats, and App Settings. |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |
 
@@ -45,8 +46,10 @@ Priority List (PodcastsView)
 │   │   ├── Podcast Preview (PodcastPreviewView)
 │   │   └── Add RSS Feed (AddFeedView)
 │   ├── Downloads (DownloadsView)
+│   ├── Listening History (ListeningHistoryView)
+│   ├── Stats (StatsView)
 │   └── App Settings (SettingsView)
-│       ├── Listening History (ListeningHistoryView)
+│       ├── Listening History (ListeningHistoryView)   ← also reachable from Menu
 │       └── Acknowledgements (AcknowledgementsView)
 ├── [Sheet] Podcast Search (PodcastSearchView)       ← also reachable from + button
 ├── [Overlay] Player (PlayerView)
