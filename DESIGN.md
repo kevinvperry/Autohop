@@ -45,7 +45,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Button-MenuHamburger` | `line.3.horizontal` — opens `MenuSheetView` |
 | `Button-ReorderToggle` | Plain text "Reorder"/"Done" — toggles drag-to-reorder mode |
 | `Button-RefreshAll` | `arrow.clockwise` trailing button — shows spinner while loading, hidden when list empty |
-| `Button-AddFeed` | `plus` trailing button — navigates to Add RSS Feed |
+| `Button-AddFeed` | `plus` trailing button — opens the Find Podcasts search sheet |
 | `Button-ToolbarAction` | Bordered, regular size, icon-only, shows `ProgressView` while async work runs |
 | `Button-ContextualShortcut` | Downloads button in Queue toolbar — navigates + pulses purple when a download is active |
 | `Indicator-PulsingIcon` | `easeInOut` 0.6s repeating scale pulse for active background state |
@@ -1168,7 +1168,7 @@ Used on full navigation stack pages (Priority page). No "Done" dismiss button �
                 else { Label("Refresh All", systemImage: "arrow.clockwise") }
             }
             .disabled(isRefreshingAll)
-            NavigationLink { AddFeedView() } label: { Label("Add Feed", systemImage: "plus") }
+            Button { showSearch = true } label: { Label("Add Podcast", systemImage: "plus") }
         }
     }
 }
@@ -1286,6 +1286,56 @@ ContentUnavailableView(
 
 ---
 
+## Podcast Search Sheet
+
+**Label: `Sheet-PodcastSearch`**
+
+A full-screen sheet containing its own `NavigationStack`. Presented from `PodcastsView` (`+` button) and `MenuSheetView` ("Find Podcasts"). Forced dark mode.
+
+**Four display phases:**
+- **Idle** — centered magnifying glass icon + prompt copy + "Enter RSS URL" bordered button at the bottom
+- **Loading** — centered `ProgressView("Searching…")`
+- **Results** — `List` of podcast rows + "Enter RSS URL" footer row (navigates to `AddFeedView`)
+- **Empty / Failed** — `ContentUnavailableView`
+
+**Search bar:** `.searchable(placement: .navigationBarDrawer(displayMode: .always))`. Debounce: 400ms via `Task.sleep` in `PodcastSearchViewModel`. Results update automatically as the user types.
+
+**Result row layout** — identical to `ListRow-SubscriptionRow` artwork column + text stack, but simplified (no rank pill, no status pill):
+- **Artwork** — 44×44, `cornerRadius 9`, `Artwork-Placeholder` fallback
+- **Title** — `.headline.weight(.semibold)`, `.primary`, `lineLimit(1)`
+- **Author** — `.subheadline`, `.secondary`, `lineLimit(1)`
+- **Genre** — `.caption`, `.tertiary`, `lineLimit(1)`
+
+Result rows use `NavigationLink(value: result)` with `navigationDestination(for: PodcastSearchResult.self)` pushing `PodcastPreviewView`.
+
+**Cancel button:** `.topBarLeading` toolbar item — dismisses the sheet.
+
+---
+
+## Podcast Preview / Subscribe View
+
+**Label: `View-PodcastPreview`**
+
+Pushed onto the `PodcastSearchView` navigation stack when a search result is tapped. A `ScrollView` centred layout.
+
+Structure (top to bottom):
+1. **Artwork** — 130×130 pt, `cornerRadius 22`, `shadow(color: black.opacity(0.45), radius: 20, y: 10)`, `Artwork-Placeholder` fallback. Top padding `32 pt`.
+2. **Title** — `.title2.weight(.bold)`, `multilineTextAlignment(.center)`
+3. **Author** — `.subheadline`, `.secondary`, `multilineTextAlignment(.center)`
+4. **Genre + episode count** — `HStack` of `Label` views, `.caption`, `.tertiary`. Genre uses `tag` icon; episode count uses `waveform` icon.
+5. **Subscribe button** — full-width, height `50 pt`, `.borderedProminent` style, `.purple` tint. Shows `ProgressView` while fetching. Disabled during fetch. Label: `Label("Subscribe", systemImage: "plus.circle.fill")`, `.headline` font.
+6. **Error message** — `.caption`, `.red`, `multilineTextAlignment(.center)`. Shown below the button on failure.
+
+**Subscribe flow:**
+1. Taps Subscribe → fetches RSS via `URLSession.shared.data(from: feedURL)`
+2. Parses with `RSSParser().parse(data:)`
+3. Calls `subscriptionStore.add(parsedFeed:feedURL:)`
+4. On success: `dismiss()` (pops back to search)
+5. On `duplicateFeed` error: inline error message, button re-enabled
+6. On other error: inline error message prompting RSS URL fallback, button re-enabled
+
+---
+
 ## Return to Player Button
 
 **Label: `Button-ReturnToPlayer`**
@@ -1356,16 +1406,17 @@ if !subscriptions.isEmpty {
 
 ---
 
-## Add Feed Button
+## Add Podcast Button
 
 **Label: `Button-AddFeed`**
 
-Rightmost trailing button. `NavigationLink` to `AddFeedView`.
+Rightmost trailing button. Opens `PodcastSearchView` as a sheet — the primary podcast discovery and subscription flow. `AddFeedView` (RSS URL entry) is accessible from within `PodcastSearchView`.
 
 ```swift
-NavigationLink { AddFeedView() } label: {
-    Label("Add Feed", systemImage: "plus")
+Button { showSearch = true } label: {
+    Label("Add Podcast", systemImage: "plus")
 }
+.sheet(isPresented: $showSearch) { PodcastSearchView() }
 ```
 
 ---

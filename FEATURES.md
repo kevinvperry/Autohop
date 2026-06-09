@@ -11,35 +11,36 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 ## Table of Contents
 
 1. [Priority Stack](#1-priority-stack)
-2. [Queue](#2-queue)
-3. [Player](#3-player)
-4. [Audio Controls](#4-audio-controls)
-   - [Playback Speed](#41-playback-speed)
-   - [Trim Silence](#42-trim-silence)
-   - [Vocal Boost](#43-vocal-boost)
-5. [Chapters](#5-chapters)
-6. [Downloads](#6-downloads)
-7. [Sleep Timer](#7-sleep-timer)
-8. [Video Podcasts](#8-video-podcasts)
-9. [Per-Podcast Settings](#9-per-podcast-settings)
-   - [Podcast section](#91-podcast-section)
-   - [Playback section](#92-playback-section)
-   - [Automation section](#93-automation-section)
-   - [Auto Archive section](#94-auto-archive-section)
-   - [Chapter Filter section](#95-chapter-filter-section)
-   - [Feed section](#96-feed-section)
-   - [Danger section](#97-danger-section)
-10. [Listening History](#10-listening-history)
-11. [OPML Import & Export](#11-opml-import--export)
-12. [Notifications](#12-notifications)
-13. [App Settings](#13-app-settings)
-    - [Podcast Polling](#131-podcast-polling)
-    - [Auto Archive](#132-auto-archive)
-    - [Downloading](#133-downloading)
-    - [Controls](#134-controls)
-    - [Subscriptions](#135-subscriptions)
-    - [Storage](#136-storage)
-    - [About](#137-about)
+2. [Find Podcasts (Search)](#2-find-podcasts-search)
+3. [Queue](#3-queue)
+4. [Player](#4-player)
+5. [Audio Controls](#5-audio-controls)
+   - [Playback Speed](#51-playback-speed)
+   - [Trim Silence](#52-trim-silence)
+   - [Vocal Boost](#53-vocal-boost)
+6. [Chapters](#6-chapters)
+7. [Downloads](#7-downloads)
+8. [Sleep Timer](#8-sleep-timer)
+9. [Video Podcasts](#9-video-podcasts)
+10. [Per-Podcast Settings](#10-per-podcast-settings)
+    - [Podcast section](#101-podcast-section)
+    - [Playback section](#102-playback-section)
+    - [Automation section](#103-automation-section)
+    - [Auto Archive section](#104-auto-archive-section)
+    - [Chapter Filter section](#105-chapter-filter-section)
+    - [Feed section](#106-feed-section)
+    - [Danger section](#107-danger-section)
+11. [Listening History](#11-listening-history)
+12. [OPML Import & Export](#12-opml-import--export)
+13. [Notifications](#13-notifications)
+14. [App Settings](#14-app-settings)
+    - [Podcast Polling](#141-podcast-polling)
+    - [Auto Archive](#142-auto-archive)
+    - [Downloading](#143-downloading)
+    - [Controls](#144-controls)
+    - [Subscriptions](#145-subscriptions)
+    - [Storage](#146-storage)
+    - [About](#147-about)
 
 ---
 
@@ -67,14 +68,41 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Toolbar buttons (left to right):**
 - Return to Player (play.circle.fill)
-- Hamburger menu (☰) → Settings, Queue, Downloads
+- Hamburger menu (☰) → Find Podcasts, Downloads, Listening History, Import OPML, Settings
 - Reorder toggle ("Reorder" / "Done")
 - Refresh all feeds (arrow.clockwise)
-- Add RSS Feed (+)
+- Add Podcast / Find Podcasts (+) — opens the podcast search sheet
 
 ---
 
-## 2. Queue
+## 2. Find Podcasts (Search)
+
+**What it is:** A full-screen sheet for discovering and subscribing to podcasts. The primary way to add new podcasts to Autohop.
+
+**Access:** Tap the `+` button on the Priority Stack toolbar, or **Find Podcasts** in the hamburger menu (☰).
+
+**How it works:**
+1. User types a search term. Results appear automatically after a short debounce (400ms).
+2. Results are fetched from the iTunes podcast catalog — no account or API key required.
+3. Tapping a result opens a **podcast preview card** showing artwork, title, author, genre, and episode count.
+4. Tapping **Subscribe** fetches the podcast's RSS feed and adds the subscription using the same pipeline as manual RSS entry.
+
+**Search states:**
+- **Idle** — prompt to search, with an "Enter RSS URL" button for direct feed URL entry
+- **Loading** — spinner while results are fetching
+- **Results** — list of matching podcasts; "Enter RSS URL" link at the bottom of the list
+- **Empty** — `ContentUnavailableView` when the search returns no matches
+- **Failed** — error message if the network request fails
+
+**RSS URL entry:** Available from both the idle state and the results list footer. Navigates to the Add RSS Feed screen for users who have a direct feed URL.
+
+**Subscribe flow:** On tapping Subscribe, Autohop fetches the podcast's RSS feed, parses it, and adds the subscription. Duplicate-feed detection prevents adding the same podcast twice.
+
+**Results filtering:** Podcasts with no RSS feed URL (Apple Podcasts exclusives) are silently excluded from results.
+
+---
+
+## 3. Queue
 
 **What it is:** A sheet view showing the current automatic playback order — all downloaded, unplayed episodes sorted by podcast priority rank, with any manual overrides applied on top.
 
@@ -92,7 +120,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 ---
 
-## 3. Player
+## 4. Player
 
 **What it is:** The full-screen playback view. Permanent root of the navigation stack — always accessible.
 
@@ -112,11 +140,11 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 ---
 
-## 4. Audio Controls
+## 5. Audio Controls
 
 Accessed via the audio controls button on the Now Playing panel. Dark card sheet. Changes take effect immediately during playback.
 
-### 4.1 Playback Speed
+### 5.1 Playback Speed
 
 **Per-podcast setting.** Stored in `PlaybackPreference.speed`.
 
@@ -133,7 +161,7 @@ Accessed via the audio controls button on the Now Playing panel. Dark card sheet
 
 ---
 
-### 4.2 Trim Silence
+### 5.2 Trim Silence
 
 **Per-podcast setting.** Stored in `PlaybackPreference.trimSilence`. Only active on **audio** episodes — never applied to video.
 
@@ -152,7 +180,7 @@ Uses an RMS-based silence detection algorithm ported from Pocket Casts (`Silence
 
 ---
 
-### 4.3 Vocal Boost
+### 5.3 Vocal Boost
 
 **Per-podcast setting.** Stored in `PlaybackPreference.vocalBoostLevel`. Applied via AVAudioEngine on the engine path. For video or when both Vocal Boost and Trim Silence are off, AVPlayer is used instead (no engine path).
 
@@ -173,7 +201,7 @@ All non-off levels enable AVAudioSession's spoken audio mode. The processing cha
 
 ---
 
-## 5. Chapters
+## 6. Chapters
 
 **Availability:** The Chapters panel in the player is only shown when the current episode has embedded chapter data.
 
@@ -187,7 +215,7 @@ All non-off levels enable AVAudioSession's spoken audio mode. The processing cha
 
 ---
 
-## 6. Downloads
+## 7. Downloads
 
 **What it is:** A view showing download activity and recently archived downloaded episodes.
 
@@ -205,7 +233,7 @@ All non-off levels enable AVAudioSession's spoken audio mode. The processing cha
 
 ---
 
-## 7. Sleep Timer
+## 8. Sleep Timer
 
 **Access:** Sleep timer button on the Now Playing panel.
 
@@ -232,7 +260,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 ---
 
-## 8. Video Podcasts
+## 9. Video Podcasts
 
 **Support:** Full audio and video podcast support. `Episode.mediaKind` is either `.audio` or `.video`.
 
@@ -246,7 +274,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 ---
 
-## 9. Per-Podcast Settings
+## 10. Per-Podcast Settings
 
 **Access:** Priority page → tap podcast row → episode list → gear icon (⚙) in top-right toolbar.
 
@@ -254,7 +282,7 @@ The settings page is titled with the podcast name and groups settings into secti
 
 ---
 
-### 9.1 Podcast section
+### 10.1 Podcast section
 
 | Setting | Description |
 |---|---|
@@ -264,7 +292,7 @@ The settings page is titled with the podcast name and groups settings into secti
 
 ---
 
-### 9.2 Playback section
+### 10.2 Playback section
 
 All settings in this section are stored in `PlaybackPreference` on the `Subscription` model. Changes apply immediately if this podcast is currently playing.
 
@@ -280,7 +308,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 ---
 
-### 9.3 Automation section
+### 10.3 Automation section
 
 | Setting | Default | Description |
 |---|---|---|
@@ -289,7 +317,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 ---
 
-### 9.4 Auto Archive section
+### 10.4 Auto Archive section
 
 Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 12 hours, or immediately on demand via Settings → Run Auto Archive Now.
 
@@ -303,7 +331,7 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 
 ---
 
-### 9.5 Chapter Filter section
+### 10.5 Chapter Filter section
 
 Only shown when the podcast's latest episode has chapter data.
 
@@ -315,7 +343,7 @@ Only shown when the podcast's latest episode has chapter data.
 
 ---
 
-### 9.6 Feed section
+### 10.6 Feed section
 
 | Field | Description |
 |---|---|
@@ -323,7 +351,7 @@ Only shown when the podcast's latest episode has chapter data.
 
 ---
 
-### 9.7 Danger section
+### 10.7 Danger section
 
 | Action | Description |
 |---|---|
@@ -331,7 +359,7 @@ Only shown when the podcast's latest episode has chapter data.
 
 ---
 
-## 10. Listening History
+## 11. Listening History
 
 **Access:** Settings → Subscriptions → Listening History.
 
@@ -360,7 +388,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-## 11. OPML Import & Export
+## 12. OPML Import & Export
 
 **What it is:** OPML (Outline Processor Markup Language) is the standard format for transferring podcast subscription lists between apps.
 
@@ -381,7 +409,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-## 12. Notifications
+## 13. Notifications
 
 **Two levels of control:**
 
@@ -396,13 +424,13 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-## 13. App Settings
+## 14. App Settings
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
 ---
 
-### 13.1 Podcast Polling
+### 14.1 Podcast Polling
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
@@ -411,7 +439,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 13.2 Auto Archive
+### 14.2 Auto Archive
 
 | Setting | Description |
 |---|---|
@@ -419,7 +447,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 13.3 Downloading
+### 14.3 Downloading
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
@@ -429,7 +457,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 13.4 Controls
+### 14.4 Controls
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
@@ -440,19 +468,19 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 13.5 Subscriptions
+### 14.5 Subscriptions
 
 | Setting | Type | Description |
 |---|---|---|
 | Manage podcasts | Navigation link | Opens the Priority Stack (PodcastsView) to reorder, add, or remove subscriptions. |
-| Add RSS Feed | Navigation link | Opens the Add RSS Feed screen. Subscribe to any podcast by entering its RSS feed URL directly — useful for independent shows not listed in major directories. |
-| Listening History | Navigation link | Opens Listening History. See [Section 10](#10-listening-history). |
-| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 11](#11-opml-import--export). |
+| Find Podcasts | Navigation link | Opens the podcast search sheet. Search the iTunes catalog or enter an RSS feed URL directly. See [Section 2](#2-find-podcasts-search). |
+| Listening History | Navigation link | Opens Listening History. See [Section 11](#11-listening-history). |
+| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 12](#12-opml-import--export). |
 | Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
 
 ---
 
-### 13.6 Storage
+### 14.6 Storage
 
 | Display | Description |
 |---|---|
@@ -460,7 +488,7 @@ Filters by episode title or podcast name. Results update as the user types. Sear
 
 ---
 
-### 13.7 About
+### 14.7 About
 
 | Item | Description |
 |---|---|
