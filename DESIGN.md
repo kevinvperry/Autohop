@@ -77,6 +77,11 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Description-EpisodePage` | HTMLDescriptionText inside a `white.opacity(0.08)` card, with `Section-Heading` label above |
 | `MetaGrid-EpisodePage` | Two-column MetaCard-Details grid: Published · Duration · File Size · Classification · File Status · Priority Rank |
 | `Toolbar-EpisodePage` | Episode page toolbar: Return to Player leading only, empty nav title |
+| `Selector-PeriodPills` | Stats page period selector: capsule pill row, purple selected / `white.opacity(0.08)` unselected |
+| `Card-StatsHero` | Stats hero card: big purple time-listened number + three stat columns (time saved teal) |
+| `Chart-Heatmap` | GitHub-style listening heatmap (30/90d) or Swift Charts monthly bars (1y/lifetime) |
+| `Chart-ListeningClock` | 24-hour rose chart in Canvas — wedge radius scales with listening per hour |
+| `ListRow-TopShow` | Stats top-shows row: rank · 44pt artwork · title + relative purple bar · duration |
 
 ---
 
@@ -1689,7 +1694,7 @@ A five-button `HStack` below the controls, providing access to audio settings, o
 
 **AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the current audio output name from `AVAudioSession.currentRoute.outputs.first`.
 
-**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. **Not yet implemented** — button is present and tappable but performs no action. Disabled when no episode is loaded. Future implementation should present a `ShareLink` or `UIActivityViewController` with the episode URL/title.
+**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens `EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): a bottom sheet that previews the rendered episode share card (`EpisodeShareCardView` — artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL. Disabled when no episode is loaded.
 
 **Archive button** (`archivebox`) — `Button-PlayerAction` style. Opens `ArchiveConfirmationSheet` (a bottom sheet). On confirm, calls `archiveEpisodeAndPlayNext` to archive the currently playing episode and advance to the next. Icon matches `SwipeActions-EpisodeRow` (`archivebox`).
 
@@ -2099,3 +2104,47 @@ Fields shown (when available):
 | Leading | `Button-ReturnToPlayer` |
 
 Empty navigation title (`.navigationTitle("")`) — the episode title is shown in the header content. Forced dark mode via `.preferredColorScheme(.dark)`.
+
+---
+
+# Stats Page
+
+`Views/StatsView.swift`, reached via Menu → Stats. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`, and `white.opacity(0.08)` cards. All sections respond to the period selector.
+
+## Stats Page — Period Selector
+
+**Label: `Selector-PeriodPills`**
+
+A centred `HStack(spacing: 8)` of capsule buttons (30 Days / 90 Days / 1 Year / All Time). Selected pill: `Color.purple` background, white `.footnote.weight(.semibold)` label. Unselected: `Color.white.opacity(0.08)` background, `.secondary` label. Switching animates with `.easeInOut(duration: 0.15)`.
+
+## Stats Page — Hero Card
+
+**Label: `Card-StatsHero`**
+
+`white.opacity(0.08)` rounded card (`cornerRadius 16`, padding 16). Contents top-to-bottom:
+1. Subtitle (`.subheadline`, `.secondary`) — "Time listened" (or "Time listened since [date]" on All Time)
+2. Headline number — `size 40, weight .bold`, `.purple`, `contentTransition(.numericText())`
+3. `Divider` overlaid `white.opacity(0.08)`
+4. Three equal columns (`heroStat`): value `.headline.bold` (teal for time saved, primary otherwise) over `.caption` `.secondary` label
+
+## Stats Page — Heatmap
+
+**Label: `Chart-Heatmap`**
+
+GitHub-style contribution grid (30/90-day periods only): columns are weeks, rows are weekdays, leading/trailing nil-padded for weekday alignment. Cell fill: `Color.clear` (pad), `white.opacity(0.06)` (zero), or `Color.purple.opacity(0.25 + 0.75 × √fraction)` scaled against the period's busiest day. Cell size 30 pt (≤7 weeks) or 19 pt. Caption below: "Busiest day: …" (`.caption`, `.secondary`). On 1 Year / All Time the card is replaced by a Swift Charts monthly `BarMark` chart (purple bars, `cornerRadius 3`, y-axis in hours, height 170).
+
+## Stats Page — Listening Clock
+
+**Label: `Chart-ListeningClock`**
+
+24-hour rose chart drawn in a `Canvas` (height 230): midnight at top, noon at bottom; each hour is a wedge whose radius scales with `√(hourSeconds/max)`, filled `purple.opacity(0.9)` with 1° gaps between wedges. Two reference circles stroked `white.opacity(0.08)`. Compass labels 12am/6am/12pm/6pm in `.caption2` `.tertiary`. Caption below: "Peak listening: [range]".
+
+## Stats Page — Top Show Row
+
+**Label: `ListRow-TopShow`**
+
+Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank number (`.subheadline.semibold.monospacedDigit`, `.secondary`, width 18) · 44 pt artwork (`cornerRadius 9`, `Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) over a 4 pt purple capsule bar sized relative to the #1 show · trailing duration (`.caption.monospacedDigit`, `.secondary`). Up to 8 rows.
+
+## Stats Page — Privacy Footer
+
+Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats never leave this device."

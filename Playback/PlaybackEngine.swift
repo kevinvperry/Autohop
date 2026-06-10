@@ -77,6 +77,10 @@ final class PlaybackEngine: PlaybackControlling {
         qos: .userInitiated
     )
     private var engineReadCancelled = false
+    // Read by the buffer loop on its serial queue (same pattern as engineReadCancelled):
+    // while paused the player node consumes nothing, so slot waits time out by design
+    // and must not be treated as stalls.
+    private var engineReadPaused = false
     private var engineReadFinished = false          // set on main thread after read loop exits
     private var engineBufferSemaphore = DispatchSemaphore(value: 0)
     private let maxEngineBufferSlots = 8
@@ -220,6 +224,7 @@ final class PlaybackEngine: PlaybackControlling {
     func pause() {
         pausedAtSeconds = currentPlaybackTime()
         if engineUsesEngine {
+            engineReadPaused = true
             audioPlayerNode?.pause()
             engineIsPlaying = false
         } else {
@@ -236,6 +241,7 @@ final class PlaybackEngine: PlaybackControlling {
         guard currentEpisode != nil else { return }
         pausedByRouteChange = false
         if engineUsesEngine {
+            engineReadPaused = false
             // Route changes can stop AVAudioEngine silently. Restart it before resuming the
             // player node, otherwise the node plays but nothing gets rendered.
             if let engine = audioEngine, !engine.isRunning {
@@ -541,6 +547,7 @@ final class PlaybackEngine: PlaybackControlling {
 
         pausedAtSeconds = startSeconds
         engineIsPlaying = shouldPlay
+        engineReadPaused = !shouldPlay
         if shouldPlay { node.play() }
 
         // NOTE: engineReadCancelled is reset to false INSIDE the async block so it only
@@ -639,19 +646,30 @@ final class PlaybackEngine: PlaybackControlling {
                         needsFadeIn = false
                     }
 
-                    let semWaitStart = CFAbsoluteTimeGetCurrent()
+                    var semWaitStart = CFAbsoluteTimeGetCurrent()
                     // Wait up to 2 s for a buffer slot. If the engine has stopped rendering
                     // (e.g. lost audio route mid-playback), .dataRendered callbacks stop firing
                     // and the semaphore never signals — without a timeout this loop hangs forever.
-                    let semResult = sem.wait(timeout: .now() + 2.0)
+                    var semResult = sem.wait(timeout: .now() + 2.0)
+                    // While paused the node consumes nothing, so timeouts are expected.
+                    // Keep waiting quietly — logging stalls or breaking here would spam
+                    // the log every 2 s and silently drop this chunk's audio.
+                    var pausedDuringWait = false
+                    while semResult == .timedOut, self.engineReadPaused, !self.engineReadCancelled {
+                        pausedDuringWait = true
+                        semWaitStart = CFAbsoluteTimeGetCurrent()
+                        semResult = sem.wait(timeout: .now() + 2.0)
+                    }
                     let semWaitMs = Int((CFAbsoluteTimeGetCurrent() - semWaitStart) * 1000)
-                    if semWaitMs > 80 {
+                    if semWaitMs > 80, !pausedDuringWait {
                         self.logger.warning("engine.bufferStall", "Audio buffer loop stalled waiting for slot", metadata: [
                             "stallMs": "\(semWaitMs)",
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
                         ])
                     }
                     if semResult == .timedOut {
+                        // Stop requested while waiting: exit quietly, no recovery needed.
+                        if self.engineReadCancelled { break }
                         // Engine is not consuming buffers. Break out and request recovery.
                         self.logger.warning("engine.bufferStall.timeout", "Buffer slot timeout — engine appears stuck, requesting restart", metadata: [
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
@@ -697,6 +715,7 @@ final class PlaybackEngine: PlaybackControlling {
         audioPeakLimiter = nil
         audioFile = nil
         engineIsPlaying = false
+        engineReadPaused = false
         engineUsesEngine = false
         engineReadFinished = false
         engineCurrentFileSeconds = 0

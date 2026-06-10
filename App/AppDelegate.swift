@@ -78,7 +78,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
             ])
-            task.setTaskCompleted(success: didRun)
+            // "No feeds due" is still a successful run — reporting failure here
+            // teaches the system to deprioritise future refresh wakes.
+            task.setTaskCompleted(success: true)
         }
 
         task.expirationHandler = {

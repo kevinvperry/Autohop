@@ -242,7 +242,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Playback")
         } footer: {
-            Text("Strong targets clearer spoken audio with a -14 LUFS loudness goal. Trim Silence removes quiet gaps — only active for audio episodes. Start and end skip are measured in real file time, independent of playback speed.")
+            Text("These settings apply to every episode of this podcast. Vocal Boost lifts speech above music and background sound — Strong targets a −14 LUFS loudness goal for the clearest spoken audio. Trim Silence removes quiet gaps (audio episodes only). Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
     }
 
@@ -253,6 +253,8 @@ struct SubscriptionSettingsView: View {
             Toggle("Exclude from Auto Feed Refresh", isOn: autoFeedRefreshExclusionBinding(sub))
         } header: {
             Text("Automation")
+        } footer: {
+            Text("Notifications also require the global toggle in Settings → Release Radar. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
 
         Section {
@@ -274,7 +276,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones. Archive runs at most every 12 hours.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes.")
         }
     }
 

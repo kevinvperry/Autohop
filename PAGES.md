@@ -20,8 +20,9 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Podcast Episodes** | `SubscriptionEpisodesView` | Page | Full episode list for a subscribed podcast. Header shows artwork, title, description. Swipe episodes for Play, Archive, and other actions. |
 | **Podcast Settings** | `SubscriptionSettingsView` | Page | Per-podcast configuration — playback speed, trim silence, auto-archive rules, notifications, and feed exclusion from auto-refresh. |
 | **Episode Detail** | `EpisodeDetailView` | Page | Full detail for a single episode — description, chapters, chapter artwork, playback controls, download and share actions. |
-| **Player** | `PlayerView` | Page (modal overlay) | Full-screen now-playing screen. Shows artwork, title, scrubber, playback controls, chapter list, and sleep timer access. |
+| **Player** | `PlayerView` | Page (modal overlay) | Full-screen now-playing screen. Shows artwork, title, scrubber, playback controls, chapter list, plus sleep timer, AirPlay, share, and archive actions. |
 | **Audio Controls** | `AudioControlsSheetView` | Sheet (from Player) | Expanded audio settings — speed, trim silence, vocal boost — accessible while an episode is playing. |
+| **Episode Share** | `EpisodeShareSheet` | Sheet (from Player) | Previews the rendered episode share card and exports it via the system share sheet together with the episode's audio URL. |
 | **Queue** | `QueueSheetView` | Sheet | The playback queue — Up Next episode plus the priority-ordered list of what plays after. Drag to reorder, swipe to remove. |
 | **Sleep Timer** | `SleepTimerSheetView` | Sheet | Set a timer to stop playback after a fixed duration or at the end of the current episode. |
 | **Downloads** | `DownloadsView` | Page | All episodes currently downloaded to the device. Shows file sizes and allows deletion. |
@@ -55,7 +56,8 @@ Priority List (PodcastsView)
 ├── [Overlay] Player (PlayerView)
 │   ├── [Sheet] Queue (QueueSheetView)
 │   ├── [Sheet] Sleep Timer (SleepTimerSheetView)
-│   └── [Sheet] Audio Controls (AudioControlsSheetView)
+│   ├── [Sheet] Audio Controls (AudioControlsSheetView)
+│   └── [Sheet] Episode Share (EpisodeShareSheet)
 └── App Settings (SettingsView)                      ← also reachable from Menu
 ```
 

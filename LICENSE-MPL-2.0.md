@@ -1,3 +1,38 @@
+About This File (Autohop Project Note)
+======================================
+
+This file contains the complete, verbatim text of the Mozilla Public
+License, Version 2.0 (MPL-2.0). It is included in the Autohop project
+because portions of Autohop's audio engine are derived from **Pocket Casts
+for iOS**, copyright © Automattic, Inc. and contributors, which is licensed
+under the MPL-2.0.
+
+Repository: https://github.com/Automattic/pocket-casts-ios
+
+The MPL-2.0-covered files in this project are:
+
+  - `Playback/SilenceDetector.swift` — the silence-trimming algorithm
+    (RMS threshold constants, gap-size thresholds, re-insert counts,
+    last-5-seconds guard, overflow safety cap, and fade-in/fade-out join
+    logic) is a direct port of `podcasts/AudioReadTask.swift` from
+    Pocket Casts for iOS.
+
+  - `Playback/PlaybackEngine.swift` — the Vocal Boost signal chain
+    (high-pass filter → dynamics processor → peak limiter, assembled from
+    Apple system Audio Units) is architecturally derived from
+    `podcasts/EffectsPlayer.swift` in Pocket Casts for iOS.
+
+Each covered file carries the MPL-2.0 Exhibit A notice in its header, and
+its source code is made available as part of the Autohop source
+distribution in accordance with MPL-2.0 Section 3.2. See the `NOTICE` file
+for the full derivation details, and Settings → Open Source
+Acknowledgements in the app for the user-facing credit.
+
+This note is informational and is not part of the license. The license
+text below is reproduced verbatim and unmodified.
+
+-------------------------------------------------------------------------------
+
 Mozilla Public License Version 2.0
 ==================================
 

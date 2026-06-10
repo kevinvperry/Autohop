@@ -7,6 +7,7 @@ public final class SubscriptionStore: ObservableObject {
     private static let saveQueue = DispatchQueue(label: "com.autohop.subscriptionStore.save", qos: .utility)
     // Coalesces rapid save() calls (e.g. during a 70-feed refresh cycle) into one disk write.
     private var pendingSave = false
+    private var saveCoalesced = false
 
     public init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Self.defaultFileURL()
@@ -606,7 +607,13 @@ public final class SubscriptionStore: ObservableObject {
 
     private func save() {
         objectWillChange.send()
-        guard let fileURL, !pendingSave else { return }
+        guard let fileURL else { return }
+        // Coalesce saves issued while a write is in flight: rerun once it lands
+        // so the final state always reaches disk (dropping them loses data).
+        if pendingSave {
+            saveCoalesced = true
+            return
+        }
         pendingSave = true
         // Snapshot on main actor, then encode + write on background queue.
         let snapshot = subscriptions
@@ -619,7 +626,22 @@ public final class SubscriptionStore: ObservableObject {
             } catch {
                 // In-memory state remains usable.
             }
-            DispatchQueue.main.async { self?.pendingSave = false }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingSave = false
+                if self.saveCoalesced {
+                    self.saveCoalesced = false
+                    self.save()
+                }
+            }
+        }
+    }
+
+    /// Waits until every queued write has reached disk. Lets tests (and shutdown
+    /// paths) reload from the file without racing the background save queue.
+    public func flushPendingSaves() async {
+        while pendingSave || saveCoalesced {
+            try? await Task.sleep(for: .milliseconds(10))
         }
     }
 

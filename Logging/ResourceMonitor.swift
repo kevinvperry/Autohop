@@ -46,6 +46,9 @@ final class ResourceMonitor {
     private var watchdogHanging: Bool = false      // true while a hang is in progress
     private let watchdogPollInterval: TimeInterval = 0.1
     private let watchdogHangThreshold: TimeInterval = 0.25
+    /// Gaps this long are app suspension (background, lock screen), not main-thread
+    /// hangs — the watchdog simply wasn't running. Logged as info, not a warning.
+    private let watchdogSuspensionThreshold: TimeInterval = 30
 
     private init() {
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -111,7 +114,11 @@ final class ResourceMonitor {
         let pongTime = CFAbsoluteTimeGetCurrent()
         let elapsed = pongTime - pingTime
 
-        if elapsed >= watchdogHangThreshold {
+        if elapsed >= watchdogSuspensionThreshold {
+            logger.info("ui.watchdogSuspensionGap", "Watchdog gap — app was suspended, not hung", metadata: [
+                "durationMs": "\(Int((elapsed * 1000).rounded()))"
+            ])
+        } else if elapsed >= watchdogHangThreshold {
             if !watchdogHanging {
                 watchdogHanging = true
                 let ms = Int((elapsed * 1000).rounded())

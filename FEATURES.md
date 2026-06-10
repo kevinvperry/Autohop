@@ -42,7 +42,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 13. [OPML Import & Export](#13-opml-import--export)
 14. [Notifications](#14-notifications)
 15. [App Settings](#15-app-settings)
-    - [Podcast Polling](#151-podcast-polling)
+    - [Release Radar](#151-release-radar)
     - [Auto Archive](#152-auto-archive)
     - [Downloading](#153-downloading)
     - [Controls](#154-controls)
@@ -212,6 +212,12 @@ Tapping a row navigates back to the Podcast Preview page for that podcast, refre
 **Audio Controls button:** Opens `AudioControlsSheetView` — a dark card sheet with speed, trim silence, and vocal boost controls.
 
 **Sleep Timer button:** Opens `SleepTimerSheetView`.
+
+**Audio row (below the transport controls):** Sound Settings · Sleep Timer · AirPlay route picker (shows the current output name) · Share · Archive.
+
+**Share:** Opens `EpisodeShareSheet` — previews a rendered share card (episode artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL.
+
+**Archive:** Opens a confirmation sheet; on confirm, archives the currently playing episode, deletes its downloaded file, and advances to the next queued episode.
 
 ---
 
@@ -387,14 +393,14 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 | Setting | Default | Description |
 |---|---|---|
-| New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Podcast Polling) to also be on. |
+| New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar) to also be on. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed for new episodes. The podcast and its downloaded episodes remain in the library. Use case: finished/completed shows the user wants to keep but doesn't need updates from. |
 
 ---
 
 ### 10.4 Auto Archive section
 
-Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 12 hours, or immediately on demand via Settings → Run Auto Archive Now.
+Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes, or immediately on demand via Settings → Run Auto Archive Now.
 
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|
@@ -402,7 +408,7 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 | Rule 2 | Inactive Episodes | Never / 4h / 8h / 16h / 24h / 2 Days / 3 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives unplayed episodes that haven't been touched (not played, not queued) within the set interval. Keeps feeds from accumulating stale backlog. |
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes, archiving older ones. Default of 1 keeps storage lean — the user always has the latest episode available. |
 
-**Footer note (shown in app):** "Played Episodes archives after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones. Archive runs at most every 12 hours."
+**Footer note (shown in app):** "Played Episodes archives after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones. Archive runs at most every 30 minutes."
 
 ---
 
@@ -531,7 +537,7 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
-| Global | New episode notifications | **On** | Settings → Podcast Polling |
+| Global | New episode notifications | **On** | Settings → Release Radar |
 | Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation |
 
 **Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. New podcasts default to off at the per-podcast level — the user opts in only for shows they want to be notified about.
@@ -546,11 +552,13 @@ Sum of all four time-saved categories, displayed in purple.
 
 ---
 
-### 15.1 Podcast Polling
+### 15.1 Release Radar
+
+Autohop learns each podcast's release schedule (median publish interval anchored to its last episode) and starts watching the feed just before a new episode is expected. Feeds that expose only a single item at a time (hourly news bulletins) carry no cadence in the feed itself, so Autohop persists the publish dates it has seen (`RefreshStats.recentPublishDates`) and derives the schedule from those; until enough history exists, such feeds are checked at the Radar sensitivity cadence, backing off automatically while nothing new appears. Checks use HTTP conditional requests (ETag/If-Modified-Since), so the feed body is only downloaded when it has actually changed. Background refresh uses the same due dates (BGAppRefreshTask, due-date priority queue, up to 8 feeds per cycle); if a refresh cycle is already in flight when a background task fires, the task waits for that cycle to finish instead of completing early (completing early lets iOS suspend the app mid-request and strand it). Manual pull-to-refresh always refreshes every feed.
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
-| Check interval | Stepper | **5 minutes** | 1 – 60 min | How often Autohop checks for new episodes while the app is open. 5 minutes is the target — iOS may adjust timing based on system conditions. Background refresh is separate (BGAppRefreshTask, opportunistic, cursor-based round-robin across subscriptions). |
+| Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
 | New episode notifications | Toggle | **On** | — | Global switch for new episode notifications. Per-podcast toggles must also be on for a notification to fire. |
 
 ---
@@ -559,7 +567,7 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Setting | Description |
 |---|---|
-| Run Auto Archive Now | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 12 hours. Shows a spinner while running. |
+| Run Auto Archive Now | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 30 minutes. Shows a spinner while running. |
 
 ---
 
@@ -600,7 +608,7 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Display | Description |
 |---|---|
-| Downloaded episodes | Count of episodes currently downloaded to the device. To free storage, archive episodes manually or tighten the Episode Limit rule in per-podcast Auto Archive settings. |
+| Downloaded episodes | Count of all episodes currently downloaded to the device, across every subscription. To free storage, archive episodes manually or tighten the Episode Limit rule in per-podcast Auto Archive settings. |
 
 ---
 

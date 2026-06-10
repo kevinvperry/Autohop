@@ -58,7 +58,8 @@ final class AppState: ObservableObject {
 
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
-    private let autoArchiveInterval: TimeInterval = 2 * 60 * 60
+    private let autoArchiveInterval: TimeInterval = 30 * 60
+    private var lastAutoArchiveSkipLogAt: Date?
 
     // Network path monitor — tracks current interface type for download enforcement.
     private let networkMonitor = NWPathMonitor()
@@ -100,7 +101,7 @@ final class AppState: ObservableObject {
     // Throttle disk writes: save at most once every 10 s.
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
-    private var isRefreshAllInProgress = false
+    private var activeRefreshCycle: Task<Bool, Never>?
     private var suppressUpNextRefresh = false
     private var upNextRefreshTask: Task<Void, Never>?
     private var feedFailureBackoffUntil: [UUID: Date] = [:]
@@ -1540,7 +1541,10 @@ final class AppState: ObservableObject {
             var stats = subscription.refreshStats
             stats.etag = newValidators.etag
             stats.lastModified = newValidators.lastModified
-            stats.recordFetch(foundNewEpisode: result.latestEpisode.guid != oldLatestGUID)
+            stats.recordFetch(
+                foundNewEpisode: result.latestEpisode.guid != oldLatestGUID,
+                publishedAt: result.latestEpisode.publishedAt
+            )
             subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
             let oldLatestWasDownloaded = subscription.latestEpisode?.downloadState == .downloaded
 
@@ -1612,6 +1616,16 @@ final class AppState: ObservableObject {
                 ])
                 return
             }
+            // Requests stranded by app suspension surface as timeouts or dropped
+            // connections once the app wakes. Those say nothing about the feed's
+            // health — retry on the normal schedule instead of backing off.
+            if isTransientTransportError(error), UIApplication.shared.applicationState != .active {
+                logger.info("feed.refreshDeferred", "Feed refresh dropped while app inactive — no backoff applied", metadata: [
+                    "podcast": subscription.title,
+                    "error": String(describing: error)
+                ])
+                return
+            }
             let backoffUntil = Date().addingTimeInterval(feedFailureBackoffInterval)
             feedFailureBackoffUntil[subscription.id] = backoffUntil
             logger.error("feed.refreshFailed", "Feed refresh failed", metadata: [
@@ -1652,7 +1666,8 @@ final class AppState: ObservableObject {
             reason: "background",
             maxSubscriptions: backgroundRefreshFeedLimit,
             includeBackoffFeeds: false,
-            onlyDueFeeds: true
+            onlyDueFeeds: true,
+            joinActiveCycle: true
         )
     }
 
@@ -1661,22 +1676,48 @@ final class AppState: ObservableObject {
         reason: String,
         maxSubscriptions: Int?,
         includeBackoffFeeds: Bool,
-        onlyDueFeeds: Bool
+        onlyDueFeeds: Bool,
+        joinActiveCycle: Bool = false
     ) async -> Bool {
-        guard !isRefreshAllInProgress else {
-            logger.info("feed.refreshAll.skip", "Refresh-all skipped because another cycle is already running", metadata: [
-                "count": "\(subscriptionStore.subscriptions.count)",
+        if let active = activeRefreshCycle {
+            guard joinActiveCycle else {
+                logger.info("feed.refreshAll.skip", "Refresh-all skipped because another cycle is already running", metadata: [
+                    "count": "\(subscriptionStore.subscriptions.count)",
+                    "reason": reason
+                ])
+                return false
+            }
+            // A cycle is already in flight (e.g. the foreground tick fired on the
+            // same wake as a background task). Ride it to completion instead of
+            // skipping, so the BGTask stays alive until the work is actually done —
+            // completing early lets iOS suspend the app mid-request.
+            logger.info("feed.refreshAll.join", "Joining refresh cycle already in flight", metadata: [
                 "reason": reason
             ])
-            return false
+            return await active.value
         }
 
-        isRefreshAllInProgress = true
-        suppressUpNextRefresh = true
-        defer {
-            suppressUpNextRefresh = false
-            isRefreshAllInProgress = false
+        let cycle = Task { @MainActor in
+            await self.performRefreshCycle(
+                reason: reason,
+                maxSubscriptions: maxSubscriptions,
+                includeBackoffFeeds: includeBackoffFeeds,
+                onlyDueFeeds: onlyDueFeeds
+            )
         }
+        activeRefreshCycle = cycle
+        defer { activeRefreshCycle = nil }
+        return await cycle.value
+    }
+
+    private func performRefreshCycle(
+        reason: String,
+        maxSubscriptions: Int?,
+        includeBackoffFeeds: Bool,
+        onlyDueFeeds: Bool
+    ) async -> Bool {
+        suppressUpNextRefresh = true
+        defer { suppressUpNextRefresh = false }
 
         resourceMonitor.logSnapshot(reason: "feed.refreshAll.before", context: resourceContext(), force: true)
         logger.info("feed.refreshAll", "Refreshing all podcast feeds", metadata: [
@@ -1756,9 +1797,13 @@ final class AppState: ObservableObject {
     /// The next moment a subscription deserves a fetch, derived from its episode
     /// publish cadence (anchored to `publishedAt`, so fixed release schedules phase-lock).
     func nextRefreshDue(for subscription: Subscription) -> Date {
-        FeedRefreshScheduling.nextDueAt(
+        // Single-item feeds (hourly news bulletins) carry too few dates to derive a
+        // cadence from the feed alone — fold in the persisted publish-date history.
+        let publishDates = Set(subscription.episodes.compactMap(\.publishedAt))
+            .union(subscription.refreshStats.recentPublishDates)
+        return FeedRefreshScheduling.nextDueAt(
             latestPublishedAt: subscription.latestEpisode?.publishedAt,
-            publishDates: subscription.episodes.compactMap(\.publishedAt),
+            publishDates: Array(publishDates),
             stats: subscription.refreshStats,
             minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60
         )
@@ -1819,10 +1864,17 @@ final class AppState: ObservableObject {
         if !force,
            let lastRun,
            Date().timeIntervalSince(lastRun) < autoArchiveInterval {
-            logger.info("autoArchive.skip", "Auto archive skipped", metadata: [
-                "reason": reason,
-                "lastRun": lastRun.formatted(date: .numeric, time: .standard)
-            ])
+            // Triggers arrive with every refresh cycle (~30 s apart) — log the skip
+            // at most once a few minutes so the gate stays visible without spam.
+            let now = Date()
+            if lastAutoArchiveSkipLogAt.map({ now.timeIntervalSince($0) >= 5 * 60 }) ?? true {
+                lastAutoArchiveSkipLogAt = now
+                logger.info("autoArchive.skip", "Auto archive skipped", metadata: [
+                    "reason": reason,
+                    "lastRun": lastRun.formatted(date: .numeric, time: .standard),
+                    "nextRun": lastRun.addingTimeInterval(autoArchiveInterval).formatted(date: .numeric, time: .standard)
+                ])
+            }
             return
         }
 
@@ -2285,6 +2337,13 @@ final class AppState: ObservableObject {
         if error is CancellationError { return true }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private func isTransientTransportError(_ error: Error) -> Bool {
+        if case FeedServiceError.timedOut = error { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain
+            && (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorNetworkConnectionLost)
     }
 
     private func clampedPlaybackTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {

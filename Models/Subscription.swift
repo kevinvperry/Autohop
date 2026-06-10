@@ -140,26 +140,51 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     public var lastNewEpisodeAt: Date?
     /// Fetches since the last new episode. Drives hiatus decay.
     public var consecutiveEmptyFetches: Int
+    /// Publish dates of recently discovered latest episodes (newest last, capped).
+    /// Feeds that expose only one item at a time (hourly news bulletins) carry too
+    /// few dates to derive a cadence from the feed alone — this history fills the gap.
+    public var recentPublishDates: [Date]
+
+    public static let maxRecentPublishDates = 10
 
     public init(
         etag: String? = nil,
         lastModified: String? = nil,
         lastFetchedAt: Date? = nil,
         lastNewEpisodeAt: Date? = nil,
-        consecutiveEmptyFetches: Int = 0
+        consecutiveEmptyFetches: Int = 0,
+        recentPublishDates: [Date] = []
     ) {
         self.etag = etag
         self.lastModified = lastModified
         self.lastFetchedAt = lastFetchedAt
         self.lastNewEpisodeAt = lastNewEpisodeAt
         self.consecutiveEmptyFetches = consecutiveEmptyFetches
+        self.recentPublishDates = recentPublishDates
     }
 
-    public mutating func recordFetch(foundNewEpisode: Bool, at date: Date = Date()) {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        etag = try container.decodeIfPresent(String.self, forKey: .etag)
+        lastModified = try container.decodeIfPresent(String.self, forKey: .lastModified)
+        lastFetchedAt = try container.decodeIfPresent(Date.self, forKey: .lastFetchedAt)
+        lastNewEpisodeAt = try container.decodeIfPresent(Date.self, forKey: .lastNewEpisodeAt)
+        consecutiveEmptyFetches = try container.decodeIfPresent(Int.self, forKey: .consecutiveEmptyFetches) ?? 0
+        recentPublishDates = try container.decodeIfPresent([Date].self, forKey: .recentPublishDates) ?? []
+    }
+
+    public mutating func recordFetch(foundNewEpisode: Bool, publishedAt: Date? = nil, at date: Date = Date()) {
         lastFetchedAt = date
         if foundNewEpisode {
             lastNewEpisodeAt = date
             consecutiveEmptyFetches = 0
+            if let publishedAt, !recentPublishDates.contains(publishedAt) {
+                recentPublishDates.append(publishedAt)
+                recentPublishDates.sort()
+                if recentPublishDates.count > Self.maxRecentPublishDates {
+                    recentPublishDates.removeFirst(recentPublishDates.count - Self.maxRecentPublishDates)
+                }
+            }
         } else {
             consecutiveEmptyFetches += 1
         }
@@ -183,14 +208,19 @@ public enum FeedRefreshScheduling {
     public static let windowOpenFraction = 0.75
 
     /// Median gap between recent episode publish dates (newest ~10), clamped.
-    public static func medianPublishInterval(publishDates: [Date]) -> TimeInterval {
+    /// Returns nil when there are too few dated episodes to derive a cadence.
+    public static func knownPublishInterval(publishDates: [Date]) -> TimeInterval? {
         let sorted = publishDates.sorted(by: >).prefix(10)
-        guard sorted.count >= 3 else { return defaultPublishInterval }
+        guard sorted.count >= 3 else { return nil }
         let gaps = zip(sorted, sorted.dropFirst()).map { $0.timeIntervalSince($1) }.filter { $0 > 0 }
-        guard !gaps.isEmpty else { return defaultPublishInterval }
+        guard !gaps.isEmpty else { return nil }
         let sortedGaps = gaps.sorted()
         let median = sortedGaps[sortedGaps.count / 2]
         return min(max(median, minPublishInterval), maxPublishInterval)
+    }
+
+    public static func medianPublishInterval(publishDates: [Date]) -> TimeInterval {
+        knownPublishInterval(publishDates: publishDates) ?? defaultPublishInterval
     }
 
     /// The next moment this feed deserves a fetch. Anchored to the latest episode's
@@ -203,10 +233,22 @@ public enum FeedRefreshScheduling {
         minRecheckInterval: TimeInterval = defaultMinRecheckInterval,
         now: Date = Date()
     ) -> Date {
-        let median = medianPublishInterval(publishDates: publishDates)
-        guard let anchor = latestPublishedAt ?? stats.lastNewEpisodeAt else {
-            // Never seen a dated episode: poll on the default cadence from last fetch.
-            return (stats.lastFetchedAt ?? .distantPast).addingTimeInterval(defaultPublishInterval)
+        let baseRecheck = min(max(minRecheckInterval, 60), maxRecheckInterval)
+
+        func decayedRecheck() -> TimeInterval {
+            let decaySteps = min(Double(stats.consecutiveEmptyFetches) / 4.0, 8)
+            return min(baseRecheck * pow(1.5, decaySteps), maxRecheckInterval)
+        }
+
+        guard let median = knownPublishInterval(publishDates: publishDates),
+              let anchor = latestPublishedAt ?? stats.lastNewEpisodeAt
+        else {
+            // Cadence unknown — typically a feed exposing a single item at a time
+            // (hourly news bulletins) or one never fetched. Poll at the Release Radar
+            // cadence from the last fetch, decaying while nothing new appears, so an
+            // hourly feed self-tunes to hourly instead of stalling on a 6 h default.
+            guard let lastFetch = stats.lastFetchedAt else { return now }
+            return lastFetch.addingTimeInterval(decayedRecheck())
         }
 
         let windowOpens = anchor.addingTimeInterval(median * windowOpenFraction)
@@ -217,11 +259,10 @@ public enum FeedRefreshScheduling {
         // Inside (or past) the expected drop window: recheck at the user-set
         // Release Radar cadence, decaying once the feed looks late or dormant
         // (no new episode for >2 medians).
-        var recheck = min(max(minRecheckInterval, 60), maxRecheckInterval)
+        var recheck = baseRecheck
         let lateness = now.timeIntervalSince(anchor.addingTimeInterval(median * 2))
         if lateness > 0 {
-            let decaySteps = min(Double(stats.consecutiveEmptyFetches) / 4.0, 8)
-            recheck = min(recheck * pow(1.5, decaySteps), maxRecheckInterval)
+            recheck = decayedRecheck()
         }
         guard let lastFetch = stats.lastFetchedAt else { return now }
         return lastFetch.addingTimeInterval(recheck)

@@ -119,16 +119,20 @@ struct SettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Manually checks every subscription using its Auto Archive setting.")
+            Text("Auto Archive normally runs on its own (at most every 30 minutes). This forces an immediate pass over every podcast using its own Auto Archive rules.")
         }
     }
 
     @ViewBuilder
     private var downloadingSection: some View {
-        Section("Downloading") {
+        Section {
             NavigationLink("Downloads") { DownloadsView() }
             Toggle("Download over WiFi", isOn: wifiBinding)
             Toggle("Download over cellular", isOn: cellularBinding)
+        } header: {
+            Text("Downloading")
+        } footer: {
+            Text("New episodes download automatically so the queue always plays from files on your device. Turn off cellular to limit downloading to Wi-Fi.")
         }
     }
 
@@ -153,7 +157,7 @@ struct SettingsView: View {
         } header: {
             Text("Controls")
         } footer: {
-            Text("Keeps the device awake only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket.")
+            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Skip durations also apply to the Lock Screen and Control Centre buttons.")
         }
     }
 
@@ -249,12 +253,16 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var storageSection: some View {
-        Section("Storage") {
+        Section {
             let downloadCount = appState.subscriptionStore.subscriptions
-                .compactMap(\.latestEpisode)
+                .flatMap(\.episodes)
                 .filter { $0.downloadState == .downloaded }
                 .count
             LabeledContent("Downloaded episodes", value: "\(downloadCount)")
+        } header: {
+            Text("Storage")
+        } footer: {
+            Text("To free up space, archive episodes or tighten a podcast's Episode Limit in its Auto Archive settings.")
         }
     }
 
