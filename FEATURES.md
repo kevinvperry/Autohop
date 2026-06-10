@@ -469,13 +469,27 @@ Filters by episode title or podcast name. Results update as the user types. Same
 
 **Access:** Hamburger menu (☰) on the Priority page → Stats.
 
-**What it is:** A lifetime summary of the user's listening activity and time saved by Autohop's audio processing features. Data is persisted in `PlaybackStatsStore` → `playback-stats.json`.
+**What it is:** A lifetime summary of the user's listening activity and time saved by Autohop's audio processing features. Data is persisted in `ListeningStatsStore` → `listening-stats.json`.
 
-### Header
-Displays total listening time since the user first launched the app, in the format `"Since [date] you've listened for [days/hours]"`.
+### Data collection (June 2026)
+All listening activity is bucketed per local calendar day in `DayStats` records (a few hundred bytes each, so lifetime retention is cheap). Each day records: wall-clock seconds, per-hour histogram (24 buckets), per-show seconds (keyed by subscription UUID, with a title map that survives unsubscribes), the four time-saved categories, episodes started/completed, and manual skip-forward count. Totals accumulated under the previous lifetime-only store (`playback-stats.json`) are imported once as a baseline so existing users keep their history; the legacy file is left in place.
+
+Hooks: playback tick (0.5 s) → listening time + hour + show attribution; `SilenceDetector` callbacks → exact trimmed seconds; `startPlayback` from a fresh position → episode started; `handleEpisodeFinished` → episode completed. Saves are throttled to 30 s during playback and flushed on pause and when the app leaves the foreground.
+
+Query API on `ListeningStatsStore`: `summary(for: .last(days:)/.lifetime)` (period aggregates incl. per-show, hour histogram, zero-filled day series for heatmaps), `lifetime` (legacy `PlaybackStats` shape used by `StatsView`), `currentStreakDays` / `longestStreakDays` (a day counts toward a streak at ≥ 60 s of listening). This is the data layer for the planned rich Stats page (period selector, heatmap, listening clock, top shows).
+
+### Page layout (`Views/StatsView.swift`, June 2026)
+All sections respond to a period selector at the top: **30 Days / 90 Days / 1 Year / All Time** (purple pill row). Cards follow the standard design system (`Section-Heading` + `white.opacity(0.08)` rounded cards, dark scheme, purple accent).
+
+1. **Hero card** — big "Time listened" number (purple; All Time adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
+2. **Listening Heatmap** (30/90 days) — GitHub-style grid, columns are weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On 1 Year / All Time this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
+3. **Listening Clock** — 24-hour rose chart (Canvas): midnight at top, noon at bottom, each hour a wedge whose radius scales with listening in that hour. Caption shows the peak hour range.
+4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear.
+5. **Time Saved By** — breakdown card (rows below) plus a purple Total row.
+6. **Privacy footer** — "Your listening stats never leave this device."
 
 ### Time Saved breakdown
-Four rows showing how much time has been saved by each feature:
+Four rows showing how much time has been saved by each feature in the selected period:
 
 | Stat | How it's calculated |
 |---|---|

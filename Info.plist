@@ -2,44 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDocumentTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>OPML Subscription List</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSHandlerRank</key>
-			<string>Alternate</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>public.opml</string>
-			</array>
-		</dict>
-	</array>
-	<key>UTImportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>public.opml</string>
-			<key>UTTypeDescription</key>
-			<string>OPML Subscription List</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.xml</string>
-				<string>public.text</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>opml</string>
-				</array>
-				<key>public.mime-type</key>
-				<string>text/x-opml+xml</string>
-			</dict>
-		</dict>
-	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.autohop.feedrefresh</string>
@@ -66,16 +28,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!--
-		Autohop fetches RSS feeds and media files from user-configured third-party
-		podcast hosting providers (Libsyn, Megaphone, Buzzsprout, Anchor, Simplecast,
-		and thousands of independent feeds). These providers serve content over
-		arbitrary domains, many of which use HTTP only. The app cannot enumerate or
-		predict these domains at build time. Autohop operates no proprietary backend;
-		all data remains on-device. NSAllowsArbitraryLoads is required for the same
-		reason it is required by all third-party podcast clients.
-		See App Review Notes for full justification.
-	-->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

@@ -67,11 +67,12 @@ targets:
           - "OPMLSmokeTests/**"              # contains main.swift
           - "SubscriptionStoreSmokeTests/**" # contains main.swift
           - "DownloadManagerSmokeTests/**"   # contains main.swift
+          - "StatsSmokeTests/**"             # contains main.swift
           - "Tests/**"                       # picked up by AutohopTests target instead
 
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.autohop.app   # update to match your Team ID
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic

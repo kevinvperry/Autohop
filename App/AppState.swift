@@ -14,7 +14,7 @@ final class AppState: ObservableObject {
     let settingsStore: SettingsStoring
     let subscriptionStore: SubscriptionStore
     let listeningHistoryStore = ListeningHistoryStore()
-    let playbackStatsStore = PlaybackStatsStore()
+    let listeningStatsStore = ListeningStatsStore()
     let downloadActivityStore = DownloadActivityStore()
 
     // Player state
@@ -301,7 +301,12 @@ final class AppState: ObservableObject {
                 // Accumulate playback stats every tick (0.5 s interval).
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
-                    state.playbackStatsStore.addListeningTime(0.5, speed: sub.playbackPreference.speed)
+                    state.listeningStatsStore.addListeningTime(
+                        0.5,
+                        speed: sub.playbackPreference.speed,
+                        subscriptionID: sub.id,
+                        showTitle: sub.title
+                    )
                 }
             }
         }
@@ -343,13 +348,13 @@ final class AppState: ObservableObject {
 
         // Playback stats
         playbackEngine.onManualSkipForward = { [weak state] seconds in
-            Task { @MainActor in state?.playbackStatsStore.addManualSkipForward(seconds) }
+            Task { @MainActor in state?.listeningStatsStore.addManualSkipForward(seconds) }
         }
         playbackEngine.onAutoSkip = { [weak state] seconds in
-            Task { @MainActor in state?.playbackStatsStore.addAutoSkip(seconds) }
+            Task { @MainActor in state?.listeningStatsStore.addAutoSkip(seconds) }
         }
         playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
-            Task { @MainActor in state?.playbackStatsStore.addTrimSilenceSaved(seconds) }
+            Task { @MainActor in state?.listeningStatsStore.addTrimSilenceSaved(seconds) }
         }
 
         // Background download completion (post app-relaunch path)
@@ -486,6 +491,7 @@ final class AppState: ObservableObject {
         if isPlaying {
             playbackEngine.pause()
             isPlaying = false
+            listeningStatsStore.save()
             if let ep = currentPlayerEpisode,
                let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                 NowPlayingService.shared.updateTime(
@@ -1400,6 +1406,10 @@ final class AppState: ObservableObject {
             }
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
+            // Fresh start only — resuming a partially played episode is not a new "start".
+            if safeResumeTime <= subscription.playbackPreference.startSkipSeconds {
+                listeningStatsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
+            }
             currentPlayerEpisode = playableEpisode
             isPlaying = true
             positionSaveCounter = 0
@@ -1460,6 +1470,7 @@ final class AppState: ObservableObject {
 
         // Episode reached EOF: use its full duration as the position.
         let finishedPos = episode.durationSeconds
+        listeningStatsStore.recordEpisodeCompleted(subscriptionID: episode.subscriptionID)
         clearPlaybackPosition(for: episode)
         markListeningHistory(
             episode,
@@ -2751,92 +2762,3 @@ final class ListeningHistoryStore: ObservableObject {
     }
 }
 
-// MARK: - PlaybackStatsStore
-
-struct PlaybackStats: Codable {
-    var totalListeningSeconds: TimeInterval = 0
-    var timeSavedVariableSpeed: TimeInterval = 0
-    var timeSavedTrimSilence: TimeInterval = 0
-    var timeSavedManualSkip: TimeInterval = 0
-    var timeSavedAutoSkip: TimeInterval = 0
-    var startedAt: Date = Date()
-
-    var totalTimeSaved: TimeInterval {
-        timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
-    }
-}
-
-@MainActor
-final class PlaybackStatsStore: ObservableObject {
-    @Published private(set) var stats = PlaybackStats()
-
-    private var lastSavedAt: Date?
-
-    private static let fileURL: URL? = {
-        guard let appSupport = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ) else { return nil }
-        return appSupport.appendingPathComponent("Autohop/playback-stats.json")
-    }()
-
-    init() { load() }
-
-    func addListeningTime(_ seconds: TimeInterval, speed: Double) {
-        guard seconds > 0 else { return }
-        stats.totalListeningSeconds += seconds
-        if speed > 1.0 {
-            // Time that would have elapsed at 1× minus time actually elapsed.
-            stats.timeSavedVariableSpeed += seconds * (speed - 1.0) / speed
-        }
-        saveThrottled()
-    }
-
-    func addManualSkipForward(_ seconds: TimeInterval) {
-        guard seconds > 0 else { return }
-        stats.timeSavedManualSkip += seconds
-        saveThrottled()
-    }
-
-    func addAutoSkip(_ seconds: TimeInterval) {
-        guard seconds > 0 else { return }
-        stats.timeSavedAutoSkip += seconds
-        saveThrottled()
-    }
-
-    func addTrimSilenceSaved(_ seconds: TimeInterval) {
-        guard seconds > 0 else { return }
-        stats.timeSavedTrimSilence += seconds
-        saveThrottled()
-    }
-
-    func save() {
-        guard let url = Self.fileURL else { return }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(stats)
-            try data.write(to: url, options: [.atomic])
-            lastSavedAt = Date()
-        } catch {
-            AppLogger.shared.warning("stats.saveFailed", "Could not save playback stats", metadata: [
-                "error": String(describing: error)
-            ])
-        }
-    }
-
-    private func saveThrottled() {
-        if let lastSavedAt, Date().timeIntervalSince(lastSavedAt) < 10 { return }
-        save()
-    }
-
-    private func load() {
-        guard let url = Self.fileURL,
-              FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let loaded = try? JSONDecoder().decode(PlaybackStats.self, from: data)
-        else { return }
-        stats = loaded
-    }
-}

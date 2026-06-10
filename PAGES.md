@@ -27,7 +27,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Downloads** | `DownloadsView` | Page | All episodes currently downloaded to the device. Shows file sizes and allows deletion. |
 | **App Settings** | `SettingsView` | Page | Global app configuration — default playback preferences, download behaviour, notifications, OPML import/export. |
 | **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
-| **Stats** | `StatsView` | Page (inside Menu) | Lifetime listening stats — total listening time and time saved by Variable Speed, Trim Silence, Skipping, and Auto Skip. |
+| **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (30 Days / 90 Days / 1 Year / All Time) — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, and time-saved breakdown. |
 | **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Priority List toolbar. Shortcuts to Find Podcasts, Downloads, Listening History, Stats, and App Settings. |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |

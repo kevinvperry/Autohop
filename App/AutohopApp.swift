@@ -27,6 +27,7 @@ struct AutohopApp: App {
                         Task { await appState.runAutoArchiveIfNeeded(reason: "app.foreground") }
                     } else {
                         appState.persistCurrentPlaybackPosition()
+                        appState.listeningStatsStore.save()
                     }
                 }
         }

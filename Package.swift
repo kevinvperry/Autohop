@@ -27,6 +27,10 @@ let package = Package(
         .executable(
             name: "DownloadManagerSmoke",
             targets: ["DownloadManagerSmoke"]
+        ),
+        .executable(
+            name: "StatsSmoke",
+            targets: ["StatsSmoke"]
         )
     ],
     targets: [
@@ -47,6 +51,7 @@ let package = Package(
                 "SmokeTests",
                 "SubscriptionStoreSmokeTests",
                 "DownloadManagerSmokeTests",
+                "StatsSmokeTests",
                 "Tests",
                 "Views"
             ],
@@ -60,6 +65,8 @@ let package = Package(
                 "Feeds/RSSParser.swift",
                 "Feeds/OPMLService.swift",
                 "Persistence/SubscriptionStore.swift",
+                "Persistence/ListeningStatsStore.swift",
+                "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift"
             ]
         ),
@@ -88,6 +95,11 @@ let package = Package(
             name: "DownloadManagerSmoke",
             dependencies: ["AutohopCore"],
             path: "DownloadManagerSmokeTests"
+        ),
+        .executableTarget(
+            name: "StatsSmoke",
+            dependencies: ["AutohopCore"],
+            path: "StatsSmokeTests"
         ),
         .testTarget(
             name: "AutohopCoreTests",
