@@ -82,16 +82,16 @@ struct SettingsView: View {
     private var pollingSection: some View {
         Section {
             Stepper(value: pollBinding, in: 1...60, step: 1) {
-                LabeledContent("Check interval") {
+                LabeledContent("Radar sensitivity") {
                     Text("\(appState.settingsStore.appSettings.podcastPollMinutes) min")
                         .foregroundStyle(.secondary)
                 }
             }
             Toggle("New episode notifications", isOn: notifyBinding)
         } header: {
-            Text("Podcast polling")
+            Text("Release Radar")
         } footer: {
-            Text("iOS schedules background refresh opportunistically — 5 minutes is the target when the app is active.")
+            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster. Checks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data.")
         }
     }
 

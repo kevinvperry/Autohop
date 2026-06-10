@@ -2,6 +2,24 @@ import Foundation
 
 protocol FeedServicing {
     func refresh(feedURL: URL, subscriptionID: UUID, episodeLimit: Int?) async throws -> FeedRefreshResult
+    func refreshIfModified(
+        feedURL: URL,
+        subscriptionID: UUID,
+        episodeLimit: Int?,
+        validators: FeedValidators?
+    ) async throws -> FeedRefreshOutcome
+}
+
+/// HTTP cache validators carried between fetches of the same feed.
+struct FeedValidators: Sendable, Equatable {
+    var etag: String?
+    var lastModified: String?
+}
+
+enum FeedRefreshOutcome {
+    /// Server returned 304 — feed unchanged, nothing was downloaded or parsed.
+    case notModified
+    case updated(FeedRefreshResult, FeedValidators)
 }
 
 struct FeedRefreshResult {
@@ -42,9 +60,53 @@ final class FeedService: FeedServicing {
     }
 
     func refresh(feedURL: URL, subscriptionID: UUID, episodeLimit: Int? = 50) async throws -> FeedRefreshResult {
-        let (data, _) = try await withTimeout(seconds: requestTimeoutSeconds) {
-            try await self.session.data(from: feedURL)
+        switch try await refreshIfModified(
+            feedURL: feedURL,
+            subscriptionID: subscriptionID,
+            episodeLimit: episodeLimit,
+            validators: nil
+        ) {
+        case .notModified:
+            // Can't happen without validators, but a misbehaving server could
+            // send 304 anyway — surface it as an empty-feed failure.
+            throw FeedServiceError.missingAudioEnclosure
+        case .updated(let result, _):
+            return result
         }
+    }
+
+    func refreshIfModified(
+        feedURL: URL,
+        subscriptionID: UUID,
+        episodeLimit: Int? = 50,
+        validators: FeedValidators?
+    ) async throws -> FeedRefreshOutcome {
+        var request = URLRequest(url: feedURL)
+        if let etag = validators?.etag {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        if let lastModified = validators?.lastModified {
+            request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
+        }
+
+        let (data, response) = try await withTimeout(seconds: requestTimeoutSeconds) {
+            try await self.session.data(for: request)
+        }
+
+        var newValidators = FeedValidators()
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 304 {
+                return .notModified
+            }
+            newValidators.etag = http.value(forHTTPHeaderField: "ETag")
+            newValidators.lastModified = http.value(forHTTPHeaderField: "Last-Modified")
+        }
+
+        let result = try parseResult(data: data, subscriptionID: subscriptionID, episodeLimit: episodeLimit)
+        return .updated(result, newValidators)
+    }
+
+    private func parseResult(data: Data, subscriptionID: UUID, episodeLimit: Int?) throws -> FeedRefreshResult {
         let parsedFeed = try parser.parse(data: data, maxEpisodes: episodeLimit)
 
         let playableEpisodes = parsedFeed.episodes.compactMap { parsedEpisode -> Episode? in

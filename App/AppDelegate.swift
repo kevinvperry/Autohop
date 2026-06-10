@@ -3,7 +3,6 @@ import BackgroundTasks
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
 
-    // Set by AutohopApp once appState is available.
     weak var appState: AppState?
 
     func application(
@@ -56,39 +55,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let registered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BackgroundTaskCoordinator.feedRefreshIdentifier,
             using: nil
-        ) { [weak self] task in
+        ) { task in
             guard let task = task as? BGAppRefreshTask else { return }
-            self?.handleFeedRefresh(task)
+            AppDelegate.handleFeedRefresh(task)
         }
         AppLogger.shared.info("background.register", "Registered background app refresh task", metadata: [
             "identifier": BackgroundTaskCoordinator.feedRefreshIdentifier,
             "registered": "\(registered)"
         ])
-        // Schedule the first background wake-up.
-        BackgroundTaskCoordinator.scheduleAppRefresh()
+        BackgroundTaskCoordinator.scheduleAppRefreshIfNeeded()
     }
 
-    private func handleFeedRefresh(_ task: BGAppRefreshTask) {
+    private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
         AppLogger.shared.info("background.launch", "Background app refresh task started", metadata: [
             "identifier": task.identifier
         ])
-        // Re-schedule so the system continues to wake the app after this run.
         BackgroundTaskCoordinator.scheduleAppRefresh()
 
-        let work = Task { [weak self] in
-            guard let appState = self?.appState else {
-                AppLogger.shared.error("background.noAppState", "Background app refresh had no app state available", metadata: [
-                    "identifier": task.identifier
-                ])
-                task.setTaskCompleted(success: false)
-                return
-            }
-            let didRun = await appState.refreshSubscriptionsForBackground()
+        let work = Task {
+            let didRun = await AppState.shared.refreshSubscriptionsForBackground()
             AppLogger.shared.info("background.complete", "Background app refresh completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
             ])
-            task.setTaskCompleted(success: true)
+            task.setTaskCompleted(success: didRun)
         }
 
         task.expirationHandler = {

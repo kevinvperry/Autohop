@@ -125,6 +125,109 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     }
 }
 
+// MARK: - RefreshStats
+
+/// Per-feed fetch bookkeeping that drives adaptive refresh scheduling.
+/// The publishing-cadence model itself is derived from episode `publishedAt`
+/// dates at decision time — only fetch state and HTTP validators persist here.
+public struct RefreshStats: Equatable, Codable, Sendable {
+    /// HTTP validators for conditional requests (304 Not Modified).
+    public var etag: String?
+    public var lastModified: String?
+    /// When the feed was last fetched (any outcome).
+    public var lastFetchedAt: Date?
+    /// When a fetch last discovered a new episode.
+    public var lastNewEpisodeAt: Date?
+    /// Fetches since the last new episode. Drives hiatus decay.
+    public var consecutiveEmptyFetches: Int
+
+    public init(
+        etag: String? = nil,
+        lastModified: String? = nil,
+        lastFetchedAt: Date? = nil,
+        lastNewEpisodeAt: Date? = nil,
+        consecutiveEmptyFetches: Int = 0
+    ) {
+        self.etag = etag
+        self.lastModified = lastModified
+        self.lastFetchedAt = lastFetchedAt
+        self.lastNewEpisodeAt = lastNewEpisodeAt
+        self.consecutiveEmptyFetches = consecutiveEmptyFetches
+    }
+
+    public mutating func recordFetch(foundNewEpisode: Bool, at date: Date = Date()) {
+        lastFetchedAt = date
+        if foundNewEpisode {
+            lastNewEpisodeAt = date
+            consecutiveEmptyFetches = 0
+        } else {
+            consecutiveEmptyFetches += 1
+        }
+    }
+}
+
+// MARK: - Feed refresh scheduling
+
+public enum FeedRefreshScheduling {
+    /// Bounds for the derived publish cadence.
+    public static let minPublishInterval: TimeInterval = 15 * 60
+    public static let maxPublishInterval: TimeInterval = 7 * 24 * 60 * 60
+    /// Used when a feed has fewer than 3 dated episodes.
+    public static let defaultPublishInterval: TimeInterval = 6 * 60 * 60
+    /// Default fastest in-window recheck while expecting a drop. User-tunable via
+    /// the Release Radar setting (conditional requests make even 1 min cheap).
+    public static let defaultMinRecheckInterval: TimeInterval = 5 * 60
+    /// Slowest cadence a dormant feed decays to.
+    public static let maxRecheckInterval: TimeInterval = 24 * 60 * 60
+    /// Fraction of the median interval at which checking starts ahead of the expected drop.
+    public static let windowOpenFraction = 0.75
+
+    /// Median gap between recent episode publish dates (newest ~10), clamped.
+    public static func medianPublishInterval(publishDates: [Date]) -> TimeInterval {
+        let sorted = publishDates.sorted(by: >).prefix(10)
+        guard sorted.count >= 3 else { return defaultPublishInterval }
+        let gaps = zip(sorted, sorted.dropFirst()).map { $0.timeIntervalSince($1) }.filter { $0 > 0 }
+        guard !gaps.isEmpty else { return defaultPublishInterval }
+        let sortedGaps = gaps.sorted()
+        let median = sortedGaps[sortedGaps.count / 2]
+        return min(max(median, minPublishInterval), maxPublishInterval)
+    }
+
+    /// The next moment this feed deserves a fetch. Anchored to the latest episode's
+    /// `publishedAt` so feeds with fixed release times (e.g. 14 past the hour)
+    /// phase-lock automatically.
+    public static func nextDueAt(
+        latestPublishedAt: Date?,
+        publishDates: [Date],
+        stats: RefreshStats,
+        minRecheckInterval: TimeInterval = defaultMinRecheckInterval,
+        now: Date = Date()
+    ) -> Date {
+        let median = medianPublishInterval(publishDates: publishDates)
+        guard let anchor = latestPublishedAt ?? stats.lastNewEpisodeAt else {
+            // Never seen a dated episode: poll on the default cadence from last fetch.
+            return (stats.lastFetchedAt ?? .distantPast).addingTimeInterval(defaultPublishInterval)
+        }
+
+        let windowOpens = anchor.addingTimeInterval(median * windowOpenFraction)
+        if now < windowOpens {
+            return windowOpens
+        }
+
+        // Inside (or past) the expected drop window: recheck at the user-set
+        // Release Radar cadence, decaying once the feed looks late or dormant
+        // (no new episode for >2 medians).
+        var recheck = min(max(minRecheckInterval, 60), maxRecheckInterval)
+        let lateness = now.timeIntervalSince(anchor.addingTimeInterval(median * 2))
+        if lateness > 0 {
+            let decaySteps = min(Double(stats.consecutiveEmptyFetches) / 4.0, 8)
+            recheck = min(recheck * pow(1.5, decaySteps), maxRecheckInterval)
+        }
+        guard let lastFetch = stats.lastFetchedAt else { return now }
+        return lastFetch.addingTimeInterval(recheck)
+    }
+}
+
 // MARK: - Subscription
 
 public struct Subscription: Identifiable, Equatable, Codable, Sendable {
@@ -149,6 +252,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     /// Non-nil when this subscription was auto-created by opening a search preview.
     /// Used for 30-day browse history retention and cleanup.
     public var browseDate: Date?
+    public var refreshStats: RefreshStats
 
     public init(
         id: UUID = UUID(),
@@ -183,6 +287,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         self.categories = categories
         self.isExplicit = isExplicit
         self.browseDate = nil
+        self.refreshStats = RefreshStats()
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -205,6 +310,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         case categories
         case isExplicit
         case browseDate
+        case refreshStats
     }
 
     public init(from decoder: Decoder) throws {
@@ -227,6 +333,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
         isExplicit = try container.decodeIfPresent(Bool.self, forKey: .isExplicit)
         browseDate = try container.decodeIfPresent(Date.self, forKey: .browseDate)
+        refreshStats = try container.decodeIfPresent(RefreshStats.self, forKey: .refreshStats) ?? RefreshStats()
 
         autoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .autoArchiveSettings) ?? .default
     }

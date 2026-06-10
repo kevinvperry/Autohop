@@ -54,6 +54,8 @@ final class AppState: ObservableObject {
     private var pendingDownloadQueue: [PendingDownload] = []
     private var activeDownloadCount = 0
 
+    private(set) static var shared: AppState!
+
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
     private let autoArchiveInterval: TimeInterval = 2 * 60 * 60
@@ -84,7 +86,6 @@ final class AppState: ObservableObject {
         var overrideIDs: [UUID]
         var demotedIDs: [UUID]
     }
-    private static let refreshCursorDefaultsKey = "Autohop.refreshCursorSubscriptionID"
 
     private struct SavedPosition: Codable {
         var episodeID: UUID
@@ -470,6 +471,7 @@ final class AppState: ObservableObject {
         Task { @MainActor in
             await state.reconcileOrphanedDownloads()
         }
+        AppState.shared = state
         return state
     }
 
@@ -855,6 +857,7 @@ final class AppState: ObservableObject {
             positionSeconds: archivedPos > 0 ? archivedPos : nil
         )
 
+        downloadManager.cancelDownload(episodeID: episode.id)
         do {
             try await downloadManager.deleteLocalFile(for: episode)
         } catch {
@@ -1501,13 +1504,33 @@ final class AppState: ObservableObject {
             "url": subscription.feedURL.absoluteString
         ])
         do {
-            let result = try await feedService.refresh(
+            let outcome = try await feedService.refreshIfModified(
                 feedURL: subscription.feedURL,
                 subscriptionID: subscription.id,
-                episodeLimit: episodeLimit
+                episodeLimit: episodeLimit,
+                validators: FeedValidators(
+                    etag: subscription.refreshStats.etag,
+                    lastModified: subscription.refreshStats.lastModified
+                )
             )
             feedFailureBackoffUntil.removeValue(forKey: subscription.id)
+
+            guard case .updated(let result, let newValidators) = outcome else {
+                var stats = subscription.refreshStats
+                stats.recordFetch(foundNewEpisode: false)
+                subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
+                logger.info("feed.notModified", "Feed unchanged (304)", metadata: [
+                    "podcast": subscription.title
+                ])
+                return
+            }
+
             let oldLatestGUID = subscription.latestEpisode?.guid
+            var stats = subscription.refreshStats
+            stats.etag = newValidators.etag
+            stats.lastModified = newValidators.lastModified
+            stats.recordFetch(foundNewEpisode: result.latestEpisode.guid != oldLatestGUID)
+            subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
             let oldLatestWasDownloaded = subscription.latestEpisode?.downloadState == .downloaded
 
             if let old = subscription.latestEpisode,
@@ -1553,6 +1576,7 @@ final class AppState: ObservableObject {
                 ])
                 return
             }
+            await enforceEpisodeLimitBeforeDownload(subscriptionID: subscription.id)
             await downloadEpisode(
                 subscriptionStore.subscription(id: subscription.id)?.latestEpisode ?? result.latestEpisode,
                 subscriptionID: subscription.id,
@@ -1590,11 +1614,24 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Manual refresh (pull-to-refresh): every feed, ignoring due dates.
     func refreshAllSubscriptions(includeBackoffFeeds: Bool = false) async {
         await refreshSubscriptions(
-            reason: "manual-or-timed",
+            reason: "manual",
             maxSubscriptions: nil,
-            includeBackoffFeeds: includeBackoffFeeds
+            includeBackoffFeeds: includeBackoffFeeds,
+            onlyDueFeeds: false
+        )
+    }
+
+    /// Timed foreground tick: only feeds whose adaptive schedule says they're due.
+    @discardableResult
+    func refreshDueSubscriptions() async -> Bool {
+        await refreshSubscriptions(
+            reason: "timed-due",
+            maxSubscriptions: nil,
+            includeBackoffFeeds: false,
+            onlyDueFeeds: true
         )
     }
 
@@ -1603,7 +1640,8 @@ final class AppState: ObservableObject {
         await refreshSubscriptions(
             reason: "background",
             maxSubscriptions: backgroundRefreshFeedLimit,
-            includeBackoffFeeds: false
+            includeBackoffFeeds: false,
+            onlyDueFeeds: true
         )
     }
 
@@ -1611,7 +1649,8 @@ final class AppState: ObservableObject {
     private func refreshSubscriptions(
         reason: String,
         maxSubscriptions: Int?,
-        includeBackoffFeeds: Bool
+        includeBackoffFeeds: Bool,
+        onlyDueFeeds: Bool
     ) async -> Bool {
         guard !isRefreshAllInProgress else {
             logger.info("feed.refreshAll.skip", "Refresh-all skipped because another cycle is already running", metadata: [
@@ -1647,10 +1686,12 @@ final class AppState: ObservableObject {
                 guard let until = feedFailureBackoffUntil[subscription.id] else { return true }
                 return until <= now
             }
-        let subscriptions = subscriptionsForRefreshCycle(
-            eligibleSubscriptions,
-            maxSubscriptions: maxSubscriptions
-        )
+        let subscriptions = onlyDueFeeds
+            ? subscriptionsForRefreshCycle(eligibleSubscriptions, maxSubscriptions: maxSubscriptions)
+            : eligibleSubscriptions
+        if onlyDueFeeds, subscriptions.isEmpty {
+            return false
+        }
         if !skippedSubscriptions.isEmpty {
             logger.info("feed.refreshAll.skippedInactive", "Skipped subscriptions excluded from auto feed refresh", metadata: [
                 "count": "\(skippedSubscriptions.count)",
@@ -1676,7 +1717,6 @@ final class AppState: ObservableObject {
                 episodeLimit: defaultFeedEpisodeLimit,
                 refreshUpNextAfterMerge: false
             )
-            saveRefreshCursor(subscription.id)
             logger.info("feed.refreshAll.itemFinished", "Finished subscription in timed cycle", metadata: [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
@@ -1684,7 +1724,11 @@ final class AppState: ObservableObject {
                 "reason": reason
             ])
         }
-        BackgroundTaskCoordinator.scheduleAppRefresh()
+        let soonestDue = subscriptionStore.subscriptions
+            .filter { !$0.excludeFromAutoFeedRefresh }
+            .map { nextRefreshDue(for: $0) }
+            .min()
+        BackgroundTaskCoordinator.scheduleAppRefresh(earliestBeginDate: soonestDue)
         refreshUpNextEpisode(reason: "feed.refreshAll.finished")
         await runAutoArchiveIfNeeded(reason: "feed.refreshAll")
         logger.info("feed.refreshAll", "Finished refreshing all podcast feeds", metadata: [
@@ -1698,33 +1742,54 @@ final class AppState: ObservableObject {
         return true
     }
 
+    /// The next moment a subscription deserves a fetch, derived from its episode
+    /// publish cadence (anchored to `publishedAt`, so fixed release schedules phase-lock).
+    func nextRefreshDue(for subscription: Subscription) -> Date {
+        FeedRefreshScheduling.nextDueAt(
+            latestPublishedAt: subscription.latestEpisode?.publishedAt,
+            publishDates: subscription.episodes.compactMap(\.publishedAt),
+            stats: subscription.refreshStats,
+            minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60
+        )
+    }
+
+    /// Due-date priority queue: overdue feeds first; feeds not yet due are skipped entirely.
+    /// `maxSubscriptions` remains only as a safety bound for the background window.
     private func subscriptionsForRefreshCycle(
         _ subscriptions: [Subscription],
         maxSubscriptions: Int?
     ) -> [Subscription] {
-        guard let maxSubscriptions,
-              maxSubscriptions > 0,
-              subscriptions.count > maxSubscriptions
-        else { return subscriptions }
+        let now = Date()
+        let due = subscriptions
+            .map { (subscription: $0, dueAt: nextRefreshDue(for: $0)) }
+            .filter { $0.dueAt <= now }
+            .sorted { $0.dueAt < $1.dueAt }
+            .map(\.subscription)
+        guard let maxSubscriptions, maxSubscriptions > 0 else { return due }
+        return Array(due.prefix(maxSubscriptions))
+    }
 
-        guard let cursorID = loadRefreshCursor(),
-              let cursorIndex = subscriptions.firstIndex(where: { $0.id == cursorID })
-        else {
-            return Array(subscriptions.prefix(maxSubscriptions))
+    /// Archives the oldest excess episodes so the newest can always download —
+    /// the limit is a gate at the door, not a cleanup afterwards. Never touches
+    /// the currently-playing episode.
+    private func enforceEpisodeLimitBeforeDownload(subscriptionID: UUID) async {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
+        guard limit > 0 else { return }
+
+        let active = subscription.episodes
+            .filter { $0.playedState != .archived }
+            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
+        guard active.count > limit else { return }
+
+        for episode in active.dropFirst(limit) where episode.id != currentPlayerEpisode?.id {
+            logger.info("autoArchive.inlineLimit", "Archiving excess episode before new download", metadata: [
+                "podcast": subscription.title,
+                "episode": episode.title,
+                "limit": "\(limit)"
+            ])
+            await archiveEpisode(episode, completionKind: .autoArchived)
         }
-
-        let nextIndex = subscriptions.index(after: cursorIndex)
-        let rotated = Array(subscriptions[nextIndex...]) + Array(subscriptions[..<nextIndex])
-        return Array(rotated.prefix(maxSubscriptions))
-    }
-
-    private func loadRefreshCursor() -> UUID? {
-        guard let value = UserDefaults.standard.string(forKey: Self.refreshCursorDefaultsKey) else { return nil }
-        return UUID(uuidString: value)
-    }
-
-    private func saveRefreshCursor(_ subscriptionID: UUID) {
-        UserDefaults.standard.set(subscriptionID.uuidString, forKey: Self.refreshCursorDefaultsKey)
     }
 
     func loadFullEpisodeHistory(for subscription: Subscription) async {
@@ -1820,7 +1885,7 @@ final class AppState: ObservableObject {
             if limit > 0 {
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) }
+                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }
@@ -2311,13 +2376,23 @@ final class AppState: ObservableObject {
 
     // MARK: - Foreground polling
 
+    /// Foreground scheduler: ticks every 30 seconds and refreshes only the feeds
+    /// whose adaptive due date has arrived. Conditional requests (304s) make each
+    /// check nearly free, so an hourly news feed is picked up within a minute or
+    /// two of publish while a weekly show is fetched roughly once a day.
     func startForegroundPolling() {
         Task { @MainActor [weak self] in
             while true {
+                try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
-                let seconds = Double(self.settingsStore.appSettings.podcastPollMinutes * 60)
-                try? await Task.sleep(for: .seconds(seconds))
-                await self.refreshAllSubscriptions()
+                let now = Date()
+                let anyDue = self.subscriptionStore.subscriptions.contains { subscription in
+                    !subscription.excludeFromAutoFeedRefresh
+                        && self.nextRefreshDue(for: subscription) <= now
+                }
+                if anyDue {
+                    await self.refreshDueSubscriptions()
+                }
             }
         }
     }

@@ -9,12 +9,22 @@ struct BackgroundTaskCoordinator {
 
     static let feedRefreshIdentifier = "com.autohop.feedrefresh"
 
-    /// Submits a `BGAppRefreshTaskRequest` asking the system to wake the app
-    /// approximately five minutes from now.  iOS schedules this opportunistically —
-    /// the actual wake time is not guaranteed.
-    static func scheduleAppRefresh() {
+    /// Schedules a refresh only when no request is already pending, preventing
+    /// every app launch from resetting the earliestBeginDate clock.
+    static func scheduleAppRefreshIfNeeded() {
+        BGTaskScheduler.shared.getPendingTaskRequests { requests in
+            guard !requests.contains(where: { $0.identifier == feedRefreshIdentifier }) else { return }
+            scheduleAppRefresh()
+        }
+    }
+
+    /// Submits a `BGAppRefreshTaskRequest`. Pass the soonest feed due date so iOS
+    /// gets accurate scheduling information; wakes are opportunistic and the
+    /// actual time is not guaranteed. Floor: 15 minutes from now.
+    static func scheduleAppRefresh(earliestBeginDate: Date? = nil) {
+        let floorDate = Date(timeIntervalSinceNow: 15 * 60)
         let request = BGAppRefreshTaskRequest(identifier: feedRefreshIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60)
+        request.earliestBeginDate = max(earliestBeginDate ?? floorDate, floorDate)
         do {
             try BGTaskScheduler.shared.submit(request)
             AppLogger.shared.info("background.schedule", "Scheduled background app refresh", metadata: [

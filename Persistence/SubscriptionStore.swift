@@ -118,6 +118,12 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
+    public func updateRefreshStats(subscriptionID: UUID, stats: RefreshStats) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].refreshStats = stats
+        save()
+    }
+
     public func updateCategories(subscriptionID: UUID, categories: [String]) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         subscriptions[index].categories = categories
