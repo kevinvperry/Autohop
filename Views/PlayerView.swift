@@ -1176,7 +1176,7 @@ struct HTMLDescriptionText: View {
         return try? AttributedString(nsAttributed, including: \.uiKit)
     }
 
-    private static func plainText(from html: String) -> String {
+    static func plainText(from html: String) -> String {
         let withoutImages = htmlForTextDisplay(html)
         let withoutTags = withoutImages.replacingOccurrences(
             of: #"(?is)<[^>]+>"#,

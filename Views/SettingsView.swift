@@ -26,6 +26,7 @@ struct SettingsView: View {
     // Resets on next app launch. Not persisted.
     @State private var developerTapCount = 0
     @State private var developerModeUnlocked = false
+    @State private var totalDownloadedBytes: Int64? = nil
 
     var body: some View {
         Form {
@@ -264,15 +265,37 @@ struct SettingsView: View {
     @ViewBuilder
     private var storageSection: some View {
         Section {
-            let downloadCount = appState.subscriptionStore.subscriptions
+            let downloadedEpisodes = appState.subscriptionStore.subscriptions
                 .flatMap(\.episodes)
                 .filter { $0.downloadState == .downloaded }
-                .count
-            LabeledContent("Downloaded episodes", value: "\(downloadCount)")
+            LabeledContent("Downloaded episodes", value: "\(downloadedEpisodes.count)")
+            LabeledContent("Total size") {
+                if let bytes = totalDownloadedBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            NavigationLink("Manage Downloads") { DownloadsView() }
         } header: {
             Text("Storage")
         } footer: {
             Text("To free up space, archive episodes or tighten a podcast's Episode Limit in its Auto Archive settings.")
+        }
+        .onAppear {
+            let episodes = appState.subscriptionStore.subscriptions
+                .flatMap(\.episodes)
+                .filter { $0.downloadState == .downloaded }
+            Task.detached(priority: .utility) {
+                var total: Int64 = 0
+                for episode in episodes {
+                    guard let url = episode.localFileURL else { continue }
+                    if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 {
+                        total += size
+                    }
+                }
+                await MainActor.run { totalDownloadedBytes = total }
+            }
         }
     }
 

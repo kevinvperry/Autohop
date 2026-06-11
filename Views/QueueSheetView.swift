@@ -13,6 +13,8 @@ struct QueueSheetView: View {
     @State private var appearTime: Date?
     @State private var rowOffsets: [UUID: CGFloat] = [:]
     @State private var rowOpacities: [UUID: Double] = [:]
+    @State private var expandedEpisodeID: UUID? = nil
+    @State private var hasActiveDownloads = false
 
     private let logger = AppLogger.shared
 
@@ -34,59 +36,82 @@ struct QueueSheetView: View {
                             let pinnedNext = appState.isQueuePinnedNext(episode)
                             let pinnedLast = appState.isQueuePinnedLast(episode)
 
-                            HStack(spacing: 12) {
-                                if isCurrent {
-                                    Image(systemName: "play.fill")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(.purple)
-                                        .frame(width: 20)
-                                } else {
-                                    Text("\(index + 1)")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 20, alignment: .center)
-                                }
+                            let isExpanded = expandedEpisodeID == episode.id
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack(spacing: 12) {
+                                    if isCurrent {
+                                        Image(systemName: "play.fill")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.purple)
+                                            .frame(width: 20)
+                                    } else {
+                                        Text("\(index + 1)")
+                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 20, alignment: .center)
+                                    }
 
-                                VStack(alignment: .center, spacing: 4) {
-                                    artwork(url: sub?.artworkURL, pinnedNext: pinnedNext, pinnedLast: pinnedLast)
-                                }
+                                    VStack(alignment: .center, spacing: 4) {
+                                        artwork(url: sub?.artworkURL, pinnedNext: pinnedNext, pinnedLast: pinnedLast)
+                                    }
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(sub?.title ?? "Unknown Podcast")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(episode.title)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(sub?.title ?? "Unknown Podcast")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(episode.title)
                                             .font(.subheadline.bold())
                                             .foregroundStyle(.primary)
                                             .lineLimit(2)
-                                    HStack(spacing: 4) {
-                                        if let date = episode.publishedAt {
-                                            Text(formatPublishedDate(date))
-                                                .lineLimit(1)
+                                            .onTapGesture {
+                                                withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                                    expandedEpisodeID = isExpanded ? nil : episode.id
+                                                }
+                                            }
+                                        HStack(spacing: 4) {
+                                            if let date = episode.publishedAt {
+                                                Text(formatPublishedDate(date))
+                                                    .lineLimit(1)
+                                            }
+                                            if let remaining = remainingTime(for: episode) {
+                                                Text("•")
+                                                Text(remaining)
+                                                    .lineLimit(1)
+                                            }
                                         }
-                                        if let remaining = remainingTime(for: episode) {
-                                            Text("•")
-                                            Text(remaining)
-                                                .lineLimit(1)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        if pinnedNext || pinnedLast {
+                                            Image(systemName: "pin.fill")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(pinnedNext ? Color.blue : Color.orange)
+                                        }
+                                        if let dur = episode.durationSeconds {
+                                            Text(formatDuration(dur))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .monospacedDigit()
                                         }
                                     }
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                                 }
 
-                                Spacer()
-
-                                VStack(alignment: .trailing, spacing: 4) {
-                                    if pinnedNext || pinnedLast {
-                                        Image(systemName: "pin.fill")
-                                            .font(.system(size: 10, weight: .bold))
-                                            .foregroundStyle(pinnedNext ? Color.blue : Color.orange)
-                                    }
-                                    if let dur = episode.durationSeconds {
-                                        Text(formatDuration(dur))
+                                if isExpanded, let raw = episode.description {
+                                    let plain = HTMLDescriptionText.plainText(from: raw)
+                                    if !plain.isEmpty {
+                                        Text(sentenceParagraphs(plain))
                                             .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .monospacedDigit()
+                                            .fontWeight(.regular)
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(15)
+                                            .padding(.top, 8)
+                                            // indent to artwork left edge: index (20) + HStack spacing (12)
+                                            .padding(.leading, 32)
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
                                     }
                                 }
                             }
@@ -191,6 +216,7 @@ struct QueueSheetView: View {
         .onAppear {
             let t = Date()
             appearTime = t
+            hasActiveDownloads = !appState.downloadActivityStore.activeActivities.isEmpty
             logger.info("nav.appear", "QueueSheetView appeared", metadata: [
                 "queueCount": "\(appState.downloadedQueue.count)"
             ])
@@ -205,10 +231,9 @@ struct QueueSheetView: View {
         .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
             dismiss()
         }
-    }
-
-    private var hasActiveDownloads: Bool {
-        !appState.downloadActivityStore.activeActivities.isEmpty
+        .onReceive(appState.downloadActivityStore.$activities) { activities in
+            hasActiveDownloads = activities.contains { $0.status == .downloading || $0.status == .paused }
+        }
     }
 
     private func refreshQueue() {
@@ -269,6 +294,17 @@ struct QueueSheetView: View {
             rowOffsets.removeValue(forKey: id)
             rowOpacities.removeValue(forKey: id)
         }
+    }
+
+    private func sentenceParagraphs(_ text: String) -> String {
+        // Split on sentence-ending punctuation followed by whitespace, then
+        // rejoin with a paragraph gap so each sentence starts on its own line.
+        let pattern = #"([.?!…]+)\s+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        let result = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "$1\n\n")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func artwork(url: URL?, pinnedNext: Bool, pinnedLast: Bool) -> some View {
