@@ -3,7 +3,8 @@ import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
 // settings Form, sections in order: Release Radar (sensitivity stepper +
-// global notifications toggle), Auto Archive (run-now button), Downloading
+// Notification Settings link — the global notifications toggle now lives on
+// NotificationSettingsView as the master switch), Auto Archive (run-now button), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, skip back/forward duration sheets), Subscriptions
 // (manage podcasts, add RSS, listening history, OPML import/export), Storage
@@ -97,11 +98,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Toggle("New episode notifications", isOn: notifyBinding)
+            NavigationLink("Notification Settings") { NotificationSettingsView() }
         } header: {
             Text("Release Radar")
         } footer: {
-            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster. Checks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data.")
+            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster. Checks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data. Notification Settings controls which podcasts notify you when a new episode arrives.")
         }
     }
 
@@ -283,16 +284,29 @@ struct SettingsView: View {
             Text("To free up space, archive episodes or tighten a podcast's Episode Limit in its Auto Archive settings.")
         }
         .onAppear {
-            let episodes = appState.subscriptionStore.subscriptions
-                .flatMap(\.episodes)
-                .filter { $0.downloadState == .downloaded }
             Task.detached(priority: .utility) {
+                let fm = FileManager.default
+                guard let appSupport = try? fm.url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: false
+                ) else {
+                    await MainActor.run { totalDownloadedBytes = 0 }
+                    return
+                }
+                let downloadsDir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
+                let keys: [URLResourceKey] = [.fileSizeKey, .isRegularFileKey]
+                guard let enumerator = fm.enumerator(at: downloadsDir, includingPropertiesForKeys: keys) else {
+                    await MainActor.run { totalDownloadedBytes = 0 }
+                    return
+                }
                 var total: Int64 = 0
-                for episode in episodes {
-                    guard let url = episode.localFileURL else { continue }
-                    if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 {
-                        total += size
-                    }
+                for case let fileURL as URL in enumerator {
+                    guard let res = try? fileURL.resourceValues(forKeys: Set(keys)),
+                          res.isRegularFile == true,
+                          let size = res.fileSize else { continue }
+                    total += Int64(size)
                 }
                 await MainActor.run { totalDownloadedBytes = total }
             }
@@ -305,13 +319,6 @@ struct SettingsView: View {
         Binding(
             get: { appState.settingsStore.appSettings.podcastPollMinutes },
             set: { appState.settingsStore.appSettings.podcastPollMinutes = $0 }
-        )
-    }
-
-    private var notifyBinding: Binding<Bool> {
-        Binding(
-            get: { appState.settingsStore.appSettings.notifyNewEpisodes },
-            set: { appState.settingsStore.appSettings.notifyNewEpisodes = $0 }
         )
     }
 

@@ -61,6 +61,7 @@
 		A43E8F56F6EEE968ED070C77 /* fsmonitor-watchman.sample in Resources */ = {isa = PBXBuildFile; fileRef = 450D8D5EE383979D6BDBCABB /* fsmonitor-watchman.sample */; };
 		B0AF83B1F0EB3A7573F5904D /* EpisodeFeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4085481A5FB344177B51FA3 /* EpisodeFeedLoader.swift */; };
 		B210DB81D2DA8717E99F54FA /* SubscriptionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */; };
+		29D4467164116F1F1BF0B27E /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F01764FA5B7A8CF06DEE41 /* NotificationSettingsView.swift */; };
 		B2D8AA4F677325CBEB0D4784 /* ChapterService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89A48F1CC784F17C10C516E /* ChapterService.swift */; };
 		B36A05FF57EB14C5A6F3B297 /* sendemail-validate.sample in Resources */ = {isa = PBXBuildFile; fileRef = CB905A9BC8E2D10E8B4EB156 /* sendemail-validate.sample */; };
 		B906D18D9FCC95E6F2D41F01 /* SilenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE8C5CD51F36B650901B3F2 /* SilenceDetector.swift */; };
@@ -182,6 +183,7 @@
 		3543E856266E51B7C7AD88BF /* 90bc1081cb7ce2b34f427b792c742b425ced91 */ = {isa = PBXFileReference; lastKnownFileType = file; path = 90bc1081cb7ce2b34f427b792c742b425ced91; sourceTree = "<group>"; };
 		3565F21462B26325EB4EB477 /* RSSParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSParser.swift; sourceTree = "<group>"; };
 		35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionSettingsView.swift; sourceTree = "<group>"; };
+		D8F01764FA5B7A8CF06DEE41 /* NotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSettingsView.swift; sourceTree = "<group>"; };
 		35FCD71F52A2CC4A68D9D199 /* 76da0c634eaa47c628642771c82be9f526332d */ = {isa = PBXFileReference; lastKnownFileType = file; path = 76da0c634eaa47c628642771c82be9f526332d; sourceTree = "<group>"; };
 		369AB01EB30A86D595C9F9FA /* 832405884dfb6dc8d3a8c0fa7f27668bef213c */ = {isa = PBXFileReference; lastKnownFileType = file; path = 832405884dfb6dc8d3a8c0fa7f27668bef213c; sourceTree = "<group>"; };
 		37105C01AB41D0EE542AC9C5 /* Autohop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Autohop.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -872,6 +874,7 @@
 				CA5E51118F25B1259016B282 /* QueueSheetView.swift */,
 				A314D3A788F1F62E2CC094A5 /* RootView.swift */,
 				E4640CA53FD6C9A99BBE0875 /* SettingsView.swift */,
+				D8F01764FA5B7A8CF06DEE41 /* NotificationSettingsView.swift */,
 				14DF66C0C501F07FFA8E90B1 /* SleepTimerSheetView.swift */,
 				302ED5C15F04FA1D1453D26F /* StatsView.swift */,
 				35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */,
@@ -2845,6 +2848,7 @@
 				EF1600E98AC2B56C4C400648 /* RootView.swift in Sources */,
 				44BEB63E377B429766ABA020 /* SettingsStore.swift in Sources */,
 				9135E017CE55B141B15F5738 /* SettingsView.swift in Sources */,
+				29D4467164116F1F1BF0B27E /* NotificationSettingsView.swift in Sources */,
 				E3B17E894AF7A054785DDDE8 /* SettingsViewModel.swift in Sources */,
 				26AD017DF9A1979B8D111B48 /* ShowEngagementAnalyzer.swift in Sources */,
 				B906D18D9FCC95E6F2D41F01 /* SilenceDetector.swift in Sources */,

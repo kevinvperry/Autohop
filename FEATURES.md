@@ -393,7 +393,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 | Setting | Default | Description |
 |---|---|---|
-| New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar) to also be on. |
+| New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed for new episodes. The podcast and its downloaded episodes remain in the library. Use case: finished/completed shows the user wants to keep but doesn't need updates from. |
 
 ---
@@ -538,8 +538,8 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
-| Global | New episode notifications | **On** | Settings → Release Radar |
-| Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation |
+| Global | New episode notifications | **On** | Settings → Release Radar → Notification Settings |
+| Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation, or Settings → Release Radar → Notification Settings |
 
 **Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. New podcasts default to off at the per-podcast level — the user opts in only for shows they want to be notified about.
 
@@ -560,7 +560,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
-| New episode notifications | Toggle | **On** | — | Global switch for new episode notifications. Per-podcast toggles must also be on for a notification to fire. |
+| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **On**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. If iOS notification permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
 
 ---
 

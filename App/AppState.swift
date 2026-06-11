@@ -350,7 +350,10 @@ final class AppState: ObservableObject {
                 }
 
                 // Accumulate playback stats every tick (0.5 s interval).
-                if let ep = state.currentPlayerEpisode,
+                // tickTime() fires whenever an episode is loaded, including while
+                // paused — only credit listening time when audio is actually playing.
+                if state.isPlaying,
+                   let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     state.listeningStatsStore.addListeningTime(
                         0.5,
