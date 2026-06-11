@@ -1,5 +1,13 @@
 import Foundation
 
+// AI CONTEXT — Models/PlaybackPreference.swift
+// Per-podcast audio settings stored on Subscription.playbackPreference and
+// consumed by PlaybackEngine: speed (1.0–2.5x, default 1.6x), start/end skip
+// seconds (real file time), VocalBoostLevel (off/light/standard/strong —
+// selects which stages of the high-pass→dynamics→limiter chain are active),
+// TrimSilenceAmount (off/low/medium/high — selects SilenceDetector tuning).
+// Any non-off boost or trim forces the AVAudioEngine playback path; video
+// episodes ignore both and always use AVPlayer.
 public enum TrimSilenceAmount: String, CaseIterable, Codable {
     case off
     case low

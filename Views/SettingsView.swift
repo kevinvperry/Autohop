@@ -1,6 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
+// settings Form, sections in order: Release Radar (sensitivity stepper +
+// global notifications toggle), Auto Archive (run-now button), Downloading
+// (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
+// lock screen scrubbing, skip back/forward duration sheets), Subscriptions
+// (manage podcasts, add RSS, listening history, OPML import/export), Storage
+// (downloaded episode count), About (acknowledgements, version — tapping the
+// version 5× unlocks the hidden Diagnostics section for this session only).
+// All section footer copy here must stay in sync with FEATURES.md §15.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

@@ -1,5 +1,11 @@
 import Foundation
 
+// AI CONTEXT — Feeds/PodcastSearch.swift
+// iTunes Search API client (actor) for the Find Podcasts sheet. No API key or
+// account needed. Results lacking a feedUrl (Apple Podcasts exclusives) are
+// silently dropped because Autohop can only subscribe via RSS. Consumed by
+// PodcastSearchView with a 400 ms debounce.
+
 // MARK: - Model
 
 struct PodcastSearchResult: Identifiable, Hashable, Sendable {

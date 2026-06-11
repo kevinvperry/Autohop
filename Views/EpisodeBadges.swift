@@ -1,5 +1,10 @@
 import SwiftUI
 
+// AI CONTEXT — Views/EpisodeBadges.swift. Small reusable badge components for
+// episode rows/detail (VIDEO pill, explicit marker, etc.), with iOS 26 glass
+// effect variants. Pure presentation; shared across episode lists, preview,
+// queue, and detail pages.
+
 // MARK: - Video Badge (small)
 //
 // TV-icon pill shown centred below episode artwork for video episodes.

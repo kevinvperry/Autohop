@@ -1,6 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
+// Priority List toolbar). Navigation shortcuts: Find Podcasts, Downloads,
+// Listening History, Stats, Import OPML, App Settings. Dismisses itself and
+// drives navigation in the parent.
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

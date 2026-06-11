@@ -1,5 +1,9 @@
 import SwiftUI
 
+// AI CONTEXT — Views/AcknowledgementsView.swift ("Acknowledgements" page,
+// Settings → About). Static open-source credits list — most importantly the
+// Pocket Casts for iOS (Automattic, MPL-2.0) derivation notice, which must
+// stay consistent with NOTICE and LICENSE-MPL-2.0.md.
 struct AcknowledgementsView: View {
     @Environment(\.dismiss) private var dismiss
 

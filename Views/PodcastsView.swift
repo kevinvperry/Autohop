@@ -1,5 +1,12 @@
 import SwiftUI
 
+// AI CONTEXT — Views/PodcastsView.swift ("Priority List" page — the app's
+// home page, see PAGES.md). Ranked list of active subscriptions (browse
+// subscriptions filtered out); drag-to-reorder in Reorder mode rewrites
+// priorityRank for the whole list. Each row shows artwork, title, and a
+// colour-coded status pill for the podcast's latest episode. Toolbar: Return
+// to Player, hamburger menu (MenuSheetView), Reorder toggle, refresh-all,
+// + (PodcastSearchView sheet). Rows navigate to SubscriptionEpisodesView.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editMode: EditMode = .inactive

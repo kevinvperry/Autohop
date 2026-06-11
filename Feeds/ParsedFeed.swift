@@ -1,5 +1,10 @@
 import Foundation
 
+// AI CONTEXT — Feeds/ParsedFeed.swift
+// Intermediate value types produced by RSSParser — feed-shaped data BEFORE it
+// becomes a Subscription/Episode (no UUIDs, no local state). SubscriptionStore
+// and FeedService convert these into model types; PodcastPreviewView renders
+// them directly for not-yet-subscribed podcasts.
 public struct ParsedFeed: Equatable {
     public var title: String
     public var description: String?

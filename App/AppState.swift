@@ -4,6 +4,53 @@ import Foundation
 import Network
 import UIKit
 
+// ============================================================================
+// AI CONTEXT — App/AppState.swift
+//
+// PURPOSE: Central @MainActor coordinator and single source of truth for the
+// whole app. Every view observes this object; every service (feeds, downloads,
+// playback, queue, stats, history, notifications) is owned and orchestrated here.
+//
+// RESPONSIBILITIES:
+//  - Player state: currentPlayerEpisode / currentPlayerTime / isPlaying;
+//    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
+//    playNextEpisode), seek, chapter navigation, per-podcast audio settings
+//    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
+//  - Queue: downloadedQueue = QueueService priority order + manual overrides.
+//    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
+//    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
+//    Application Support/Autohop/queue-pins.json and clear on play/archive.
+//  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
+//    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles;
+//    reconcileOrphanedDownloads() repairs DB-vs-filesystem mismatches at launch.
+//  - Feed refresh: refreshSubscription merges new episodes (auto-downloading
+//    them), refreshDueSubscriptions implements Release Radar due-date polling,
+//    refreshSubscriptionsForBackground serves BGAppRefreshTask (max 8 feeds,
+//    waits on an in-flight cycle instead of completing early). Per-feed failure
+//    backoff lives in feedFailureBackoffUntil.
+//  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
+//    (autoArchiveInterval) unless forced; runAutoArchive applies the three
+//    per-podcast rules (after-played delay, inactive timeout, episode limit).
+//  - Persistence side: playback positions saved (throttled ~10 s) to
+//    playback-position.json keyed by episode GUID/URL so re-fetched episodes
+//    resume correctly; listening history + stats recorded on playback ticks.
+//  - OPML import/export with progress reporting.
+//
+// KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
+// FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
+// store), QueueService (pure queue ordering), ListeningHistoryStore &
+// ListeningStatsStore (JSON persistence, defined at bottom of this file and
+// in Persistence/), NotificationService, SleepTimerService.
+//
+// INVARIANTS / GOTCHAS:
+//  - Queue only ever contains DOWNLOADED, unplayed episodes (download-first).
+//  - upNextEpisode refreshes are debounced via scheduleUpNextRefresh; mutate
+//    suppressUpNextRefresh around bulk operations to avoid churn.
+//  - Listening history requires ≥ 60 s listened before an entry is shown.
+//  - AppState.shared is set once in init (used by AppDelegate/background tasks).
+//  - All methods assume MainActor; long work hops to detached tasks/services.
+// ============================================================================
+
 @MainActor
 final class AppState: ObservableObject {
     let feedService: FeedServicing
@@ -2578,6 +2625,14 @@ final class AppState: ObservableObject {
 }
 
 
+// AI CONTEXT — ListeningHistoryStore: persists per-episode listening log to
+// Application Support/Autohop/listening-history.json (max 500 entries, oldest
+// dropped). Entries are keyed by episode GUID/URL (historyKey) so the same
+// episode re-fetched from a feed merges into one entry. recordProgress() is
+// called from AppState playback ticks; mark() sets played/archived status with
+// a CompletionKind used later by ShowEngagementAnalyzer ("drifting" stats).
+// UI filters out entries with < 60 s listened — that rule lives in the views,
+// not here. Value types live in Models/ListeningHistory.swift.
 @MainActor
 final class ListeningHistoryStore: ObservableObject {
     @Published private(set) var entries: [ListeningHistoryEntry] = []

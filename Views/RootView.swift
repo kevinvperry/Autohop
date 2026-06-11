@@ -1,5 +1,12 @@
 import SwiftUI
 
+// AI CONTEXT — Views/RootView.swift
+// Navigation root. KEY ARCHITECTURE: PlayerView is the PERMANENT root of the
+// NavigationStack — it is never torn down, so AVFoundation state survives all
+// navigation; every other page (starting with PodcastsView via AppRoute) is
+// pushed on top. The .autohopReturnToPlayer notification pops the path to
+// reveal the player from anywhere (posted by ReturnToPlayerButton in page
+// toolbars). Also shows the launch splash overlay briefly on cold start.
 enum AppRoute: Hashable {
     case podcasts
 }

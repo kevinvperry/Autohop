@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+// AI CONTEXT — Views/EpisodeShareSheet.swift ("Episode Share" sheet, from the
+// Player's audio row). Previews the rendered EpisodeShareCardView image, then
+// exports image + episode audio URL through UIActivityViewController.
+
 // MARK: - Episode share sheet
 
 /// Bottom sheet that previews the share card, then exports it via the

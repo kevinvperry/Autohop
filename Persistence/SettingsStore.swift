@@ -1,5 +1,11 @@
 import Foundation
 
+// AI CONTEXT — Persistence/SettingsStore.swift
+// Trivial persistence wrapper for the global AppSettings value: every didSet
+// writes settings.json atomically to Application Support/Autohop/. Injected
+// into AppState as SettingsStoring (protocol exists for test substitution).
+// Per-podcast settings do NOT live here — they're on Subscription in
+// SubscriptionStore.
 protocol SettingsStoring: AnyObject {
     var appSettings: AppSettings { get set }
 }

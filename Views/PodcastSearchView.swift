@@ -1,5 +1,16 @@
 import SwiftUI
 
+// AI CONTEXT — Views/PodcastSearchView.swift ("Podcast Search" sheet + the
+// "Podcast Preview" page inside it). Search the iTunes catalog (400 ms
+// debounce via PodcastSearchViewModel/PodcastSearchService); idle state shows
+// Recently Viewed (browse subscriptions, browseDate != nil, newest first) and
+// an Enter RSS URL link to AddFeedView. Opening a result creates/refreshes an
+// invisible BROWSE subscription (30-day retention clock resets per visit) so
+// the preview's episode list is fully interactive — play/queue/archive —
+// before subscribing. Subscribe activates the browse subscription and moves
+// it to the top of the Priority Stack; already-subscribed results redirect to
+// the existing episode page instead of showing the preview. Lifecycle rules:
+// PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
 // MARK: - Search Sheet
 
 struct PodcastSearchView: View {

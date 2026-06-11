@@ -184,7 +184,7 @@
 		35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionSettingsView.swift; sourceTree = "<group>"; };
 		35FCD71F52A2CC4A68D9D199 /* 76da0c634eaa47c628642771c82be9f526332d */ = {isa = PBXFileReference; lastKnownFileType = file; path = 76da0c634eaa47c628642771c82be9f526332d; sourceTree = "<group>"; };
 		369AB01EB30A86D595C9F9FA /* 832405884dfb6dc8d3a8c0fa7f27668bef213c */ = {isa = PBXFileReference; lastKnownFileType = file; path = 832405884dfb6dc8d3a8c0fa7f27668bef213c; sourceTree = "<group>"; };
-		37105C01AB41D0EE542AC9C5 /* Autohop.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Autohop.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		37105C01AB41D0EE542AC9C5 /* Autohop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Autohop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3762E2DEDE828A02EC60F0FA /* 6d5ad908ede0c8e1d0cbdecaca564c157cab2d */ = {isa = PBXFileReference; lastKnownFileType = file; path = 6d5ad908ede0c8e1d0cbdecaca564c157cab2d; sourceTree = "<group>"; };
 		37C2D2BA2408F2EF182B3B32 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		38CD7D621CF0A6E82AD16358 /* HEAD */ = {isa = PBXFileReference; lastKnownFileType = text; path = HEAD; sourceTree = "<group>"; };
@@ -328,7 +328,7 @@
 		8D1ED44E730068D26BD5BC6B /* 85c5749dd8c6ba4a7af078a16657367ca6b8e7 */ = {isa = PBXFileReference; lastKnownFileType = file; path = 85c5749dd8c6ba4a7af078a16657367ca6b8e7; sourceTree = "<group>"; };
 		8E2B24699CC9F4509A22F0B5 /* pre-merge-commit.sample */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "pre-merge-commit.sample"; sourceTree = "<group>"; };
 		8F1AF001123B971BD1C8971A /* 753a191bef493522b877d7fa93343ccf33cceb */ = {isa = PBXFileReference; lastKnownFileType = file; path = 753a191bef493522b877d7fa93343ccf33cceb; sourceTree = "<group>"; };
-		8F6BE90CFA13F09C49C4088D /* AutohopTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AutohopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		8F6BE90CFA13F09C49C4088D /* AutohopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutohopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8FA9C3CD503AC7BFBA6E2826 /* b47be4e2f0ef77ea7120c7b50a8b31f300eee8 */ = {isa = PBXFileReference; lastKnownFileType = file; path = b47be4e2f0ef77ea7120c7b50a8b31f300eee8; sourceTree = "<group>"; };
 		9030EF8A1C219B53102C5B2B /* 4b013d8fa7e875691d9f1cb0b37a27fe6be574 */ = {isa = PBXFileReference; lastKnownFileType = file; path = 4b013d8fa7e875691d9f1cb0b37a27fe6be574; sourceTree = "<group>"; };
 		913BE8209519B6FE4C5A1F47 /* 9903612efc80d705d194c7110831e2731c9c9e */ = {isa = PBXFileReference; lastKnownFileType = file; path = 9903612efc80d705d194c7110831e2731c9c9e; sourceTree = "<group>"; };
@@ -2885,6 +2885,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2903,6 +2904,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = QT3N6256FG;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2925,6 +2927,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -3065,6 +3068,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = QT3N6256FG;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

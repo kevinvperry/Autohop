@@ -1,5 +1,11 @@
 import Foundation
 
+// AI CONTEXT — Models/Chapter.swift
+// Value type for one episode chapter. `position` is the 0-based slot index —
+// the key ChapterFilter uses to disable chapters across all future episodes
+// of a podcast. `source` records where the chapter came from (embedded ID3/
+// MP4 metadata vs. external PodcastIndex JSON). Skipping logic lives in
+// ChapterService + PlaybackEngine, not here.
 public struct Chapter: Identifiable, Equatable, Codable {
     public var id: UUID
     public var episodeID: UUID?

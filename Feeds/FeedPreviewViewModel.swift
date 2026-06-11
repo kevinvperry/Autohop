@@ -1,5 +1,10 @@
 import Foundation
 
+// AI CONTEXT — Feeds/FeedPreviewViewModel.swift
+// View model for AddFeedView (manual RSS URL entry): fetches and parses the
+// typed URL into a ParsedFeed preview state machine (idle/loading/loaded/
+// failed). Subscribe action is handled by the view via AppState/
+// SubscriptionStore, not here.
 @MainActor
 final class FeedPreviewViewModel: ObservableObject {
     enum State: Equatable {

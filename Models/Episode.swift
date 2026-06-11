@@ -1,5 +1,19 @@
 import Foundation
 
+// AI CONTEXT — Models/Episode.swift
+// Pure value type for one podcast episode, persisted inside its Subscription
+// by SubscriptionStore. Identity subtleties that matter app-wide:
+//  - `id` (UUID) is local and regenerated if an episode is re-fetched; stable
+//    identity across refreshes is `guid` (RSS <guid>, falling back to URL) —
+//    playback positions and listening history key on guid/URL, not UUID.
+//  - downloadState lifecycle: notDownloaded → queued → downloading →
+//    downloaded | failed. A "downloaded" episode must also have
+//    localFileURL/localFileName for the queue to accept it.
+//  - playedState lifecycle: unplayed → playing/paused → played → archived
+//    (archived episodes leave the queue and their file is deleted).
+//  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
+//  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
+//    (PodcastIndex JSON chapters) by AppState.
 public struct Episode: Identifiable, Equatable, Codable {
     public var id: UUID
     public var subscriptionID: UUID

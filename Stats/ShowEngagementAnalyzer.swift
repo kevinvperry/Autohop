@@ -1,5 +1,16 @@
 import Foundation
 
+// AI CONTEXT — Stats/ShowEngagementAnalyzer.swift
+// Pure functions (no I/O, smoke-tested in StatsSmokeTests) powering the Stats
+// page's "Shows You're Drifting From" section. Classifies each listening-
+// history entry into completed / abandoned / archivedUnplayed(deliberate:),
+// aggregates per show, and flags shows with struggleScore ≥ 0.4, ≥ 4 resolved
+// episodes, AND ≥ 2 genuine drift signals (abandoned or deliberately archived)
+// — the last rule guarantees auto-archive churn alone (e.g. episode-limit
+// cycling through news bulletins) can never flag a show. Thresholds are the
+// constants below; medianStopSeconds feeds the "you usually stop around the
+// N-minute mark" insight line.
+
 // MARK: - EpisodeOutcome
 
 /// How one listening-history entry resolved, for engagement analysis.

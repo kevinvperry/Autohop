@@ -1,5 +1,11 @@
 import SwiftUI
 
+// AI CONTEXT — Views/QueueSheetView.swift ("Queue" sheet — the canonical
+// design-system reference page per DESIGN.md). Shows Up Next + the priority-
+// ordered downloaded queue from appState.downloadedQueue (overrides applied).
+// Swipe actions (allowsFullSwipe FALSE by design): leading Play / Play Next,
+// trailing Archive / Play Last. Pin badges mark Play Next (blue) / Play Last
+// (orange) overrides. Row offset/opacity state animates removals.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

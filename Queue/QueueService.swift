@@ -1,5 +1,13 @@
 import Foundation
 
+// AI CONTEXT — Queue/QueueService.swift
+// Pure, stateless queue-ordering logic — THE core "Priority Stack" rule:
+// walk subscriptions by ascending priorityRank; within each podcast, order
+// episodes oldest-published first; include ONLY episodes that are downloaded
+// (with a local file), not played, and not archived. Browse subscriptions are
+// filtered out upstream by SubscriptionStore accessors. Manual Play Next /
+// Play Last overrides are NOT applied here — AppState layers its pinned-ID
+// lists on top via orderedQueueWithOverrides().
 protocol QueueServicing {
     func nextPlayableEpisode(from subscriptions: [Subscription]) -> Episode?
     func downloadedQueue(from subscriptions: [Subscription]) -> [Episode]

@@ -1,6 +1,12 @@
 import AVKit
 import SwiftUI
 
+// AI CONTEXT — Views/NativeVideoPlayerView.swift. Video playback UI for the
+// Player page: AVPlayerViewController wrapper (full-screen + Picture in
+// Picture) around PlaybackEngine's AVPlayer. VideoOrientationController is the
+// global orientation gate — portrait-only app-wide, unlocked to landscape
+// only while full-screen video is active (queried by AppDelegate's
+// supportedInterfaceOrientationsFor).
 enum VideoOrientationController {
     static var supportedOrientations: UIInterfaceOrientationMask = .portrait
 

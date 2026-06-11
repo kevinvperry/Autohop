@@ -1,5 +1,16 @@
 import SwiftUI
 
+// AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
+// gear icon from a podcast's episode list). Per-podcast configuration, all
+// persisted on the Subscription via SubscriptionStore. Sections: Podcast
+// (editable title, numeric priority rank, read-only author), Playback (speed
+// 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
+// AppState if this podcast is playing), Automation (per-podcast notifications,
+// exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
+// (only when latest episode has chapters; position-based), Feed (read-only
+// URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
+// with FEATURES.md §10. stripHTML/decodeHTMLEntities below clean feed-supplied
+// description text for display.
 private func stripHTML(_ html: String) -> String {
     // Strip tags, then decode entities.
     let withoutTags = html.replacingOccurrences(

@@ -1,5 +1,18 @@
 import Foundation
 
+// AI CONTEXT — Downloads/DownloadManager.swift
+// Background URLSession download layer ("com.autohop.downloads" identifier),
+// continuation-based: download() suspends until the URLSession delegate fires.
+// All mutable maps are accessed on the main queue only (no locks).
+// HANDLES: resume-data save/restore on pause/cancel/failure; a stall watchdog
+// (no progress bytes for 10 min → cancel with resume data, notify AppState via
+// onWatchdogCancelled to schedule a retry); progress throttling (≤1/s/task);
+// background relaunch completion (onBackgroundDownloadCompleted, when the app
+// was killed and iOS relaunched it to deliver a finished download — there is
+// no live continuation in that case); file storage under the app's Downloads
+// directory with deterministic names (expectedLocalFileURL).
+// CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
+// ENFORCED HERE — AppState gates calls to download().
 public protocol DownloadManaging: AnyObject {
     var backgroundEventsCompletionHandler: (() -> Void)? { get set }
     /// `(episodeID, subscriptionID, localFileURL)` — called when a download completes

@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+// AI CONTEXT — Views/CachedArtworkImage.swift. App-wide artwork image view:
+// async-loads from URL with an in-memory + URLCache-backed cache so list
+// scrolling doesn't re-fetch, falling back to the caller's placeholder.
+// Used by every row/page that shows podcast or episode artwork — prefer this
+// over AsyncImage anywhere in the app.
 struct CachedArtworkImage<Placeholder: View>: View {
     let url: URL?
     var contentMode: ContentMode = .fill

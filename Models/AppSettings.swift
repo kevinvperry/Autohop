@@ -1,5 +1,13 @@
 import Foundation
 
+// AI CONTEXT — Models/AppSettings.swift
+// Global (non-per-podcast) settings value type, persisted by SettingsStore as
+// JSON. podcastPollMinutes is the Release Radar sensitivity (how often a feed
+// is re-checked while a drop is imminent, default 5 min). The *Migrated flags
+// are one-shot first-launch migration markers (e.g. moving existing users to
+// the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag
+// once shipped or the migration will re-run. Defaults here must stay in sync
+// with the FEATURES.md "Model Defaults Quick Reference" appendix.
 struct AppSettings: Equatable, Codable {
     var podcastPollMinutes: Int
     var downloadOverWifi: Bool

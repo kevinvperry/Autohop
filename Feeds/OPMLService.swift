@@ -1,5 +1,11 @@
 import Foundation
 
+// AI CONTEXT — Feeds/OPMLService.swift
+// OPML subscription import/export. Import parses outline elements for feed
+// URLs, skipping URLs already subscribed (existingFeedURLs); AppState then
+// fetches and subscribes to each returned URL with progress UI. Export emits
+// OPML 2.0 in priorityRank order so importing elsewhere preserves the stack
+// order. Covered by the OPMLSmoke target.
 public protocol OPMLServicing {
     func importSubscriptions(from fileURL: URL, existingFeedURLs: Set<URL>) async throws -> [URL]
     func exportSubscriptions(_ subscriptions: [Subscription]) throws -> Data

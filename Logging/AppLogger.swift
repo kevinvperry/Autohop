@@ -1,5 +1,12 @@
 import Foundation
 
+// AI CONTEXT — Logging/AppLogger.swift
+// Singleton diagnostic logger writing structured lines (ISO8601 timestamp,
+// level, event key, message, key=value metadata) to autohop-diagnostic.log on
+// a serial queue, capped at ~1 MB with truncation. isEnabled mirrors the
+// hidden Diagnostics toggle (Settings → About → tap version 5×); when off,
+// writes are no-ops. Read by DiagnosticLogView. Event keys are dot-namespaced
+// ("background.schedule", "download.stalled", ...) — grep-friendly.
 final class AppLogger: ObservableObject {
     static let shared = AppLogger()
 

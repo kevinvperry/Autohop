@@ -1,6 +1,13 @@
 import Foundation
 import BackgroundTasks
 
+// AI CONTEXT — App/BackgroundTaskCoordinator.swift
+// Stateless helper owning the BGAppRefreshTask identifier and submit logic for
+// Release Radar background feed refresh. Called from AppDelegate (registration/
+// initial schedule) and AppState (re-schedule with the next feed due date after
+// each refresh cycle). 15-minute floor on earliestBeginDate; identifier must
+// stay in sync with Info.plist BGTaskSchedulerPermittedIdentifiers.
+
 /// Owns the `BGTaskScheduler` registration identifiers and submit logic.
 ///
 /// The task identifier must also appear in Info.plist under

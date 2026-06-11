@@ -1,5 +1,11 @@
 import Foundation
 
+// AI CONTEXT — Chapters/ChapterService.swift
+// Stateless chapter queries used by PlaybackEngine (to jump over chapters
+// disabled in the podcast's ChapterFilter) and PlayerView (chapter list +
+// prev/next navigation). "Active" = not disabled by the position-based
+// ChapterFilter. All lookups are simple sorted-array scans over
+// Episode.chapters.
 protocol ChapterServicing {
     func activeChapters(for episode: Episode, filter: ChapterFilter) -> [Chapter]
     func nextActiveChapter(after position: Int, in episode: Episode, filter: ChapterFilter) -> Chapter?

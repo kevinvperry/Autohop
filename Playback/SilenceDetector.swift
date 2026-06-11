@@ -16,6 +16,17 @@
 import Accelerate
 import AVFoundation
 
+// AI CONTEXT — Playback/SilenceDetector.swift  (LICENSE: MPL-2.0, see header)
+// Value-type silence trimmer used ONLY by PlaybackEngine's engine-path buffer
+// read loop. Stateless API surface: feed each AVAudioPCMBuffer to process(),
+// receive back buffers to schedule (silent runs collapsed, with fade-out/
+// fade-in joins) plus a count of trimmed frames (PlaybackEngine converts to
+// seconds for the Stats "Trim Silence" time-saved category). Tuning constants
+// (minRMS per level, min gap sizes, re-insert counts, last-5-seconds guard,
+// overflow cap) are ported verbatim from Pocket Casts AudioReadTask.swift and
+// MUST NOT be retuned casually — they are perceptually validated values.
+// RMS is computed with Accelerate vDSP_rmsqv.
+
 /// Detects and removes silent gaps from a stream of audio buffers.
 ///
 /// The core algorithm is ported from Pocket Casts' AudioReadTask (MPL-2.0).

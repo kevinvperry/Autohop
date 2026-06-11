@@ -1,5 +1,20 @@
 import Foundation
 
+// AI CONTEXT — Persistence/ListeningStatsStore.swift
+// Data layer for the Stats page. Buckets all listening activity per LOCAL
+// calendar day in DayStats records (wall-clock seconds, 24-hour histogram,
+// per-show seconds keyed by subscription UUID with a title map that survives
+// unsubscribes, four time-saved categories, episodes started/completed,
+// manual skip count). Persisted to listening-stats.json; saves throttled to
+// 30 s during playback and force-flushed on pause/background (AutohopApp).
+// Legacy lifetime totals from playback-stats.json are imported once as
+// `legacyBaseline` so pre-daily-bucketing history isn't lost.
+// QUERY API (used by StatsView): summary(for: .last(days:)/.lifetime),
+// lifetime (legacy PlaybackStats shape), currentStreakDays/longestStreakDays
+// (a day counts at ≥ 60 s), previousPeriodShowSeconds (rank-movement badges).
+// FED BY AppState hooks: 0.5 s playback tick, SilenceDetector trim callbacks,
+// startPlayback (episode started), handleEpisodeFinished (completed).
+
 // MARK: - PlaybackStats (lifetime summary)
 
 /// Lifetime aggregate shape consumed by `StatsView`. Also the on-disk format of the

@@ -1,5 +1,9 @@
 import SwiftUI
 
+// AI CONTEXT — Views/DownloadsView.swift ("Downloads" page). Sections driven
+// by DownloadActivityStore: active downloads (progress, pause/resume/cancel),
+// failed (retry), and downloaded/recently archived episodes with file sizes
+// and delete actions routed through AppState (which owns file + model state).
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

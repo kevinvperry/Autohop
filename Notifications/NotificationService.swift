@@ -2,6 +2,13 @@ import Foundation
 import UIKit
 import UserNotifications
 
+// AI CONTEXT — Notifications/NotificationService.swift
+// Singleton UNUserNotificationCenter wrapper. New-episode notifications fire
+// only when BOTH the global toggle (AppSettings.notifyNewEpisodes) and the
+// per-podcast toggle (Subscription.notificationsEnabled, default OFF) are on —
+// that gating lives in AppState.notifyNewEpisodeIfAllowed, not here. Also owns
+// the app icon badge (queue count, behind the showQueueBadge setting).
+
 /// Wraps `UNUserNotificationCenter` for Autohop-specific notifications.
 ///
 /// Permission is requested once at first launch.  All `post*` methods are

@@ -2,6 +2,14 @@ import Foundation
 import MediaPlayer
 import UIKit
 
+// AI CONTEXT — NowPlaying/NowPlayingService.swift
+// Singleton bridge to MPNowPlayingInfoCenter + MPRemoteCommandCenter: lock
+// screen / Control Centre card (title, artwork cached per URL, elapsed time,
+// rate) and remote commands (play/pause, skip ±N using the user's configured
+// intervals, next track, scrubbing — seek command is enabled/disabled live by
+// the Lock Screen Scrubbing setting). AppState.bootstrap() wires the handlers
+// once and pushes state updates on every tick/transition.
+
 /// Manages the lock-screen / Control Centre Now Playing card and remote controls.
 ///
 /// Call `configure(onPlayPause:onSeek:onSkipForward:onSkipBackward:onNextTrack:)` once

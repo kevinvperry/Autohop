@@ -17,6 +17,40 @@ import AudioToolbox
 import AVFoundation
 import Foundation
 
+// ============================================================================
+// AI CONTEXT — Playback/PlaybackEngine.swift  (LICENSE: MPL-2.0, see header)
+//
+// PURPOSE: The audio/video playback core. AppState is the only caller and
+// wires every closure callback (time ticks, finish, skip/trim accounting).
+//
+// TWO PLAYBACK PATHS — the central design decision of this file:
+//  1. AVPlayer path ("standard"): all VIDEO episodes, and audio when both
+//     Vocal Boost and Trim Silence are off. Speed via AVPlayer.rate.
+//  2. AVAudioEngine path ("engine"): audio when Vocal Boost or Trim Silence is
+//     active. A background buffer-read loop (engineReadQueue, bounded by an
+//     8-slot semaphore) reads the local AVAudioFile, runs buffers through
+//     SilenceDetector, and schedules them on AVAudioPlayerNode behind the
+//     chain: time-pitch (speed) → high-pass 180 Hz → dynamics processor →
+//     peak limiter (the Pocket Casts-derived vocal boost chain; stages are
+//     bypassed per VocalBoostLevel). Changing a setting mid-play rebuilds the
+//     path while preserving position.
+//
+// ALSO OWNS: AVAudioSession configuration (spoken-audio mode when boost on),
+// interruption and route-change handling (AirPod removal must not auto-resume:
+// pausedByRouteChange / wasPlayingBeforeInterruption guards), start/end skip
+// (real file time, fires onAutoSkip), disabled-chapter skipping per
+// ChapterFilter, and a render watchdog that detects a running-but-silent
+// engine and recovers it.
+//
+// INVARIANTS:
+//  - Plays local files only (download-first); never streams.
+//  - onTimeUpdate ticks ~0.5 s on both paths — AppState derives stats,
+//    history, sleep timer, and position persistence from this single tick.
+//  - Engine-path time is tracked in FILE seconds via .dataRendered callbacks
+//    (engineCurrentFileSeconds); trimmed frames mean engine time ≠ wall time.
+//  - setVolume() is the sleep-timer fade hook on whichever path is active.
+// ============================================================================
+
 protocol PlaybackControlling {
     var onEpisodeFinished: ((Episode) -> Void)? { get set }
     var onTimeUpdate: ((TimeInterval) -> Void)? { get set }

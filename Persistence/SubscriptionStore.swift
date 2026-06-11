@@ -1,5 +1,19 @@
 import Foundation
 
+// AI CONTEXT — Persistence/SubscriptionStore.swift
+// The single persistent store for ALL subscription + episode data. JSON file
+// at Application Support/Autohop/subscriptions.json; saves are coalesced on a
+// utility queue so a 70-feed refresh cycle produces one disk write, written
+// atomically. @MainActor: all mutation happens on the main actor and views
+// observe `subscriptions` directly.
+// RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
+// preserving local fields like downloadState/playedState/localFileURL),
+// priorityRank normalization (contiguous 1..n after any insert/move/delete),
+// browse-subscription lifecycle (creation on preview, 30-day expiry purge,
+// activation on subscribe), and ParsedFeed → Episode conversion.
+// GOTCHA: accessors generally distinguish active subscriptions
+// (browseDate == nil) from browse ones; queue/refresh/UI must not see browse
+// subscriptions except in the search sheet's Recently Viewed list.
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     @Published public private(set) var subscriptions: [Subscription] = []

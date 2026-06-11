@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+// AI CONTEXT — Views/EpisodeShareCardView.swift. Fixed-size share card
+// (artwork, episode title, podcast name, Autohop branding) rendered to a
+// UIImage via ImageRenderer by EpisodeShareSheet. Artwork is passed as a
+// pre-fetched UIImage so rendering is synchronous.
+
 // MARK: - Share card
 
 /// A self-contained share card rendered at a fixed size.

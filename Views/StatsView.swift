@@ -1,6 +1,14 @@
 import SwiftUI
 import Charts
 
+// AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
+// FEATURES.md §12). Period selector (30/90 days, 1 year, all time) drives
+// every section, all data from ListeningStatsStore.summary(): hero card (time
+// listened, time saved, episodes finished, streak), listening heatmap (30/90)
+// or monthly Swift Charts trend (1y/all), 24-hour listening clock (Canvas
+// rose chart), Top Shows (+ Show All page with rank-movement badges), "Shows
+// You're Drifting From" (ShowEngagementAnalyzer, 30/90 only, omitted when
+// empty), time-saved breakdown, privacy footer. All on-device data only.
 // MARK: - StatsView
 
 struct StatsView: View {

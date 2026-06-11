@@ -1,6 +1,15 @@
 import Combine
 import Foundation
 
+// AI CONTEXT — Playback/SleepTimerService.swift (MIT — original Autohop code;
+// feature set informed by Pocket Casts but independently authored, see NOTICE).
+// Owned by AppState; driven by PlaybackEngine's 0.5 s onTimeUpdate tick via
+// tick(). Two modes: fixed duration (with +5 min extend) and end-of-N-episodes
+// (AppState calls episodeFinished() on natural completion). Fires onFadeVolume
+// with a 0–1 scalar over the last 5 s (linear fade → PlaybackEngine.setVolume),
+// then onPause. If the user resumes within 5 minutes of the timer firing
+// (autoRestartWindow), the previous mode restarts automatically.
+
 /// Manages sleep timer state for Autohop.
 ///
 /// Supports two modes:

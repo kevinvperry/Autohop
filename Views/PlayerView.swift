@@ -3,6 +3,17 @@ import AVKit
 import SwiftUI
 import UIKit
 
+// AI CONTEXT — Views/PlayerView.swift ("Player" page). Full-screen now-playing
+// UI, permanently mounted as the NavigationStack root (see RootView). Three
+// horizontally swipeable panels: Now Playing (artwork/scrubber/transport),
+// Details (description), Chapters (only when the episode has chapters).
+// Hosts the sheets: AudioControlsSheetView (speed/trim/boost), Sleep Timer,
+// Queue, Episode Share, archive confirmation. Video episodes embed the
+// AVPlayer-backed NativeVideoPlayerView with full-screen + PiP and landscape
+// unlock via VideoOrientationController. Scrubber uses local sliderValue +
+// isSeeking so engine ticks don't fight the user's drag. Also manages the
+// keep-screen-awake idle timer via appState.updateIdleTimer(playerVisible:).
+
 // MARK: - Root player
 
 struct PlayerView: View {

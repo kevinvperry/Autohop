@@ -1,5 +1,22 @@
 import Foundation
 
+// AI CONTEXT — Models/Subscription.swift
+// Value types for one subscribed podcast and its per-podcast policies. All
+// persisted by SubscriptionStore. Contains:
+//  - AutoArchiveSettings: three independent rules (AfterPlayed delay,
+//    AfterInactive timeout, EpisodeLimit keep-N). Defaults: afterPlaying /
+//    1 week / keep 1. Enforced by AppState.runAutoArchive every ≤30 min.
+//  - ChapterFilter: set of DISABLED chapter position indices; position-based
+//    so a disabled slot skips that chapter in every future episode.
+//  - RefreshStats: Release Radar state — ETag/Last-Modified for HTTP
+//    conditional GETs, recentPublishDates history used to derive the median
+//    publish cadence and the next due date for adaptive feed polling.
+//  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
+//    order), episodes array, playbackPreference, notificationsEnabled
+//    (default false), excludeFromAutoFeedRefresh, and browseDate — non-nil
+//    marks an invisible "browse subscription" auto-created when the user
+//    previews a podcast in search (deleted after 30 days if untouched).
+
 // MARK: - AutoArchiveSettings
 
 public struct AutoArchiveSettings: Equatable, Codable, Sendable {

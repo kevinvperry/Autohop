@@ -2,6 +2,12 @@ import Foundation
 import UIKit
 import Darwin.Mach
 
+// AI CONTEXT — Logging/ResourceMonitor.swift
+// Captures device/process resource snapshots (Mach task memory, battery,
+// thermal state, low-power mode) for diagnostic log context. AppState attaches
+// a snapshot's metadata to significant log events and runs a periodic sampling
+// timer while diagnostics are enabled. Debug/observability only — no feature
+// behaviour depends on these values.
 struct ResourceSnapshot {
     var memoryMB: Int
     var residentMemoryMB: Int

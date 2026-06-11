@@ -1,6 +1,19 @@
 import UIKit
 import BackgroundTasks
 
+// AI CONTEXT — App/AppDelegate.swift
+// UIKit delegate bridged into the SwiftUI app via @UIApplicationDelegateAdaptor
+// (see AutohopApp.swift). Handles the four things SwiftUI cannot:
+//  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (must happen
+//     before didFinishLaunching returns) and the BGAppRefreshTask handler,
+//     which calls AppState.shared.refreshSubscriptionsForBackground().
+//  2. Background URLSession wake: stores the system completion handler on
+//     DownloadManager so it fires after urlSessionDidFinishEvents.
+//  3. OPML/.xml file-open events → AppState.importOPML.
+//  4. Orientation lock: delegates to VideoOrientationController so landscape
+//     is only allowed during full-screen video playback.
+// GOTCHA: a BGAppRefreshTask run with "no feeds due" still reports success —
+// reporting failure teaches iOS to deprioritise future background wakes.
 final class AppDelegate: NSObject, UIApplicationDelegate {
 
     weak var appState: AppState?

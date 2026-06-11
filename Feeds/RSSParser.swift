@@ -1,5 +1,15 @@
 import Foundation
 
+// AI CONTEXT — Feeds/RSSParser.swift
+// XMLParser-based RSS/podcast feed parser → ParsedFeed/ParsedEpisode values.
+// Handles itunes:* tags, enclosure media kind detection (audio vs video),
+// duration formats, chapters (podcast:chapters external URL), explicit flags.
+// maxEpisodes short-circuits parsing (didReachEpisodeLimit aborts the parse
+// but is NOT an error). Pre-pass dataByEscapingBareAmpersands() repairs the
+// most common real-world feed defect — unescaped "&" — by escaping any
+// ampersand that doesn't start a known or numeric entity, since XMLParser
+// hard-fails on bare ampersands. Pure logic, no networking; covered by
+// Tests/RSSParserTests and the RSSParserSmoke target.
 public final class RSSParser: NSObject {
     public override init() {}
 

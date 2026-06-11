@@ -1,5 +1,8 @@
 import SwiftUI
 
+// AI CONTEXT — Views/DiagnosticLogView.swift ("Diagnostic Log" page, hidden
+// dev/support tool unlocked via Settings → About → tap version 5×). Renders
+// AppLogger's log file lines with share/clear actions. No feature logic.
 struct DiagnosticLogView: View {
     @ObservedObject private var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss

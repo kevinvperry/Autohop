@@ -1,5 +1,12 @@
 import Foundation
 
+// AI CONTEXT — Downloads/DownloadActivityStore.swift
+// UI-facing record of download activity (one DownloadActivity per episode
+// download: downloading/paused/failed/completed with byte progress), persisted
+// to download-activity.json so the Downloads page survives relaunch. This is
+// presentation/bookkeeping state — the source of truth for whether an episode
+// is actually on disk is Episode.downloadState + the file system (reconciled
+// at launch by AppState.reconcileOrphanedDownloads).
 public enum DownloadActivityStatus: String, Codable {
     case downloading
     case paused

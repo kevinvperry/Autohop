@@ -1,5 +1,13 @@
 import Foundation
 
+// AI CONTEXT — Models/ListeningHistory.swift
+// Value types for the listening-history log: ListeningHistoryEntry (one per
+// unique episode, keyed by guid/URL), ListeningHistoryStatus (listened/played/
+// archived), and CompletionKind (HOW a session ended — finishedNaturally,
+// manuallyArchived, autoArchived, etc.). CompletionKind is the signal
+// ShowEngagementAnalyzer uses to distinguish deliberate abandonment from
+// auto-archive churn in the Stats "Shows You're Drifting From" section.
+//
 // Moved out of App/AppState.swift (June 2026) so AutohopCore — and the
 // ShowEngagementAnalyzer smoke tests — can consume listening history entries.
 // `ListeningHistoryStore` itself stays in AppState.swift; only the value types

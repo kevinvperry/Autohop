@@ -1,5 +1,14 @@
 import Foundation
 
+// AI CONTEXT — Feeds/FeedService.swift
+// Network layer for fetching + parsing one RSS feed. Two entry points:
+//  - refresh(): unconditional GET, full parse (manual pull-to-refresh).
+//  - refreshIfModified(): HTTP conditional GET using stored ETag/Last-Modified
+//    (FeedValidators, persisted in Subscription.refreshStats) — the Release
+//    Radar fast path; a 304 returns .notModified with zero parse cost.
+// Converts ParsedFeed → FeedRefreshResult with Episode values; AppState then
+// merges via SubscriptionStore. 25 s request timeout. Episode limit param
+// caps parse work (50 for normal refresh, nil for full history load).
 protocol FeedServicing {
     func refresh(feedURL: URL, subscriptionID: UUID, episodeLimit: Int?) async throws -> FeedRefreshResult
     func refreshIfModified(

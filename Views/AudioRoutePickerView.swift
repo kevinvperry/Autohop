@@ -1,6 +1,10 @@
 import SwiftUI
 import AVKit
 
+// AI CONTEXT — Views/AudioRoutePickerView.swift. UIViewRepresentable wrapper
+// around the system AVRoutePickerView (AirPlay/output picker), embedded in the
+// Player's audio row. Pure UI bridge; no app state.
+
 /// Wraps `AVRoutePickerView` so SwiftUI can embed the system AirPlay/audio-route picker.
 ///
 /// Tapping the view presents the system picker sheet — no extra code needed.
