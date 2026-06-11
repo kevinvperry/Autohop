@@ -284,6 +284,23 @@ public final class ListeningStatsStore: ObservableObject {
         return result
     }
 
+    /// Per-show seconds for the window of the same length immediately before
+    /// `period` — feeds rank-movement badges in the Top Shows list. Returns nil
+    /// for `.lifetime`, which has no previous period to compare against.
+    public func previousPeriodShowSeconds(for period: StatsPeriod) -> [String: TimeInterval]? {
+        guard case .last(let count) = period else { return nil }
+        let today = calendar.startOfDay(for: Date())
+        var totals: [String: TimeInterval] = [:]
+        for offset in count..<(count * 2) {
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: today),
+                  let day = data.days[dayKey(for: date)] else { continue }
+            for (show, seconds) in day.perShowSeconds {
+                totals[show, default: 0] += seconds
+            }
+        }
+        return totals
+    }
+
     /// Consecutive days with listening ending today (or yesterday, if today is
     /// still empty — an unfinished today doesn't break the streak).
     public var currentStreakDays: Int {

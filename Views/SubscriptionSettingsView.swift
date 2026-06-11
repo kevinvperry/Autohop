@@ -576,6 +576,7 @@ struct SubscriptionEpisodesView: View {
     @State private var isRefreshing = false
     @State private var isLoadingOlderEpisodes = false
     @State private var episodeToShare: Episode?
+    @State private var showExpandedArtwork = false
 
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
@@ -803,6 +804,10 @@ struct SubscriptionEpisodesView: View {
             .frame(width: 120, height: 120)
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .onTapGesture { showExpandedArtwork = true }
+            .sheet(isPresented: $showExpandedArtwork) {
+                ExpandedArtworkSheet(url: sub.artworkURL)
+            }
 
             VStack(spacing: 4) {
                 Text(sub.title)
@@ -960,6 +965,7 @@ struct EpisodeDetailView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var showShareSheet = false
+    @State private var showExpandedArtwork = false
 
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
@@ -1015,6 +1021,10 @@ struct EpisodeDetailView: View {
                         .frame(width: 120, height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+                        .onTapGesture { showExpandedArtwork = true }
+                        .sheet(isPresented: $showExpandedArtwork) {
+                            ExpandedArtworkSheet(url: ep.artworkURL ?? sub.artworkURL)
+                        }
 
                     VStack(spacing: 6) {
                         Text(ep.title)

@@ -60,6 +60,8 @@ let package = Package(
                 "Models/Subscription.swift",
                 "Models/Episode.swift",
                 "Models/AppSettings.swift",
+                "Models/ListeningHistory.swift",
+                "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Feeds/ParsedFeed.swift",
                 "Feeds/RSSParser.swift",

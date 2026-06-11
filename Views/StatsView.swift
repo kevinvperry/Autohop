@@ -7,7 +7,10 @@ struct StatsView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        StatsContentView(store: appState.listeningStatsStore)
+        StatsContentView(
+            store: appState.listeningStatsStore,
+            historyStore: appState.listeningHistoryStore
+        )
     }
 }
 
@@ -32,7 +35,12 @@ private enum StatsRange: String, CaseIterable, Identifiable {
 private struct StatsContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var store: ListeningStatsStore
+    @ObservedObject var historyStore: ListeningHistoryStore
     @State private var range: StatsRange = .days30
+    @State private var driftShowToUnsubscribe: ShowEngagement?
+    @State private var showDriftUnsubscribeConfirm = false
+    /// Comma-joined subscription UUIDs the user muted from the drifting list.
+    @AppStorage("stats.hiddenDriftShowIDs") private var hiddenDriftShowIDsRaw: String = ""
 
     var body: some View {
         let summary = store.summary(for: range.period)
@@ -51,6 +59,7 @@ private struct StatsContentView: View {
 
                 clockSection(summary)
                 topShowsSection(summary)
+                driftingShowsSection
                 timeSavedSection(summary)
 
                 privacyFooter
@@ -67,30 +76,26 @@ private struct StatsContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .confirmationDialog(
+            "Unsubscribe from \(driftShowToUnsubscribe?.title ?? "this podcast")?",
+            isPresented: $showDriftUnsubscribeConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Unsubscribe", role: .destructive) {
+                if let show = driftShowToUnsubscribe {
+                    appState.subscriptionStore.remove(subscriptionID: show.subscriptionID)
+                }
+                driftShowToUnsubscribe = nil
+            }
+        } message: {
+            Text("Your settings for this podcast will be deleted. Downloaded episodes are not removed.")
+        }
     }
 
     // MARK: - Range selector
 
     private var rangeSelector: some View {
-        HStack(spacing: 8) {
-            ForEach(StatsRange.allCases) { item in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { range = item }
-                } label: {
-                    Text(item.rawValue)
-                        .font(.footnote.weight(.semibold))
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 7)
-                        .background(
-                            range == item ? Color.purple : Color.white.opacity(0.08),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(range == item ? Color.white : Color.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .frame(maxWidth: .infinity)
+        StatsRangeSelector(range: $range)
     }
 
     // MARK: - Hero card
@@ -295,9 +300,27 @@ private struct StatsContentView: View {
     private func topShowsSection(_ summary: ListeningStatsSummary) -> some View {
         let shows = summary.topShows(titles: store.showTitles, limit: 8)
         let maxSeconds = shows.first?.seconds ?? 0
+        let totalShows = summary.perShowSeconds.values.filter { $0 > 0 }.count
 
         return VStack(alignment: .leading, spacing: 12) {
-            sectionHeading("Top Shows", icon: "trophy")
+            HStack {
+                sectionHeading("Top Shows", icon: "trophy")
+                Spacer()
+                if totalShows > shows.count {
+                    NavigationLink {
+                        TopShowsListView(store: store, range: range)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Show All")
+                                .font(.footnote.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(.purple)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             if shows.isEmpty || maxSeconds == 0 {
                 emptyCardText("No listening in this period yet")
@@ -307,7 +330,7 @@ private struct StatsContentView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
-                        topShowRow(rank: index + 1, show: show, maxSeconds: maxSeconds)
+                        TopShowRow(rank: index + 1, show: show, maxSeconds: maxSeconds, movement: nil)
 
                         if show.id != shows.last?.id {
                             Divider()
@@ -321,64 +344,134 @@ private struct StatsContentView: View {
         }
     }
 
-    private func topShowRow(
-        rank: Int,
-        show: (id: String, title: String, seconds: TimeInterval),
-        maxSeconds: TimeInterval
-    ) -> some View {
-        HStack(spacing: 12) {
-            Text("\(rank)")
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 18, alignment: .center)
+    // MARK: - Drifting shows
 
-            showArtwork(for: show.id)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(show.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.1))
-                        Capsule()
-                            .fill(Color.purple)
-                            .frame(width: geo.size.width * (show.seconds / maxSeconds))
-                    }
-                }
-                .frame(height: 4)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(formattedLongDuration(show.seconds))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+    private var hiddenDriftShowIDs: Set<UUID> {
+        Set(hiddenDriftShowIDsRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
     }
 
-    private func showArtwork(for subscriptionID: String) -> some View {
-        let subscription = UUID(uuidString: subscriptionID)
-            .flatMap { appState.subscriptionStore.subscription(id: $0) }
+    /// "Shows You're Drifting From" — 30/90 days only: the 500-entry history cap
+    /// silently truncates longer ranges, and a year-old struggle isn't actionable.
+    @ViewBuilder
+    private var driftingShowsSection: some View {
+        if range == .days30 || range == .days90,
+           case .last(let days) = range.period {
+            let calendar = Calendar.current
+            let since = calendar.date(
+                byAdding: .day,
+                value: -(days - 1),
+                to: calendar.startOfDay(for: Date())
+            ) ?? Date()
+            // Unsubscribed shows are excluded — drift from a show you already left is resolved.
+            let shows = ShowEngagementAnalyzer.strugglingShows(
+                entries: historyStore.entries,
+                since: since,
+                excluding: hiddenDriftShowIDs
+            ).filter { appState.subscriptionStore.subscription(id: $0.subscriptionID) != nil }
 
-        return CachedArtworkImage(url: subscription?.artworkURL) {
-            ZStack {
-                LinearGradient(
-                    colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                Image(systemName: "waveform")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.65))
+            if !shows.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionHeading("Shows You're Drifting From", icon: "zzz")
+
+                    VStack(spacing: 0) {
+                        ForEach(shows) { show in
+                            driftingShowRow(show)
+
+                            if show.id != shows.last?.id {
+                                Divider()
+                                    .overlay(Color.white.opacity(0.08))
+                                    .padding(.leading, 70)
+                            }
+                        }
+                    }
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        completionLegend
+                        Text("Based on how recent episodes ended. Tap a show for its settings; long-press for options.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 2)
+                }
             }
         }
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func driftingShowRow(_ show: ShowEngagement) -> some View {
+        NavigationLink {
+            SubscriptionSettingsView(subscriptionID: show.subscriptionID)
+        } label: {
+            HStack(spacing: 12) {
+                StatsShowArtwork(subscriptionID: show.subscriptionID.uuidString)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(show.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(ShowEngagementAnalyzer.label(for: show))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    CompletionBar(
+                        completed: show.completed,
+                        partial: show.abandoned,
+                        untouched: show.archivedUnplayed
+                    )
+                }
+
+                Spacer(minLength: 8)
+
+                Text("\(show.completed)/\(show.totalResolved)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                hideDriftShow(show.subscriptionID)
+            } label: {
+                Label("Hide From This List", systemImage: "eye.slash")
+            }
+            Button(role: .destructive) {
+                driftShowToUnsubscribe = show
+                showDriftUnsubscribeConfirm = true
+            } label: {
+                Label("Unsubscribe", systemImage: "trash")
+            }
+        }
+    }
+
+    private func hideDriftShow(_ subscriptionID: UUID) {
+        var ids = hiddenDriftShowIDs
+        ids.insert(subscriptionID)
+        hiddenDriftShowIDsRaw = ids.map(\.uuidString).sorted().joined(separator: ",")
+    }
+
+    private var completionLegend: some View {
+        HStack(spacing: 12) {
+            legendDot(color: .teal, label: "Finished")
+            legendDot(color: .orange, label: "Stopped partway")
+            legendDot(color: Color.white.opacity(0.25), label: "Archived unplayed")
+        }
+    }
+
+    private func legendDot(color: Color, label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // MARK: - Time saved breakdown
@@ -462,6 +555,264 @@ private struct StatsContentView: View {
         .foregroundStyle(.tertiary)
         .frame(maxWidth: .infinity)
         .padding(.top, 4)
+    }
+}
+
+// MARK: - Range selector
+
+private struct StatsRangeSelector: View {
+    @Binding var range: StatsRange
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(StatsRange.allCases) { item in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { range = item }
+                } label: {
+                    Text(item.rawValue)
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 7)
+                        .background(
+                            range == item ? Color.purple : Color.white.opacity(0.08),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(range == item ? Color.white : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Top show row
+
+/// Rank change against the previous period of the same length.
+private enum RankMovement {
+    case up(Int)
+    case down(Int)
+    case new
+}
+
+private struct TopShowRow: View {
+    let rank: Int
+    let show: (id: String, title: String, seconds: TimeInterval)
+    let maxSeconds: TimeInterval
+    let movement: RankMovement?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(rank)")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .center)
+
+            StatsShowArtwork(subscriptionID: show.id)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(show.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let movement {
+                        movementBadge(movement)
+                    }
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        Capsule()
+                            .fill(Color.purple)
+                            .frame(width: geo.size.width * (show.seconds / maxSeconds))
+                    }
+                }
+                .frame(height: 4)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(formattedLongDuration(show.seconds))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func movementBadge(_ movement: RankMovement) -> some View {
+        switch movement {
+        case .up(let places):
+            Text("▲\(places)")
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.teal)
+        case .down(let places):
+            Text("▼\(places)")
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.secondary)
+        case .new:
+            Text("NEW")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.purple)
+        }
+    }
+
+}
+
+// MARK: - Show artwork (44 pt, shared by stats rows)
+
+private struct StatsShowArtwork: View {
+    @EnvironmentObject private var appState: AppState
+    let subscriptionID: String
+
+    var body: some View {
+        let subscription = UUID(uuidString: subscriptionID)
+            .flatMap { appState.subscriptionStore.subscription(id: $0) }
+
+        CachedArtworkImage(url: subscription?.artworkURL) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(systemName: "waveform")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+// MARK: - Completion bar
+
+/// Horizontal stacked bar of episode outcomes for one show:
+/// teal = finished, orange = stopped partway, dim = archived unplayed.
+private struct CompletionBar: View {
+    let completed: Int
+    let partial: Int
+    let untouched: Int
+
+    var body: some View {
+        let total = max(completed + partial + untouched, 1)
+
+        GeometryReader { geo in
+            HStack(spacing: 1) {
+                segment(.teal, count: completed, total: total, width: geo.size.width)
+                segment(.orange, count: partial, total: total, width: geo.size.width)
+                segment(Color.white.opacity(0.25), count: untouched, total: total, width: geo.size.width)
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 5)
+    }
+
+    @ViewBuilder
+    private func segment(_ color: Color, count: Int, total: Int, width: CGFloat) -> some View {
+        if count > 0 {
+            Rectangle()
+                .fill(color)
+                .frame(width: max(width * CGFloat(count) / CGFloat(total) - 1, 3))
+        }
+    }
+}
+
+// MARK: - Top shows full list (Top 50)
+
+private struct TopShowsListView: View {
+    @ObservedObject var store: ListeningStatsStore
+    @State var range: StatsRange
+
+    var body: some View {
+        let summary = store.summary(for: range.period)
+        let shows = summary.topShows(titles: store.showTitles, limit: 50)
+        let maxSeconds = shows.first?.seconds ?? 0
+        let movements = rankMovements(currentShows: shows)
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                StatsRangeSelector(range: $range)
+
+                if shows.isEmpty || maxSeconds == 0 {
+                    Text("No listening in this period yet")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
+                            TopShowRow(
+                                rank: index + 1,
+                                show: show,
+                                maxSeconds: maxSeconds,
+                                movement: movements?[show.id]
+                            )
+
+                            if show.id != shows.last?.id {
+                                Divider()
+                                    .overlay(Color.white.opacity(0.08))
+                                    .padding(.leading, 70)
+                            }
+                        }
+                    }
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+
+                    if movements != nil {
+                        Text("▲▼ rank change vs. the previous \(range.rawValue.lowercased())")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .navigationTitle("Top Shows")
+        .navigationBarTitleDisplayMode(.inline)
+        .preferredColorScheme(.dark)
+    }
+
+    /// Movement per show ID against the previous period of the same length.
+    /// nil when there is no previous period to compare (All Time).
+    private func rankMovements(
+        currentShows: [(id: String, title: String, seconds: TimeInterval)]
+    ) -> [String: RankMovement]? {
+        guard let previousSeconds = store.previousPeriodShowSeconds(for: range.period) else { return nil }
+
+        // Rank across all shows from the previous window, not just its top 50,
+        // so a show climbing from #60 reads as a rise rather than NEW.
+        let previousRanks: [String: Int] = Dictionary(
+            uniqueKeysWithValues: previousSeconds
+                .filter { $0.value > 0 }
+                .sorted { $0.value > $1.value }
+                .enumerated()
+                .map { ($0.element.key, $0.offset + 1) }
+        )
+
+        var movements: [String: RankMovement] = [:]
+        for (index, show) in currentShows.enumerated() {
+            let currentRank = index + 1
+            guard let previousRank = previousRanks[show.id] else {
+                movements[show.id] = .new
+                continue
+            }
+            if previousRank > currentRank {
+                movements[show.id] = .up(previousRank - currentRank)
+            } else if previousRank < currentRank {
+                movements[show.id] = .down(currentRank - previousRank)
+            }
+        }
+        return movements
     }
 }
 

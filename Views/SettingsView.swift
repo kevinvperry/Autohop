@@ -141,6 +141,7 @@ struct SettingsView: View {
         Section {
             Toggle("Keep Screen Awake", isOn: keepScreenAwakeBinding)
             Toggle("Lock Screen Scrubbing", isOn: lockScreenScrubbingBinding)
+            Toggle("Queue Badge", isOn: queueBadgeBinding)
             Button {
                 openSkipEditor(.back)
             } label: {
@@ -157,7 +158,7 @@ struct SettingsView: View {
         } header: {
             Text("Controls")
         } footer: {
-            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Skip durations also apply to the Lock Screen and Control Centre buttons.")
+            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Skip durations also apply to the Lock Screen and Control Centre buttons.")
         }
     }
 
@@ -307,6 +308,17 @@ struct SettingsView: View {
         Binding(
             get: { appState.settingsStore.appSettings.lockScreenScrubbingEnabled },
             set: { appState.updateLockScreenScrubbing(enabled: $0) }
+        )
+    }
+
+    private var queueBadgeBinding: Binding<Bool> {
+        Binding(
+            get: { appState.settingsStore.appSettings.showQueueBadge },
+            set: {
+                appState.settingsStore.appSettings.showQueueBadge = $0
+                let count = $0 ? appState.downloadedQueue.count : 0
+                NotificationService.shared.updateBadge(count: count)
+            }
         )
     }
 

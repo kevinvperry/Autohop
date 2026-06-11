@@ -7,6 +7,9 @@ public protocol DownloadManaging: AnyObject {
     var onBackgroundDownloadCompleted: ((UUID, UUID, URL) -> Void)? { get set }
     /// `(episodeID, fractionCompleted, bytesWritten, bytesExpected)` — called on the main queue while downloading.
     var onProgressUpdate: ((UUID, Double, Int64, Int64) -> Void)? { get set }
+    /// Called on the main queue when the watchdog cancels a stalled download. The caller should
+    /// schedule a retry. Resume data has already been saved; the next `download()` call will use it.
+    var onWatchdogCancelled: ((UUID) -> Void)? { get set }
     func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL
     func pauseDownload(episodeID: UUID)
     func cancelDownload(episodeID: UUID)
@@ -38,6 +41,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private var lastLoggedProgressBucketByEpisodeID: [UUID: Int] = [:]
     private var intentionallyPausedEpisodeIDs = Set<UUID>()
     private var intentionallyCancelledEpisodeIDs = Set<UUID>()
+    private var watchdogStalledEpisodeIDs = Set<UUID>()
     // Progress throttle: only dispatch onProgressUpdate at most once per second per task.
     private var progressLastDispatchedAt: [Int: Date] = [:]
     // Watchdog: track last time each episode received any progress bytes.
@@ -52,6 +56,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
     public var backgroundEventsCompletionHandler: (() -> Void)?
     public var onBackgroundDownloadCompleted: ((UUID, UUID, URL) -> Void)?
     public var onProgressUpdate: ((UUID, Double, Int64, Int64) -> Void)?
+    public var onWatchdogCancelled: ((UUID) -> Void)?
 
     // MARK: - Init
 
@@ -444,6 +449,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
             self.clearTaskTracking(taskID: taskID)
             let nsError = error as NSError
             let isPauseOrCancel = nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+            if isPauseOrCancel, let episodeID, self.watchdogStalledEpisodeIDs.remove(episodeID) != nil {
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.info("download.watchdogPaused", "Download paused by stall watchdog — will retry", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "hasResumeData": "\(self.resumeDataByEpisodeID[episodeID] != nil)"
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.paused)
+                self.continuations.removeValue(forKey: taskID)
+                self.onWatchdogCancelled?(episodeID)
+                return
+            }
             if isPauseOrCancel, let episodeID, self.intentionallyCancelledEpisodeIDs.remove(episodeID) != nil {
                 self.logger.info("download.taskCancelled", "Download task cancelled", metadata: [
                     "taskID": "\(taskID)",
@@ -533,11 +550,32 @@ private extension DownloadManager {
                 "taskID": "\(taskID)",
                 "stallMinutes": "\(Int(downloadStallThreshold / 60))"
             ])
-            intentionallyCancelledEpisodeIDs.insert(episodeID)
-            session.getAllTasks { tasks in
-                tasks.first(where: { $0.taskIdentifier == taskID })?.cancel()
+            // Mark as watchdog-stalled so didCompleteWithError can fire onWatchdogCancelled.
+            // Do NOT pre-clear task tracking here — that would orphan the episodeID lookup in
+            // the delegate and silently drop the retry callback.
+            watchdogStalledEpisodeIDs.insert(episodeID)
+            session.getAllTasks { [weak self] tasks in
+                guard let task = tasks.first(where: { $0.taskIdentifier == taskID }) as? URLSessionDownloadTask else {
+                    // Task already gone — clean up directly and still fire the retry callback.
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.watchdogStalledEpisodeIDs.remove(episodeID)
+                        self.clearTaskTracking(taskID: taskID)
+                        self.onWatchdogCancelled?(episodeID)
+                    }
+                    return
+                }
+                // Use cancel(byProducingResumeData:) so the partial download isn't thrown away.
+                task.cancel(byProducingResumeData: { [weak self] resumeData in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        if let resumeData {
+                            self.resumeDataByEpisodeID[episodeID] = resumeData
+                        }
+                        // didCompleteWithError will fire next and handle the rest.
+                    }
+                })
             }
-            clearTaskTracking(taskID: taskID)
         }
     }
 }

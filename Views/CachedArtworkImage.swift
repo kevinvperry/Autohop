@@ -28,6 +28,47 @@ struct CachedArtworkImage<Placeholder: View>: View {
     }
 }
 
+// MARK: - Expanded artwork sheet
+
+struct ExpandedArtworkSheet: View {
+    let url: URL?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            CachedArtworkImage(url: url) {
+                ZStack {
+                    LinearGradient(
+                        colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    Image(systemName: "waveform")
+                        .font(.system(size: 64, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .presentationBackground(.black)
+    }
+}
+
+// MARK: - Artwork image cache
+
 actor ArtworkImageCache {
     static let shared = ArtworkImageCache()
 

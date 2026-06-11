@@ -237,6 +237,8 @@ struct PodcastPreviewView: View {
     @StateObject private var viewModel: PodcastPreviewViewModel
     @State private var isSubscribing = false
     @State private var isLoadingOlderEpisodes = false
+    @State private var episodeToShare: Episode?
+    @State private var showExpandedArtwork = false
 
     /// Standard init from search results.
     init(result: PodcastSearchResult) {
@@ -309,6 +311,18 @@ struct PodcastPreviewView: View {
                     ReturnToPlayerButton()
                 }
             }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    episodeToShare = subscription?.latestEpisode
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(subscription?.latestEpisode == nil)
+            }
+        }
+        .sheet(item: $episodeToShare) { ep in
+            EpisodeShareSheet(episode: ep, subscription: subscription)
         }
     }
 
@@ -369,6 +383,10 @@ struct PodcastPreviewView: View {
             .frame(width: 120, height: 120)
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .onTapGesture { showExpandedArtwork = true }
+            .sheet(isPresented: $showExpandedArtwork) {
+                ExpandedArtworkSheet(url: artworkURL)
+            }
 
             VStack(spacing: 4) {
                 Text(title)
@@ -747,17 +765,57 @@ private struct EpisodeStatusPill: View {
 // MARK: - HTML stripping (regex-only — safe in SwiftUI view updates)
 
 private func stripHTMLPreview(_ html: String) -> String {
-    guard html.contains("<") else { return html }
-    var result = html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-    result = result
-        .replacingOccurrences(of: "&amp;",  with: "&")
-        .replacingOccurrences(of: "&lt;",   with: "<")
-        .replacingOccurrences(of: "&gt;",   with: ">")
-        .replacingOccurrences(of: "&quot;", with: "\"")
-        .replacingOccurrences(of: "&#39;",  with: "'")
-        .replacingOccurrences(of: "&nbsp;", with: " ")
-    return result
+    let withoutTags = html.replacingOccurrences(
+        of: #"(?is)<[^>]+>"#, with: " ", options: .regularExpression
+    )
+    return decodeHTMLEntitiesPreview(withoutTags)
         .components(separatedBy: .whitespacesAndNewlines)
         .filter { !$0.isEmpty }
         .joined(separator: " ")
 }
+
+private func decodeHTMLEntitiesPreview(_ text: String) -> String {
+    var result = text
+    if let regex = try? NSRegularExpression(pattern: #"&#(\d+);"#) {
+        let nsResult = NSMutableString(string: result)
+        var offset = 0
+        for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)) {
+            guard let numRange = Range(match.range(at: 1), in: result),
+                  let codePoint = UInt32(result[numRange]),
+                  let scalar = Unicode.Scalar(codePoint) else { continue }
+            let replacement = String(scalar)
+            let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+            nsResult.replaceCharacters(in: adjustedRange, with: replacement)
+            offset += replacement.count - match.range.length
+        }
+        result = nsResult as String
+    }
+    if let regex = try? NSRegularExpression(pattern: #"&#x([0-9a-fA-F]+);"#) {
+        let nsResult = NSMutableString(string: result)
+        var offset = 0
+        for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)) {
+            guard let numRange = Range(match.range(at: 1), in: result),
+                  let codePoint = UInt32(result[numRange], radix: 16),
+                  let scalar = Unicode.Scalar(codePoint) else { continue }
+            let replacement = String(scalar)
+            let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+            nsResult.replaceCharacters(in: adjustedRange, with: replacement)
+            offset += replacement.count - match.range.length
+        }
+        result = nsResult as String
+    }
+    for (entity, replacement) in namedHTMLEntitiesPreview {
+        result = result.replacingOccurrences(of: entity, with: replacement)
+    }
+    return result
+}
+
+private let namedHTMLEntitiesPreview: [(String, String)] = [
+    ("&amp;",   "&"),  ("&lt;",    "<"),  ("&gt;",    ">"),
+    ("&quot;",  "\""), ("&apos;",  "'"),  ("&nbsp;",  " "),
+    ("&mdash;", "—"),  ("&ndash;", "–"),  ("&rsquo;", "\u{2019}"),
+    ("&lsquo;", "\u{2018}"), ("&rdquo;", "\u{201D}"), ("&ldquo;", "\u{201C}"),
+    ("&hellip;","\u{2026}"), ("&bull;",  "\u{2022}"), ("&copy;",  "\u{00A9}"),
+    ("&reg;",   "\u{00AE}"), ("&trade;", "\u{2122}"), ("&euro;",  "\u{20AC}"),
+    ("&pound;", "\u{00A3}"), ("&yen;",   "\u{00A5}"), ("&cent;",  "\u{00A2}"),
+]

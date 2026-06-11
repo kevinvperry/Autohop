@@ -2148,3 +2148,19 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank
 ## Stats Page — Privacy Footer
 
 Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats never leave this device."
+
+## Completion Bar
+
+**Label: `Chart-CompletionBar`**
+
+Horizontal stacked outcome bar used in the Stats page "Shows You're Drifting From" rows (`CompletionBar` in `Views/StatsView.swift`). 5 pt tall, `Capsule`-clipped `HStack` with 1 pt gaps; segment widths proportional to episode counts, minimum 3 pt so tiny counts stay visible.
+
+- **Teal** — episodes finished
+- **Orange** — stopped partway (abandoned)
+- **`white.opacity(0.25)`** — archived unplayed
+
+A single shared legend (`6 pt circle dots + .caption2 .tertiary labels`) appears once below the section, never per row.
+
+## Stats Page — Drifting Show Row
+
+Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 pt artwork (`Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) · blunt insight line (`.caption` `.secondary`, e.g. "Archived 6 of the last 8 unplayed") · `Chart-CompletionBar` · trailing "finished/total" fraction (`.caption.monospacedDigit`, `.secondary`). Row tap pushes `SubscriptionSettingsView`; long-press context menu offers Hide From This List and Unsubscribe (confirmation dialog).

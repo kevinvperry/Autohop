@@ -10,6 +10,7 @@ struct AppSettings: Equatable, Codable {
     var keepScreenAwakeDuringPlayback: Bool
     var lockScreenScrubbingEnabled: Bool
     var diagnosticLoggingEnabled: Bool
+    var showQueueBadge: Bool
     var lastAutoArchiveRunAt: Date?
     var autoArchiveDefaultMigrated: Bool
     var vocalBoostLevelMigrated: Bool
@@ -27,6 +28,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback: false,
         lockScreenScrubbingEnabled: true,
         diagnosticLoggingEnabled: false,
+        showQueueBadge: true,
         lastAutoArchiveRunAt: nil,
         autoArchiveDefaultMigrated: false,
         vocalBoostLevelMigrated: false,
@@ -45,6 +47,7 @@ struct AppSettings: Equatable, Codable {
         case keepScreenAwakeDuringPlayback
         case lockScreenScrubbingEnabled
         case diagnosticLoggingEnabled
+        case showQueueBadge
         case lastAutoArchiveRunAt
         case autoArchiveDefaultMigrated
         case vocalBoostLevelMigrated
@@ -63,6 +66,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback: Bool,
         lockScreenScrubbingEnabled: Bool,
         diagnosticLoggingEnabled: Bool,
+        showQueueBadge: Bool,
         lastAutoArchiveRunAt: Date?,
         autoArchiveDefaultMigrated: Bool,
         vocalBoostLevelMigrated: Bool,
@@ -79,6 +83,7 @@ struct AppSettings: Equatable, Codable {
         self.keepScreenAwakeDuringPlayback = keepScreenAwakeDuringPlayback
         self.lockScreenScrubbingEnabled = lockScreenScrubbingEnabled
         self.diagnosticLoggingEnabled = diagnosticLoggingEnabled
+        self.showQueueBadge = showQueueBadge
         self.lastAutoArchiveRunAt = lastAutoArchiveRunAt
         self.autoArchiveDefaultMigrated = autoArchiveDefaultMigrated
         self.vocalBoostLevelMigrated = vocalBoostLevelMigrated
@@ -98,6 +103,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwakeDuringPlayback) ?? Self.default.keepScreenAwakeDuringPlayback
         lockScreenScrubbingEnabled = try container.decodeIfPresent(Bool.self, forKey: .lockScreenScrubbingEnabled) ?? Self.default.lockScreenScrubbingEnabled
         diagnosticLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .diagnosticLoggingEnabled) ?? Self.default.diagnosticLoggingEnabled
+        showQueueBadge = try container.decodeIfPresent(Bool.self, forKey: .showQueueBadge) ?? Self.default.showQueueBadge
         lastAutoArchiveRunAt = try container.decodeIfPresent(Date.self, forKey: .lastAutoArchiveRunAt)
         autoArchiveDefaultMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveDefaultMigrated) ?? Self.default.autoArchiveDefaultMigrated
         vocalBoostLevelMigrated = try container.decodeIfPresent(Bool.self, forKey: .vocalBoostLevelMigrated) ?? Self.default.vocalBoostLevelMigrated

@@ -579,9 +579,19 @@ final class PlaybackEngine: PlaybackControlling {
                 do {
                     try file.read(into: buffer)
                 } catch {
-                    self.logger.error("engine.readFailed", "AVAudioFile read failed", metadata: [
-                        "error": String(describing: error)
-                    ])
+                    // AVAudioFile.read(into:) throws at EOF by bridging a nil NSError*,
+                    // which produces an NSError with empty domain and code 0. That is
+                    // normal end-of-file signalling, not a real failure.
+                    let nsError = error as NSError
+                    if nsError.domain.isEmpty && nsError.code == 0 {
+                        self.logger.info("engine.readEOF", "AVAudioFile reached end of file")
+                    } else {
+                        self.logger.error("engine.readFailed", "AVAudioFile read failed", metadata: [
+                            "error": error.localizedDescription,
+                            "domain": nsError.domain,
+                            "code": String(nsError.code)
+                        ])
+                    }
                     break
                 }
 
