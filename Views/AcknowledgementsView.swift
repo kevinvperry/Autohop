@@ -30,12 +30,10 @@ struct AcknowledgementsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-                    ReturnToPlayerButton()
-                }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
             }
         }
+        .miniPlayerBar()
     }
 }
 

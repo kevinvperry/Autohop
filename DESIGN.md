@@ -13,6 +13,9 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `ColorScheme-Dark` | Every page forces dark mode — no white or light screens |
 | `Accent-Purple` | Purple is the highlight colour for buttons, icons, active states, and progress |
 | `NavTitle-Inline` | Page title in the centre of the top bar, not as a large heading |
+| `NavBack-Standard` | Pushed pages: brand back chevron top-left, nothing else in that corner |
+| `SheetClose-Standard` | Informational sheets: ✕ close button top-right, no Done/Cancel |
+| `MiniPlayer-Bar` | Now-playing bar docked at the bottom of every pushed page; tap to return to Player |
 | `List-Plain` | Lists use `.plain` style; row backgrounds do the visual separating |
 | `Section-Heading` | Bold `title3` section label above each card group |
 | `Section-CardList` | A `List` or `VStack` wrapped in a `white.opacity(0.08)` rounded-rect card |
@@ -121,6 +124,24 @@ All navigation titles use `.inline` display mode.
 .navigationBarTitleDisplayMode(.inline)
 ```
 
+---
+
+## Navigation Chrome (NavRules)
+
+> Full navigation structure and the three exit patterns → see `PAGES.md`.
+
+**Label: `NavBack-Standard`** — every pushed page's only top-left control:
+
+```swift
+ToolbarItem(placement: .topBarLeading) {
+    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+}
+```
+
+**Label: `SheetClose-Standard`** — every informational sheet's only close control, top-right (`SheetCloseButton` in `Views/RootView.swift`). Text `Cancel`/`Save` buttons are reserved for editing sheets that commit data.
+
+**Label: `MiniPlayer-Bar`** — `MiniPlayerBar` (`Views/RootView.swift`), docked via `.miniPlayerBar()` on every pushed page. Artwork · episode title · remaining time · play/pause, with a purple progress hairline on top. Tapping it posts `.autohopReturnToPlayer` to pop to the Player. Hidden on Subscriptions while Reorder mode is active.
+
 The Individual Subscription episodes page uses an empty nav title (the channel name is shown in `Header-SubscriptionPage` instead):
 
 ```swift
@@ -159,7 +180,7 @@ With an optional trailing icon:
 
 ```swift
 HStack(spacing: 6) {
-    Text("Priority Sort")
+    Text("Section Title")
         .font(.title3.weight(.bold))
         .foregroundStyle(.primary)
     Image(systemName: "arrow.up.arrow.down")
@@ -992,7 +1013,7 @@ Purple, animated progress bar shown whenever an episode is actively downloading.
 
 | Page | Position |
 |---|---|
-| Priority Sort | Below the metadata row, indented 56 pt (past artwork) |
+| Subscriptions | Below the metadata row, indented 56 pt (past artwork) |
 | Individual Subscription | Below the episode row HStack, indented 56 pt (past artwork) |
 | Downloads page | Inside the activity row, below the text stack |
 

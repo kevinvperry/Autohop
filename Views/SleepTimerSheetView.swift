@@ -3,8 +3,10 @@ import SwiftUI
 // AI CONTEXT — Views/SleepTimerSheetView.swift ("Sleep Timer" sheet, from the
 // Player; MIT-licensed original code, see NOTICE). Inactive state: six
 // duration presets (5–60 min) in a 3×2 grid plus an end-of-N-episodes stepper
-// (1–10). Active state: countdown (+5 min extend) or episodes-remaining, with
-// Cancel. All timer logic lives in SleepTimerService — this is pure UI.
+// (1–10) — selecting a preset or Set starts the timer AND dismisses the sheet
+// (NavRules: one-tap apply-and-close). Active state: countdown (+5 min
+// extend) or episodes-remaining, with Cancel (cancels the timer, keeps the
+// sheet open). All timer logic lives in SleepTimerService — this is pure UI.
 
 // MARK: - Sleep Timer Sheet
 
@@ -82,6 +84,7 @@ struct SleepTimerSheetView: View {
     private func presetButton(label: String, seconds: TimeInterval) -> some View {
         Button {
             sleepTimer.start(mode: .duration(seconds))
+            dismiss()
         } label: {
             Text(label)
                 .font(.system(size: 15, weight: .semibold))
@@ -141,6 +144,7 @@ struct SleepTimerSheetView: View {
 
             Button {
                 sleepTimer.start(mode: .endOfEpisode(count: episodeCount))
+                dismiss()
             } label: {
                 Text("Set")
                     .font(.system(size: 14, weight: .bold))

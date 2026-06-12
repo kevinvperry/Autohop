@@ -2,14 +2,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
-// Priority List toolbar). Navigation shortcuts: Find Podcasts, Downloads,
-// Listening History, Stats, Import OPML, App Settings. Dismisses itself and
-// drives navigation in the parent.
+// Subscriptions toolbar). The single gateway to the secondary pages —
+// Downloads, Listening History, Stats, App Settings — plus the Import OPML
+// action (NavRules: one path per page; Find Podcasts lives behind + only).
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showSearch = false
     @State private var showOPMLImporter = false
     @State private var isImporting = false
     @State private var appearTime: Date?
@@ -19,20 +18,6 @@ struct MenuSheetView: View {
     var body: some View {
         NavigationStack {
             List {
-                Button {
-                    dismiss()
-                } label: {
-                    Label("Subscriptions", systemImage: "dot.radiowaves.left.and.right")
-                        .foregroundStyle(.primary)
-                }
-
-                Button {
-                    showSearch = true
-                } label: {
-                    Label("Find Podcasts", systemImage: "magnifyingglass")
-                        .foregroundStyle(.primary)
-                }
-
                 NavigationLink {
                     DownloadsView()
                 } label: {
@@ -81,21 +66,11 @@ struct MenuSheetView: View {
             .navigationTitle("Menu")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        returnToPlayer()
-                    } label: {
-                        Image(systemName: "play.circle.fill")
-                    }
-                    .accessibilityLabel("Return to Player")
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .topBarTrailing) {
+                    SheetCloseButton { dismiss() }
                 }
             }
         }
-        .sheet(isPresented: $showSearch) { PodcastSearchView() }
         .preferredColorScheme(.dark)
         .onAppear {
             let t = Date()
@@ -128,8 +103,4 @@ struct MenuSheetView: View {
         }
     }
 
-    private func returnToPlayer() {
-        NotificationCenter.default.post(name: .autohopReturnToPlayer, object: nil)
-        dismiss()
-    }
 }

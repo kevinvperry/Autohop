@@ -7,11 +7,17 @@ import UIKit
 // UI, permanently mounted as the NavigationStack root (see RootView). Three
 // horizontally swipeable panels: Now Playing (artwork/scrubber/transport),
 // Details (description), Chapters (only when the episode has chapters).
-// Hosts the sheets: AudioControlsSheetView (speed/trim/boost), Sleep Timer,
-// Queue, Episode Share, archive confirmation. Video episodes embed the
-// AVPlayer-backed NativeVideoPlayerView with full-screen + PiP and landscape
-// unlock via VideoOrientationController. Scrubber uses local sliderValue +
-// isSeeking so engine ticks don't fight the user's drag. Also manages the
+// Top bar (NavRules): quiet list.bullet circle (left) pushes Subscriptions —
+// the only nav exit; icon pills switch panels (selected pill expands to
+// icon + label); queue button (right, playerActionIcon tint style, icon +
+// count) opens the Queue sheet and momentarily flashes the subscription
+// artwork of any episode newly added to the queue (2.5 s, gated on
+// isPlayerVisible). Hosts the sheets: AudioControlsSheetView
+// (speed/trim/boost), Sleep Timer, Queue, Episode Share, archive
+// confirmation. Video episodes embed the AVPlayer-backed
+// NativeVideoPlayerView with full-screen + PiP and landscape unlock via
+// VideoOrientationController. Scrubber uses local sliderValue + isSeeking so
+// engine ticks don't fight the user's drag. Also manages the
 // keep-screen-awake idle timer via appState.updateIdleTimer(playerVisible:).
 
 // MARK: - Root player
@@ -31,6 +37,8 @@ struct PlayerView: View {
     @State private var pictureInPictureStartToken = 0
     @State private var isPlayerVisible = false
     @State private var audioRouteName = PlayerView.currentAudioRouteName()
+    @State private var queueFlashArtworkURL: URL?
+    @State private var queueFlashTask: Task<Void, Never>?
 
     private var episode: Episode? { appState.currentPlayerEpisode }
     private var isVideoEpisode: Bool { episode?.mediaKind == .video && appState.currentVideoPlayer != nil }
@@ -157,40 +165,106 @@ struct PlayerView: View {
 
     private var topBar: some View {
         HStack(spacing: 0) {
+            // Quiet icon circle — the player's only navigation exit, the
+            // visual twin of the MiniPlayerBar that brings you back.
             NavigationLink(value: AppRoute.podcasts) {
-                Image(systemName: "list.number")
-                    .font(.system(size: 18, weight: .semibold))
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 36, height: 36)
+                    .background(Color(white: 0.12))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
             }
+            .accessibilityLabel("Subscriptions")
 
             Spacer()
 
+            // Icon pills — the selected panel expands to icon + label so the
+            // row stays uncluttered but never cryptic.
             HStack(spacing: 2) {
                 ForEach(visiblePanels) { panel in
-                    Button(panel.title) {
+                    let isSelected = selectedPanel == panel.rawValue
+                    Button {
                         withAnimation(.easeInOut(duration: 0.22)) { selectedPanel = panel.rawValue }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: panel.icon)
+                                .font(.system(size: 13, weight: .semibold))
+                            if isSelected {
+                                Text(panel.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .transition(.opacity)
+                            }
+                        }
+                        .foregroundStyle(isSelected ? .white : Color(white: 0.4))
+                        .padding(.horizontal, isSelected ? 12 : 9)
+                        .frame(height: 30)
+                        .background(isSelected ? Color(white: 0.15) : .clear)
+                        .clipShape(Capsule())
                     }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(selectedPanel == panel.rawValue ? .white : Color(white: 0.4))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(selectedPanel == panel.rawValue ? Color(white: 0.15) : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .accessibilityLabel(panel.title)
                 }
             }
 
             Spacer()
 
+            // Matches the audio-row action buttons (playerActionIcon tint
+            // style) so the top bar stays calm. When an episode joins the
+            // queue, the button momentarily flashes that episode's
+            // subscription artwork.
             Button { showQueue = true } label: {
-                Text("\(appState.downloadedQueue.count)")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color(white: 0.55))
-                    .padding(.horizontal, 8)
-                    .frame(height: 30)
-                    .background(Color(white: 0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 15))
-                    .overlay(RoundedRectangle(cornerRadius: 15).stroke(Color(white: 0.18), lineWidth: 0.5))
+                ZStack {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.stack")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Color.purple.opacity(0.85))
+                        Text("\(appState.downloadedQueue.count)")
+                            .font(.system(size: 12, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.purple.opacity(0.85))
+                    }
+                    .opacity(queueFlashArtworkURL == nil ? 1 : 0)
+
+                    if let url = queueFlashArtworkURL {
+                        CachedArtworkImage(url: url) {
+                            Rectangle().fill(Color(white: 0.2))
+                        }
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .transition(.scale(scale: 0.4).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(Color.purple.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+            }
+            .accessibilityLabel("Queue, \(appState.downloadedQueue.count) episodes")
+        }
+        .onChange(of: appState.downloadedQueue.map(\.id)) { oldIDs, newIDs in
+            // Flash the artwork of an episode newly added to the queue.
+            // oldIDs is the pre-change list, so cold-start population (old
+            // empty before the queue first loads) still flashes only on
+            // genuine additions after the player is visible.
+            guard isPlayerVisible else { return }
+            let added = Set(newIDs).subtracting(oldIDs)
+            guard let newID = added.first,
+                  let episode = appState.downloadedQueue.first(where: { $0.id == newID }),
+                  let artworkURL = appState.subscriptionStore.subscription(id: episode.subscriptionID)?.artworkURL
+            else { return }
+
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                queueFlashArtworkURL = artworkURL
+            }
+            queueFlashTask?.cancel()
+            queueFlashTask = Task {
+                try? await Task.sleep(for: .seconds(2.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.3)) {
+                    queueFlashArtworkURL = nil
+                }
             }
         }
     }
@@ -1776,9 +1850,17 @@ private enum PlayerPanel: Int, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .nowPlaying: return "Now Playing"
+        case .nowPlaying: return "Playing"
         case .details: return "Details"
         case .chapters: return "Chapters"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .nowPlaying: return "waveform"
+        case .details: return "info.circle"
+        case .chapters: return "list.number"
         }
     }
 }

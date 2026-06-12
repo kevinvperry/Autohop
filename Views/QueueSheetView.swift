@@ -3,9 +3,11 @@ import SwiftUI
 // AI CONTEXT — Views/QueueSheetView.swift ("Queue" sheet — the canonical
 // design-system reference page per DESIGN.md). Shows Up Next + the priority-
 // ordered downloaded queue from appState.downloadedQueue (overrides applied).
-// Swipe actions (allowsFullSwipe FALSE by design): leading Play / Play Next,
-// trailing Archive / Play Last. Pin badges mark Play Next (blue) / Play Last
-// (orange) overrides. Row offset/opacity state animates removals.
+// Chrome (NavRules): centered title, SheetCloseButton ✕ top-right, pull-to-
+// refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
+// leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
+// Play Next (blue) / Play Last (orange) overrides. Row offset/opacity state
+// animates removals.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -14,7 +16,6 @@ struct QueueSheetView: View {
     @State private var rowOffsets: [UUID: CGFloat] = [:]
     @State private var rowOpacities: [UUID: Double] = [:]
     @State private var expandedEpisodeID: UUID? = nil
-    @State private var hasActiveDownloads = false
 
     private let logger = AppLogger.shared
 
@@ -179,36 +180,12 @@ struct QueueSheetView: View {
             }
             .navigationTitle("Queue")
             .navigationBarTitleDisplayMode(.inline)
+            .refreshable {
+                await refreshQueue()
+            }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        DownloadsView()
-                    } label: {
-                        DownloadShortcutButton(isActive: hasActiveDownloads)
-                    }
-                    .accessibilityLabel("Downloads")
-                }
-
-                ToolbarItem(placement: .principal) {
-                    Button {
-                        refreshQueue()
-                    } label: {
-                        if isRefreshing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Label("Refresh", systemImage: "arrow.clockwise")
-                                .labelStyle(.iconOnly)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .disabled(isRefreshing)
-                    .accessibilityLabel("Refresh feeds")
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .topBarTrailing) {
+                    SheetCloseButton { dismiss() }
                 }
             }
         }
@@ -216,7 +193,6 @@ struct QueueSheetView: View {
         .onAppear {
             let t = Date()
             appearTime = t
-            hasActiveDownloads = !appState.downloadActivityStore.activeActivities.isEmpty
             logger.info("nav.appear", "QueueSheetView appeared", metadata: [
                 "queueCount": "\(appState.downloadedQueue.count)"
             ])
@@ -231,21 +207,14 @@ struct QueueSheetView: View {
         .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
             dismiss()
         }
-        .onReceive(appState.downloadActivityStore.$activities) { activities in
-            hasActiveDownloads = activities.contains { $0.status == .downloading || $0.status == .paused }
-        }
     }
 
-    private func refreshQueue() {
+    private func refreshQueue() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        Task {
-            await appState.refreshAllSubscriptions(includeBackoffFeeds: true)
-            await appState.runAutoArchiveIfNeeded(reason: "queue.manualRefresh", force: true)
-            await MainActor.run {
-                isRefreshing = false
-            }
-        }
+        await appState.refreshAllSubscriptions(includeBackoffFeeds: true)
+        await appState.runAutoArchiveIfNeeded(reason: "queue.manualRefresh", force: true)
+        isRefreshing = false
     }
 
     private func remainingTime(for episode: Episode) -> String? {
@@ -329,35 +298,3 @@ struct QueueSheetView: View {
     }
 }
 
-private struct DownloadShortcutButton: View {
-    let isActive: Bool
-    // Drives the repeating pulse via a standard SwiftUI animation rather than
-    // TimelineView(.animation), which runs at 60 Hz unconditionally and creates
-    // an AttributeGraph cycle when combined with an explicit .animation modifier.
-    @State private var pulsing = false
-
-    var body: some View {
-        Image(systemName: isActive ? "arrow.down.circle.fill" : "arrow.down.circle")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(isActive ? Color.purple : Color.primary)
-            .scaleEffect(pulsing ? 1.0 : 0.85)
-            .onAppear {
-                if isActive { startPulse() }
-            }
-            .onChange(of: isActive) { _, active in
-                if active {
-                    startPulse()
-                } else {
-                    withAnimation(.default) { pulsing = false }
-                }
-            }
-    }
-
-    private func startPulse() {
-        // Kick off from a known state so the animation always starts cleanly.
-        pulsing = false
-        withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-            pulsing = true
-        }
-    }
-}

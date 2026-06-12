@@ -53,8 +53,8 @@ struct PodcastSearchView: View {
             .navigationTitle("Add Podcast")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
+                ToolbarItem(placement: .topBarTrailing) {
+                    SheetCloseButton { dismiss() }
                 }
             }
             // Search result → check for active sub first; otherwise go to preview.
@@ -321,11 +321,8 @@ struct PodcastPreviewView: View {
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.left.circle.fill")
-                    }
-                    ReturnToPlayerButton()
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left.circle.fill")
                 }
             }
 

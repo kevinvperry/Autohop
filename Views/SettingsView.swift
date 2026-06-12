@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 // NotificationSettingsView as the master switch), Auto Archive (run-now button), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, skip back/forward duration sheets), Subscriptions
-// (manage podcasts, add RSS, listening history, OPML import/export), Storage
+// (manage podcasts, add RSS, OPML import/export — Listening History moved to
+// the Menu sheet, NavRules: one path per page), Storage
 // (downloaded episode count), About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
 // All section footer copy here must stay in sync with FEATURES.md §15.
@@ -48,12 +49,10 @@ struct SettingsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-                    ReturnToPlayerButton()
-                }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
             }
         }
+        .miniPlayerBar()
         .fileImporter(
             isPresented: $showOPMLImporter,
             allowedContentTypes: [.xml, .plainText, UTType(filenameExtension: "opml") ?? .xml],
@@ -192,7 +191,6 @@ struct SettingsView: View {
         Section("Subscriptions") {
             NavigationLink("Manage podcasts") { PodcastsView() }
             NavigationLink("Add RSS Feed") { AddFeedView() }
-            NavigationLink("Listening History") { ListeningHistoryView() }
 
             Button {
                 showOPMLImporter = true
@@ -540,11 +538,7 @@ struct ListeningHistoryView: View {
         .navigationTitle("Listening History")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
-            }
-        }
+        .miniPlayerBar()
     }
 }
 

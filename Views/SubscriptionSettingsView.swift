@@ -112,10 +112,7 @@ struct SubscriptionSettingsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-                    ReturnToPlayerButton()
-                }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -145,6 +142,7 @@ struct SubscriptionSettingsView: View {
                 .disabled(subscription?.latestEpisode == nil)
             }
         }
+        .miniPlayerBar()
         .sheet(item: $episodeToShare) { ep in
             EpisodeShareSheet(episode: ep, subscription: subscription)
         }
@@ -879,10 +877,7 @@ struct SubscriptionEpisodesView: View {
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-                    ReturnToPlayerButton()
-                }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
             }
 
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -919,6 +914,7 @@ struct SubscriptionEpisodesView: View {
                 .disabled(subscription == nil)
             }
         }
+        .miniPlayerBar()
         .sheet(item: $episodeToShare) { ep in
             EpisodeShareSheet(episode: ep, subscription: subscription)
         }
@@ -1129,10 +1125,7 @@ struct EpisodeDetailView: View {
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 16) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-                    ReturnToPlayerButton()
-                }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
             }
 
             ToolbarItem(placement: .topBarTrailing) {
@@ -1144,6 +1137,7 @@ struct EpisodeDetailView: View {
                 .disabled(episode == nil)
             }
         }
+        .miniPlayerBar()
         .sheet(isPresented: $showShareSheet) {
             if let ep = episode {
                 EpisodeShareSheet(episode: ep, subscription: subscription)

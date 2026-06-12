@@ -32,11 +32,7 @@ struct NotificationSettingsView: View {
         .listSectionSpacing(28)
         .navigationTitle("Notification Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
-            }
-        }
+        .miniPlayerBar()
         .task { await refreshPermissionStatus() }
         .onChange(of: scenePhase) { _, phase in
             // Re-check after the user returns from the iOS Settings app.

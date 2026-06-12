@@ -78,11 +78,7 @@ private struct StatsContentView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Stats")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                ReturnToPlayerButton()
-            }
-        }
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
         .confirmationDialog(
             "Unsubscribe from \(driftShowToUnsubscribe?.title ?? "this podcast")?",

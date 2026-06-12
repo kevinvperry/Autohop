@@ -13,7 +13,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 
 | Label | Code Name | Type | Purpose |
 |---|---|---|---|
-| **Priority List** | `PodcastsView` | Full page | Your subscribed podcasts in priority order. Drag to reorder. Tap a podcast to see its episodes. The home page of the app. |
+| **Subscriptions** | `PodcastsView` | Full page | Your subscribed podcasts in priority order — the home page. Centered "Subscriptions" heading; action row below holds Reorder (mode toggle: status pills hide, drag grips show) and refresh-all. Tap a podcast to see its episodes. |
 | **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Entry point to finding new podcasts. |
 | **Podcast Preview** | `PodcastPreviewView` | Page (inside Search sheet) | Shows a podcast's artwork, description, and full episode list before subscribing. Subscribe button graduates it to a full subscription. Episodes are fully interactive from first load. |
 | **Add RSS Feed** | `AddFeedView` | Page | Manually enter a podcast RSS URL. Fallback for podcasts not found in the search directory. |
@@ -30,7 +30,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Notification Settings** | `NotificationSettingsView` | Page (inside App Settings) | Master new-episode notification toggle, Enable All / Disable All, and per-podcast notification toggles for every subscription. Shows a permission banner with an iOS Settings deep link when notifications are denied. |
 | **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
 | **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (30 Days / 90 Days / 1 Year / All Time) — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, and time-saved breakdown. |
-| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Priority List toolbar. Shortcuts to Find Podcasts, Downloads, Listening History, Stats, and App Settings. |
+| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Downloads, Listening History, Stats, and App Settings, plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |
 
@@ -39,29 +39,37 @@ Keep this file updated whenever a new page is added or an existing one is rename
 ## Navigation Structure
 
 ```
-Priority List (PodcastsView)
-├── Podcast Episodes (SubscriptionEpisodesView)
-│   ├── Episode Detail (EpisodeDetailView)
-│   └── Podcast Settings (SubscriptionSettingsView)
-├── [Sheet] Menu (MenuSheetView)
-│   ├── [Sheet] Podcast Search (PodcastSearchView)
-│   │   ├── Podcast Preview (PodcastPreviewView)
-│   │   └── Add RSS Feed (AddFeedView)
-│   ├── Downloads (DownloadsView)
-│   ├── Listening History (ListeningHistoryView)
-│   ├── Stats (StatsView)
-│   └── App Settings (SettingsView)
-│       ├── Notification Settings (NotificationSettingsView)
-│       ├── Listening History (ListeningHistoryView)   ← also reachable from Menu
-│       └── Acknowledgements (AcknowledgementsView)
-├── [Sheet] Podcast Search (PodcastSearchView)       ← also reachable from + button
-├── [Overlay] Player (PlayerView)
-│   ├── [Sheet] Queue (QueueSheetView)
-│   ├── [Sheet] Sleep Timer (SleepTimerSheetView)
-│   ├── [Sheet] Audio Controls (AudioControlsSheetView)
-│   └── [Sheet] Episode Share (EpisodeShareSheet)
-└── App Settings (SettingsView)                      ← also reachable from Menu
+Player (PlayerView — permanent NavigationStack root, never torn down)
+├── [Sheet] Queue (QueueSheetView)
+├── [Sheet] Sleep Timer (SleepTimerSheetView)
+├── [Sheet] Audio Controls (AudioControlsSheetView)
+├── [Sheet] Episode Share (EpisodeShareSheet)
+└── Subscriptions (PodcastsView — home page, pushed above the Player)
+    ├── Podcast Episodes (SubscriptionEpisodesView)
+    │   ├── Episode Detail (EpisodeDetailView)
+    │   └── Podcast Settings (SubscriptionSettingsView)
+    ├── [Sheet] Podcast Search (PodcastSearchView)    ← + button, only entry point
+    │   ├── Podcast Preview (PodcastPreviewView)
+    │   └── Add RSS Feed (AddFeedView)
+    └── [Sheet] Menu (MenuSheetView)                  ← only path to the pages below
+        ├── Downloads (DownloadsView)
+        ├── Listening History (ListeningHistoryView)
+        ├── Stats (StatsView)
+        └── App Settings (SettingsView)
+            ├── Notification Settings (NotificationSettingsView)
+            ├── Acknowledgements (AcknowledgementsView)
+            └── Diagnostic Log (DiagnosticLogView)
 ```
+
+### Navigation rules (NavRules)
+
+Every screen uses exactly one of three exit patterns:
+
+1. **Pushed page** — brand back chevron (`chevron.left.circle.fill`) top-left; nothing else in that corner. `MiniPlayerBar` docks at the bottom (hidden during Subscriptions reorder mode); tapping it pops to the Player.
+2. **Informational sheet** — `SheetCloseButton` (✕) top-right; drag-to-dismiss. No "Done"/"Cancel". (Queue, Menu, Podcast Search, Audio Controls, Sleep Timer — timer presets apply and close in one tap.)
+3. **Editing sheet** — `Cancel` leading / `Save` trailing, reserved for forms that commit data (Edit Title, Edit Priority, skip-interval editor).
+
+Player top bar: quiet icon circle (top-left) pushes Subscriptions — the only nav exit; purple **Queue** button (top-right, with count badge) opens the Queue sheet. One path per page — no duplicate routes.
 
 ---
 

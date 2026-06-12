@@ -1,12 +1,14 @@
 import SwiftUI
 
-// AI CONTEXT — Views/PodcastsView.swift ("Priority List" page — the app's
+// AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
 // home page, see PAGES.md). Ranked list of active subscriptions (browse
 // subscriptions filtered out); drag-to-reorder in Reorder mode rewrites
 // priorityRank for the whole list. Each row shows artwork, title, and a
-// colour-coded status pill for the podcast's latest episode. Toolbar: Return
-// to Player, hamburger menu (MenuSheetView), Reorder toggle, refresh-all,
-// + (PodcastSearchView sheet). Rows navigate to SubscriptionEpisodesView.
+// colour-coded status pill for the podcast's latest episode (pills hide in
+// Reorder mode so they never fight the drag grips). Toolbar: hamburger menu
+// (MenuSheetView) leading, + (PodcastSearchView sheet) trailing; Reorder and
+// refresh-all live on the action row under the heading. MiniPlayerBar docks
+// at the bottom except during reorder. Rows navigate to SubscriptionEpisodesView.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editMode: EditMode = .inactive
@@ -31,14 +33,52 @@ struct PodcastsView: View {
                 )
             } else {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Section heading — matches Downloads page style
-                    HStack(spacing: 6) {
-                        Text("Priority Sort")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                        Image(systemName: "arrow.up.arrow.down")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                    // Action row — page actions live here, below the heading,
+                    // so the title bar stays pure navigation (NavRules).
+                    HStack {
+                        Button {
+                            withAnimation {
+                                editMode = editMode == .active ? .inactive : .active
+                            }
+                        } label: {
+                            Label(
+                                editMode == .active ? "Done" : "Reorder",
+                                systemImage: editMode == .active ? "checkmark" : "arrow.up.arrow.down"
+                            )
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                editMode == .active ? Color.purple : Color.white.opacity(0.1),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        if editMode == .active {
+                            Text("drag to set priority")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, 4)
+                        }
+
+                        Spacer()
+
+                        if editMode != .active {
+                            Button {
+                                refreshAll()
+                            } label: {
+                                if isRefreshingAll {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 14, weight: .semibold))
+                                }
+                            }
+                            .disabled(isRefreshingAll)
+                            .accessibilityLabel("Refresh all feeds")
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
@@ -69,51 +109,31 @@ struct PodcastsView: View {
                 }
             }
         }
-        .navigationTitle("")
+        .navigationTitle("Subscriptions")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .preferredColorScheme(.dark)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                HStack {
-                    if !visibleSubscriptions.isEmpty {
-                        Button {
-                            refreshAll()
-                        } label: {
-                            if isRefreshingAll {
-                                ProgressView()
-                            } else {
-                                Label("Refresh All", systemImage: "arrow.clockwise")
-                            }
-                        }
-                        .disabled(isRefreshingAll)
-                    }
-
-                    Button {
-                        showSearch = true
-                    } label: {
-                        Label("Add Podcast", systemImage: "plus")
-                    }
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showMenu = true
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .accessibilityLabel("Menu")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showSearch = true
+                } label: {
+                    Label("Add Podcast", systemImage: "plus")
                 }
             }
-            ToolbarItem(placement: .navigationBarLeading) {
-                if !visibleSubscriptions.isEmpty {
-                    HStack(spacing: 8) {
-                        ReturnToPlayerButton()
-
-                        Button {
-                            showMenu = true
-                        } label: {
-                            Image(systemName: "line.3.horizontal")
-                        }
-
-                        Button(editMode == .active ? "Done" : "Reorder") {
-                            withAnimation {
-                                editMode = editMode == .active ? .inactive : .active
-                            }
-                        }
-                    }
-                }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Hidden during reorder so the drag operation gets the full list.
+            if editMode != .active {
+                MiniPlayerBar()
             }
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
@@ -184,23 +204,27 @@ struct PodcastsView: View {
 
                         Spacer(minLength: 8)
 
-                        if sub.excludeFromAutoFeedRefresh {
-                            EpisodeStatusPill(kind: .inactive)
-                        } else if episode.playedState == .played {
-                            EpisodeStatusPill(kind: .played)
-                        } else if episode.playedState == .archived {
-                            let position = appState.effectivePlaybackTime(for: episode)
-                            let completed = episode.durationSeconds.map { position >= $0 * 0.95 } ?? false
-                            EpisodeStatusPill(kind: completed ? .played : .archived)
-                        } else if episode.downloadState == .notDownloaded || episode.downloadState == .failed {
-                            Button("Download") {
-                                Task { await appState.downloadLatestEpisode(for: sub) }
+                        // Pills hide in Reorder mode so the row's right edge
+                        // belongs to the drag grips (NavRules).
+                        if editMode != .active {
+                            if sub.excludeFromAutoFeedRefresh {
+                                EpisodeStatusPill(kind: .inactive)
+                            } else if episode.playedState == .played {
+                                EpisodeStatusPill(kind: .played)
+                            } else if episode.playedState == .archived {
+                                let position = appState.effectivePlaybackTime(for: episode)
+                                let completed = episode.durationSeconds.map { position >= $0 * 0.95 } ?? false
+                                EpisodeStatusPill(kind: completed ? .played : .archived)
+                            } else if episode.downloadState == .notDownloaded || episode.downloadState == .failed {
+                                Button("Download") {
+                                    Task { await appState.downloadLatestEpisode(for: sub) }
+                                }
+                                .font(.caption.bold())
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            } else {
+                                EpisodeStatusPill(kind: statusKind(for: episode))
                             }
-                            .font(.caption.bold())
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        } else {
-                            EpisodeStatusPill(kind: statusKind(for: episode))
                         }
                     }
                     .font(.caption)
