@@ -3,12 +3,14 @@ import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
-// Downloads, Listening History, Stats, App Settings — plus the Import OPML
-// action (NavRules: one path per page; Find Podcasts lives behind + only).
+// Discover (top item, presented as its own sheet), Downloads, Listening
+// History, Stats, App Settings — plus the Import OPML action (NavRules: one
+// path per page; Find Podcasts lives behind + only).
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showDiscover = false
     @State private var showOPMLImporter = false
     @State private var isImporting = false
     @State private var appearTime: Date?
@@ -18,6 +20,13 @@ struct MenuSheetView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button {
+                    showDiscover = true
+                } label: {
+                    Label("Discover", systemImage: "safari")
+                        .foregroundStyle(.primary)
+                }
+
                 NavigationLink {
                     DownloadsView()
                 } label: {
@@ -72,6 +81,7 @@ struct MenuSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showDiscover) { DiscoverView() }
         .onAppear {
             let t = Date()
             appearTime = t

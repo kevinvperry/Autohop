@@ -13,7 +13,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 ## Table of Contents
 
 1. [Priority Stack](#1-priority-stack)
-2. [Find Podcasts (Search)](#2-find-podcasts-search)
+2. [Find Podcasts (Search) & Discover](#2-find-podcasts-search)
    - [Search](#21-search)
    - [Podcast Preview Page](#22-podcast-preview-page)
    - [Subscribe Button Behaviour](#23-subscribe-button-behaviour)
@@ -76,10 +76,10 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Toolbar buttons (left to right):**
 - Return to Player (play.circle.fill)
-- Hamburger menu (☰) → Find Podcasts, Downloads, Listening History, Stats, Import OPML, Settings
+- Hamburger menu (☰) → Discover, Downloads, Listening History, Stats, Import OPML, Settings
 - Reorder toggle ("Reorder" / "Done")
 - Refresh all feeds (arrow.clockwise)
-- Add Podcast / Find Podcasts (+) — opens the podcast search sheet
+- Add Podcast / Discover (+) — opens the Discover charts sheet (search lives inside it)
 
 ---
 
@@ -87,7 +87,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **What it is:** A full-screen sheet for finding and subscribing to podcasts. The primary way to add new podcasts to Autohop.
 
-**Access:** Tap the `+` button on the Priority Stack toolbar, or **Find Podcasts** in the hamburger menu (☰).
+**Access:** Tap the search shortcut at the top of the **Discover** page (the only entry point to Search).
 
 ---
 
@@ -174,6 +174,25 @@ Each row shows:
 - "Viewed [date]" caption
 
 Tapping a row navigates back to the Podcast Preview page for that podcast, refreshing episodes and resetting the 30-day clock.
+
+---
+
+### 2.6 Discover (Charts)
+
+**What it is:** A full-screen sheet for browsing Apple Podcasts charts — the exploration counterpart to Search.
+
+**Access:** Tap the `+` button on the Priority Stack toolbar, or **Discover** (top item) in the hamburger menu (☰). Discover is the parent page of Podcast Search.
+
+**Page structure (top to bottom):**
+- **Search shortcut** — a search-field-shaped button that opens the unchanged Podcast Search sheet
+- **Top Podcasts hero** — the storefront's Top 8 as big sideways-paging cards (purple gradient, oversized ghosted rank numeral, artwork, rank pill, title/artist/genre)
+- **Genre rails** — horizontally scrolling Top-15 shelves for Comedy, News, True Crime, Society & Culture, Business, Sports, Health & Fitness, Technology, Science, and TV & Film; a rail that fails to load is simply omitted
+
+**Country picker:** Toolbar-leading menu ("🇦🇺 Australia ▾"). Defaults to the device's region (`Locale.current.region`, no location permission needed), falls back to the US, and persists the user's manual choice (`discoverCountryCode` in UserDefaults). 21 storefronts offered.
+
+**Data source:** Apple's public chart feeds — the Marketing Tools v2 feed for the Top 8 and the legacy iTunes RSS genre endpoint for the rails. No API key or account. Responses are cached on disk for 12 hours (`Caches/discover-charts`), so the page opens instantly on revisit. Pull to refresh re-fetches.
+
+**Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — already-subscribed shows go straight to their Podcast Episodes page; everything else opens Podcast Preview, which creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
 
 ---
 

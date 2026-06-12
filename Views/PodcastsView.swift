@@ -6,7 +6,8 @@ import SwiftUI
 // priorityRank for the whole list. Each row shows artwork, title, and a
 // colour-coded status pill for the podcast's latest episode (pills hide in
 // Reorder mode so they never fight the drag grips). Toolbar: hamburger menu
-// (MenuSheetView) leading, + (PodcastSearchView sheet) trailing; Reorder and
+// (MenuSheetView) leading, + (DiscoverView sheet — parent of Podcast Search)
+// trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
 // at the bottom except during reorder. Rows navigate to SubscriptionEpisodesView.
 struct PodcastsView: View {
@@ -14,7 +15,7 @@ struct PodcastsView: View {
     @State private var editMode: EditMode = .inactive
     @State private var isRefreshingAll = false
     @State private var showMenu = false
-    @State private var showSearch = false
+    @State private var showDiscover = false
 
     /// Subscriptions visible in the Priority Sort list.
     /// Browse-only subscriptions (browseDate != nil) are invisible here —
@@ -124,7 +125,7 @@ struct PodcastsView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showSearch = true
+                    showDiscover = true
                 } label: {
                     Label("Add Podcast", systemImage: "plus")
                 }
@@ -137,7 +138,7 @@ struct PodcastsView: View {
             }
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
-        .sheet(isPresented: $showSearch) { PodcastSearchView() }
+        .sheet(isPresented: $showDiscover) { DiscoverView() }
     }
 
     private func refreshAll() {

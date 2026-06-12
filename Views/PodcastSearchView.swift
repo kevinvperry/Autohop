@@ -115,15 +115,19 @@ struct PodcastSearchView: View {
                             .font(.title3.weight(.bold))
                             .padding(.horizontal, 20)
 
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(recentlyViewed) { sub in
                                 NavigationLink(value: sub.id) {
                                     recentlyViewedRow(sub)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
                                 }
-                                .listRowBackground(Color.white.opacity(0.08))
+                                .buttonStyle(.plain)
                                 .padding(.horizontal, 20)
                                 .padding(.vertical, 6)
-                                Divider().padding(.leading, 76)
+                                if sub.id != recentlyViewed.last?.id {
+                                    Divider().padding(.leading, 76)
+                                }
                             }
                         }
                         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))

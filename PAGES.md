@@ -14,7 +14,8 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | Label | Code Name | Type | Purpose |
 |---|---|---|---|
 | **Subscriptions** | `PodcastsView` | Full page | Your subscribed podcasts in priority order — the home page. Centered "Subscriptions" heading; action row below holds Reorder (mode toggle: status pills hide, drag grips show) and refresh-all. Tap a podcast to see its episodes. |
-| **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Entry point to finding new podcasts. |
+| **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Reached only via the Discover page's search shortcut. |
+| **Discover** | `DiscoverView` | Sheet | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to Podcast Preview (or the episode page if already subscribed). |
 | **Podcast Preview** | `PodcastPreviewView` | Page (inside Search sheet) | Shows a podcast's artwork, description, and full episode list before subscribing. Subscribe button graduates it to a full subscription. Episodes are fully interactive from first load. |
 | **Add RSS Feed** | `AddFeedView` | Page | Manually enter a podcast RSS URL. Fallback for podcasts not found in the search directory. |
 | **Podcast Episodes** | `SubscriptionEpisodesView` | Page | Full episode list for a subscribed podcast. Header shows artwork, title, description. Swipe episodes for Play, Archive, and other actions. |
@@ -30,7 +31,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Notification Settings** | `NotificationSettingsView` | Page (inside App Settings) | Master new-episode notification toggle, Enable All / Disable All, and per-podcast notification toggles for every subscription. Shows a permission banner with an iOS Settings deep link when notifications are denied. |
 | **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
 | **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (30 Days / 90 Days / 1 Year / All Time) — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, and time-saved breakdown. |
-| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Downloads, Listening History, Stats, and App Settings, plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
+| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item), Downloads, Listening History, Stats, and App Settings, plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |
 
@@ -48,10 +49,14 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
     ├── Podcast Episodes (SubscriptionEpisodesView)
     │   ├── Episode Detail (EpisodeDetailView)
     │   └── Podcast Settings (SubscriptionSettingsView)
-    ├── [Sheet] Podcast Search (PodcastSearchView)    ← + button, only entry point
+    ├── [Sheet] Discover (DiscoverView)               ← + button (also top Menu item)
     │   ├── Podcast Preview (PodcastPreviewView)
-    │   └── Add RSS Feed (AddFeedView)
+    │   ├── Podcast Episodes (SubscriptionEpisodesView, if already subscribed)
+    │   └── [Sheet] Podcast Search (PodcastSearchView) ← only entry point to Search
+    │       ├── Podcast Preview (PodcastPreviewView)
+    │       └── Add RSS Feed (AddFeedView)
     └── [Sheet] Menu (MenuSheetView)                  ← only path to the pages below
+        ├── [Sheet] Discover (DiscoverView)           ← top menu item (same sheet as +)
         ├── Downloads (DownloadsView)
         ├── Listening History (ListeningHistoryView)
         ├── Stats (StatsView)
@@ -66,7 +71,7 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
 Every screen uses exactly one of three exit patterns:
 
 1. **Pushed page** — brand back chevron (`chevron.left.circle.fill`) top-left; nothing else in that corner. `MiniPlayerBar` docks at the bottom (hidden during Subscriptions reorder mode); tapping it pops to the Player.
-2. **Informational sheet** — `SheetCloseButton` (✕) top-right; drag-to-dismiss. No "Done"/"Cancel". (Queue, Menu, Podcast Search, Audio Controls, Sleep Timer — timer presets apply and close in one tap.)
+2. **Informational sheet** — `SheetCloseButton` (✕) top-right; drag-to-dismiss. No "Done"/"Cancel". (Queue, Menu, Podcast Search, Discover, Audio Controls, Sleep Timer — timer presets apply and close in one tap.)
 3. **Editing sheet** — `Cancel` leading / `Save` trailing, reserved for forms that commit data (Edit Title, Edit Priority, skip-interval editor).
 
 Player top bar: quiet icon circle (top-left) pushes Subscriptions — the only nav exit; purple **Queue** button (top-right, with count badge) opens the Queue sheet. One path per page — no duplicate routes.
@@ -75,7 +80,7 @@ Player top bar: quiet icon circle (top-left) pushes Subscriptions — the only n
 
 ## Browse Subscription Lifecycle
 
-Podcasts opened via Podcast Search but not explicitly subscribed to are stored as **browse subscriptions** (`browseDate != nil`). These are invisible everywhere in the app except Podcast Search (Recently Viewed).
+Podcasts opened via Podcast Search or Discover but not explicitly subscribed to are stored as **browse subscriptions** (`browseDate != nil`). These are invisible everywhere in the app except Podcast Search (Recently Viewed).
 
 | State | `excludeFromAutoFeedRefresh` | `browseDate` | Visible in Priority List |
 |---|---|---|---|
