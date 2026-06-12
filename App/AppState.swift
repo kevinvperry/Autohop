@@ -40,7 +40,8 @@ import UIKit
 // FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
 // store), QueueService (pure queue ordering), ListeningHistoryStore &
 // ListeningStatsStore (JSON persistence, defined at bottom of this file and
-// in Persistence/), NotificationService, SleepTimerService.
+// in Persistence/), NotificationService, SleepTimerService,
+// SleepScheduleService (recurring nightly "still listening?" timer).
 //
 // INVARIANTS / GOTCHAS:
 //  - Queue only ever contains DOWNLOADED, unplayed episodes (download-first).
@@ -84,6 +85,9 @@ final class AppState: ObservableObject {
 
     // Sleep timer
     let sleepTimerService = SleepTimerService()
+
+    // Sleep Schedule (recurring nightly sleep timer with "still listening?" prompts)
+    let sleepScheduleService = SleepScheduleService()
 
     // User-facing messages
     @Published var downloadMessage: String?
@@ -276,14 +280,22 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
+        sleepScheduleService.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
         if let observableSettingsStore = settingsStore as? SettingsStore {
             observableSettingsStore.objectWillChange
                 .sink { [weak self] _ in
                     self?.objectWillChange.send()
                     self?.syncDiagnosticLogging()
+                    // didSet hasn't run yet on objectWillChange — sync after the value lands.
+                    Task { @MainActor in self?.syncSleepScheduleConfig() }
                 }
                 .store(in: &cancellables)
         }
+
+        syncSleepScheduleConfig()
 
         refreshUpNextEpisode()
         startNetworkMonitor()
@@ -332,13 +344,19 @@ final class AppState: ObservableObject {
                 state.currentPlayerTime = time
                 state.sleepTimerService.tick()
 
+                // Manual Sleep Timer overrides the Sleep Schedule for this session.
+                if state.sleepTimerService.isActive {
+                    state.sleepScheduleService.suspendForSession()
+                }
+                state.sleepScheduleService.tick(isPlaying: state.isPlaying)
+
                 // Update lock-screen position (cheap — just updates two keys)
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NowPlayingService.shared.updateTime(
                         currentTime: time,
                         isPlaying: state.isPlaying,
-                        speed: sub.playbackPreference.speed
+                        speed: state.effectiveSpeed(for: sub)
                     )
                 }
 
@@ -357,7 +375,7 @@ final class AppState: ObservableObject {
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     state.listeningStatsStore.addListeningTime(
                         0.5,
-                        speed: sub.playbackPreference.speed,
+                        speed: state.effectiveSpeed(for: sub),
                         subscriptionID: sub.id,
                         showTitle: sub.title
                     )
@@ -375,7 +393,7 @@ final class AppState: ObservableObject {
                     NowPlayingService.shared.updateTime(
                         currentTime: state.currentPlayerTime,
                         isPlaying: false,
-                        speed: sub.playbackPreference.speed
+                        speed: state.effectiveSpeed(for: sub)
                     )
                 }
             }
@@ -386,15 +404,15 @@ final class AppState: ObservableObject {
                 state.isPlaying = true
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
-                    state.playbackEngine.updatePlaybackSpeed(sub.playbackPreference.speed)
+                    state.playbackEngine.updatePlaybackSpeed(state.effectiveSpeed(for: sub))
                     state.logger.info("player.resumedAfterInterruption", "Playback resumed after interruption", metadata: [
                         "episode": ep.title,
-                        "speed": PlaybackPreference.speedLabel(sub.playbackPreference.speed)
+                        "speed": PlaybackPreference.speedLabel(state.effectiveSpeed(for: sub))
                     ])
                     NowPlayingService.shared.updateTime(
                         currentTime: state.currentPlayerTime,
                         isPlaying: true,
-                        speed: sub.playbackPreference.speed
+                        speed: state.effectiveSpeed(for: sub)
                     )
                 }
             }
@@ -402,13 +420,28 @@ final class AppState: ObservableObject {
 
         // Playback stats
         playbackEngine.onManualSkipForward = { [weak state] seconds in
-            Task { @MainActor in state?.listeningStatsStore.addManualSkipForward(seconds) }
+            Task { @MainActor in
+                state?.listeningStatsStore.addManualSkipForward(
+                    seconds,
+                    subscriptionID: state?.currentPlayerEpisode?.subscriptionID
+                )
+            }
         }
         playbackEngine.onAutoSkip = { [weak state] seconds in
-            Task { @MainActor in state?.listeningStatsStore.addAutoSkip(seconds) }
+            Task { @MainActor in
+                state?.listeningStatsStore.addAutoSkip(
+                    seconds,
+                    subscriptionID: state?.currentPlayerEpisode?.subscriptionID
+                )
+            }
         }
         playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
-            Task { @MainActor in state?.listeningStatsStore.addTrimSilenceSaved(seconds) }
+            Task { @MainActor in
+                state?.listeningStatsStore.addTrimSilenceSaved(
+                    seconds,
+                    subscriptionID: state?.currentPlayerEpisode?.subscriptionID
+                )
+            }
         }
 
         // Background download completion (post app-relaunch path)
@@ -476,7 +509,7 @@ final class AppState: ObservableObject {
                     NowPlayingService.shared.updateTime(
                         currentTime: state.currentPlayerTime,
                         isPlaying: false,
-                        speed: sub.playbackPreference.speed
+                        speed: state.effectiveSpeed(for: sub)
                     )
                 }
                 state.logger.info("sleepTimer.fired", "Sleep timer paused playback")
@@ -484,6 +517,40 @@ final class AppState: ObservableObject {
         }
         state.sleepTimerService.onFadeVolume = { [weak state] volume in
             state?.playbackEngine.setVolume(volume)
+        }
+
+        // Sleep Schedule callbacks
+        state.sleepScheduleService.onPrompt = { [weak state] in
+            Task { @MainActor in
+                guard let state, state.isPlaying else { return }
+                state.playbackEngine.pause()
+                state.isPlaying = false
+                state.savePlaybackPosition()
+                if let ep = state.currentPlayerEpisode,
+                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
+                    NowPlayingService.shared.updateTime(
+                        currentTime: state.currentPlayerTime,
+                        isPlaying: false,
+                        speed: state.effectiveSpeed(for: sub)
+                    )
+                }
+                state.logger.info("sleepSchedule.prompt", "Sleep Schedule paused playback to ask if still listening")
+            }
+        }
+        state.sleepScheduleService.onAsleep = { [weak state] atEpisodeBoundary in
+            Task { @MainActor in
+                guard let state else { return }
+                // Playback paused exactly at the prompt point — that IS the
+                // morning resume position, so just persist it.
+                state.savePlaybackPosition()
+                state.listeningStatsStore.save()
+                if atEpisodeBoundary {
+                    NowPlayingService.shared.clear()
+                }
+                state.logger.info("sleepSchedule.asleep", "No response to prompt — assuming asleep", metadata: [
+                    "atEpisodeBoundary": "\(atEpisodeBoundary)"
+                ])
+            }
         }
 
         // Remote command centre (AirPods, lock screen, CarPlay)
@@ -564,10 +631,23 @@ final class AppState: ObservableObject {
                let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                 NowPlayingService.shared.updateTime(
                     currentTime: currentPlayerTime, isPlaying: false,
-                    speed: sub.playbackPreference.speed
+                    speed: effectiveSpeed(for: sub)
                 )
             }
         } else if let ep = currentPlayerEpisode {
+            // A play command while the Sleep Schedule prompt is active = "yes,
+            // still listening". The cycle restarts; at an episode boundary
+            // there's nothing to resume into, so advance the queue instead.
+            if sleepScheduleService.isPrompting {
+                let atEpisodeBoundary = sleepScheduleService.userResponded()
+                logger.info("sleepSchedule.stillListening", "User confirmed still listening", metadata: [
+                    "atEpisodeBoundary": "\(atEpisodeBoundary)"
+                ])
+                if atEpisodeBoundary {
+                    await playNextEpisode()
+                    return
+                }
+            }
             if playbackEngine.currentEpisode?.id == ep.id {
                 playbackEngine.setVolume(1.0)
                 playbackEngine.resume()
@@ -575,6 +655,7 @@ final class AppState: ObservableObject {
                 if sleepTimerService.checkAutoRestart() {
                     logger.info("sleepTimer.autoRestart", "Sleep timer auto-restarted on manual resume")
                 }
+                sleepScheduleService.playbackResumed()
             } else if ep.downloadState == .downloaded, ep.localFileURL != nil {
                 _ = await startPlayback(episode: ep, resumeFrom: currentPlayerTime)
                 return
@@ -588,7 +669,7 @@ final class AppState: ObservableObject {
             if let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                 NowPlayingService.shared.updateTime(
                     currentTime: currentPlayerTime, isPlaying: true,
-                    speed: sub.playbackPreference.speed
+                    speed: effectiveSpeed(for: sub)
                 )
             }
         } else {
@@ -635,7 +716,7 @@ final class AppState: ObservableObject {
             NowPlayingService.shared.updateTime(
                 currentTime: target,
                 isPlaying: isPlaying,
-                speed: subscription.playbackPreference.speed
+                speed: effectiveSpeed(for: subscription)
             )
         }
     }
@@ -1364,7 +1445,7 @@ final class AppState: ObservableObject {
         preference.speed = speed
         subscriptionStore.updatePlaybackPreference(subscriptionID: subscriptionID, preference: preference)
 
-        if currentPlayerEpisode?.subscriptionID == subscriptionID {
+        if currentPlayerEpisode?.subscriptionID == subscriptionID, !sharedListeningActive {
             playbackEngine.updatePlaybackSpeed(speed)
             NowPlayingService.shared.updateTime(
                 currentTime: currentPlayerTime,
@@ -1405,9 +1486,71 @@ final class AppState: ObservableObject {
         preference.trimSilence = amount
         subscriptionStore.updatePlaybackPreference(subscriptionID: subscriptionID, preference: preference)
 
-        if currentPlayerEpisode?.subscriptionID == subscriptionID {
+        if currentPlayerEpisode?.subscriptionID == subscriptionID, !sharedListeningActive {
             playbackEngine.updateTrimSilence(amount)
         }
+    }
+
+    // MARK: - Shared Listening (global temporary override)
+
+    // While active, every podcast plays at sharedListeningSpeed (1.0–1.3x) with
+    // Trim Silence off — per-subscription settings are untouched and resume the
+    // moment the mode is switched off. Persisted in AppSettings so the mode
+    // survives relaunch until explicitly deactivated.
+
+    var sharedListeningActive: Bool { settingsStore.appSettings.sharedListeningActive }
+    var sharedListeningSpeed: Double { settingsStore.appSettings.sharedListeningSpeed }
+
+    static let sharedListeningSpeedOptions: [Double] = [1.0, 1.1, 1.2, 1.3]
+
+    func setSharedListening(active: Bool) {
+        var settings = settingsStore.appSettings
+        settings.sharedListeningActive = active
+        if active {
+            // Each activation starts back at 1x regardless of last session's pick.
+            settings.sharedListeningSpeed = 1.0
+        }
+        settingsStore.appSettings = settings
+        logger.info("player.sharedListening", active ? "Shared Listening activated" : "Shared Listening deactivated")
+        applyEffectivePreferenceToCurrentEpisode()
+    }
+
+    func updateSharedListeningSpeed(_ speed: Double) {
+        guard sharedListeningActive else { return }
+        settingsStore.appSettings.sharedListeningSpeed = speed
+        logger.info("player.sharedListening", "Shared Listening speed changed", metadata: [
+            "speed": PlaybackPreference.speedLabel(speed)
+        ])
+        applyEffectivePreferenceToCurrentEpisode()
+    }
+
+    /// The subscription's preference with the Shared Listening override applied.
+    /// All playback paths must read speed/trim through this, never directly.
+    func effectivePreference(for subscription: Subscription) -> PlaybackPreference {
+        var preference = subscription.playbackPreference
+        if settingsStore.appSettings.sharedListeningActive {
+            preference.speed = settingsStore.appSettings.sharedListeningSpeed
+            preference.trimSilence = .off
+        }
+        return preference
+    }
+
+    func effectiveSpeed(for subscription: Subscription) -> Double {
+        effectivePreference(for: subscription).speed
+    }
+
+    private func applyEffectivePreferenceToCurrentEpisode() {
+        guard let episode = currentPlayerEpisode,
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
+        else { return }
+        let preference = effectivePreference(for: subscription)
+        playbackEngine.updatePlaybackSpeed(preference.speed)
+        playbackEngine.updateTrimSilence(preference.trimSilence)
+        NowPlayingService.shared.updateTime(
+            currentTime: currentPlayerTime,
+            isPlaying: isPlaying,
+            speed: preference.speed
+        )
     }
 
     private func startPlayback(episode: Episode, resumeFrom: TimeInterval) async -> Bool {
@@ -1486,7 +1629,7 @@ final class AppState: ObservableObject {
 
             try await playbackEngine.play(
                 playableEpisode,
-                preference: subscription.playbackPreference,
+                preference: effectivePreference(for: subscription),
                 filter: subscription.chapterFilter
             )
 
@@ -1515,12 +1658,17 @@ final class AppState: ObservableObject {
                 logger.info("sleepTimer.autoRestart", "Sleep timer auto-restarted on playback resume")
             }
 
+            // New playback session: clear any Sleep Schedule suspension and
+            // arm a fresh cycle if we're inside the nightly window.
+            sleepScheduleService.playbackStarted()
+
             logger.info("player.started", "Playback started", metadata: [
                 "episode": playableEpisode.title,
                 "podcast": subscription.title,
                 "duration": playableEpisode.durationSeconds.map { "\(Int($0))" } ?? "unknown",
-                "speed": PlaybackPreference.speedLabel(subscription.playbackPreference.speed),
-                "vocalBoost": subscription.playbackPreference.vocalBoostLevel.title
+                "speed": PlaybackPreference.speedLabel(effectiveSpeed(for: subscription)),
+                "vocalBoost": subscription.playbackPreference.vocalBoostLevel.title,
+                "sharedListening": "\(sharedListeningActive)"
             ])
 
             NowPlayingService.shared.update(
@@ -1528,7 +1676,7 @@ final class AppState: ObservableObject {
                 podcastTitle: subscription.title,
                 currentTime: safeResumeTime,
                 duration: playableEpisode.durationSeconds,
-                speed: subscription.playbackPreference.speed,
+                speed: effectiveSpeed(for: subscription),
                 isPlaying: true,
                 artworkURL: playableEpisode.artworkURL ?? subscription.artworkURL
             )
@@ -1561,6 +1709,10 @@ final class AppState: ObservableObject {
         // returns true on the last episode — in which case we stop rather than advance.
         let sleepTimerFired = sleepTimerService.episodeFinished()
 
+        // Sleep Schedule end-of-episode mode: prompt at the boundary instead
+        // of auto-advancing (skipped when the manual timer just fired).
+        let sleepSchedulePrompting = !sleepTimerFired && sleepScheduleService.episodeFinished()
+
         // Episode reached EOF: use its full duration as the position.
         let finishedPos = episode.durationSeconds
         listeningStatsStore.recordEpisodeCompleted(subscriptionID: episode.subscriptionID)
@@ -1590,6 +1742,15 @@ final class AppState: ObservableObject {
                 "episode": episode.title
             ])
             NowPlayingService.shared.clear()
+            return
+        }
+
+        if sleepSchedulePrompting {
+            // Don't advance and don't clear Now Playing — the lock-screen play
+            // button must stay live so it can answer the prompt.
+            logger.info("sleepSchedule.episodeEnd", "Sleep Schedule prompting at episode boundary", metadata: [
+                "episode": episode.title
+            ])
             return
         }
 
@@ -2568,6 +2729,20 @@ final class AppState: ObservableObject {
 
     func syncDiagnosticLogging() {
         AppLogger.shared.isEnabled = settingsStore.appSettings.diagnosticLoggingEnabled
+    }
+
+    /// Pushes the AppSettings.sleepSchedule* values into SleepScheduleService.
+    func syncSleepScheduleConfig() {
+        let settings = settingsStore.appSettings
+        sleepScheduleService.updateConfig(
+            SleepScheduleService.Config(
+                enabled: settings.sleepScheduleEnabled,
+                startMinutes: settings.sleepScheduleStartMinutes,
+                endMinutes: settings.sleepScheduleEndMinutes,
+                durationMinutes: settings.sleepScheduleDurationMinutes
+            ),
+            isPlaying: isPlaying
+        )
     }
 
     func updateIdleTimer(playerVisible: Bool) {

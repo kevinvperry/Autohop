@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
 // Discover (top item, presented as its own sheet), Downloads, Listening
-// History, Stats, App Settings — plus the Import OPML action (NavRules: one
+// History, Stats, Sleep Schedule, App Settings — plus the Import OPML action (NavRules: one
 // path per page; Find Podcasts lives behind + only).
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
@@ -43,6 +43,12 @@ struct MenuSheetView: View {
                     StatsView()
                 } label: {
                     Label("Stats", systemImage: "chart.bar")
+                }
+
+                NavigationLink {
+                    SleepScheduleView()
+                } label: {
+                    Label("Sleep Schedule", systemImage: "moon.zzz")
                 }
 
                 Button {

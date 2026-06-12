@@ -25,9 +25,11 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
    - [Playback Speed](#51-playback-speed)
    - [Trim Silence](#52-trim-silence)
    - [Vocal Boost](#53-vocal-boost)
+   - [Shared Listening](#54-shared-listening)
 6. [Chapters](#6-chapters)
 7. [Downloads](#7-downloads)
 8. [Sleep Timer](#8-sleep-timer)
+   - [Sleep Schedule](#81-sleep-schedule)
 9. [Video Podcasts](#9-video-podcasts)
 10. [Per-Podcast Settings](#10-per-podcast-settings)
     - [Podcast section](#101-podcast-section)
@@ -68,8 +70,8 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 | Queued | Teal | Sitting in the automatic queue |
 | Paused | Yellow | Partially played but not currently playing |
 | Playing | Green | Currently playing |
-| Played | Blue | Marked as played |
-| Archived | Purple | Archived (removed from queue) |
+| Played | Blue | Listened to completion (natural end, Skip End, or Mark Played). Completion wins permanently: the pill stays Played even after the episode is later archived (manually or by Auto Archive). Tracked by `Episode.wasCompleted`. |
+| Archived | Purple | Archived (removed from queue) before being listened to completion |
 | Inactive | Orange | Excluded from auto feed refresh (finished show) |
 
 **Navigation to per-podcast settings:** Tap a podcast row → episode list view → gear icon (⚙) in the top-right toolbar.
@@ -301,6 +303,24 @@ All non-off levels enable AVAudioSession's spoken audio mode. The processing cha
 
 ---
 
+### 5.4 Shared Listening
+
+**Global temporary override** for group environments (car stereo, speakers with other people). Stored in `AppSettings.sharedListeningActive` / `AppSettings.sharedListeningSpeed` — per-podcast settings are never modified.
+
+> **Marketing note:** Unique to Autohop — Apple Podcasts, Pocket Casts, and Overcast have no one-tap global speed override for group listening; users must manually change (and later restore) each show's speed. Promoted on the website feature grid and comparison table.
+
+While active, **every** podcast plays at the chosen Shared Listening speed with **Trim Silence forced off**. Vocal Boost is unaffected. Deactivating instantly returns all podcasts to their own settings.
+
+| Property | Value |
+|---|---|
+| Speed options | 1x / 1.1x / 1.2x / 1.3x |
+| Default on activation | **1x** (always resets to 1x each time it is switched on) |
+| Persistence | Survives app relaunch until explicitly switched off |
+
+**UI:** Top row of the Audio Controls sheet — toggle plus animated segmented speed picker when on. While active, the per-podcast Speed and Trim Silence rows below are greyed out (disabled), and the sound-controls button in the player's audio row renders **white** (mirroring the active Sleep Timer button). Changes apply live to the playing episode via `AppState.effectivePreference(for:)`, which all playback paths read instead of raw `playbackPreference`.
+
+---
+
 ## 6. Chapters
 
 **Availability:** The Chapters panel in the player is only shown when the current episode has embedded chapter data.
@@ -357,6 +377,23 @@ While active: shows a countdown display with a **+5 min** extend button and a **
 A stepper (range: 1–10, default: 1) lets the user choose how many episodes to finish before sleep. Tap **Set** to start. While active: shows episodes remaining with a **Cancel** button.
 
 **Sheet height:** 380pt when inactive (preset grid + episode row). 240pt when a timer is active.
+
+### 8.1 Sleep Schedule
+
+**Access:** Menu → Sleep Schedule (`SleepScheduleView`). The recurring nightly counterpart to the one-shot Sleep Timer. Logic lives in `Playback/SleepScheduleService.swift`, owned by `AppState`.
+
+**Settings (persisted in `AppSettings`):**
+- **Toggle** — `sleepScheduleEnabled` (default off). Runs every night when on.
+- **Active Hours** — start/end time pickers (`sleepScheduleStartMinutes`/`sleepScheduleEndMinutes`, minutes from midnight; default 9:00pm–6:00am). The window may span midnight; start == end means always active.
+- **Ask Every** — duration presets 10 / 15 / 20 / 40 / 60 minutes (default 20) plus **End of Episode** (stored as `sleepScheduleDurationMinutes = 0`).
+
+**Behaviour:**
+1. The schedule **arms** — it never self-starts audio. Whenever playback starts (audio or video) inside the window, the cycle begins.
+2. After the chosen duration of playback (or at the episode boundary in End of Episode mode), playback **pauses** and a gentle generated chime asks "Are you still listening?" — chimes at 0/20/40 s inside a single 60 s in-memory WAV played via `AVAudioPlayer` (keeps the audio session rendering so the app isn't suspended while waiting; a 75 s backup `Task` covers audio failure).
+3. **Any play command is "yes"** — lock screen, earbud tap, headphone remote, or the on-screen overlay in `PlayerView` (shown for the screen-on/video case). Playback resumes and the cycle restarts. At an episode boundary, "yes" advances to the next queued episode.
+4. **No response within 60 s = asleep.** Playback stays paused exactly where the prompt fired (that position is persisted as the morning resume point). The session ends; the schedule re-arms on the next playback start inside the window.
+5. **Manual Sleep Timer overrides:** setting the regular Sleep Timer suspends the schedule for the rest of that session (`suspendForSession`, checked on every 0.5 s tick).
+6. The countdown only advances while playing — pausing freezes it. Sessions that started inside the window keep cycling past the end time mid-cycle.
 
 ---
 
@@ -504,13 +541,13 @@ Hooks: playback tick (0.5 s) → listening time + hour + show attribution; `Sile
 Query API on `ListeningStatsStore`: `summary(for: .last(days:)/.lifetime)` (period aggregates incl. per-show, hour histogram, zero-filled day series for heatmaps), `lifetime` (legacy `PlaybackStats` shape used by `StatsView`), `currentStreakDays` / `longestStreakDays` (a day counts toward a streak at ≥ 60 s of listening). This is the data layer for the planned rich Stats page (period selector, heatmap, listening clock, top shows).
 
 ### Page layout (`Views/StatsView.swift`, June 2026)
-All sections respond to a period selector at the top: **30 Days / 90 Days / 1 Year / All Time** (purple pill row). Cards follow the standard design system (`Section-Heading` + `white.opacity(0.08)` rounded cards, dark scheme, purple accent).
+All sections respond to a period selector at the top: **7 Days / 30 Days / 90 Days / 1 Year / All Time** (purple pill row). Cards follow the standard design system (`Section-Heading` + `white.opacity(0.08)` rounded cards, dark scheme, purple accent).
 
 1. **Hero card** — big "Time listened" number (purple; All Time adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
-2. **Listening Heatmap** (30/90 days) — GitHub-style grid, columns are weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On 1 Year / All Time this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
+2. **Listening Heatmap** (7/30/90 days) — GitHub-style grid, columns are weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On 1 Year / All Time this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
 3. **Listening Clock** — 24-hour rose chart (Canvas): midnight at top, noon at bottom, each hour a wedge whose radius scales with listening in that hour. Caption shows the peak hour range.
-4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous period of the same length — teal ▲n, grey ▼n, or purple NEW (no badges on All Time, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`).
-5. **Shows You're Drifting From** (30/90 days only) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes; shows need ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed) to appear — auto-archive churn alone can never flag a show, so high-volume feeds the episode limit cycles through (100% auto-archived news bulletins) stay out of the list (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tap pushes the show's settings; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. The section is omitted entirely when nothing qualifies — no empty state. Not shown on 1 Year / All Time (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
+4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous period of the same length — teal ▲n, grey ▼n, or purple NEW (no badges on All Time, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; periods made up entirely of pre-tracking days fall back to apportioning the period total by listening share, labelled "est."), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Episode outcomes come from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period. Tap again to collapse.
+5. **Shows You're Drifting From** (7/30/90 days only) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes; shows need ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed) to appear — auto-archive churn alone can never flag a show, so high-volume feeds the episode limit cycles through (100% auto-archived news bulletins) stay out of the list (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. The section is omitted entirely when nothing qualifies — no empty state. Not shown on 1 Year / All Time (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
 6. **Time Saved By** — breakdown card (rows below) plus a purple Total row.
 7. **Privacy footer** — "Your listening stats never leave this device."
 
@@ -672,6 +709,12 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | keepScreenAwakeDuringPlayback | false |
 | lockScreenScrubbingEnabled | true |
 | showQueueBadge | true |
+| sharedListeningActive | false |
+| sharedListeningSpeed | 1.0 |
+| sleepScheduleEnabled | false |
+| sleepScheduleStartMinutes | 1260 (9:00pm) |
+| sleepScheduleEndMinutes | 360 (6:00am) |
+| sleepScheduleDurationMinutes | 20 (0 = end of episode) |
 | diagnosticLoggingEnabled | false |
 
 ### `Subscription.init` defaults

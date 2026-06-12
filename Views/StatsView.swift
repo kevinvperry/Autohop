@@ -2,13 +2,15 @@ import SwiftUI
 import Charts
 
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
-// FEATURES.md §12). Period selector (30/90 days, 1 year, all time) drives
+// FEATURES.md §12). Period selector (7/30/90 days, 1 year, all time) drives
 // every section, all data from ListeningStatsStore.summary(): hero card (time
-// listened, time saved, episodes finished, streak), listening heatmap (30/90)
+// listened, time saved, episodes finished, streak), listening heatmap (7/30/90)
 // or monthly Swift Charts trend (1y/all), 24-hour listening clock (Canvas
 // rose chart), Top Shows (+ Show All page with rank-movement badges), "Shows
-// You're Drifting From" (ShowEngagementAnalyzer, 30/90 only, omitted when
-// empty), time-saved breakdown, privacy footer. All on-device data only.
+// You're Drifting From" (ShowEngagementAnalyzer, 7/30/90 only, omitted when
+// empty), time-saved breakdown, privacy footer. Tapping a Top Shows or
+// drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
+// All on-device data only.
 // MARK: - StatsView
 
 struct StatsView: View {
@@ -23,6 +25,7 @@ struct StatsView: View {
 }
 
 private enum StatsRange: String, CaseIterable, Identifiable {
+    case days7 = "7 Days"
     case days30 = "30 Days"
     case days90 = "90 Days"
     case year = "1 Year"
@@ -32,11 +35,31 @@ private enum StatsRange: String, CaseIterable, Identifiable {
 
     var period: StatsPeriod {
         switch self {
+        case .days7: return .last(days: 7)
         case .days30: return .last(days: 30)
         case .days90: return .last(days: 90)
         case .year: return .last(days: 365)
         case .allTime: return .lifetime
         }
+    }
+
+    /// Short ranges use the day heatmap; long ones the monthly trend chart.
+    var usesHeatmap: Bool {
+        switch self {
+        case .days7, .days30, .days90: return true
+        case .year, .allTime: return false
+        }
+    }
+
+    /// Start-of-day cutoff for history-based per-show stats. Nil for All Time.
+    var sinceDate: Date? {
+        guard case .last(let days) = period else { return nil }
+        let calendar = Calendar.current
+        return calendar.date(
+            byAdding: .day,
+            value: -(days - 1),
+            to: calendar.startOfDay(for: Date())
+        )
     }
 }
 
@@ -47,6 +70,10 @@ private struct StatsContentView: View {
     @State private var range: StatsRange = .days30
     @State private var driftShowToUnsubscribe: ShowEngagement?
     @State private var showDriftUnsubscribeConfirm = false
+    /// Subscription UUID string of the Top Shows row expanded into a detail card.
+    @State private var expandedTopShowID: String?
+    /// Subscription UUID of the drifting-shows row expanded into a detail card.
+    @State private var expandedDriftShowID: UUID?
     /// Comma-joined subscription UUIDs the user muted from the drifting list.
     @AppStorage("stats.hiddenDriftShowIDs") private var hiddenDriftShowIDsRaw: String = ""
 
@@ -59,7 +86,7 @@ private struct StatsContentView: View {
 
                 heroCard(summary)
 
-                if range == .days30 || range == .days90 {
+                if range.usesHeatmap {
                     heatmapSection(summary)
                 } else {
                     trendSection(summary)
@@ -67,7 +94,7 @@ private struct StatsContentView: View {
 
                 clockSection(summary)
                 topShowsSection(summary)
-                driftingShowsSection
+                driftingShowsSection(summary)
                 timeSavedSection(summary)
 
                 privacyFooter
@@ -312,7 +339,7 @@ private struct StatsContentView: View {
                 Spacer()
                 if totalShows > shows.count {
                     NavigationLink {
-                        TopShowsListView(store: store, range: range)
+                        TopShowsListView(store: store, historyStore: historyStore, range: range)
                     } label: {
                         HStack(spacing: 3) {
                             Text("Show All")
@@ -334,7 +361,27 @@ private struct StatsContentView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
-                        TopShowRow(rank: index + 1, show: show, maxSeconds: maxSeconds, movement: nil)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                expandedTopShowID = expandedTopShowID == show.id ? nil : show.id
+                            }
+                        } label: {
+                            TopShowRow(rank: index + 1, show: show, maxSeconds: maxSeconds, movement: nil)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if expandedTopShowID == show.id {
+                            ShowStatsExpandedCard(
+                                detail: ShowPeriodDetail(
+                                    subscriptionID: show.id,
+                                    entries: historyStore.entries,
+                                    summary: summary,
+                                    since: range.sinceDate
+                                ),
+                                settingsSubscriptionID: nil
+                            )
+                        }
 
                         if show.id != shows.last?.id {
                             Divider()
@@ -354,18 +401,11 @@ private struct StatsContentView: View {
         Set(hiddenDriftShowIDsRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
     }
 
-    /// "Shows You're Drifting From" — 30/90 days only: the 500-entry history cap
+    /// "Shows You're Drifting From" — short ranges only: the 500-entry history cap
     /// silently truncates longer ranges, and a year-old struggle isn't actionable.
     @ViewBuilder
-    private var driftingShowsSection: some View {
-        if range == .days30 || range == .days90,
-           case .last(let days) = range.period {
-            let calendar = Calendar.current
-            let since = calendar.date(
-                byAdding: .day,
-                value: -(days - 1),
-                to: calendar.startOfDay(for: Date())
-            ) ?? Date()
+    private func driftingShowsSection(_ summary: ListeningStatsSummary) -> some View {
+        if range.usesHeatmap, let since = range.sinceDate {
             // Unsubscribed shows are excluded — drift from a show you already left is resolved.
             let shows = ShowEngagementAnalyzer.strugglingShows(
                 entries: historyStore.entries,
@@ -381,6 +421,18 @@ private struct StatsContentView: View {
                         ForEach(shows) { show in
                             driftingShowRow(show)
 
+                            if expandedDriftShowID == show.subscriptionID {
+                                ShowStatsExpandedCard(
+                                    detail: ShowPeriodDetail(
+                                        subscriptionID: show.subscriptionID.uuidString,
+                                        entries: historyStore.entries,
+                                        summary: summary,
+                                        since: since
+                                    ),
+                                    settingsSubscriptionID: show.subscriptionID
+                                )
+                            }
+
                             if show.id != shows.last?.id {
                                 Divider()
                                     .overlay(Color.white.opacity(0.08))
@@ -392,7 +444,7 @@ private struct StatsContentView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         completionLegend
-                        Text("Based on how recent episodes ended. Tap a show for its settings; long-press for options.")
+                        Text("Based on how recent episodes ended. Tap a show for details; long-press for options.")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -403,8 +455,10 @@ private struct StatsContentView: View {
     }
 
     private func driftingShowRow(_ show: ShowEngagement) -> some View {
-        NavigationLink {
-            SubscriptionSettingsView(subscriptionID: show.subscriptionID)
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedDriftShowID = expandedDriftShowID == show.subscriptionID ? nil : show.subscriptionID
+            }
         } label: {
             HStack(spacing: 12) {
                 StatsShowArtwork(subscriptionID: show.subscriptionID.uuidString)
@@ -667,6 +721,167 @@ private struct TopShowRow: View {
 
 }
 
+// MARK: - Per-show period detail
+
+/// Per-show numbers for the expandable detail card, derived from listening
+/// history entries (episode outcomes, cadence) plus the period summary (time
+/// listened, per-show time saved). Time saved uses the tracked per-show value
+/// when the period has any; days recorded before per-show tracking existed
+/// fall back to apportioning the period total by listening share ("est.").
+private struct ShowPeriodDetail {
+    var seconds: TimeInterval = 0
+    var episodesCompleted = 0
+    var episodesAbandoned = 0
+    var episodesTouched = 0
+    var averageCompletionPercent: Double?
+    var lastListenedAt: Date?
+    var shareOfListening: Double = 0
+    var timeSaved: TimeInterval = 0
+    var timeSavedIsEstimate = false
+    /// Median delay between an episode's release and the user's last listen to
+    /// it — "how soon after release do I get to this show".
+    var medianReleaseToListen: TimeInterval?
+
+    init(
+        subscriptionID: String,
+        entries: [ListeningHistoryEntry],
+        summary: ListeningStatsSummary,
+        since: Date?
+    ) {
+        var percents: [Double] = []
+        var releaseDelays: [TimeInterval] = []
+        for entry in entries where entry.subscriptionID.uuidString == subscriptionID {
+            if let since, entry.lastListenedAt < since { continue }
+            episodesTouched += 1
+            lastListenedAt = max(lastListenedAt ?? .distantPast, entry.lastListenedAt)
+            if let percent = entry.completionPercent {
+                percents.append(min(max(percent, 0), 1))
+            }
+            if let publishedAt = entry.publishedAt {
+                let delay = entry.lastListenedAt.timeIntervalSince(publishedAt)
+                // Negative delays are clock/feed-date noise, not time travel.
+                if delay >= 0 { releaseDelays.append(delay) }
+            }
+            switch ShowEngagementAnalyzer.classify(entry) {
+            case .completed: episodesCompleted += 1
+            case .abandoned: episodesAbandoned += 1
+            case .archivedUnplayed, nil: break
+            }
+        }
+        if !percents.isEmpty {
+            averageCompletionPercent = percents.reduce(0, +) / Double(percents.count)
+        }
+        if !releaseDelays.isEmpty {
+            let sorted = releaseDelays.sorted()
+            medianReleaseToListen = sorted[sorted.count / 2]
+        }
+        seconds = summary.perShowSeconds[subscriptionID] ?? 0
+        if summary.wallClockSeconds > 0 {
+            shareOfListening = seconds / summary.wallClockSeconds
+        }
+        // Tracked per-show savings exist for this period — use the real number.
+        // A period made up entirely of pre-tracking days has an empty map; fall
+        // back to apportioning the period total by listening share.
+        if !summary.perShowTimeSaved.isEmpty {
+            timeSaved = summary.perShowTimeSaved[subscriptionID] ?? 0
+        } else {
+            timeSaved = summary.totalTimeSaved * shareOfListening
+            timeSavedIsEstimate = true
+        }
+    }
+}
+
+// MARK: - Expanded show card
+
+/// Detail card revealed by tapping a Top Shows or drifting-shows row.
+/// `settingsSubscriptionID` adds a "Podcast Settings" link (drift rows, which
+/// previously navigated there on tap).
+private struct ShowStatsExpandedCard: View {
+    let detail: ShowPeriodDetail
+    let settingsSubscriptionID: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                stat(value: "\(detail.episodesCompleted)", label: "episodes finished", tint: .teal)
+                stat(
+                    value: formattedLongDuration(detail.timeSaved),
+                    label: detail.timeSavedIsEstimate ? "time saved (est.)" : "time saved",
+                    tint: .teal
+                )
+                stat(value: percentLabel(detail.shareOfListening), label: "of all listening", tint: .primary)
+                stat(
+                    value: detail.averageCompletionPercent.map(percentLabel) ?? "—",
+                    label: "avg. completion",
+                    tint: .primary
+                )
+                stat(value: "\(detail.episodesAbandoned)", label: "stopped partway", tint: .orange)
+                stat(
+                    value: detail.lastListenedAt.map {
+                        $0.formatted(.relative(presentation: .named))
+                    } ?? "—",
+                    label: "last listened",
+                    tint: .primary
+                )
+                stat(
+                    value: detail.medianReleaseToListen.map(cadenceLabel) ?? "—",
+                    label: "typical wait after release",
+                    tint: .primary
+                )
+            }
+
+            if let settingsSubscriptionID {
+                NavigationLink {
+                    SubscriptionSettingsView(subscriptionID: settingsSubscriptionID)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gearshape")
+                            .font(.caption.weight(.semibold))
+                        Text("Podcast Settings")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(.purple)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private func stat(value: String, label: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.subheadline.weight(.bold).monospacedDigit())
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func percentLabel(_ fraction: Double) -> String {
+        "\(Int((fraction * 100).rounded()))%"
+    }
+
+    /// Coarse release-to-listen delay: "under 1h", "~6h", "~3d".
+    private func cadenceLabel(_ seconds: TimeInterval) -> String {
+        if seconds < 3600 { return "under 1h" }
+        if seconds < 86400 { return "~\(Int((seconds / 3600).rounded()))h" }
+        return "~\(Int((seconds / 86400).rounded()))d"
+    }
+}
+
 // MARK: - Show artwork (44 pt, shared by stats rows)
 
 private struct StatsShowArtwork: View {
@@ -731,7 +946,9 @@ private struct CompletionBar: View {
 
 private struct TopShowsListView: View {
     @ObservedObject var store: ListeningStatsStore
+    @ObservedObject var historyStore: ListeningHistoryStore
     @State var range: StatsRange
+    @State private var expandedShowID: String?
 
     var body: some View {
         let summary = store.summary(for: range.period)
@@ -753,12 +970,32 @@ private struct TopShowsListView: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
-                            TopShowRow(
-                                rank: index + 1,
-                                show: show,
-                                maxSeconds: maxSeconds,
-                                movement: movements?[show.id]
-                            )
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    expandedShowID = expandedShowID == show.id ? nil : show.id
+                                }
+                            } label: {
+                                TopShowRow(
+                                    rank: index + 1,
+                                    show: show,
+                                    maxSeconds: maxSeconds,
+                                    movement: movements?[show.id]
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            if expandedShowID == show.id {
+                                ShowStatsExpandedCard(
+                                    detail: ShowPeriodDetail(
+                                        subscriptionID: show.id,
+                                        entries: historyStore.entries,
+                                        summary: summary,
+                                        since: range.sinceDate
+                                    ),
+                                    settingsSubscriptionID: nil
+                                )
+                            }
 
                             if show.id != shows.last?.id {
                                 Divider()

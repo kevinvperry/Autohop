@@ -11,6 +11,11 @@ import Foundation
 //    localFileURL/localFileName for the queue to accept it.
 //  - playedState lifecycle: unplayed → playing/paused → played → archived
 //    (archived episodes leave the queue and their file is deleted).
+//  - wasCompleted is a sticky "was ever finished" flag, separate from
+//    playedState: it survives the played → archived transition so episode
+//    lists keep showing a Played pill on completed-then-archived episodes
+//    (set/cleared by SubscriptionStore mark* methods; decode defaults it to
+//    playedState == .played for stores written before the flag existed).
 //  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
 //  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
 //    (PodcastIndex JSON chapters) by AppState.
@@ -36,6 +41,11 @@ public struct Episode: Identifiable, Equatable, Codable {
     public var chapters: [Chapter]
     public var externalChaptersURL: URL?
     public var lastPlayedAt: Date?
+    /// True once the episode has been listened to completion (natural end,
+    /// Skip End, or Mark Played). Survives archiving so the UI keeps showing
+    /// "Played" on completed episodes that were archived afterwards. Cleared
+    /// only when the episode returns to unplayed.
+    public var wasCompleted: Bool
 
     public init(
         id: UUID = UUID(),
@@ -67,6 +77,7 @@ public struct Episode: Identifiable, Equatable, Codable {
         self.localFileName = nil
         self.playedState = playedState
         self.chapters = chapters
+        self.wasCompleted = false
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -91,6 +102,7 @@ public struct Episode: Identifiable, Equatable, Codable {
         case chapters
         case externalChaptersURL
         case lastPlayedAt
+        case wasCompleted
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,6 +128,10 @@ public struct Episode: Identifiable, Equatable, Codable {
         chapters = try container.decode([Chapter].self, forKey: .chapters)
         externalChaptersURL = try container.decodeIfPresent(URL.self, forKey: .externalChaptersURL)
         lastPlayedAt = try container.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
+        // Pre-existing stores have no completion flag; episodes currently in
+        // .played state are completed by definition.
+        wasCompleted = try container.decodeIfPresent(Bool.self, forKey: .wasCompleted)
+            ?? (playedState == .played)
     }
 }
 

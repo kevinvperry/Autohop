@@ -28,6 +28,19 @@ was *informed by studying* Pocket Casts but contains no ported code,
 constants, or algorithms — it is original Autohop code under the MIT
 License, as recorded in the `NOTICE` file.
 
+Beyond the two covered files, Autohop gratefully acknowledges Pocket Casts
+for iOS as a broader source of **design ideas and inspiration**. Several
+Autohop features follow conventions that Pocket Casts established or
+popularised — including the concepts of silence trimming and a volume/vocal
+boost as per-podcast audio effects, an up-next style playback queue,
+episode auto-archive housekeeping, and on-device listening statistics
+(time listened / time saved). These are *concepts and UX conventions*, not
+copied code or assets: every implementation outside the two covered files
+is original Autohop work (independent algorithms, layouts, and visual
+design), and no Pocket Casts artwork, strings, or interface assets are
+used. This acknowledgement is offered for transparency and credit, not
+because the MPL-2.0 requires it.
+
 Each covered file carries the MPL-2.0 Exhibit A notice in its header, and
 its source code is made available as part of the Autohop source
 distribution in accordance with MPL-2.0 Section 3.2. See the `NOTICE` file

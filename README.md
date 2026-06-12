@@ -32,6 +32,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
+- Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker
 - Podcast search via the iTunes catalog — search by name, author, or keyword; browse episode list before subscribing; 30-day recently viewed history
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
@@ -44,7 +45,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
-- Stats page: time listened, time saved, episodes finished, and streaks over 30/90-day, 1-year, and lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, and top shows; all data stays on device
+- Stats page: time listened, time saved, episodes finished, and streaks over 7/30/90-day, 1-year, and lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Episode share cards: rendered artwork card exported through the system share sheet
 - OPML import and export for subscription portability

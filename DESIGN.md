@@ -85,6 +85,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Chart-Heatmap` | GitHub-style listening heatmap (30/90d) or Swift Charts monthly bars (1y/lifetime) |
 | `Chart-ListeningClock` | 24-hour rose chart in Canvas — wedge radius scales with listening per hour |
 | `ListRow-TopShow` | Stats top-shows row: rank · 44pt artwork · title + relative purple bar · duration |
+| `Card-ShowStatsExpanded` | Stats inline per-show detail card: tap a Top Shows / Drifting row to toggle; 2-column stat-tile grid in a nested `white.opacity(0.05)` card |
 
 ---
 
@@ -2136,7 +2137,7 @@ Empty navigation title (`.navigationTitle("")`) — the episode title is shown i
 
 **Label: `Selector-PeriodPills`**
 
-A centred `HStack(spacing: 8)` of capsule buttons (30 Days / 90 Days / 1 Year / All Time). Selected pill: `Color.purple` background, white `.footnote.weight(.semibold)` label. Unselected: `Color.white.opacity(0.08)` background, `.secondary` label. Switching animates with `.easeInOut(duration: 0.15)`.
+A centred `HStack(spacing: 8)` of capsule buttons (7 Days / 30 Days / 90 Days / 1 Year / All Time). Selected pill: `Color.purple` background, white `.footnote.weight(.semibold)` label. Unselected: `Color.white.opacity(0.08)` background, `.secondary` label. Switching animates with `.easeInOut(duration: 0.15)`.
 
 ## Stats Page — Hero Card
 
@@ -2152,7 +2153,7 @@ A centred `HStack(spacing: 8)` of capsule buttons (30 Days / 90 Days / 1 Year / 
 
 **Label: `Chart-Heatmap`**
 
-GitHub-style contribution grid (30/90-day periods only): columns are weeks, rows are weekdays, leading/trailing nil-padded for weekday alignment. Cell fill: `Color.clear` (pad), `white.opacity(0.06)` (zero), or `Color.purple.opacity(0.25 + 0.75 × √fraction)` scaled against the period's busiest day. Cell size 30 pt (≤7 weeks) or 19 pt. Caption below: "Busiest day: …" (`.caption`, `.secondary`). On 1 Year / All Time the card is replaced by a Swift Charts monthly `BarMark` chart (purple bars, `cornerRadius 3`, y-axis in hours, height 170).
+GitHub-style contribution grid (7/30/90-day periods only): columns are weeks, rows are weekdays, leading/trailing nil-padded for weekday alignment. Cell fill: `Color.clear` (pad), `white.opacity(0.06)` (zero), or `Color.purple.opacity(0.25 + 0.75 × √fraction)` scaled against the period's busiest day. Cell size 30 pt (≤7 weeks) or 19 pt. Caption below: "Busiest day: …" (`.caption`, `.secondary`). On 1 Year / All Time the card is replaced by a Swift Charts monthly `BarMark` chart (purple bars, `cornerRadius 3`, y-axis in hours, height 170).
 
 ## Stats Page — Listening Clock
 
@@ -2164,7 +2165,7 @@ GitHub-style contribution grid (30/90-day periods only): columns are weeks, rows
 
 **Label: `ListRow-TopShow`**
 
-Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank number (`.subheadline.semibold.monospacedDigit`, `.secondary`, width 18) · 44 pt artwork (`cornerRadius 9`, `Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) over a 4 pt purple capsule bar sized relative to the #1 show · trailing duration (`.caption.monospacedDigit`, `.secondary`). Up to 8 rows.
+Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank number (`.subheadline.semibold.monospacedDigit`, `.secondary`, width 18) · 44 pt artwork (`cornerRadius 9`, `Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) over a 4 pt purple capsule bar sized relative to the #1 show · trailing duration (`.caption.monospacedDigit`, `.secondary`). Up to 8 rows. Tapping a row toggles an inline `Card-ShowStatsExpanded` beneath it.
 
 ## Stats Page — Privacy Footer
 
@@ -2184,4 +2185,10 @@ A single shared legend (`6 pt circle dots + .caption2 .tertiary labels`) appears
 
 ## Stats Page — Drifting Show Row
 
-Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 pt artwork (`Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) · blunt insight line (`.caption` `.secondary`, e.g. "Archived 6 of the last 8 unplayed") · `Chart-CompletionBar` · trailing "finished/total" fraction (`.caption.monospacedDigit`, `.secondary`). Row tap pushes `SubscriptionSettingsView`; long-press context menu offers Hide From This List and Unsubscribe (confirmation dialog).
+Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 pt artwork (`Artwork-Placeholder` fallback) · show title (`.subheadline.semibold`, lineLimit 1) · blunt insight line (`.caption` `.secondary`, e.g. "Archived 6 of the last 8 unplayed") · `Chart-CompletionBar` · trailing "finished/total" fraction (`.caption.monospacedDigit`, `.secondary`). Row tap toggles an inline `Card-ShowStatsExpanded` beneath the row (this variant includes a Podcast Settings link to `SubscriptionSettingsView`); long-press context menu offers Hide From This List and Unsubscribe (confirmation dialog).
+
+## Stats Page — Expanded Show Card
+
+**Label: `Card-ShowStatsExpanded`**
+
+Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `white.opacity(0.08)` card. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.

@@ -19,6 +19,16 @@ struct AppSettings: Equatable, Codable {
     var lockScreenScrubbingEnabled: Bool
     var diagnosticLoggingEnabled: Bool
     var showQueueBadge: Bool
+    // Shared Listening: global temporary override — caps speed (1.0–1.3x) and
+    // disables Trim Silence on ALL podcasts without touching per-sub settings.
+    var sharedListeningActive: Bool
+    var sharedListeningSpeed: Double
+    // Sleep Schedule: nightly recurring sleep timer. Window is minutes from
+    // midnight (may span it); duration 0 = prompt at end of episode.
+    var sleepScheduleEnabled: Bool
+    var sleepScheduleStartMinutes: Int
+    var sleepScheduleEndMinutes: Int
+    var sleepScheduleDurationMinutes: Int
     var lastAutoArchiveRunAt: Date?
     var autoArchiveDefaultMigrated: Bool
     var vocalBoostLevelMigrated: Bool
@@ -37,6 +47,12 @@ struct AppSettings: Equatable, Codable {
         lockScreenScrubbingEnabled: true,
         diagnosticLoggingEnabled: false,
         showQueueBadge: true,
+        sharedListeningActive: false,
+        sharedListeningSpeed: 1.0,
+        sleepScheduleEnabled: false,
+        sleepScheduleStartMinutes: 21 * 60,
+        sleepScheduleEndMinutes: 6 * 60,
+        sleepScheduleDurationMinutes: 20,
         lastAutoArchiveRunAt: nil,
         autoArchiveDefaultMigrated: false,
         vocalBoostLevelMigrated: false,
@@ -56,6 +72,12 @@ struct AppSettings: Equatable, Codable {
         case lockScreenScrubbingEnabled
         case diagnosticLoggingEnabled
         case showQueueBadge
+        case sharedListeningActive
+        case sharedListeningSpeed
+        case sleepScheduleEnabled
+        case sleepScheduleStartMinutes
+        case sleepScheduleEndMinutes
+        case sleepScheduleDurationMinutes
         case lastAutoArchiveRunAt
         case autoArchiveDefaultMigrated
         case vocalBoostLevelMigrated
@@ -75,6 +97,12 @@ struct AppSettings: Equatable, Codable {
         lockScreenScrubbingEnabled: Bool,
         diagnosticLoggingEnabled: Bool,
         showQueueBadge: Bool,
+        sharedListeningActive: Bool,
+        sharedListeningSpeed: Double,
+        sleepScheduleEnabled: Bool,
+        sleepScheduleStartMinutes: Int,
+        sleepScheduleEndMinutes: Int,
+        sleepScheduleDurationMinutes: Int,
         lastAutoArchiveRunAt: Date?,
         autoArchiveDefaultMigrated: Bool,
         vocalBoostLevelMigrated: Bool,
@@ -92,6 +120,12 @@ struct AppSettings: Equatable, Codable {
         self.lockScreenScrubbingEnabled = lockScreenScrubbingEnabled
         self.diagnosticLoggingEnabled = diagnosticLoggingEnabled
         self.showQueueBadge = showQueueBadge
+        self.sharedListeningActive = sharedListeningActive
+        self.sharedListeningSpeed = sharedListeningSpeed
+        self.sleepScheduleEnabled = sleepScheduleEnabled
+        self.sleepScheduleStartMinutes = sleepScheduleStartMinutes
+        self.sleepScheduleEndMinutes = sleepScheduleEndMinutes
+        self.sleepScheduleDurationMinutes = sleepScheduleDurationMinutes
         self.lastAutoArchiveRunAt = lastAutoArchiveRunAt
         self.autoArchiveDefaultMigrated = autoArchiveDefaultMigrated
         self.vocalBoostLevelMigrated = vocalBoostLevelMigrated
@@ -112,6 +146,12 @@ struct AppSettings: Equatable, Codable {
         lockScreenScrubbingEnabled = try container.decodeIfPresent(Bool.self, forKey: .lockScreenScrubbingEnabled) ?? Self.default.lockScreenScrubbingEnabled
         diagnosticLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .diagnosticLoggingEnabled) ?? Self.default.diagnosticLoggingEnabled
         showQueueBadge = try container.decodeIfPresent(Bool.self, forKey: .showQueueBadge) ?? Self.default.showQueueBadge
+        sharedListeningActive = try container.decodeIfPresent(Bool.self, forKey: .sharedListeningActive) ?? Self.default.sharedListeningActive
+        sharedListeningSpeed = try container.decodeIfPresent(Double.self, forKey: .sharedListeningSpeed) ?? Self.default.sharedListeningSpeed
+        sleepScheduleEnabled = try container.decodeIfPresent(Bool.self, forKey: .sleepScheduleEnabled) ?? Self.default.sleepScheduleEnabled
+        sleepScheduleStartMinutes = try container.decodeIfPresent(Int.self, forKey: .sleepScheduleStartMinutes) ?? Self.default.sleepScheduleStartMinutes
+        sleepScheduleEndMinutes = try container.decodeIfPresent(Int.self, forKey: .sleepScheduleEndMinutes) ?? Self.default.sleepScheduleEndMinutes
+        sleepScheduleDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .sleepScheduleDurationMinutes) ?? Self.default.sleepScheduleDurationMinutes
         lastAutoArchiveRunAt = try container.decodeIfPresent(Date.self, forKey: .lastAutoArchiveRunAt)
         autoArchiveDefaultMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveDefaultMigrated) ?? Self.default.autoArchiveDefaultMigrated
         vocalBoostLevelMigrated = try container.decodeIfPresent(Bool.self, forKey: .vocalBoostLevelMigrated) ?? Self.default.vocalBoostLevelMigrated

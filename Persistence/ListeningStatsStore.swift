@@ -3,9 +3,9 @@ import Foundation
 // AI CONTEXT — Persistence/ListeningStatsStore.swift
 // Data layer for the Stats page. Buckets all listening activity per LOCAL
 // calendar day in DayStats records (wall-clock seconds, 24-hour histogram,
-// per-show seconds keyed by subscription UUID with a title map that survives
-// unsubscribes, four time-saved categories, episodes started/completed,
-// manual skip count). Persisted to listening-stats.json; saves throttled to
+// per-show seconds and per-show time saved keyed by subscription UUID with a
+// title map that survives unsubscribes, four time-saved categories, episodes
+// started/completed, manual skip count). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause/background (AutohopApp).
 // Legacy lifetime totals from playback-stats.json are imported once as
 // `legacyBaseline` so pre-daily-bucketing history isn't lost.
@@ -63,6 +63,10 @@ public struct DayStats: Codable, Equatable {
     public var hourSeconds: [TimeInterval]
     /// Wall-clock seconds per subscription, keyed by `Subscription.id.uuidString`.
     public var perShowSeconds: [String: TimeInterval]
+    /// Total time saved (all four categories) per subscription, keyed by
+    /// `Subscription.id.uuidString`. Added 2026-06; days recorded before then
+    /// have an empty map, so per-period sums can undercount the category totals.
+    public var perShowTimeSaved: [String: TimeInterval]
     public var timeSavedVariableSpeed: TimeInterval
     public var timeSavedTrimSilence: TimeInterval
     public var timeSavedManualSkip: TimeInterval
@@ -76,6 +80,7 @@ public struct DayStats: Codable, Equatable {
         wallClockSeconds: TimeInterval = 0,
         hourSeconds: [TimeInterval] = Array(repeating: 0, count: 24),
         perShowSeconds: [String: TimeInterval] = [:],
+        perShowTimeSaved: [String: TimeInterval] = [:],
         timeSavedVariableSpeed: TimeInterval = 0,
         timeSavedTrimSilence: TimeInterval = 0,
         timeSavedManualSkip: TimeInterval = 0,
@@ -88,6 +93,7 @@ public struct DayStats: Codable, Equatable {
         self.wallClockSeconds = wallClockSeconds
         self.hourSeconds = hourSeconds
         self.perShowSeconds = perShowSeconds
+        self.perShowTimeSaved = perShowTimeSaved
         self.timeSavedVariableSpeed = timeSavedVariableSpeed
         self.timeSavedTrimSilence = timeSavedTrimSilence
         self.timeSavedManualSkip = timeSavedManualSkip
@@ -99,6 +105,31 @@ public struct DayStats: Codable, Equatable {
 
     public var totalTimeSaved: TimeInterval {
         timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
+    }
+
+    // MARK: Codable — graceful decoding of day buckets saved before perShowTimeSaved existed
+
+    enum CodingKeys: String, CodingKey {
+        case dayKey, wallClockSeconds, hourSeconds, perShowSeconds, perShowTimeSaved
+        case timeSavedVariableSpeed, timeSavedTrimSilence, timeSavedManualSkip, timeSavedAutoSkip
+        case episodesStarted, episodesCompleted, manualSkipForwardCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dayKey = try c.decode(String.self, forKey: .dayKey)
+        wallClockSeconds = try c.decode(TimeInterval.self, forKey: .wallClockSeconds)
+        hourSeconds = try c.decode([TimeInterval].self, forKey: .hourSeconds)
+        perShowSeconds = try c.decode([String: TimeInterval].self, forKey: .perShowSeconds)
+        // Absent in JSON written before per-show time-saved tracking (2026-06).
+        perShowTimeSaved = try c.decodeIfPresent([String: TimeInterval].self, forKey: .perShowTimeSaved) ?? [:]
+        timeSavedVariableSpeed = try c.decode(TimeInterval.self, forKey: .timeSavedVariableSpeed)
+        timeSavedTrimSilence = try c.decode(TimeInterval.self, forKey: .timeSavedTrimSilence)
+        timeSavedManualSkip = try c.decode(TimeInterval.self, forKey: .timeSavedManualSkip)
+        timeSavedAutoSkip = try c.decode(TimeInterval.self, forKey: .timeSavedAutoSkip)
+        episodesStarted = try c.decode(Int.self, forKey: .episodesStarted)
+        episodesCompleted = try c.decode(Int.self, forKey: .episodesCompleted)
+        manualSkipForwardCount = try c.decode(Int.self, forKey: .manualSkipForwardCount)
     }
 }
 
@@ -117,6 +148,9 @@ public struct ListeningStatsSummary {
     public var manualSkipForwardCount: Int = 0
     /// Wall-clock seconds per subscription UUID string, summed over the period.
     public var perShowSeconds: [String: TimeInterval] = [:]
+    /// Time saved per subscription UUID string, summed over the period. Empty
+    /// contributions from days recorded before per-show tracking (2026-06).
+    public var perShowTimeSaved: [String: TimeInterval] = [:]
     /// Wall-clock seconds per hour of day (24 buckets), summed over the period.
     public var hourSeconds: [TimeInterval] = Array(repeating: 0, count: 24)
     /// One entry per day in the period (zero-filled), oldest first — feeds heatmaps.
@@ -205,7 +239,9 @@ public final class ListeningStatsStore: ObservableObject {
         day.perShowSeconds[showKey, default: 0] += seconds
         if speed > 1.0 {
             // Time that would have elapsed at 1× minus time actually elapsed.
-            day.timeSavedVariableSpeed += seconds * (speed - 1.0) / speed
+            let saved = seconds * (speed - 1.0) / speed
+            day.timeSavedVariableSpeed += saved
+            day.perShowTimeSaved[showKey, default: 0] += saved
         }
 
         data.days[day.dayKey] = day
@@ -214,22 +250,35 @@ public final class ListeningStatsStore: ObservableObject {
         saveThrottled()
     }
 
-    public func addManualSkipForward(_ seconds: TimeInterval) {
+    public func addManualSkipForward(_ seconds: TimeInterval, subscriptionID: UUID? = nil) {
         guard seconds > 0 else { return }
         mutateToday {
             $0.timeSavedManualSkip += seconds
             $0.manualSkipForwardCount += 1
+            if let key = subscriptionID?.uuidString {
+                $0.perShowTimeSaved[key, default: 0] += seconds
+            }
         }
     }
 
-    public func addAutoSkip(_ seconds: TimeInterval) {
+    public func addAutoSkip(_ seconds: TimeInterval, subscriptionID: UUID? = nil) {
         guard seconds > 0 else { return }
-        mutateToday { $0.timeSavedAutoSkip += seconds }
+        mutateToday {
+            $0.timeSavedAutoSkip += seconds
+            if let key = subscriptionID?.uuidString {
+                $0.perShowTimeSaved[key, default: 0] += seconds
+            }
+        }
     }
 
-    public func addTrimSilenceSaved(_ seconds: TimeInterval) {
+    public func addTrimSilenceSaved(_ seconds: TimeInterval, subscriptionID: UUID? = nil) {
         guard seconds > 0 else { return }
-        mutateToday { $0.timeSavedTrimSilence += seconds }
+        mutateToday {
+            $0.timeSavedTrimSilence += seconds
+            if let key = subscriptionID?.uuidString {
+                $0.perShowTimeSaved[key, default: 0] += seconds
+            }
+        }
     }
 
     public func recordEpisodeStarted(subscriptionID: UUID, showTitle: String) {
@@ -291,6 +340,9 @@ public final class ListeningStatsStore: ObservableObject {
             result.manualSkipForwardCount += day.manualSkipForwardCount
             for (show, seconds) in day.perShowSeconds {
                 result.perShowSeconds[show, default: 0] += seconds
+            }
+            for (show, seconds) in day.perShowTimeSaved {
+                result.perShowTimeSaved[show, default: 0] += seconds
             }
             for hour in 0..<24 {
                 result.hourSeconds[hour] += day.hourSeconds[hour]

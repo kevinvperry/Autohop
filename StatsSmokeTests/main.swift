@@ -49,9 +49,9 @@ func runSmokeTest() throws {
     for _ in 0..<120 {
         store.addListeningTime(0.5, speed: 2.0, subscriptionID: showA, showTitle: "Show A")
     }
-    store.addTrimSilenceSaved(12)
-    store.addManualSkipForward(30)
-    store.addAutoSkip(45)
+    store.addTrimSilenceSaved(12, subscriptionID: showA)
+    store.addManualSkipForward(30, subscriptionID: showA)
+    store.addAutoSkip(45) // no subscription — counts in the category total only
     store.recordEpisodeStarted(subscriptionID: showA, showTitle: "Show A")
     store.recordEpisodeCompleted(subscriptionID: showA)
 
@@ -66,7 +66,17 @@ func runSmokeTest() throws {
     require(today.episodesStarted == 1 && today.episodesCompleted == 1, "Expected 1 started + 1 completed")
     require(approx(today.hourSeconds.reduce(0, +), 60), "Hour histogram should sum to wall clock")
     require(approx(today.perShowSeconds[showA.uuidString] ?? 0, 60), "Expected per-show attribution")
+    // Per-show time saved: 30s variable speed + 12s trim + 30s manual skip; the
+    // unattributed 45s auto skip stays out of the per-show map.
+    require(approx(today.perShowTimeSaved[showA.uuidString] ?? 0, 72), "Expected 72s per-show time saved, got \(today.perShowTimeSaved[showA.uuidString] ?? 0)")
     require(store.showTitles[showA.uuidString] == "Show A", "Expected show title captured")
+
+    // Day buckets saved before perShowTimeSaved existed must still decode.
+    let legacyDayJSON = """
+    {"dayKey":"2026-01-01","wallClockSeconds":100,"hourSeconds":[0,0,0,0,0,0,0,0,100,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"perShowSeconds":{},"timeSavedVariableSpeed":0,"timeSavedTrimSilence":0,"timeSavedManualSkip":0,"timeSavedAutoSkip":0,"episodesStarted":0,"episodesCompleted":0,"manualSkipForwardCount":0}
+    """
+    let legacyDay = try JSONDecoder().decode(DayStats.self, from: Data(legacyDayJSON.utf8))
+    require(legacyDay.perShowTimeSaved.isEmpty, "Expected pre-tracking day to decode with empty perShowTimeSaved")
 
     // 2. Period aggregation and streaks over synthetic history.
     // Qualifying days: today (60s), 1-3 days ago, then a gap, then 5-6 days ago.

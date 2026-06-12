@@ -30,8 +30,9 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **App Settings** | `SettingsView` | Page | Global app configuration — default playback preferences, download behaviour, notifications, OPML import/export. |
 | **Notification Settings** | `NotificationSettingsView` | Page (inside App Settings) | Master new-episode notification toggle, Enable All / Disable All, and per-podcast notification toggles for every subscription. Shows a permission banner with an iOS Settings deep link when notifications are denied. |
 | **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
-| **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (30 Days / 90 Days / 1 Year / All Time) — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, and time-saved breakdown. |
-| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item), Downloads, Listening History, Stats, and App Settings, plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
+| **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (7 Days / 30 Days / 90 Days / 1 Year / All Time) — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, Shows You're Drifting From, and time-saved breakdown. Tapping a Top Shows or drifting-shows row expands an inline per-show detail card. |
+| **Sleep Schedule** | `SleepScheduleView` | Page (inside Menu) | Recurring nightly sleep timer: on/off toggle, active-hours window (may span midnight), and prompt duration (10/15/20/40/60 min or End of Episode). During the window, playback pauses after the duration and a chime asks "Are you still listening?" — any play command continues; no response within 60 s ends the session at the prompt point. |
+| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item), Downloads, Listening History, Stats, Sleep Schedule, and App Settings, plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |
 
@@ -60,6 +61,7 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
         ├── Downloads (DownloadsView)
         ├── Listening History (ListeningHistoryView)
         ├── Stats (StatsView)
+        ├── Sleep Schedule (SleepScheduleView)
         └── App Settings (SettingsView)
             ├── Notification Settings (NotificationSettingsView)
             ├── Acknowledgements (AcknowledgementsView)

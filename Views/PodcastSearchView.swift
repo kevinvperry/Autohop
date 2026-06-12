@@ -10,7 +10,8 @@ import SwiftUI
 // before subscribing. Subscribe activates the browse subscription and moves
 // it to the top of the Priority Stack; already-subscribed results redirect to
 // the existing episode page instead of showing the preview. Lifecycle rules:
-// PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
+// PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2. Episode status
+// pills treat archived episodes with Episode.wasCompleted as Played.
 // MARK: - Search Sheet
 
 struct PodcastSearchView: View {
@@ -706,7 +707,7 @@ struct PodcastPreviewView: View {
         case .playing:
             return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
         case .played:   return .played
-        case .archived: return .archived
+        case .archived: return episode.wasCompleted ? .played : .archived
         case .unplayed:
             let position = appState.effectivePlaybackTime(for: episode)
             if position > 0 { return .partiallyPlayed }

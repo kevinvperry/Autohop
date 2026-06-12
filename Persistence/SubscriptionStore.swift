@@ -7,7 +7,9 @@ import Foundation
 // atomically. @MainActor: all mutation happens on the main actor and views
 // observe `subscriptions` directly.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
-// preserving local fields like downloadState/playedState/localFileURL),
+// preserving local fields like downloadState/playedState/localFileURL/
+// wasCompleted — the merge also reconstructs wasCompleted from
+// playedEpisodeKeys when a finished episode was archived between refreshes),
 // priorityRank normalization (contiguous 1..n after any insert/move/delete),
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
@@ -351,6 +353,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileURL = localFileURL
             $0.localFileName = localFileURL.lastPathComponent
             $0.playedState = .unplayed
+            $0.wasCompleted = false
         }
     }
 
@@ -388,6 +391,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileURL = nil
             $0.localFileName = nil
             $0.playedState = .played
+            $0.wasCompleted = true
         }
     }
 
@@ -399,6 +403,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileName = nil
             $0.playedState = .played
             $0.lastPlayedAt = now
+            $0.wasCompleted = true
         }
         rememberPlayedEpisode(subscriptionID: subscriptionID, episodeID: episodeID)
     }
@@ -420,7 +425,10 @@ public final class SubscriptionStore: ObservableObject {
         let keys = playedEpisodeKeys(for: episode)
         subscriptions[subIndex].archivedEpisodeKeys.subtract(keys)
         subscriptions[subIndex].playedEpisodeKeys.subtract(keys)
-        updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) { $0.playedState = .unplayed }
+        updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            $0.playedState = .unplayed
+            $0.wasCompleted = false
+        }
     }
 
     public func markEpisodeNotDownloaded(subscriptionID: UUID, episodeID: UUID) {
@@ -429,6 +437,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileURL = nil
             $0.localFileName = nil
             $0.playedState = .unplayed
+            $0.wasCompleted = false
         }
     }
 
@@ -456,6 +465,7 @@ public final class SubscriptionStore: ObservableObject {
                 merged.localFileURL = existing.localFileURL
                 merged.localFileName = existing.localFileName ?? existing.localFileURL?.lastPathComponent
                 merged.playedState = existing.playedState
+                merged.wasCompleted = existing.wasCompleted
                 merged.isExplicit = newEpisode.isExplicit ?? existing.isExplicit
                 if existing.localFileURL != nil, let duration = existing.durationSeconds {
                     merged.durationSeconds = duration
@@ -468,11 +478,16 @@ public final class SubscriptionStore: ObservableObject {
                     merged.localFileURL = nil
                     merged.localFileName = nil
                     merged.playedState = .archived
+                    // Episode keys in both sets = finished, then archived.
+                    if keys.contains(where: { subscriptions[index].playedEpisodeKeys.contains($0) }) {
+                        merged.wasCompleted = true
+                    }
                 } else if keys.contains(where: { subscriptions[index].playedEpisodeKeys.contains($0) }) {
                     merged.downloadState = .notDownloaded
                     merged.localFileURL = nil
                     merged.localFileName = nil
                     merged.playedState = .played
+                    merged.wasCompleted = true
                 }
             }
             return merged

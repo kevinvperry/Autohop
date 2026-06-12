@@ -10,7 +10,9 @@ import SwiftUI
 // (only when latest episode has chapters; position-based), Feed (read-only
 // URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
 // with FEATURES.md §10. stripHTML/decodeHTMLEntities below clean feed-supplied
-// description text for display.
+// description text for display. Also hosts SubscriptionEpisodesView (the
+// podcast's episode list), whose status pills treat archived episodes with
+// Episode.wasCompleted as Played.
 private func stripHTML(_ html: String) -> String {
     // Strip tags, then decode entities.
     let withoutTags = html.replacingOccurrences(
@@ -416,7 +418,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Automation")
         } footer: {
-            Text("Notifications also require the global toggle in Settings → Release Radar. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
+            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
 
         Section {
@@ -1069,7 +1071,7 @@ struct SubscriptionEpisodesView: View {
         case .playing:
             return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
         case .played:   return .played
-        case .archived: return .archived
+        case .archived: return episode.wasCompleted ? .played : .archived
         case .unplayed:
             let position = appState.effectivePlaybackTime(for: episode)
             if position > 0 { return .partiallyPlayed }

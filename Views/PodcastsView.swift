@@ -5,7 +5,9 @@ import SwiftUI
 // subscriptions filtered out); drag-to-reorder in Reorder mode rewrites
 // priorityRank for the whole list. Each row shows artwork, title, and a
 // colour-coded status pill for the podcast's latest episode (pills hide in
-// Reorder mode so they never fight the drag grips). Toolbar: hamburger menu
+// Reorder mode so they never fight the drag grips). Pill logic: archived
+// episodes show Played (not Archived) when Episode.wasCompleted is true, so
+// auto-archive doesn't erase the "you finished this" signal. Toolbar: hamburger menu
 // (MenuSheetView) leading, + (DiscoverView sheet — parent of Podcast Search)
 // trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
@@ -213,9 +215,9 @@ struct PodcastsView: View {
                             } else if episode.playedState == .played {
                                 EpisodeStatusPill(kind: .played)
                             } else if episode.playedState == .archived {
-                                let position = appState.effectivePlaybackTime(for: episode)
-                                let completed = episode.durationSeconds.map { position >= $0 * 0.95 } ?? false
-                                EpisodeStatusPill(kind: completed ? .played : .archived)
+                                // Completed episodes keep Played even after
+                                // auto-archive removes them from the queue.
+                                EpisodeStatusPill(kind: episode.wasCompleted ? .played : .archived)
                             } else if episode.downloadState == .notDownloaded || episode.downloadState == .failed {
                                 Button("Download") {
                                     Task { await appState.downloadLatestEpisode(for: sub) }
@@ -261,7 +263,7 @@ struct PodcastsView: View {
             // Any other episode with .playing state was started but not finished.
             return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
         case .played:   return .played
-        case .archived: return .archived
+        case .archived: return episode.wasCompleted ? .played : .archived
         case .unplayed:
             let position = appState.effectivePlaybackTime(for: episode)
             if position > 0 { return .partiallyPlayed }

@@ -75,6 +75,12 @@ struct PlayerView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
+
+            // Sleep Schedule "still listening?" prompt — mostly answered from
+            // the lock screen, but shown here for the screen-on (video) case.
+            if appState.sleepScheduleService.isPrompting {
+                sleepSchedulePromptOverlay
+            }
         }
         .preferredColorScheme(.dark)
         .onChange(of: appState.currentPlayerTime) { _, time in
@@ -159,6 +165,43 @@ struct PlayerView: View {
                 EpisodeShareSheet(episode: ep, subscription: sub)
             }
         }
+    }
+
+    // MARK: - Sleep Schedule prompt overlay
+
+    private var sleepSchedulePromptOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.72).ignoresSafeArea()
+
+            VStack(spacing: 22) {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundStyle(.purple)
+
+                Text("Are you still listening?")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("Playback pauses soon unless you respond.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color(white: 0.6))
+
+                Button {
+                    Task { await appState.togglePlayPause() }
+                } label: {
+                    Text("Yes, keep playing")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 14)
+                        .background(Color.purple)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(32)
+        }
+        .transition(.opacity)
     }
 
     // MARK: - Top bar
@@ -606,7 +649,8 @@ struct PlayerView: View {
                 Button {
                     showAudioControlMenu = true
                 } label: {
-                    playerActionIcon("slider.horizontal.3")
+                    // Mirrors the sleep timer button: white while Shared Listening is on.
+                    playerActionIcon("slider.horizontal.3", highlighted: appState.sharedListeningActive)
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
@@ -647,10 +691,10 @@ struct PlayerView: View {
         .padding(.vertical, 7)
     }
 
-    private func playerActionIcon(_ systemName: String) -> some View {
+    private func playerActionIcon(_ systemName: String, highlighted: Bool = false) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 18, weight: .bold))
-            .foregroundStyle(Color.purple.opacity(0.85))
+            .foregroundStyle(highlighted ? Color.white : Color.purple.opacity(0.85))
             .frame(width: 44, height: 32)
             .background(Color.purple.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 9))
@@ -1618,7 +1662,10 @@ private struct ArchiveConfirmationSheet: View {
 // speed stepper (1.0–2.5x), Trim Silence toggle + Low/Medium/High picker,
 // Vocal Boost toggle + Light/Standard/Strong picker. Changes route through
 // AppState.update* methods so they apply live to the playing episode AND
-// persist on the subscription.
+// persist on the subscription. Top row is Shared Listening — a GLOBAL
+// temporary override (1x–1.3x, Trim Silence forced off, per-sub settings
+// untouched); while on, the Speed and Trim rows below are greyed out and the
+// player's sound-controls button renders white.
 struct AudioControlsSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -1637,11 +1684,19 @@ struct AudioControlsSheetView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 20)
 
+            sharedListeningRow
+
+            rowDivider
+
             speedRow
+                .opacity(sharedListeningActive ? 0.35 : 1)
+                .disabled(sharedListeningActive)
 
             rowDivider
 
             trimSilenceRow
+                .opacity(sharedListeningActive ? 0.35 : 1)
+                .disabled(sharedListeningActive)
 
             rowDivider
 
@@ -1658,12 +1713,63 @@ struct AudioControlsSheetView: View {
 
     private var trimSilenceOn: Bool { subscription?.playbackPreference.trimSilence != .off }
     private var vocalBoostOn: Bool { subscription?.playbackPreference.vocalBoostLevel != .off }
+    private var sharedListeningActive: Bool { appState.sharedListeningActive }
 
     private var sheetHeight: CGFloat {
-        var height: CGFloat = 300           // base: speed + trim header + vocal header
-        if trimSilenceOn { height += 68 }   // trim silence segmented picker
-        if vocalBoostOn  { height += 68 }   // vocal boost segmented picker
+        var height: CGFloat = 382                    // base: shared listening + speed + trim header + vocal header
+        if sharedListeningActive { height += 68 }    // shared listening speed picker
+        if trimSilenceOn { height += 68 }            // trim silence segmented picker
+        if vocalBoostOn  { height += 68 }            // vocal boost segmented picker
         return height
+    }
+
+    // MARK: - Shared Listening Row
+
+    private var sharedListeningRow: some View {
+        let isOn = sharedListeningActive
+        let speeds = AppState.sharedListeningSpeedOptions
+
+        return VStack(spacing: 14) {
+            HStack(spacing: 14) {
+                rowIcon("person.2.fill")
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Shared Listening")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Slow every podcast for listening together")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(white: 0.50))
+                }
+
+                Spacer()
+
+                Toggle("", isOn: Binding(
+                    get: { isOn },
+                    set: { appState.setSharedListening(active: $0) }
+                ))
+                .labelsHidden()
+                .tint(.purple)
+            }
+
+            if isOn {
+                Picker("", selection: Binding(
+                    get: {
+                        speeds.first { abs($0 - appState.sharedListeningSpeed) < 0.01 } ?? 1.0
+                    },
+                    set: { appState.updateSharedListeningSpeed($0) }
+                )) {
+                    ForEach(speeds, id: \.self) { speed in
+                        Text(PlaybackPreference.speedLabel(speed)).tag(speed)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .tint(.purple)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .animation(.easeInOut(duration: 0.22), value: isOn)
     }
 
     // MARK: - Speed Row
