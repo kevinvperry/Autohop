@@ -22,6 +22,12 @@ The MPL-2.0-covered files in this project are:
     Apple system Audio Units) is architecturally derived from
     `podcasts/EffectsPlayer.swift` in Pocket Casts for iOS.
 
+No other Autohop files are subject to the MPL-2.0. In particular, the sleep
+timer (`Playback/SleepTimerService.swift`, `Views/SleepTimerSheetView.swift`)
+was *informed by studying* Pocket Casts but contains no ported code,
+constants, or algorithms — it is original Autohop code under the MIT
+License, as recorded in the `NOTICE` file.
+
 Each covered file carries the MPL-2.0 Exhibit A notice in its header, and
 its source code is made available as part of the Autohop source
 distribution in accordance with MPL-2.0 Section 3.2. See the `NOTICE` file

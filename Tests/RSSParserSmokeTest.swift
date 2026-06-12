@@ -1,3 +1,6 @@
+// AI CONTEXT — Tests/RSSParserSmokeTest.swift. Shared assertion body used by
+// the RSSParserSmoke executable: parses a sample feed and precondition-checks
+// titles, episode fields, and media kinds.
 import Foundation
 @testable import AutohopCore
 

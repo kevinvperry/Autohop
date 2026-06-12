@@ -476,6 +476,11 @@ private struct SkipDurationEditSheet: View {
     }
 }
 
+// AI CONTEXT — ListeningHistoryView ("Listening History" page, reached from
+// Menu or App Settings → Subscriptions). Searchable log of ListeningHistoryStore
+// entries grouped by date (Today/Yesterday/older); entries with < 60 s listened
+// AND < 60 s position are hidden (the threshold rule lives here in the view).
+// Header cards: total listening time and finished-episode count.
 struct ListeningHistoryView: View {
     @EnvironmentObject private var appState: AppState
     @State private var searchText = ""

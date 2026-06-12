@@ -385,7 +385,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 | Start skip | 0 – 300s (5s steps) | **0 (off)** | Automatically skips N seconds at the start of every episode. Measured in real file time, independent of playback speed. Primary use case: skipping recurring show intros or theme music. |
 | End skip | 0 – 300s (5s steps) | **0 (off)** | Automatically skips N seconds at the end of every episode. Measured in real file time, independent of playback speed. Primary use case: skipping recurring outros or trailing ad reads. |
 
-**Footer note (shown in app):** "Strong targets clearer spoken audio with a -14 LUFS loudness goal. Trim Silence removes quiet gaps — only active for audio episodes. Start and end skip are measured in real file time, independent of playback speed."
+**Footer notes (shown in app):** "Vocal Boost lifts speech above music and background sound — Strong targets a −14 LUFS loudness goal for the clearest spoken audio. Trim Silence removes quiet gaps (audio episodes only)." and "Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically."
 
 ---
 
@@ -408,7 +408,7 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 | Rule 2 | Inactive Episodes | Never / 4h / 8h / 16h / 24h / 2 Days / 3 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives unplayed episodes that haven't been touched (not played, not queued) within the set interval. Keeps feeds from accumulating stale backlog. |
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes, archiving older ones. Default of 1 keeps storage lean — the user always has the latest episode available. |
 
-**Footer note (shown in app):** "Played Episodes archives after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones. Archive runs at most every 30 minutes."
+**Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes."
 
 ---
 
@@ -588,6 +588,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 |---|---|---|---|---|
 | Keep Screen Awake | Toggle | **Off** | — | Prevents the screen from dimming or locking while an episode is actively playing in the full-screen player. Has no effect when playback is paused. |
 | Lock Screen Scrubbing | Toggle | **On** | — | Enables seeking from the Lock Screen and Control Centre scrubber. Turn off to prevent accidental seeks when the phone is in a pocket. |
+| Queue Badge | Toggle | **On** | — | Shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Turn off to clear the badge. |
 | Skip back | Sheet (5s steps) | **15s** | 5 – 120s | Duration of the skip-back button in the player. Also controls the skip-back interval shown on the Lock Screen and in Control Centre. |
 | Skip forward | Sheet (5s steps) | **30s** | 5 – 120s | Duration of the skip-forward button in the player. Also controls the skip-forward interval shown on the Lock Screen and in Control Centre. |
 
@@ -651,6 +652,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | skipForwardSeconds | 30 |
 | keepScreenAwakeDuringPlayback | false |
 | lockScreenScrubbingEnabled | true |
+| showQueueBadge | true |
 | diagnosticLoggingEnabled | false |
 
 ### `Subscription.init` defaults

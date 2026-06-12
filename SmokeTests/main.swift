@@ -1,3 +1,6 @@
+// AI CONTEXT — SmokeTests/main.swift (RSSParserSmoke executable, `swift run
+// RSSParserSmoke`). CLI smoke test: parses the bundled sample feed via
+// Tests/RSSParserSmokeTest.run and fatalErrors on any assertion failure.
 import Foundation
 import AutohopCore
 

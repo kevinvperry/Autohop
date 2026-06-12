@@ -1,3 +1,5 @@
+// AI CONTEXT — Tests/RSSParserTests.swift. XCTest unit tests for RSSParser
+// against bundled XML fixtures (runs in the Xcode test target, not SwiftPM).
 import XCTest
 @testable import Autohop
 

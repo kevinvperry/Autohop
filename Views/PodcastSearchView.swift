@@ -239,6 +239,12 @@ struct PodcastSearchView: View {
 
 // MARK: - Podcast Preview (header + episode list)
 
+// AI CONTEXT — PodcastPreviewView ("Podcast Preview" page inside the Search
+// sheet). Renders a podcast before subscription: auto-creates the invisible
+// browse subscription on open, shows up to 50 episodes (Load Older Episodes →
+// EpisodeFeedLoader full fetch), fully interactive rows identical to the
+// subscribed episode list. Subscribe button activates the browse subscription
+// and inserts it at the top of the Priority Stack.
 struct PodcastPreviewView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

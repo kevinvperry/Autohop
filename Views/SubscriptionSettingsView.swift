@@ -701,6 +701,11 @@ private struct EditPrioritySheet: View {
     }
 }
 
+// AI CONTEXT — SubscriptionEpisodesView ("Podcast Episodes" page, tap a row on
+// the Priority List). Header (artwork/title/description) + full episode list
+// with status pills, download progress, and the standard swipe actions
+// (leading Play / Play Next, trailing Archive / Play Last). Gear toolbar icon
+// pushes SubscriptionSettingsView; rows push EpisodeDetailView.
 struct SubscriptionEpisodesView: View {
     let subscriptionID: UUID
     @EnvironmentObject private var appState: AppState
@@ -1091,6 +1096,9 @@ struct SubscriptionEpisodesView: View {
     }
 }
 
+// AI CONTEXT — EpisodeDetailView ("Episode Detail" page). Full single-episode
+// view: description, chapter list with artwork, play/download/share/archive
+// actions. Reached from episode lists (subscribed or preview).
 struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID

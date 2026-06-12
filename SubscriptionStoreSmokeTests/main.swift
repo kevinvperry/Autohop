@@ -1,3 +1,6 @@
+// AI CONTEXT — SubscriptionStoreSmokeTests/main.swift (SubscriptionStoreSmoke
+// executable). CLI smoke test for SubscriptionStore add/merge/priority-rank/
+// browse-subscription behaviour against a temp file; fatalErrors on failure.
 import Foundation
 import AutohopCore
 

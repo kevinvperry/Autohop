@@ -1,3 +1,6 @@
+// AI CONTEXT — StatsSmokeTests/main.swift (StatsSmoke executable). CLI smoke
+// tests for ListeningStatsStore day-bucketing/period queries/streaks and
+// ShowEngagementAnalyzer drift classification; fatalErrors on failure.
 import Foundation
 import AutohopCore
 

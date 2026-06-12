@@ -1,3 +1,5 @@
+// AI CONTEXT — OPMLSmokeTests/main.swift (OPMLSmoke executable). CLI smoke
+// test for OPMLService import/export round-tripping; fatalErrors on failure.
 import Foundation
 import AutohopCore
 

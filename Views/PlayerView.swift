@@ -1539,6 +1539,12 @@ private struct ArchiveConfirmationSheet: View {
 
 // MARK: - Audio Controls Sheet
 
+// AI CONTEXT — AudioControlsSheetView ("Audio Controls" sheet, from the
+// Player). Dark card sheet editing the CURRENT podcast's PlaybackPreference:
+// speed stepper (1.0–2.5x), Trim Silence toggle + Low/Medium/High picker,
+// Vocal Boost toggle + Light/Standard/Strong picker. Changes route through
+// AppState.update* methods so they apply live to the playing episode AND
+// persist on the subscription.
 struct AudioControlsSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

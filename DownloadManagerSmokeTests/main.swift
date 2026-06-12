@@ -1,3 +1,6 @@
+// AI CONTEXT — DownloadManagerSmokeTests/main.swift (DownloadManagerSmoke
+// executable). CLI smoke test for DownloadManager file-path/storage logic
+// (no network); fatalErrors on failure.
 import Foundation
 import AutohopCore
 
