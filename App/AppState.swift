@@ -88,6 +88,8 @@ final class AppState: ObservableObject {
 
     // Sleep Schedule (recurring nightly sleep timer with "still listening?" prompts)
     let sleepScheduleService = SleepScheduleService()
+    // Playback position when the prompt fired — the asleep rewind target.
+    private var sleepSchedulePromptAnchorTime: TimeInterval = 0
 
     // User-facing messages
     @Published var downloadMessage: String?
@@ -519,36 +521,66 @@ final class AppState: ObservableObject {
             state?.playbackEngine.setVolume(volume)
         }
 
-        // Sleep Schedule callbacks
+        // Sleep Schedule callbacks. Playback keeps going through the prompt —
+        // the chime plays over it; we only record the rewind anchor here.
         state.sleepScheduleService.onPrompt = { [weak state] in
             Task { @MainActor in
-                guard let state, state.isPlaying else { return }
-                state.playbackEngine.pause()
-                state.isPlaying = false
-                state.savePlaybackPosition()
-                if let ep = state.currentPlayerEpisode,
-                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
-                    NowPlayingService.shared.updateTime(
-                        currentTime: state.currentPlayerTime,
-                        isPlaying: false,
-                        speed: state.effectiveSpeed(for: sub)
-                    )
+                guard let state else { return }
+                state.sleepSchedulePromptAnchorTime = state.currentPlayerTime
+                // Lock-screen prompt with a "Still Listening" action button so
+                // the user can confirm without unlocking or opening the app.
+                NotificationService.shared.postSleepSchedulePrompt()
+                state.logger.info("sleepSchedule.prompt", "Sleep Schedule asking if still listening (playback continues)", metadata: [
+                    "anchorTime": "\(Int(state.sleepSchedulePromptAnchorTime))"
+                ])
+            }
+        }
+        // Clear the lock-screen prompt whenever it tears down (confirmed,
+        // timed out, suspended or reset).
+        state.sleepScheduleService.onPromptDismissed = {
+            NotificationService.shared.clearSleepSchedulePrompt()
+        }
+        // "Still Listening" tapped on the lock screen → confirm, same as any
+        // transport command during the grace period.
+        NotificationService.shared.setStillListeningHandler { [weak state] in
+            Task { @MainActor in
+                guard let state else { return }
+                if state.sleepScheduleService.isPrompting {
+                    state.sleepScheduleService.userResponded()
+                    state.logger.info("sleepSchedule.stillListening", "User confirmed still listening via lock-screen notification")
                 }
-                state.logger.info("sleepSchedule.prompt", "Sleep Schedule paused playback to ask if still listening")
             }
         }
         state.sleepScheduleService.onAsleep = { [weak state] atEpisodeBoundary in
             Task { @MainActor in
-                guard let state else { return }
-                // Playback paused exactly at the prompt point — that IS the
-                // morning resume position, so just persist it.
+                guard let state, state.isPlaying else { return }
+                // Gentle fade over ~2.5 s, then pause and rewind to the point
+                // where the chime started — the last position plausibly heard.
+                for step in stride(from: 0.9, through: 0.0, by: -0.1) {
+                    state.playbackEngine.setVolume(Float(step))
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                state.playbackEngine.pause()
+                state.isPlaying = false
+                state.playbackEngine.setVolume(1.0)
+
+                // At an episode boundary the next episode auto-advanced during
+                // the grace period — the anchor is its very start.
+                let rewindTarget = atEpisodeBoundary ? 0 : state.sleepSchedulePromptAnchorTime
+                state.seek(to: rewindTarget)
                 state.savePlaybackPosition()
                 state.listeningStatsStore.save()
-                if atEpisodeBoundary {
-                    NowPlayingService.shared.clear()
+                if let ep = state.currentPlayerEpisode,
+                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
+                    NowPlayingService.shared.updateTime(
+                        currentTime: rewindTarget,
+                        isPlaying: false,
+                        speed: state.effectiveSpeed(for: sub)
+                    )
                 }
-                state.logger.info("sleepSchedule.asleep", "No response to prompt — assuming asleep", metadata: [
-                    "atEpisodeBoundary": "\(atEpisodeBoundary)"
+                state.logger.info("sleepSchedule.asleep", "No response to prompt — faded out and rewound to prompt point", metadata: [
+                    "atEpisodeBoundary": "\(atEpisodeBoundary)",
+                    "rewindTarget": "\(Int(rewindTarget))"
                 ])
             }
         }
@@ -574,7 +606,11 @@ final class AppState: ObservableObject {
             enabled: state.settingsStore.appSettings.lockScreenScrubbingEnabled
         )
 
-        NotificationService.shared.requestPermission()
+        // Notification permission is intentionally NOT requested here. The
+        // launch path only sets up the delegate + categories (AppDelegate →
+        // NotificationService.configure()); the system prompt is deferred to a
+        // user-triggered opt-in (notification toggles, or enabling Sleep
+        // Schedule). See NotificationService.requestPermission().
         if !state.settingsStore.appSettings.autoArchiveSettingsMigrated {
             state.subscriptionStore.migrateExistingSubscriptionsToAutoArchiveSettings()
             state.settingsStore.appSettings.autoArchiveSettingsMigrated = true
@@ -623,6 +659,13 @@ final class AppState: ObservableObject {
             "isPlaying": "\(isPlaying)",
             "episode": currentPlayerEpisode?.title ?? "none"
         ])
+        // Any transport command during the "still listening?" grace period is
+        // a "yes" — confirm before the toggle proceeds. A pause press both
+        // confirms and pauses; the re-armed countdown freezes until resume.
+        if sleepScheduleService.isPrompting {
+            sleepScheduleService.userResponded()
+            logger.info("sleepSchedule.stillListening", "User confirmed still listening via play/pause")
+        }
         if isPlaying {
             playbackEngine.pause()
             isPlaying = false
@@ -635,19 +678,6 @@ final class AppState: ObservableObject {
                 )
             }
         } else if let ep = currentPlayerEpisode {
-            // A play command while the Sleep Schedule prompt is active = "yes,
-            // still listening". The cycle restarts; at an episode boundary
-            // there's nothing to resume into, so advance the queue instead.
-            if sleepScheduleService.isPrompting {
-                let atEpisodeBoundary = sleepScheduleService.userResponded()
-                logger.info("sleepSchedule.stillListening", "User confirmed still listening", metadata: [
-                    "atEpisodeBoundary": "\(atEpisodeBoundary)"
-                ])
-                if atEpisodeBoundary {
-                    await playNextEpisode()
-                    return
-                }
-            }
             if playbackEngine.currentEpisode?.id == ep.id {
                 playbackEngine.setVolume(1.0)
                 playbackEngine.resume()
@@ -702,6 +732,12 @@ final class AppState: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval) {
+        // Skip forward/back or scrubbing during the "still listening?" grace
+        // period counts as a "yes".
+        if sleepScheduleService.isPrompting {
+            sleepScheduleService.userResponded()
+            logger.info("sleepSchedule.stillListening", "User confirmed still listening via seek/skip")
+        }
         let duration = currentPlayerEpisode?.durationSeconds
         let target = clampedPlaybackTime(seconds, duration: duration)
         logger.info("player.seek", "Seeking episode", metadata: [
@@ -1709,8 +1745,10 @@ final class AppState: ObservableObject {
         // returns true on the last episode — in which case we stop rather than advance.
         let sleepTimerFired = sleepTimerService.episodeFinished()
 
-        // Sleep Schedule end-of-episode mode: prompt at the boundary instead
-        // of auto-advancing (skipped when the manual timer just fired).
+        // Sleep Schedule end-of-episode mode: begin the prompt at the boundary
+        // (skipped when the manual timer just fired). Playback still advances
+        // to the next episode — the chime plays over it, and if there's no
+        // response the asleep handler rewinds that episode to its start.
         let sleepSchedulePrompting = !sleepTimerFired && sleepScheduleService.episodeFinished()
 
         // Episode reached EOF: use its full duration as the position.
@@ -1746,12 +1784,9 @@ final class AppState: ObservableObject {
         }
 
         if sleepSchedulePrompting {
-            // Don't advance and don't clear Now Playing — the lock-screen play
-            // button must stay live so it can answer the prompt.
-            logger.info("sleepSchedule.episodeEnd", "Sleep Schedule prompting at episode boundary", metadata: [
+            logger.info("sleepSchedule.episodeEnd", "Sleep Schedule prompting at episode boundary, advancing under the chime", metadata: [
                 "episode": episode.title
             ])
-            return
         }
 
         try? await Task.sleep(for: .seconds(0.4))

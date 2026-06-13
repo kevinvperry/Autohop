@@ -1,7 +1,14 @@
 // AI CONTEXT — Tests/RSSParserTests.swift. XCTest unit tests for RSSParser
-// against bundled XML fixtures (runs in the Xcode test target, not SwiftPM).
+// against bundled XML fixtures. Runs in BOTH the SwiftPM `AutohopCoreTests`
+// target (`swift test`) and the Xcode test bundle — so it imports the shared
+// AutohopCore library module (RSSParser, ParsedFeed, Episode, Chapter all live
+// there), not the app module.
 import XCTest
-@testable import Autohop
+#if AUTOHOP_SPM
+@testable import AutohopCore   // `swift test` (SwiftPM AutohopCoreTests target)
+#else
+@testable import Autohop       // Xcode test bundle (app module)
+#endif
 
 final class RSSParserTests: XCTestCase {
     func testParsesABCBreakfastFixture() throws {

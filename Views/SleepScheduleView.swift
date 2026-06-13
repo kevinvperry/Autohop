@@ -75,7 +75,13 @@ struct SleepScheduleView: View {
     private var enabledBinding: Binding<Bool> {
         Binding(
             get: { appState.settingsStore.appSettings.sleepScheduleEnabled },
-            set: { appState.settingsStore.appSettings.sleepScheduleEnabled = $0 }
+            set: { isOn in
+                appState.settingsStore.appSettings.sleepScheduleEnabled = isOn
+                // Turning the schedule on is a user opt-in to its lock-screen
+                // "still listening?" prompt, so request notification permission
+                // now (no-op if already decided).
+                if isOn { NotificationService.shared.requestPermission() }
+            }
         )
     }
 

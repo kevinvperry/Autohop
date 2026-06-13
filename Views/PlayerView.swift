@@ -8,9 +8,12 @@ import UIKit
 // horizontally swipeable panels: Now Playing (artwork/scrubber/transport),
 // Details (description), Chapters (only when the episode has chapters).
 // Top bar (NavRules): quiet list.bullet circle (left) pushes Subscriptions —
-// the only nav exit; icon pills switch panels (selected pill expands to
-// icon + label); queue button (right, playerActionIcon tint style, icon +
-// count) opens the Queue sheet and momentarily flashes the subscription
+// the only nav exit; next to it a Sleep Schedule indicator pill (bed.double
+// + minutes until the next "still listening?" prompt, icon-only when not
+// counting) appears only while in-window and pushes AppRoute.sleepSchedule;
+// icon pills switch panels (selected pill
+// expands to icon + label); queue button (right, playerActionIcon tint style,
+// icon + count) opens the Queue sheet and momentarily flashes the subscription
 // artwork of any episode newly added to the queue (2.5 s, gated on
 // isPlayerVisible). Hosts the sheets: AudioControlsSheetView
 // (speed/trim/boost), Sleep Timer, Queue, Episode Share, archive
@@ -132,6 +135,7 @@ struct PlayerView: View {
                             .frame(width: 44, height: 44)
                             .background(.black.opacity(0.45), in: Circle())
                     }
+                    .accessibilityLabel("Close full screen")
                     .padding(.top, 18)
                     .padding(.leading, 18)
                 }
@@ -182,24 +186,30 @@ struct PlayerView: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(.white)
 
-                Text("Playback pauses soon unless you respond.")
+                Text("Playback fades out soon unless you respond.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color(white: 0.6))
 
+                // Deliberately huge tap target — easy to hit half-asleep
+                // without aiming. Fills the width and stands well off the
+                // bottom edge.
                 Button {
-                    Task { await appState.togglePlayPause() }
+                    // Confirm without toggling — playback is still going.
+                    appState.sleepScheduleService.userResponded()
                 } label: {
-                    Text("Yes, keep playing")
-                        .font(.system(size: 16, weight: .bold))
+                    Text("Still Listening")
+                        .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 160)
                         .background(Color.purple)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .clipShape(RoundedRectangle(cornerRadius: 28))
+                        .contentShape(RoundedRectangle(cornerRadius: 28))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(32)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 32)
         }
         .transition(.opacity)
     }
@@ -220,6 +230,12 @@ struct PlayerView: View {
                     .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
             }
             .accessibilityLabel("Subscriptions")
+
+            // Sleep Schedule indicator — appears only while inside the nightly
+            // active-hours window. Shows a bed icon + minutes remaining until
+            // the window closes; taps push the Sleep Schedule settings page.
+            // Matches the playerActionIcon purple tint pill (cf. Queue button).
+            sleepScheduleIndicator
 
             Spacer()
 
@@ -308,6 +324,42 @@ struct PlayerView: View {
                 withAnimation(.easeOut(duration: 0.3)) {
                     queueFlashArtworkURL = nil
                 }
+            }
+        }
+    }
+
+    // MARK: - Sleep Schedule indicator
+
+    /// Top-bar pill shown only while inside the Sleep Schedule active-hours
+    /// window. The digit counts down the minutes until the next "still
+    /// listening?" prompt (the countdown phase); when not counting (paused,
+    /// idle, or End-of-Episode mode) the icon shows alone. TimelineView
+    /// re-evaluates every 30 s so the pill appears/disappears at the window
+    /// edges; the @Published phase keeps the digit live while counting.
+    @ViewBuilder
+    private var sleepScheduleIndicator: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            if appState.sleepScheduleService.isActive(context.date) {
+                let minutes = appState.sleepScheduleService.minutesUntilPrompt
+                NavigationLink(value: AppRoute.sleepSchedule) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bed.double.fill")
+                            .font(.system(size: 15, weight: .bold))
+                        if let minutes {
+                            Text("\(minutes)")
+                                .font(.system(size: 12, weight: .bold))
+                                .monospacedDigit()
+                        }
+                    }
+                    .foregroundStyle(Color.purple.opacity(0.85))
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(Color.purple.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                }
+                .padding(.leading, 8)
+                .accessibilityLabel(minutes.map { "Sleep Schedule active, \($0) minutes until prompt" } ?? "Sleep Schedule active")
             }
         }
     }
@@ -618,6 +670,7 @@ struct PlayerView: View {
                     .shadow(color: Color.purple.opacity(0.35), radius: 14)
             }
             .disabled(appState.currentPlayerEpisode == nil && appState.nextPlayableEpisode == nil)
+            .accessibilityLabel(appState.isPlaying ? "Pause" : "Play")
 
             Button {
                 guard let dur = appState.currentPlayerEpisode?.durationSeconds else { return }
@@ -654,6 +707,7 @@ struct PlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
+                .accessibilityLabel("Audio controls")
 
                 Button {
                     showSleepTimer = true
@@ -661,6 +715,7 @@ struct PlayerView: View {
                     sleepTimerButtonLabel
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Sleep timer")
             }
             .frame(width: 96, alignment: .leading)
 
@@ -676,6 +731,7 @@ struct PlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
+                .accessibilityLabel("Share episode")
 
                 Button {
                     showArchiveConfirmation = true
@@ -684,6 +740,7 @@ struct PlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
+                .accessibilityLabel("Archive episode")
             }
             .frame(width: 96, alignment: .trailing)
         }

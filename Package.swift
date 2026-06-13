@@ -120,6 +120,11 @@ let package = Package(
             ],
             resources: [
                 .copy("Fixtures")
+            ],
+            // Lets shared test files import the AutohopCore library under SwiftPM
+            // while still importing the app module under the Xcode test target.
+            swiftSettings: [
+                .define("AUTOHOP_SPM")
             ]
         )
     ]

@@ -5,7 +5,12 @@ import SwiftUI
 // Podcast Search, which is now reachable only through the search shortcut
 // here). Browse-and-explore page for finding
 // new podcasts: a Top-8 hero of big sideways-paging chart cards, horizontal
-// per-genre rails (PodcastChartsService / DiscoverViewModel), a storefront
+// per-genre rails (PodcastChartsService / DiscoverViewModel), plus two
+// secondary "Top Podcasts · <Country>" spotlight heroes woven into the rail
+// list — spotlight A before Health & Fitness, spotlight B at the end — each a
+// fixed Top-8 storefront (US/UK/AU, resolved by DiscoverViewModel
+// .spotlightCountries so they never duplicate the user's selected country or
+// each other). A storefront
 // country picker (defaults to Locale.current.region, falls back to US,
 // persisted in @AppStorage), and a search-field-shaped shortcut that presents
 // the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
@@ -24,6 +29,8 @@ struct DiscoverView: View {
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
     @State private var heroIndex = 0
+    @State private var spotlightAIndex = 0
+    @State private var spotlightBIndex = 0
 
     /// Auto-advance cadence for the hero cards.
     private let heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -31,6 +38,50 @@ struct DiscoverView: View {
     private enum Route: Hashable {
         case preview(PodcastSearchResult)
         case episodes(UUID)
+    }
+
+    /// Ordered Discover feed item: a genre rail or one of the two country
+    /// spotlight heroes. Spotlight A sits before Health & Fitness; B at the end.
+    private enum FeedSection: Identifiable {
+        case rail(DiscoverViewModel.GenreRail)
+        case spotlightA(DiscoverViewModel.CountrySpotlight)
+        case spotlightB(DiscoverViewModel.CountrySpotlight)
+
+        var id: String {
+            switch self {
+            case .rail(let r): return "rail-\(r.id)"
+            case .spotlightA(let s): return "spotlightA-\(s.country.code)"
+            case .spotlightB(let s): return "spotlightB-\(s.country.code)"
+            }
+        }
+    }
+
+    /// Builds the rail list with the spotlight heroes inserted. Spotlight A goes
+    /// immediately before the Health & Fitness rail (so it lands between Sports
+    /// and Health & Fitness); if that rail is absent it falls in after Sports,
+    /// otherwise at the end of the rails. Spotlight B always closes the feed.
+    private var feedSections: [FeedSection] {
+        var result: [FeedSection] = []
+        for rail in viewModel.rails {
+            if rail.genre.id == 1512, let a = viewModel.spotlightA {   // Health & Fitness
+                result.append(.spotlightA(a))
+            }
+            result.append(.rail(rail))
+        }
+        let hasSpotlightA = result.contains { if case .spotlightA = $0 { return true }; return false }
+        if let a = viewModel.spotlightA, !hasSpotlightA {
+            if let sportsIdx = result.firstIndex(where: {
+                if case .rail(let r) = $0 { return r.genre.id == 1545 }; return false   // Sports
+            }) {
+                result.insert(.spotlightA(a), at: sportsIdx + 1)
+            } else {
+                result.append(.spotlightA(a))
+            }
+        }
+        if let b = viewModel.spotlightB {
+            result.append(.spotlightB(b))
+        }
+        return result
     }
 
     private var country: ChartCountry {
@@ -113,9 +164,16 @@ struct DiscoverView: View {
                         }
                     }
 
-                    ForEach(viewModel.rails) { rail in
-                        genreRail(rail)
-                            .id("rail-\(rail.id)")
+                    ForEach(feedSections) { section in
+                        switch section {
+                        case .rail(let rail):
+                            genreRail(rail)
+                                .id("rail-\(rail.id)")
+                        case .spotlightA(let spotlight):
+                            spotlightHero(spotlight, index: $spotlightAIndex)
+                        case .spotlightB(let spotlight):
+                            spotlightHero(spotlight, index: $spotlightBIndex)
+                        }
                     }
 
                     Spacer(minLength: 24)
@@ -188,27 +246,46 @@ struct DiscoverView: View {
     // MARK: - Hero (Top 8 paging cards)
 
     private var heroSection: some View {
+        heroCarousel(title: "Top Podcasts · \(country.name)",
+                     podcasts: viewModel.heroPodcasts,
+                     index: $heroIndex,
+                     resolveCountry: country.code)
+    }
+
+    /// A secondary country spotlight hero (Top 8 for a fixed storefront),
+    /// mirroring the top hero's design.
+    private func spotlightHero(_ spotlight: DiscoverViewModel.CountrySpotlight, index: Binding<Int>) -> some View {
+        heroCarousel(title: "Top Podcasts · \(spotlight.country.name)",
+                     podcasts: spotlight.podcasts,
+                     index: index,
+                     resolveCountry: spotlight.country.code)
+    }
+
+    /// Shared paging hero carousel used by both the top hero and the country
+    /// spotlights. Each instance keeps its own selection index and auto-advances
+    /// on the shared cadence (paused while a tap is resolving a feed).
+    private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Top Podcasts · \(country.name)")
+            Text(title)
                 .font(.title3.weight(.bold))
                 .padding(.horizontal, 20)
 
-            TabView(selection: $heroIndex) {
-                ForEach(Array(viewModel.heroPodcasts.enumerated()), id: \.element.id) { index, podcast in
-                    heroCard(podcast)
+            TabView(selection: index) {
+                ForEach(Array(podcasts.enumerated()), id: \.element.id) { idx, podcast in
+                    heroCard(podcast, resolveCountry: resolveCountry)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 36)   // clear the page dots
-                        .tag(index)
+                        .tag(idx)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .never))
             .frame(height: 320)
             .onReceive(heroTimer) { _ in
-                let count = viewModel.heroPodcasts.count
+                let count = podcasts.count
                 guard count > 1, resolvingPodcastID == nil else { return }
                 withAnimation(.easeInOut(duration: 0.45)) {
-                    heroIndex = (heroIndex + 1) % count
+                    index.wrappedValue = (index.wrappedValue + 1) % count
                 }
             }
         }
@@ -265,9 +342,9 @@ struct DiscoverView: View {
         }
     }
 
-    private func heroCard(_ podcast: ChartPodcast) -> some View {
+    private func heroCard(_ podcast: ChartPodcast, resolveCountry: String) -> some View {
         Button {
-            open(podcast)
+            open(podcast, country: resolveCountry)
         } label: {
             ZStack(alignment: .bottomLeading) {
                 LinearGradient(
@@ -351,7 +428,7 @@ struct DiscoverView: View {
 
     private func railTile(_ podcast: ChartPodcast) -> some View {
         Button {
-            open(podcast)
+            open(podcast, country: country.code)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 ZStack(alignment: .topLeading) {
@@ -416,12 +493,12 @@ struct DiscoverView: View {
 
     // MARK: - Open a chart entry
 
-    private func open(_ podcast: ChartPodcast) {
+    private func open(_ podcast: ChartPodcast, country: String) {
         guard resolvingPodcastID == nil else { return }
         resolvingPodcastID = podcast.id
         Task {
             defer { resolvingPodcastID = nil }
-            guard let result = await viewModel.resolve(podcast, country: country.code) else {
+            guard let result = await viewModel.resolve(podcast, country: country) else {
                 showUnavailableAlert = true
                 return
             }

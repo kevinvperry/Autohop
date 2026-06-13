@@ -103,35 +103,44 @@ targets:
         # ── Device / orientation ───────────────────────────────────────────
         UIRequiredDeviceCapabilities:
           - arm64
+        # AppDelegate keeps normal screens portrait and opens video in landscape.
+        # v1 is iPhone-only (TARGETED_DEVICE_FAMILY = 1); no ~ipad variants.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        # AppDelegate keeps normal screens portrait and opens video in landscape.
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
         # ── Background modes ───────────────────────────────────────────────
         # audio      → AVAudioSession keeps playback alive when screen locks
         # fetch      → BGAppRefreshTask for periodic feed polling
-        # processing → BGProcessingTask reserved for future heavy work
+        # NOTE: only modes the app actually uses are declared (App Review
+        # guideline 2.5.4). "processing" was removed — no BGProcessingTask is
+        # registered. Re-add it only alongside a real BGProcessingTask handler.
         UIBackgroundModes:
           - audio
           - fetch
-          - processing
 
         # ── Background task identifiers ────────────────────────────────────
         # Must match BackgroundTaskCoordinator.feedRefreshIdentifier exactly.
         BGTaskSchedulerPermittedIdentifiers:
           - com.autohop.feedrefresh
 
-        # ── Network ───────────────────────────────────────────────────────
-        # Podcast RSS feeds and audio enclosures may be served over plain HTTP.
-        # Tighten this (remove NSAllowsArbitraryLoads, add per-domain exceptions)
-        # before App Store submission.
+        # ── Network (App Transport Security) ───────────────────────────────
+        # NSAllowsArbitraryLoads is required and is the standard, defensible
+        # posture for a podcast client: feeds, episode audio/video enclosures,
+        # and artwork are fetched (via URLSession) from arbitrary third-party
+        # hosts chosen by the user or surfaced by Apple's public charts. Many
+        # podcast hosts still serve plain HTTP, and the host set is unbounded and
+        # unknown at build time, so per-domain NSExceptionDomains cannot
+        # enumerate it. Autohop adds NO first-party HTTP endpoints (it runs no
+        # server). Apple permits this for apps connecting to servers the
+        # developer does not control; justification is in App Review notes
+        # (APPSTORE_ROADMAP.md, Review Notes appendix).
+        #
+        # DO NOT add the granular keys (NSAllowsArbitraryLoadsForMedia /
+        # …InWebContent / …InLocalNetworking): on iOS 10+ their mere presence
+        # makes the system IGNORE NSAllowsArbitraryLoads, which would block the
+        # URLSession HTTP loads (feed refresh, downloads, artwork) we depend on.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
 
@@ -142,6 +151,16 @@ targets:
 
         # ── App Store ──────────────────────────────────────────────────────
         ITSAppUsesNonExemptEncryption: false
+
+    # ── Entitlements ───────────────────────────────────────────────────────
+    # Time Sensitive Notifications: lets the Sleep Schedule "Are you still
+    # listening?" prompt (NotificationService.postSleepSchedulePrompt) break
+    # through Sleep Focus / Do Not Disturb via interruptionLevel = .timeSensitive.
+    # Declared here (not just in Xcode's UI) so `xcodegen generate` preserves it.
+    entitlements:
+      path: Autohop.entitlements
+      properties:
+        com.apple.developer.usernotifications.time-sensitive: true
 
     # System frameworks — AVKit pulls in AVFoundation transitively but listed
     # explicitly so the linker flags are unambiguous.

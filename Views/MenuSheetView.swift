@@ -1,18 +1,17 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
 // Discover (top item, presented as its own sheet), Downloads, Listening
-// History, Stats, Sleep Schedule, App Settings — plus the Import OPML action (NavRules: one
-// path per page; Find Podcasts lives behind + only).
+// History, Stats, Sleep Schedule, App Settings, and Support (last item — the
+// in-app User Guide, SupportView, which mirrors the website Support page).
+// NavRules: one path per page; Find Podcasts lives behind + only; OPML import
+// lives in Settings → Subscriptions.
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     @State private var showDiscover = false
-    @State private var showOPMLImporter = false
-    @State private var isImporting = false
     @State private var appearTime: Date?
 
     private let logger = AppLogger.shared
@@ -51,30 +50,16 @@ struct MenuSheetView: View {
                     Label("Sleep Schedule", systemImage: "moon.zzz")
                 }
 
-                Button {
-                    showOPMLImporter = true
-                } label: {
-                    if isImporting {
-                        Label {
-                            HStack {
-                                Text("Importing…")
-                                Spacer()
-                                ProgressView()
-                            }
-                        } icon: {
-                            Image(systemName: "square.and.arrow.down")
-                        }
-                    } else {
-                        Label("Import OPML", systemImage: "square.and.arrow.down")
-                            .foregroundStyle(.primary)
-                    }
-                }
-                .disabled(isImporting)
-
                 NavigationLink {
                     SettingsView()
                 } label: {
                     Label("Settings", systemImage: "gear")
+                }
+
+                NavigationLink {
+                    SupportView()
+                } label: {
+                    Label("Support", systemImage: "questionmark.circle")
                 }
             }
             .tint(.primary)
@@ -104,18 +89,6 @@ struct MenuSheetView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
             dismiss()
-        }
-        .fileImporter(
-            isPresented: $showOPMLImporter,
-            allowedContentTypes: [.xml, .plainText],
-            allowsMultipleSelection: false
-        ) { result in
-            guard let url = (try? result.get())?.first else { return }
-            isImporting = true
-            Task {
-                _ = await appState.importOPML(from: url)
-                isImporting = false
-            }
         }
     }
 

@@ -32,7 +32,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
-- Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker
+- Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker, plus two fixed "Top Podcasts · Country" spotlight heroes (US/UK/AU) woven into the feed
 - Podcast search via the iTunes catalog — search by name, author, or keyword; browse episode list before subscribing; 30-day recently viewed history
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
@@ -47,11 +47,13 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
 - Stats page: time listened, time saved, episodes finished, and streaks over 7/30/90-day, 1-year, and lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
+- Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
 - OPML import and export for subscription portability
 - New episode push notifications (global and per-podcast)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
+- In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback, and resource metrics (hidden developer tool)
 
 ## Documentation Map
@@ -61,6 +63,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`FEATURES.md`](FEATURES.md) | **Source of truth** for every feature, setting label, default, and behaviour. Update this first when any model/view/setting changes, then propagate to the website and App Store copy. |
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
 | [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference). |
+| [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
 | [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the two covered files. |
 

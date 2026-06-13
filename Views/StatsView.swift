@@ -664,7 +664,7 @@ private struct TopShowRow: View {
             Text("\(rank)")
                 .font(.subheadline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 18, alignment: .center)
+                .frame(width: 24, alignment: .center)
 
             StatsShowArtwork(subscriptionID: show.id)
 

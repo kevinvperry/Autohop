@@ -29,9 +29,10 @@
             </array>
         </dict>
         <!--
-            UserDefaults: used exclusively to persist the background feed-refresh
-            cursor (a single UUID identifying the last-refreshed subscription).
-            This is the only UserDefaults key written by Autohop.
+            UserDefaults: used only to persist the user's own app preferences and
+            UI state on-device (AppSettings, the Discover storefront choice, and
+            small view preferences such as shows hidden from the Stats drift
+            list). No identifiers for tracking; nothing leaves the device.
             1C8F.1: Read/write information used only to provide primary functionality.
         -->
         <dict>

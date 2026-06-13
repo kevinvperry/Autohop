@@ -2,18 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-		Autohop requires no special entitlements.
-
-		- Notifications: local only (UNUserNotificationCenter, no APNs remote push).
-		  No aps-environment entitlement needed.
-		- Background audio: declared via UIBackgroundModes in Info.plist.
-		- Background fetch/processing: declared via UIBackgroundModes in Info.plist.
-		- No iCloud, no associated domains, no wallet, no Siri, no CarPlay.
-
-		Xcode automatic signing will embed this file. If capabilities are added
-		in future (e.g. CarPlay, iCloud sync), add the corresponding entitlement
-		key here and enable the capability in the Developer Portal App ID.
-	-->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
 </dict>
 </plist>

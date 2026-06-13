@@ -51,6 +51,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
     - [Subscriptions](#155-subscriptions)
     - [Storage](#156-storage)
     - [About](#157-about)
+16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
 
 ---
 
@@ -189,6 +190,7 @@ Tapping a row navigates back to the Podcast Preview page for that podcast, refre
 - **Search shortcut** — a search-field-shaped button that opens the unchanged Podcast Search sheet
 - **Top Podcasts hero** — the storefront's Top 8 as big sideways-paging cards (purple gradient, oversized ghosted rank numeral, artwork, rank pill, title/artist/genre)
 - **Genre rails** — horizontally scrolling Top-15 shelves for Comedy, News, True Crime, Society & Culture, Business, Sports, Health & Fitness, Technology, Science, and TV & Film; a rail that fails to load is simply omitted
+- **Country spotlight heroes** — two additional "Top Podcasts · <Country>" hero carousels (identical design to the top hero) woven into the rails: spotlight A appears between Sports and Health & Fitness, spotlight B at the very end. They show fixed storefronts — A = United States (or UK if the user's country is already US); B = United Kingdom (or Australia if the user's country is UK, and also Australia when A has taken UK, i.e. a US user). `DiscoverViewModel.spotlightCountries(selected:)` resolves the pair so neither duplicates the user's country or each other. Each spotlight loads independently (omitted on failure, never blocking the page) and resolves taps against *its own* storefront so the show opens reliably.
 
 **Country picker:** Toolbar-leading menu ("🇦🇺 Australia ▾"). Defaults to the device's region (`Locale.current.region`, no location permission needed), falls back to the US, and persists the user's manual choice (`discoverCountryCode` in UserDefaults). 21 storefronts offered.
 
@@ -224,6 +226,8 @@ Tapping a row navigates back to the Podcast Preview page for that podcast, refre
 1. **Now Playing** — artwork, episode title, podcast name, scrubber, transport controls (skip back, play/pause, skip forward), audio controls button, sleep timer button, queue peek.
 2. **Details** — episode description and metadata.
 3. **Chapters** — chapter list. Only shown if the current episode has chapters.
+
+**Top bar:** leading nav icon (pushes Subscriptions) · **Sleep Schedule indicator** · panel tab strip · Queue count pill. The Sleep Schedule indicator (`bed.double.fill` purple pill, matching the audio-row action buttons) appears next to the nav icon **only while inside the Sleep Schedule active-hours window**. It shows the whole minutes remaining until the next "still listening?" prompt while a countdown is running, and the icon alone when not counting (paused, idle, or End-of-Episode mode). Tapping it pushes the Sleep Schedule page (`AppRoute.sleepSchedule`).
 
 **Transport controls:**
 - Skip back: configurable duration (default 15s), applied globally in Settings
@@ -382,6 +386,8 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Access:** Menu → Sleep Schedule (`SleepScheduleView`). The recurring nightly counterpart to the one-shot Sleep Timer. Logic lives in `Playback/SleepScheduleService.swift`, owned by `AppState`.
 
+> **Marketing note:** Sleep Schedule is an Autohop exclusive — no recurring/scheduled sleep timer with a "still listening?" check exists in Apple Podcasts, Pocket Casts or Overcast. It appears as a unique feature card and comparison-table row on the kevmarl.com promo page and has its own section in the support guide.
+
 **Settings (persisted in `AppSettings`):**
 - **Toggle** — `sleepScheduleEnabled` (default off). Runs every night when on.
 - **Active Hours** — start/end time pickers (`sleepScheduleStartMinutes`/`sleepScheduleEndMinutes`, minutes from midnight; default 9:00pm–6:00am). The window may span midnight; start == end means always active.
@@ -389,11 +395,15 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Behaviour:**
 1. The schedule **arms** — it never self-starts audio. Whenever playback starts (audio or video) inside the window, the cycle begins.
-2. After the chosen duration of playback (or at the episode boundary in End of Episode mode), playback **pauses** and a gentle generated chime asks "Are you still listening?" — chimes at 0/20/40 s inside a single 60 s in-memory WAV played via `AVAudioPlayer` (keeps the audio session rendering so the app isn't suspended while waiting; a 75 s backup `Task` covers audio failure).
-3. **Any play command is "yes"** — lock screen, earbud tap, headphone remote, or the on-screen overlay in `PlayerView` (shown for the screen-on/video case). Playback resumes and the cycle restarts. At an episode boundary, "yes" advances to the next queued episode.
-4. **No response within 60 s = asleep.** Playback stays paused exactly where the prompt fired (that position is persisted as the morning resume point). The session ends; the schedule re-arms on the next playback start inside the window.
+2. After the chosen duration of playback (or at the episode boundary in End of Episode mode), a soft singing-bowl-style chime asks "Are you still listening?" — **playback keeps going**; the chime (C4 fundamental with quiet partials, slow ~0.5 s attack, ~7 s decay) plays over it at 0/20/40 s inside a single 60 s in-memory WAV via `AVAudioPlayer` (keeps the audio session rendering so the app isn't suspended while waiting; a 75 s backup `Task` covers audio failure). In End of Episode mode the queue still advances to the next episode under the chime.
+3. **Any transport command is "yes"** — play/pause (lock screen, earbud tap, headphone remote), skip forward/back, scrubbing, the oversized on-screen overlay button in `PlayerView` (shown for the screen-on/video case; a deliberately large `minHeight: 160` "Still Listening" target for half-asleep tapping), or the **"Still Listening" action on the lock-screen notification** (see below). The cycle restarts; a pause press both confirms and pauses (the re-armed countdown freezes until resume).
+4. **No response within 60 s = asleep.** Playback fades out over ~2.5 s, pauses, and **rewinds to where the chime started** — the last point plausibly heard, persisted as the morning resume position (start of the auto-advanced episode in End of Episode mode). The session ends; the schedule re-arms on the next playback start inside the window.
 5. **Manual Sleep Timer overrides:** setting the regular Sleep Timer suspends the schedule for the rest of that session (`suspendForSession`, checked on every 0.5 s tick).
 6. The countdown only advances while playing — pausing freezes it. Sessions that started inside the window keep cycling past the end time mid-cycle.
+
+**Lock-screen "Still Listening" notification:** When the prompt fires, Autohop also posts a local notification (`NotificationService`) titled "Are you still listening?" carrying a **"Still Listening" action button**. It's a background action (empty options) so tapping it on the lock screen confirms **without unlocking or opening the app** — routed through the notification-centre delegate to `userResponded()`, exactly like a transport command. The notification uses `interruptionLevel = .timeSensitive` so it breaks through Sleep Focus / Do Not Disturb at night (requires the **Time Sensitive Notifications** capability on the app target). It is cleared automatically whenever the prompt ends (confirmed, timed out, suspended, or reset) via the service's `onPromptDismissed` callback.
+
+**Player indicator:** While inside the active-hours window, the player top bar shows a Sleep Schedule pill (see §4) with the minutes remaining until the next prompt.
 
 ---
 
@@ -599,7 +609,9 @@ Sum of all four time-saved categories, displayed in purple.
 
 **Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. New podcasts default to off at the per-podcast level — the user opts in only for shows they want to be notified about.
 
-**iOS permission:** Standard `UNUserNotificationCenter` authorisation is required. Managed by `NotificationService`.
+**iOS permission:** Standard `UNUserNotificationCenter` authorisation is required. Managed by `NotificationService`, which is also the app's `UNUserNotificationCenterDelegate` (installed in `AppDelegate`).
+
+**Sleep Schedule prompt notification:** Separate from new-episode alerts, `NotificationService` also posts the time-sensitive "Are you still listening?" lock-screen notification with its background "Still Listening" action button (see §8.1). This is generated locally on demand and is not gated by the per-podcast notification toggles.
 
 ---
 
@@ -676,6 +688,18 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
+
+---
+
+## 16. Support (In-App User Guide)
+
+**Access:** Menu (☰) → **Support** (the last menu item). Code: `Views/SupportView.swift`; content data: `Views/SupportContent.swift` (`SupportGuide.sections`).
+
+**What it is:** A native, dark-themed in-app User Guide that **mirrors the website Support page** (`kevmarl-site/support.html`). The two are kept in sync by hand — any change to support information is applied in both places.
+
+**Structure:** Drill-down navigation. Support opens to a scannable list of ~16 topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Queue, Player, Audio Controls, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, Listening History, Stats, App Settings.
+
+**Content blocks (native renderers):** paragraphs with inline Markdown bold, headings, bullet and numbered lists, tinted callouts (tip / note / warning), key-value and labelled tables (as cards), colour-coded status pills, and Queue-style swipe-action cards. The website's SVG diagrams are intentionally omitted — the surrounding text and tables carry the same information on a phone screen. See DESIGN.md `ListRow-SupportSection` and `Blocks-Support`.
 
 ---
 

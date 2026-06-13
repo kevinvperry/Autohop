@@ -1509,11 +1509,14 @@ A custom `HStack` across the top of the screen (not a SwiftUI toolbar). Three zo
 
 | Zone | Content | Action |
 |---|---|---|
-| Leading | `list.number` icon (18pt semibold, white) | `NavigationLink` to Priority page |
+| Leading | `list.bullet` icon circle (15pt semibold, white) | `NavigationLink` to Priority page |
+| Leading (cont.) | **Sleep Schedule indicator** — `bed.double.fill` pill, only while in the active-hours window | `NavigationLink` to `AppRoute.sleepSchedule` |
 | Centre | Panel tab strip — `Now Playing` / `Details` / `Chapters` | Switches `TabView` panel with `easeInOut(0.22)` animation |
-| Trailing | Queue count pill | Opens `QueueSheetView` as a sheet |
+| Trailing | Queue count pill (purple `playerActionIcon` tint style, icon + count) | Opens `QueueSheetView` as a sheet |
 
 **Panel tab strip** — each tab is a plain `Button`. Selected tab: white foreground + `Color(white: 0.15)` rounded-rect background. Unselected: `Color(white: 0.4)` foreground, clear background. `cornerRadius 14`, `font(.system(size: 13, weight: .semibold))`.
+
+**Sleep Schedule indicator (`Indicator-SleepSchedule`)** — appears immediately right of the leading nav icon, but only while `sleepScheduleService.isActive` (schedule enabled AND current time inside the active-hours window). Matches the `playerActionIcon` purple tint pill (`Color.purple.opacity(0.12)` fill, `0.3` stroke, `cornerRadius 9`, height 32, purple `0.85` icon). Shows `bed.double.fill` plus the whole minutes until the next "still listening?" prompt (`minutesUntilPrompt`, from the `.counting` phase); when not counting (paused, idle, or End-of-Episode mode) the icon shows alone. Wrapped in a `TimelineView(.periodic(by: 30))` so it appears/disappears at the window edges and the digit stays current while paused.
 
 **Queue count pill** — shows `appState.downloadedQueue.count`. Fixed height 30 pt, `Color(white: 0.12)` background, `cornerRadius 15`, subtle `Color(white: 0.18)` stroke. Font: `size: 12, weight: .bold`, colour `Color(white: 0.55)`.
 
@@ -2192,3 +2195,27 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 p
 **Label: `Card-ShowStatsExpanded`**
 
 Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `white.opacity(0.08)` card. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
+
+## Main Player — Sleep Schedule Prompt Overlay
+
+**Label: `Overlay-SleepSchedulePrompt`**
+
+Full-screen overlay shown over the player while `sleepScheduleService.isPrompting` (the screen-on / video case; on the lock screen the time-sensitive "Still Listening" notification handles it). `Color.black.opacity(0.72)` scrim, centred `VStack(spacing: 22)`: `moon.zzz.fill` (40pt, purple) · "Are you still listening?" (`size 22, .bold`, white) · subtitle (`size 14`, `Color(white: 0.6)`) · a deliberately **oversized** confirm button. The button fills the width and is `minHeight: 160` with a `size 26, .bold` "Still Listening" label, `Color.purple` fill, `cornerRadius 28`, explicit `contentShape` — a huge tap target so a half-asleep user can confirm without aiming. Tapping calls `sleepScheduleService.userResponded()`.
+
+## Support Page — Section Row
+
+**Label: `ListRow-SupportSection`**
+
+Drill-down list row in `SupportView` (Menu → Support). `HStack(spacing: 14)`: a 38×38 purple icon tile (`Color.purple.opacity(0.15)` fill, `cornerRadius 9`, 17pt semibold purple SF Symbol) · a `VStack` of the section title (`size 16, .semibold`, primary) over a one-line summary (`size 13`, `.secondary`, lineLimit 2). Standard dark `List` with `scrollContentBackground(.hidden)` over `Color.black`.
+
+## Support Page — Content Blocks
+
+**Label: `Blocks-Support`**
+
+Native renderers in `SupportView` for the structured `SupportBlock` data (mirrors the website Support page; content in `SupportContent.swift`):
+
+- **Paragraph / heading / bullets / steps** — `size 15` body in `Color(white: 0.75)`; headings `size 17 .bold` white; bullets use a purple "–", steps a purple monospaced index. Inline **bold** is parsed at runtime via `AttributedString(markdown:)`.
+- **Callout** (`tip` / `note` / `warning`) — tinted rounded card (`tint.opacity(0.14)` fill, `0.3` stroke, `cornerRadius 10`) with a leading symbol (`lightbulb.fill` purple / `info.circle.fill` blue / `exclamationmark.triangle.fill` orange).
+- **Table** — each row a `white.opacity(0.06)` card (`cornerRadius 12`): first cell a `.semibold` title, remaining cells labelled by the header (`**Header:** value`) or shown plain for two-column key/value tables.
+- **Pills** — adaptive `LazyVGrid` of capsule status chips (8pt colour dot + label, `color.opacity(0.18)` fill) reusing the `Episode Status Pill` colour set.
+- **Swipe-action cards** — two `white.opacity(0.06)` cards (Swipe Right / Swipe Left) listing each action as a colour dot + `**Label** — detail`, matching the Queue swipe semantics.

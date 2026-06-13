@@ -12,6 +12,9 @@ import BackgroundTasks
 //  3. OPML/.xml file-open events → AppState.importOPML.
 //  4. Orientation lock: delegates to VideoOrientationController so landscape
 //     is only allowed during full-screen video playback.
+//  5. Installs NotificationService as the UNUserNotificationCenter delegate
+//     (before launch returns) so Sleep Schedule "Still Listening" action taps
+//     that wake the app from the lock screen are handled.
 // GOTCHA: a BGAppRefreshTask run with "no feeds due" still reports success —
 // reporting failure teaches iOS to deprioritise future background wakes.
 final class AppDelegate: NSObject, UIApplicationDelegate {
@@ -23,6 +26,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         registerBackgroundTasks()
+        // Install the notification-center delegate before launch returns so
+        // "Still Listening" action taps that wake the app are delivered.
+        NotificationService.shared.configure()
         return true
     }
 

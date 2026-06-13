@@ -274,7 +274,15 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             if currentItem?.audioURL == nil {
                 currentItem?.audioURL = url
                 currentItem?.mediaKind = playableKind
-                currentItem?.fileSizeBytes = attributes["length"].flatMap(Int64.init)
+            }
+            // Capture the byte size from whichever playable element provides it
+            // for the chosen URL — <enclosure> is authoritative and carries the
+            // length, while a <media:content> for the same file often omits it
+            // (and may appear first). Ignore zero/absent lengths (e.g. an image
+            // enclosure with length="0").
+            if currentItem?.audioURL == url, currentItem?.fileSizeBytes == nil,
+               let length = attributes["length"].flatMap(Int64.init), length > 0 {
+                currentItem?.fileSizeBytes = length
             }
         } else if Self.isImageURL(url, mimeType: type), currentItem?.artworkURL == nil {
             currentItem?.artworkURL = url

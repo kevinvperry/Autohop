@@ -8,15 +8,18 @@ import Foundation
 // (sleepSchedule* fields) and driven by PlaybackEngine's 0.5 s onTimeUpdate
 // tick via tick(). When playback starts inside the nightly window the service
 // arms a cycle: after the configured duration (or at episode end in
-// end-of-episode mode) it fires onPrompt (AppState pauses playback) and plays
-// a gentle 60 s chime sequence through SleepScheduleChimePlayer. Any play
-// command while prompting counts as "yes" (AppState calls userResponded() and
-// resumes; the cycle restarts). If the chime finishes with no response, the
-// user is assumed asleep: onAsleep fires and the session ends — playback is
-// already paused at the prompt point, so the morning resume position is
-// exactly where the prompt fired. A manual SleepTimerService activation
+// end-of-episode mode) it fires onPrompt and plays a soft 60 s chime sequence
+// through SleepScheduleChimePlayer — playback does NOT pause; the chime plays
+// over the continuing audio. Any transport command while prompting counts as
+// "yes" (AppState calls userResponded(); the cycle restarts). If the chime
+// finishes with no response, the user is assumed asleep: onAsleep fires and
+// AppState fades playback out, pauses, and rewinds to the position where the
+// chime started — the morning resume point. A manual SleepTimerService activation
 // suspends the schedule for the rest of the session (suspendForSession,
-// called by AppState's tick). All methods must be called on the main actor.
+// called by AppState's tick). onPrompt also drives a lock-screen "Still
+// Listening" notification (AppState → NotificationService); onPromptDismissed
+// fires whenever the prompt tears down so AppState can clear that notification.
+// All methods must be called on the main actor.
 @MainActor
 final class SleepScheduleService: ObservableObject {
 
@@ -62,13 +65,21 @@ final class SleepScheduleService: ObservableObject {
 
     // MARK: - Callbacks (wired by AppState)
 
-    /// Fired when the duration elapses: AppState should pause playback. The
+    /// Fired when the duration elapses. Playback keeps going — AppState just
+    /// records the prompt-point position (the asleep rewind target). The
     /// chime starts immediately after.
     var onPrompt: (() -> Void)?
 
-    /// Fired when the grace period passes with no response. Parameter is true
-    /// when the prompt fired at an episode boundary (nothing to resume into).
+    /// Fired when the grace period passes with no response: AppState fades
+    /// out, pauses and rewinds to the prompt point. Parameter is true when
+    /// the prompt fired at an episode boundary (rewind target is the start
+    /// of the episode that auto-advanced during the grace period).
     var onAsleep: ((_ atEpisodeBoundary: Bool) -> Void)?
+
+    /// Fired whenever the prompt is torn down for any reason (confirmed, timed
+    /// out, suspended, or reset). AppState uses it to clear the lock-screen
+    /// "Still Listening" notification. Safe to fire when no prompt was active.
+    var onPromptDismissed: (() -> Void)?
 
     // MARK: - Internals
 
@@ -101,6 +112,9 @@ final class SleepScheduleService: ObservableObject {
     /// A fresh playback session started (startPlayback succeeded). Clears any
     /// manual-timer suspension and arms if inside the window.
     func playbackStarted() {
+        // End-of-episode mode auto-advances to the next episode while the
+        // prompt is live — that startPlayback must not tear the prompt down.
+        if isPrompting { return }
         suspendedForSession = false
         cancelPromptArtifacts()
         guard config.enabled, isWithinWindow() else {
@@ -157,9 +171,9 @@ final class SleepScheduleService: ObservableObject {
 
     // MARK: - "Yes" response (called by AppState's resume paths)
 
-    /// The user issued a play command while prompting. Stops the chime and
-    /// re-arms a fresh cycle. Returns true if the prompt fired at an episode
-    /// boundary (caller should advance to the next episode rather than resume).
+    /// The user issued a transport command (play/pause, skip, seek) while
+    /// prompting. Stops the chime and re-arms a fresh cycle. Returns true if
+    /// the prompt fired at an episode boundary.
     @discardableResult
     func userResponded() -> Bool {
         guard case .prompting(let atEpisodeBoundary) = phase else { return false }
@@ -184,6 +198,24 @@ final class SleepScheduleService: ObservableObject {
         }
         // Spans midnight, e.g. 21:00–06:00.
         return nowMinutes >= start || nowMinutes < end
+    }
+
+    /// True while the schedule is enabled and the current time is inside the
+    /// active-hours window — i.e. Sleep Schedule mode is potentially active.
+    /// Gates the player's Sleep Schedule indicator button visibility.
+    func isActive(_ date: Date = Date()) -> Bool {
+        config.enabled && isWithinWindow(date)
+    }
+
+    /// Minutes (rounded up) left in the current pre-prompt countdown — the time
+    /// until Sleep Schedule potentially activates and asks "still listening?".
+    /// nil when not actively counting (paused, idle, End-of-Episode mode, or
+    /// already prompting). Drives the indicator button's digit.
+    var minutesUntilPrompt: Int? {
+        if case .counting(let remaining) = phase {
+            return max(1, Int(ceil(remaining / 60)))
+        }
+        return nil
     }
 
     // MARK: - Private
@@ -222,17 +254,20 @@ final class SleepScheduleService: ObservableObject {
         chimePlayer.stop()
         graceBackupTask?.cancel()
         graceBackupTask = nil
+        onPromptDismissed?()
     }
 }
 
 // MARK: - Chime player
 
-/// Plays the 60-second "Are you still listening?" prompt audio: a gentle
-/// two-note chime at 0 s, 20 s and 40 s with silence between, generated as a
-/// single in-memory WAV so AVAudioPlayer keeps the audio session rendering for
-/// the whole grace period (which also keeps the app from being suspended while
-/// backgrounded). The completion fires when the full 60 s plays out with no
-/// interruption — i.e. the user did not respond.
+/// Plays the 60-second "Are you still listening?" prompt audio over the
+/// continuing podcast playback: a soft singing-bowl-style tone at 0 s, 20 s
+/// and 40 s with silence between, generated as a single in-memory WAV so
+/// AVAudioPlayer keeps rendering for the whole grace period (which also keeps
+/// the app from being suspended while backgrounded). Deliberately meditative —
+/// slow ~0.5 s attack, long gentle decay, low-mid pitch — so it cues an awake
+/// listener without startling one who is drifting off. The completion fires
+/// when the full 60 s plays out with no interruption — i.e. no response.
 @MainActor
 final class SleepScheduleChimePlayer: NSObject, AVAudioPlayerDelegate {
 
@@ -249,7 +284,7 @@ final class SleepScheduleChimePlayer: NSObject, AVAudioPlayerDelegate {
         do {
             let player = try AVAudioPlayer(data: Self.chimeWAVData)
             player.delegate = self
-            player.volume = 0.6
+            player.volume = 0.38
             player.prepareToPlay()
             player.play()
             self.player = player
@@ -277,7 +312,8 @@ final class SleepScheduleChimePlayer: NSObject, AVAudioPlayerDelegate {
 
     // MARK: - Generated audio
 
-    /// 60 s mono 16-bit WAV: soft E5→C5 sine chime (≈1.6 s, exponential decay)
+    /// 60 s mono 16-bit WAV: a singing-bowl-style swell (slow attack, ≈7 s
+    /// decay) built from a low C4 fundamental with quiet harmonic partials,
     /// repeated at each offset. Built once and cached.
     private static let chimeWAVData: Data = {
         let sampleRate = SleepScheduleChimePlayer.sampleRate
@@ -291,7 +327,13 @@ final class SleepScheduleChimePlayer: NSObject, AVAudioPlayerDelegate {
                 let frame = startFrame + i
                 guard frame < totalFrames else { break }
                 let t = Double(i) / sampleRate
-                let envelope = exp(-3.2 * t) * min(1.0, t / 0.015)   // fast attack, gentle decay
+                // Slow half-sine swell over the first 0.5 s, then a long
+                // gentle decay with a fade floor at the end of the tone.
+                let attack = min(1.0, t / 0.5)
+                let attackCurve = sin(attack * .pi / 2)
+                let decay = exp(-0.55 * t)
+                let release = min(1.0, (duration - t) / 0.8)
+                let envelope = attackCurve * decay * max(0, release)
                 let value = sin(2 * .pi * frequency * t) * envelope * amplitude
                 let mixed = Double(samples[frame]) + value * Double(Int16.max)
                 samples[frame] = Int16(max(Double(Int16.min), min(Double(Int16.max), mixed)))
@@ -299,8 +341,10 @@ final class SleepScheduleChimePlayer: NSObject, AVAudioPlayerDelegate {
         }
 
         for offset in SleepScheduleChimePlayer.chimeOffsets {
-            addTone(frequency: 659.25, startSecond: offset, duration: 1.4, amplitude: 0.32)        // E5
-            addTone(frequency: 523.25, startSecond: offset + 0.45, duration: 1.6, amplitude: 0.30) // C5
+            // Singing-bowl voicing: C4 fundamental + soft octave and twelfth.
+            addTone(frequency: 261.63, startSecond: offset, duration: 7.0, amplitude: 0.22)       // C4
+            addTone(frequency: 523.25, startSecond: offset, duration: 6.0, amplitude: 0.08)       // C5 partial
+            addTone(frequency: 784.0, startSecond: offset, duration: 4.5, amplitude: 0.035)       // G5 partial
         }
 
         // Minimal PCM WAV container.

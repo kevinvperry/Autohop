@@ -307,6 +307,14 @@ final class DiscoverViewModel: ObservableObject {
         var id: Int { genre.id }
     }
 
+    /// A secondary "Top Podcasts · <Country>" hero shown in the Discover feed
+    /// for a fixed spotlight storefront (see `spotlightCountries`).
+    struct CountrySpotlight: Identifiable {
+        let country: ChartCountry
+        let podcasts: [ChartPodcast]
+        var id: String { country.code }
+    }
+
     enum Phase {
         case loading
         case loaded
@@ -316,9 +324,27 @@ final class DiscoverViewModel: ObservableObject {
     @Published private(set) var phase: Phase = .loading
     @Published private(set) var heroPodcasts: [ChartPodcast] = []
     @Published private(set) var rails: [GenreRail] = []
+    /// First spotlight hero (mid-list, before Health & Fitness): US, or UK when
+    /// the user is already browsing US.
+    @Published private(set) var spotlightA: CountrySpotlight?
+    /// Second spotlight hero (end of feed): UK, or AU when the user is already
+    /// browsing UK — and AU too when A has already claimed UK (US user).
+    @Published private(set) var spotlightB: CountrySpotlight?
 
     private let service = PodcastChartsService()
     private var loadedCountry: String?
+
+    /// Resolves the two fixed spotlight storefronts relative to the user's
+    /// selected country so neither duplicates it or each other.
+    /// Card A: US, falling back to UK when the user is in the US.
+    /// Card B: UK, falling back to AU when the user is in the UK or when A has
+    /// already taken UK (i.e. the user is in the US).
+    static func spotlightCountries(selected: String) -> (ChartCountry, ChartCountry) {
+        let aCode = (selected == "us") ? "gb" : "us"
+        var bCode = (selected == "gb") ? "au" : "gb"
+        if bCode == aCode { bCode = "au" }
+        return (.named(aCode), .named(bCode))
+    }
 
     func load(country: String) async {
         guard loadedCountry != country else { return }
@@ -326,9 +352,15 @@ final class DiscoverViewModel: ObservableObject {
         phase = .loading
         heroPodcasts = []
         rails = []
+        spotlightA = nil
+        spotlightB = nil
 
-        // Hero and rails load concurrently; a failed rail is simply omitted.
+        let (countryA, countryB) = Self.spotlightCountries(selected: country)
+
+        // Hero, spotlights and rails load concurrently; a failed one is omitted.
         async let heroTask: [ChartPodcast]? = try? service.topPodcasts(country: country, limit: 8)
+        async let spotlightATask: [ChartPodcast]? = try? service.topPodcasts(country: countryA.code, limit: 8)
+        async let spotlightBTask: [ChartPodcast]? = try? service.topPodcasts(country: countryB.code, limit: 8)
         let railTasks = ChartGenre.rails.map { genre in
             Task { [service] in
                 (genre, try? await service.topPodcasts(country: country, genre: genre, limit: 15))
@@ -336,6 +368,8 @@ final class DiscoverViewModel: ObservableObject {
         }
 
         let hero = await heroTask ?? []
+        let spotA = await spotlightATask ?? []
+        let spotB = await spotlightBTask ?? []
         var loadedRails: [GenreRail] = []
         for task in railTasks {
             let (genre, podcasts) = await task.value
@@ -346,6 +380,8 @@ final class DiscoverViewModel: ObservableObject {
 
         guard loadedCountry == country else { return }  // user switched mid-flight
         heroPodcasts = hero
+        spotlightA = spotA.isEmpty ? nil : CountrySpotlight(country: countryA, podcasts: spotA)
+        spotlightB = spotB.isEmpty ? nil : CountrySpotlight(country: countryB, podcasts: spotB)
         rails = loadedRails
         phase = (hero.isEmpty && loadedRails.isEmpty)
             ? .failed("Couldn't load charts. Check your connection and try again.")

@@ -12,6 +12,7 @@ import SwiftUI
 // Also shows the launch splash overlay briefly on cold start.
 enum AppRoute: Hashable {
     case podcasts
+    case sleepSchedule
 }
 
 extension Notification.Name {
@@ -150,6 +151,8 @@ struct RootView: View {
                         switch route {
                         case .podcasts:
                             PodcastsView()
+                        case .sleepSchedule:
+                            SleepScheduleView()
                         }
                     }
             }
