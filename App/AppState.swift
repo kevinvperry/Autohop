@@ -63,6 +63,11 @@ final class AppState: ObservableObject {
     let subscriptionStore: SubscriptionStore
     let listeningHistoryStore = ListeningHistoryStore()
     let listeningStatsStore = ListeningStatsStore()
+
+    /// Opt-in cross-device sync engine (CloudKit). Started only while
+    /// AppSettings.iCloudSyncEnabled is true.
+    private let cloudSyncEngine: CloudSyncEngine
+    static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
     let downloadActivityStore = DownloadActivityStore()
 
     // Player state
@@ -265,6 +270,17 @@ final class AppState: ObservableObject {
         self.queueService = queueService
         self.settingsStore = settingsStore
         self.subscriptionStore = subscriptionStore
+        self.cloudSyncEngine = CloudSyncEngine(
+            containerIdentifier: AppState.cloudKitContainerID,
+            subscriptionStore: subscriptionStore,
+            database: subscriptionStore.database
+        )
+        cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
+            await self?.materializeRemoteSubscription(state)
+        }
+        if settingsStore.appSettings.iCloudSyncEnabled {
+            cloudSyncEngine.start()
+        }
 
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
@@ -292,7 +308,11 @@ final class AppState: ObservableObject {
                     self?.objectWillChange.send()
                     self?.syncDiagnosticLogging()
                     // didSet hasn't run yet on objectWillChange — sync after the value lands.
-                    Task { @MainActor in self?.syncSleepScheduleConfig() }
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.syncSleepScheduleConfig()
+                        self.cloudSyncEngine.syncEnabledChanged(self.settingsStore.appSettings.iCloudSyncEnabled)
+                    }
                 }
                 .store(in: &cancellables)
         }
@@ -302,6 +322,40 @@ final class AppState: ObservableObject {
         refreshUpNextEpisode()
         startNetworkMonitor()
         subscriptionStore.cleanupExpiredPreviewSubscriptions()
+    }
+
+    /// Creates a podcast that another device subscribed to, by fetching its feed,
+    /// then applies the synced per-podcast settings on top. Invoked by the sync
+    /// engine when a remote subscription record has no local match.
+    private func materializeRemoteSubscription(_ state: SubscriptionSyncState) async {
+        // Already present (by id or feed) — just apply settings.
+        if subscriptionStore.subscription(id: state.subscriptionID) != nil
+            || subscriptionStore.subscriptions.contains(where: { $0.feedURL == state.feedURL }) {
+            subscriptionStore.applyRemoteSubscriptionState(state)
+            return
+        }
+
+        do {
+            let result = try await feedService.refresh(
+                feedURL: state.feedURL,
+                subscriptionID: state.subscriptionID,
+                episodeLimit: defaultFeedEpisodeLimit
+            )
+            _ = try subscriptionStore.addSubscription(
+                id: state.subscriptionID, feedURL: state.feedURL,
+                title: result.subscriptionTitle, description: result.description,
+                author: result.author, artworkURL: result.artworkURL,
+                categories: result.categories, isExplicit: result.isExplicit,
+                latestEpisode: result.latestEpisode, insertAtBottom: true
+            )
+            subscriptionStore.updateEpisodes(subscriptionID: state.subscriptionID, episodes: result.episodes)
+            // Apply the synced settings (priority, playback, auto-archive, …) on top.
+            subscriptionStore.applyRemoteSubscriptionState(state)
+        } catch {
+            logger.error("sync.materializeFailed", "Could not materialise synced subscription", metadata: [
+                "url": state.feedURL.absoluteString
+            ])
+        }
     }
 
     private func startNetworkMonitor() {

@@ -37,6 +37,7 @@ struct SettingsView: View {
             downloadingSection
             controlsSection
             subscriptionsSection
+            syncSection
             storageSection
             if developerModeUnlocked {
                 diagnosticsSection
@@ -169,6 +170,17 @@ struct SettingsView: View {
             Text("Controls")
         } footer: {
             Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Skip durations also apply to the Lock Screen and Control Centre buttons.")
+        }
+    }
+
+    @ViewBuilder
+    private var syncSection: some View {
+        Section {
+            Toggle("iCloud Sync", isOn: iCloudSyncBinding)
+        } header: {
+            Text("Sync")
+        } footer: {
+            Text("Private by default — your subscriptions, played state and stats stay on this device unless you turn on iCloud Sync. When enabled, your listening syncs across your devices signed into the same iCloud account.")
         }
     }
 
@@ -331,6 +343,13 @@ struct SettingsView: View {
         Binding(
             get: { appState.settingsStore.appSettings.downloadOverWifi },
             set: { appState.settingsStore.appSettings.downloadOverWifi = $0 }
+        )
+    }
+
+    private var iCloudSyncBinding: Binding<Bool> {
+        Binding(
+            get: { appState.settingsStore.appSettings.iCloudSyncEnabled },
+            set: { appState.settingsStore.appSettings.iCloudSyncEnabled = $0 }
         )
     }
 

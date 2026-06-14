@@ -41,9 +41,16 @@ let package = Package(
             targets: ["StatsSmoke"]
         )
     ],
+    dependencies: [
+        // SQLite layer backing AutohopDatabase (see SYNC_DESIGN.md).
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.0")
+    ],
     targets: [
         .target(
             name: "AutohopCore",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: ".",
             exclude: [
                 "App",
@@ -69,12 +76,17 @@ let package = Package(
                 "Models/Episode.swift",
                 "Models/AppSettings.swift",
                 "Models/ListeningHistory.swift",
+                "Models/Synced.swift",
+                "Models/SyncState.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Feeds/ParsedFeed.swift",
                 "Feeds/RSSParser.swift",
                 "Feeds/OPMLService.swift",
                 "Persistence/SubscriptionStore.swift",
+                "Persistence/AutohopDatabase.swift",
+                "Persistence/CloudKitSyncMapping.swift",
+                "Persistence/CloudSyncEngine.swift",
                 "Persistence/ListeningStatsStore.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift"
