@@ -36,6 +36,8 @@ public struct ParsedEpisode: Equatable {
     public var publishedAt: Date?
     public var durationSeconds: TimeInterval?
     public var audioURL: URL?
+    /// Canonical episode web page (RSS `<item><link>`), for sharing.
+    public var episodeLink: URL?
     public var mediaKind: EpisodeMediaKind
     public var artworkURL: URL?
     public var fileSizeBytes: Int64?
@@ -52,6 +54,7 @@ public struct ParsedEpisode: Equatable {
         publishedAt: Date?,
         durationSeconds: TimeInterval?,
         audioURL: URL?,
+        episodeLink: URL? = nil,
         mediaKind: EpisodeMediaKind = .audio,
         artworkURL: URL?,
         fileSizeBytes: Int64?,
@@ -67,6 +70,7 @@ public struct ParsedEpisode: Equatable {
         self.publishedAt = publishedAt
         self.durationSeconds = durationSeconds
         self.audioURL = audioURL
+        self.episodeLink = episodeLink
         self.mediaKind = mediaKind
         self.artworkURL = artworkURL
         self.fileSizeBytes = fileSizeBytes

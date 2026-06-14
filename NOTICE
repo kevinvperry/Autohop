@@ -54,5 +54,8 @@ Mozilla Public License, Version 2.0. A copy of the MPL-2.0 is included
 in this repository as LICENSE-MPL-2.0.md, and is also available at:
 https://mozilla.org/MPL/2.0/
 
-In accordance with MPL-2.0 Section 3.2, the source code of the above files
-is made available as part of the Autohop project source distribution.
+In accordance with MPL-2.0 Section 3.2, the complete source code of Autohop's
+modified versions of the above MPL-2.0-covered files is made available to all
+recipients of the Autohop binary in the public Autohop source repository:
+https://github.com/kevinvperry/Autohop
+(see Playback/SilenceDetector.swift and Playback/PlaybackEngine.swift).

@@ -176,6 +176,7 @@ final class FeedService: FeedServicing {
         episode.fileSizeBytes = parsedEpisode.fileSizeBytes
         episode.isExplicit = parsedEpisode.isExplicit
         episode.externalChaptersURL = parsedEpisode.externalChaptersURL
+        episode.episodeLink = parsedEpisode.episodeLink
         return episode
     }
 

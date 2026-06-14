@@ -2,7 +2,7 @@
 
 **Status legend:** ✅ done · 🔄 in progress · ⬜ not started · 🧍 needs you (Apple account / device / asset / decision)
 **Owner:** **[Me]** = doable in-repo by the assistant · **[You]** = requires your Apple account, hardware, or a manual store action.
-**Last updated:** 2026-06-13
+**Last updated:** 2026-06-14
 
 > **v1 scope decision: iPhone only.** `TARGETED_DEVICE_FAMILY = 1`. iPad layout/screenshots are out of scope for v1.
 
@@ -16,25 +16,25 @@
 | A2 | Finalize ATS posture + justification | P0 | Me/You | ✅ (reverted to clean global allowance) · 🧍 review note to paste |
 | A6 | Defer notification permission to user opt-in | P2 | Me | ✅ |
 | A7 | Required-reason API audit (privacy manifest) | P1 | Me | ✅ clean |
-| A3 | Time Sensitive Notifications entitlement provisioning | P0 | Me/You | 🔄 (yml done) · 🧍 portal + regen |
+| A3 | Time Sensitive Notifications entitlement provisioning | P0 | Me/You | ✅ entitlement provisions cleanly via auto-signing (no errors on device) |
 | A4 | Fix stale privacy-manifest comment | P1 | Me | ✅ |
 | B5 | iPhone-only cleanup (orientation keys + website badge) | P0 | Me | ✅ |
 | C6 | Apple Developer Program enrollment | P0 | You | ⬜ |
-| C7 | Signing & team in Xcode | P0 | You | ⬜ |
+| C7 | Signing & team in Xcode | P0 | You | ✅ auto-signing, team Kevin Perry, runs on device |
 | C8 | Release archive + validate | P0 | You | ⬜ |
 | D9 | Create App Store Connect record | P0 | You | ⬜ |
 | D10 | Category selection | P0 | You | ⬜ |
-| D11 | Screenshots (6.9"/6.7" iPhone) | P0 | You | ⬜ |
+| D11 | Screenshots (6.9"/6.7" iPhone) | P0 | You | ✅ 6 shots @ 1290×2796 (6.9" slot) |
 | D12 | Listing copy (name/subtitle/desc/keywords) | P0 | Me | ✅ draft (Appendix 1) |
 | D13 | Support / Marketing / Privacy URLs | P0 | You | ✅ URLs ready |
-| D14 | App Privacy "Data Not Collected" answers | P0 | Me/You | ✅ draft (Appendix 4) |
-| D15 | Age rating questionnaire | P0 | You | ⬜ |
+| D14 | App Privacy "Data Not Collected" answers | P0 | Me/You | ✅ published in ASC (Data Not Collected) |
+| D15 | Age rating questionnaire | P0 | You | ✅ 9+ (UGC=No; profanity/substances=Infrequent) |
 | D16 | Export compliance (encryption=false) | P0 | — | ✅ already set |
-| E17 | MPL-2.0 source availability (link/offer) | P0 | Me/You | ⬜ decision needed |
+| E17 | MPL-2.0 source availability (link/offer) | P0 | Me/You | ✅ public repo + in-app/NOTICE links |
 | E18 | Apple charts/API terms comfort check | P1 | You | ⬜ |
 | E19 | App Review notes | P0 | Me | ✅ draft (Appendix 2) |
 | F20 | TestFlight beta pass | P1 | You | ⬜ |
-| F21 | On-device validation of new features | P1 | You | ⬜ |
+| F21 | On-device validation of new features | P1 | You | ✅ on iPhone 17 Pro Max |
 | F22 | Accessibility pass | P1 | Me/You | ✅ (labels added) · 🧍 on-device VoiceOver check |
 | F23 | Fix `swift test` target import | P2 | Me | ✅ (+ fixed a real parser bug; 4/4 pass) |
 | G24 | Real App Store CTA link on website | P1 | Me | 🔄 (badge fixed; link pending approval) |
@@ -47,7 +47,7 @@
 - ✅ **A2 — ATS finalized** (`project.yml`). `NSAllowsArbitraryLoads: true`, **no granular sub-keys**. This is required and defensible: feeds/enclosures/artwork are fetched via `URLSession` from unbounded, user-supplied third-party hosts (many HTTP-only); Autohop runs no first-party server. Per-domain `NSExceptionDomains` cannot enumerate an open-ended host set, so domain-scoping is not viable for a general podcast client. **Gotcha avoided:** an earlier attempt added `…InWebContent`/`…ForMedia` sub-keys — but on iOS 10+ the presence of any granular key makes the system *ignore* `NSAllowsArbitraryLoads`, which would have **blocked** our HTTP `URLSession` loads. Those sub-keys were removed. Justification is in Appendix 2 (paste into App Review notes 🧍). NOTE: a stale generated `./Info.plist` on disk still shows the old TODO comment — it is a build artifact and is reconciled on the next `xcodegen generate`.
 - ✅ **A6 — Notification permission deferred to user opt-in.** Removed the launch-time `requestPermission()` from `AppState` bootstrap. `NotificationService.configure()` (delegate + categories) still runs at launch but no longer prompts; `requestPermission()` now only fires from user opt-ins: the notification toggles (`NotificationSettingsView`) and enabling Sleep Schedule (`SleepScheduleView`). Better polish + opt-in rates.
 - ✅ **A7 — Required-reason API audit.** Confirmed the privacy manifest is complete: no system-boot-time or volume disk-space APIs are used (SettingsView reads per-file `.fileSizeKey` only, which is not the regulated category); file-timestamp (AppLogger) and UserDefaults are both declared. Stale comment corrected (see A4).
-- 🔄 **A3 — Time Sensitive Notifications entitlement.** `project.yml` now declares `com.apple.developer.usernotifications.time-sensitive`. Remaining 🧍: (1) run `xcodegen generate`; (2) enable the **Time Sensitive Notifications** capability on the App ID in the Apple Developer portal; (3) regenerate the provisioning profile. Without (2) the entitlement will fail to provision.
+- ✅/🧍 **A3 — Time Sensitive Notifications entitlement.** In-repo work done: `project.yml` declares `com.apple.developer.usernotifications.time-sensitive`, it is present in `Autohop.entitlements`, and `xcodegen generate` has been run (project + `Info.plist` reconciled, plist valid). Remaining 🧍: (1) enable the **Time Sensitive Notifications** capability on the App ID in the Apple Developer portal; (2) regenerate the provisioning profile. Without (1) the entitlement will fail to provision and the archive will fail signing.
 - ✅ **A4 — Privacy-manifest comment corrected** (`PrivacyInfo.xcprivacy`). The stale "single UUID refresh cursor" note (cursor was removed) now accurately describes UserDefaults usage (app settings + UI prefs). Declaration/reason code unchanged.
 
 ## B. Product decision
@@ -64,16 +64,16 @@
 
 - ⬜ **D9** Create the app record (name "Autohop", primary language en, bundle ID, SKU).
 - ⬜ **D10** Category — recommended **Primary: News**, **Secondary: Entertainment** (matches how Pocket Casts/Overcast are categorized).
-- ⬜ **D11** Screenshots — 6.9" and 6.7" iPhone. Shot list in Appendix 3.
+- ✅ **D11** Screenshots — 6 captured on a Pro Max device at **1290×2796** (accepted in the 6.9" slot). Set: Now Playing (hero), Sleep Schedule, Audio Controls, Subscriptions/Priority, Top Shows (Stats), Discover. Recommended order: Now Playing → Sleep Schedule → Audio Controls → Subscriptions → Discover → Stats. Optional later polish: Shared Listening ON, Subscriptions from #1, Stats heatmap variant.
 - ✅ **D12** Listing copy drafted — Appendix 1.
 - ✅ **D13** URLs ready: Support `https://kevmarl.com/autohop/support` · Marketing `https://kevmarl.com/autohop` · Privacy `https://kevmarl.com/autohop/privacy`.
 - ✅ **D14** App Privacy answers drafted — Appendix 4 ("Data Not Collected").
-- ⬜ **D15** Age rating questionnaire (expected 12+ for unrestricted third-party web/podcast content).
+- ✅ **D15** Age rating questionnaire completed → **9+ global** (Brazil A10, Korea ALL as auto regional equivalents). Answers: In-App Controls all No; Unrestricted Web Access No; **User-Generated Content No** (podcasts are third-party-published RSS, not app-user content — avoids Guideline 1.2 UGC-safeguard requirements); Messaging/Advertising No; Mature Themes — Profanity and Alcohol/Tobacco/Drug references set to **Infrequent** (honest for an open podcast catalog), Horror None. Age Suitability URL left blank (optional).
 - ✅ **D16** Export compliance: `ITSAppUsesNonExemptEncryption = false` already set.
 
 ## E. Legal & compliance
 
-- ⬜ **E17 — MPL-2.0 source availability.** `SilenceDetector.swift` + `PlaybackEngine.swift` are MPL-covered. MPL §3.2 requires offering their source to binary recipients. **Decision needed:** publish a public repo (or just those files), or host a source archive + written offer. Once chosen, I'll wire the link into `NOTICE` and the in-app Acknowledgements screen.
+- ✅ **E17 — MPL-2.0 source availability.** `SilenceDetector.swift` + `PlaybackEngine.swift` are MPL-covered. The Autohop repo is **public** (`https://github.com/kevinvperry/Autohop`) and both modified files are live on `main`, so MPL §3.2's source-availability requirement for binary recipients is met. Wired the public repo URL into both `NOTICE` (§3.2 paragraph) and the in-app Acknowledgements footer (`AcknowledgementsView.swift`), pointing recipients to Autohop's *own* modified files — separate from, and in addition to, the existing upstream attribution to Pocket Casts / Automattic (unchanged).
 - ⬜ **E18 — Apple charts/API comfort check.** Using public RSS + Apple's public iTunes Search / chart feeds is standard; confirm you're comfortable displaying Apple Podcasts charts on Discover.
 - ✅ **E19 — App Review notes drafted** — Appendix 2.
 

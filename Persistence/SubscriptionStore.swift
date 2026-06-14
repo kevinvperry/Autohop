@@ -614,6 +614,7 @@ public final class SubscriptionStore: ObservableObject {
         episode.artworkURL = parsedEpisode.artworkURL ?? feedArtworkURL
         episode.fileSizeBytes = parsedEpisode.fileSizeBytes
         episode.isExplicit = parsedEpisode.isExplicit
+        episode.episodeLink = parsedEpisode.episodeLink
         return episode
     }
 

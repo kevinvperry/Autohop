@@ -243,6 +243,13 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         switch name {
         case "guid":
             currentItem?.guid = text
+        case "link":
+            // Episode web page (show-notes/permalink). Some feeds repeat <link>
+            // inside <item> for atom:link alternates — keep the first usable one.
+            if currentItem?.episodeLink == nil, let url = Self.url(from: text),
+               url.scheme == "http" || url.scheme == "https" {
+                currentItem?.episodeLink = url
+            }
         case "title":
             currentItem?.title = text
         case "description", "content:encoded":
@@ -460,6 +467,7 @@ private struct EpisodeAccumulator {
     var publishedAt: Date?
     var durationSeconds: TimeInterval?
     var audioURL: URL?
+    var episodeLink: URL?
     var mediaKind: EpisodeMediaKind = .audio
     var artworkURL: URL?
     var fileSizeBytes: Int64?
@@ -477,6 +485,7 @@ private struct EpisodeAccumulator {
             publishedAt: publishedAt,
             durationSeconds: durationSeconds,
             audioURL: audioURL,
+            episodeLink: episodeLink,
             mediaKind: mediaKind,
             artworkURL: artworkURL,
             fileSizeBytes: fileSizeBytes,

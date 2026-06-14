@@ -30,6 +30,10 @@ public struct Episode: Identifiable, Equatable, Codable {
     public var publishedAt: Date?
     public var durationSeconds: TimeInterval?
     public var audioURL: URL
+    /// Canonical web page for this episode (RSS `<item><link>`), used for
+    /// sharing — gives recipients a rich, openable link instead of the raw
+    /// enclosure. nil when the feed omits a usable `<link>`.
+    public var episodeLink: URL?
     public var mediaKind: EpisodeMediaKind
     public var artworkURL: URL?
     public var fileSizeBytes: Int64?
@@ -68,6 +72,7 @@ public struct Episode: Identifiable, Equatable, Codable {
         self.publishedAt = nil
         self.durationSeconds = nil
         self.audioURL = audioURL
+        self.episodeLink = nil
         self.mediaKind = mediaKind
         self.artworkURL = nil
         self.fileSizeBytes = nil
@@ -91,6 +96,7 @@ public struct Episode: Identifiable, Equatable, Codable {
         case publishedAt
         case durationSeconds
         case audioURL
+        case episodeLink
         case mediaKind
         case artworkURL
         case fileSizeBytes
@@ -117,6 +123,7 @@ public struct Episode: Identifiable, Equatable, Codable {
         publishedAt = try container.decodeIfPresent(Date.self, forKey: .publishedAt)
         durationSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .durationSeconds)
         audioURL = try container.decode(URL.self, forKey: .audioURL)
+        episodeLink = try container.decodeIfPresent(URL.self, forKey: .episodeLink)
         mediaKind = try container.decodeIfPresent(EpisodeMediaKind.self, forKey: .mediaKind) ?? .audio
         artworkURL = try container.decodeIfPresent(URL.self, forKey: .artworkURL)
         fileSizeBytes = try container.decodeIfPresent(Int64.self, forKey: .fileSizeBytes)

@@ -21,8 +21,18 @@ struct AcknowledgementsView: View {
             } header: {
                 Text("Open Source Components")
             } footer: {
-                Text("Autohop uses portions of the above open-source projects. Full licence texts and source code for covered files are included with the Autohop source distribution.")
-                    .font(.footnote)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Autohop uses portions of the above open-source projects. Full licence texts are included with Autohop.")
+                    if let autohopRepo = URL(string: "https://github.com/kevinvperry/Autohop") {
+                        Text("As required by the MPL-2.0, the source code of Autohop's modified versions of the covered files (SilenceDetector.swift and PlaybackEngine.swift) is published here:")
+                        Link(destination: autohopRepo) {
+                            Label("github.com/kevinvperry/Autohop", systemImage: "arrow.up.right.square")
+                                .font(.footnote.weight(.medium))
+                        }
+                        .tint(.purple)
+                    }
+                }
+                .font(.footnote)
             }
         }
         .navigationTitle("Acknowledgements")

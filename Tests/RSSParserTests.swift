@@ -121,6 +121,54 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(episode.chapters[4].startSeconds, 4_718)
     }
 
+    func testParsesEpisodeWebLinkForSharing() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Some Show</title>
+            <link>https://example.com</link>
+            <item>
+              <guid isPermaLink="false">abc-123</guid>
+              <title>An Episode</title>
+              <link>https://example.com/episodes/an-episode</link>
+              <enclosure url="https://cdn.example.com/an-episode.mp3" length="100" type="audio/mpeg"/>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+
+        // The item-level <link> is captured (not the channel <link>).
+        XCTAssertEqual(episode.episodeLink?.absoluteString, "https://example.com/episodes/an-episode")
+        XCTAssertEqual(episode.audioURL?.absoluteString, "https://cdn.example.com/an-episode.mp3")
+    }
+
+    func testEpisodeWebLinkAbsentWhenItemHasNoLink() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Some Show</title>
+            <link>https://example.com</link>
+            <item>
+              <guid isPermaLink="false">abc-123</guid>
+              <title>An Episode</title>
+              <enclosure url="https://cdn.example.com/an-episode.mp3" length="100" type="audio/mpeg"/>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+
+        // Channel <link> must NOT leak into the episode's link.
+        XCTAssertNil(episode.episodeLink)
+    }
+
     private func fixtureData(named name: String, extension fileExtension: String) throws -> Data {
         let url = try XCTUnwrap(
             Bundle.module.url(

@@ -1,9 +1,14 @@
 import SwiftUI
 import UIKit
+import LinkPresentation
 
 // AI CONTEXT — Views/EpisodeShareSheet.swift ("Episode Share" sheet, from the
 // Player's audio row). Previews the rendered EpisodeShareCardView image, then
-// exports image + episode audio URL through UIActivityViewController.
+// exports the card image plus a shareable link through UIActivityViewController.
+// The link prefers the episode's web page (Episode.episodeLink, RSS <item><link>)
+// → an http(s) permalink guid → the raw enclosure as last resort, and is wrapped
+// in an LPLinkMetadata item source so recipients get a rich, branded preview
+// (card image + episode title) instead of a bare URL.
 
 // MARK: - Episode share sheet
 
@@ -30,6 +35,16 @@ struct EpisodeShareSheet: View {
     }
     private var artworkURL: URL? {
         subscription?.artworkURL ?? episode.artworkURL
+    }
+    /// Best shareable link for a recipient: prefer the episode's web page,
+    /// then an http(s) permalink guid, then the raw enclosure as a last resort.
+    private var shareURL: URL {
+        if let link = episode.episodeLink { return link }
+        if let url = URL(string: episode.guid),
+           url.scheme == "http" || url.scheme == "https" {
+            return url
+        }
+        return episode.audioURL
     }
 
     // State
@@ -135,15 +150,74 @@ struct EpisodeShareSheet: View {
         let renderer = ImageRenderer(content: card)
         renderer.scale = 3.0
 
+        let cardImage = renderer.uiImage
+
         var items: [Any] = []
-        if let cardImage = renderer.uiImage {
+        if let cardImage {
             items.append(cardImage)
         }
-        // Tier 1: audio URL so recipients see something useful even without the image
-        items.append(episode.audioURL)
+        // Shareable link wrapped in LPLinkMetadata so recipients get a rich,
+        // branded preview (card image + episode title) pointing at a real,
+        // openable page — instead of a bare enclosure URL.
+        items.append(
+            EpisodeLinkItemSource(
+                url: shareURL,
+                title: "\(episode.title) — \(podcastName)",
+                image: cardImage
+            )
+        )
 
         shareItems = items
         showActivitySheet = true
+    }
+}
+
+// MARK: - Rich link item source
+
+/// Supplies the share payload as a URL while providing `LPLinkMetadata` so the
+/// share-sheet preview (and delivered message) shows the episode's card image
+/// and title rather than a raw link.
+private final class EpisodeLinkItemSource: NSObject, UIActivityItemSource {
+    private let url: URL
+    private let title: String
+    private let image: UIImage?
+
+    init(url: URL, title: String, image: UIImage?) {
+        self.url = url
+        self.title = title
+        self.image = image
+    }
+
+    func activityViewControllerPlaceholderItem(_ controller: UIActivityViewController) -> Any {
+        url
+    }
+
+    func activityViewController(
+        _ controller: UIActivityViewController,
+        itemForActivityType activityType: UIActivity.ActivityType?
+    ) -> Any? {
+        url
+    }
+
+    func activityViewController(
+        _ controller: UIActivityViewController,
+        subjectForActivityType activityType: UIActivity.ActivityType?
+    ) -> String {
+        title
+    }
+
+    func activityViewControllerLinkMetadata(
+        _ controller: UIActivityViewController
+    ) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        metadata.originalURL = url
+        metadata.url = url
+        metadata.title = title
+        if let image {
+            metadata.imageProvider = NSItemProvider(object: image)
+            metadata.iconProvider = NSItemProvider(object: image)
+        }
+        return metadata
     }
 }
 
