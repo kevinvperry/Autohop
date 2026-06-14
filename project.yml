@@ -73,9 +73,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
+        TARGETED_DEVICE_FAMILY: "1"          # iPhone only — explicit on the app target
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QT3N6256FG          # Kevin Perry — keeps signing through regen
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
       configs:

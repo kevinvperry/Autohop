@@ -68,12 +68,15 @@ public struct PlaybackPreference: Equatable, Codable {
         (Double(Int(($0 * 10).rounded())) / 10)
     }
 
+    // Defaults for NEW subscriptions. Existing subscriptions keep their own
+    // persisted values (and the one-shot migrations in AppState moved pre-existing
+    // users to 1.6x / Strong / Low — those are not affected by changes here).
     public static let `default` = PlaybackPreference(
-        speed: 1.6,
+        speed: 1.0,
         startSkipSeconds: 0,
         endSkipSeconds: 0,
-        vocalBoostLevel: .strong,
-        trimSilence: .low
+        vocalBoostLevel: .off,
+        trimSilence: .off
     )
 
     public static func speedLabel(_ speed: Double) -> String {

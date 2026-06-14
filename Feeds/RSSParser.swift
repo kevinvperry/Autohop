@@ -214,19 +214,19 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         switch name {
         case "title":
             if channelTitle == nil {
-                channelTitle = text
+                channelTitle = Self.decodingEntities(text)
             }
         case "description":
             if channelDescription == nil {
-                channelDescription = text
+                channelDescription = Self.decodingEntities(text)
             }
         case "itunes:summary":
             if channelDescription == nil {
-                channelDescription = text
+                channelDescription = Self.decodingEntities(text)
             }
         case "itunes:author", "author":
             if channelAuthor == nil {
-                channelAuthor = text
+                channelAuthor = Self.decodingEntities(text)
             }
         case "itunes:explicit":
             if channelIsExplicit == nil {
@@ -251,15 +251,15 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
                 currentItem?.episodeLink = url
             }
         case "title":
-            currentItem?.title = text
+            currentItem?.title = Self.decodingEntities(text)
         case "description", "content:encoded":
             if currentItem?.description == nil {
-                currentItem?.description = text
+                currentItem?.description = Self.decodingEntities(text)
             }
         case "itunes:subtitle":
-            currentItem?.subtitle = text
+            currentItem?.subtitle = Self.decodingEntities(text)
         case "itunes:author", "author":
-            currentItem?.author = text
+            currentItem?.author = Self.decodingEntities(text)
         case "pubDate":
             currentItem?.publishedAt = Self.parseDate(text)
         case "itunes:duration", "duration":
@@ -411,6 +411,59 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             return numeric
         }
         return parseTimecode(value)
+    }
+
+    /// Decodes HTML/XML character entities one pass. XMLParser already decodes a
+    /// single layer of entities, so this exists to repair **double-encoded** feeds
+    /// (e.g. Omny/Megaphone emitting `&amp;amp;`), which arrive here as a literal
+    /// `&amp;`. A single pass turns that into `&` while leaving already-correct
+    /// text untouched (no entities left to decode). Applied only to display fields
+    /// (title/subtitle/author/description) — never to guid, dates, or URLs.
+    static func decodingEntities(_ string: String) -> String {
+        guard string.contains("&") else { return string }
+        var result = ""
+        result.reserveCapacity(string.count)
+        var index = string.startIndex
+        while index < string.endIndex {
+            let char = string[index]
+            if char == "&",
+               let semicolon = string[index...].firstIndex(of: ";"),
+               string.distance(from: index, to: semicolon) <= 12 {
+                let entity = String(string[string.index(after: index)..<semicolon])
+                if let decoded = decodeEntity(entity) {
+                    result.append(decoded)
+                    index = string.index(after: semicolon)
+                    continue
+                }
+            }
+            result.append(char)
+            index = string.index(after: index)
+        }
+        return result
+    }
+
+    private static func decodeEntity(_ entity: String) -> Character? {
+        switch entity.lowercased() {
+        case "amp":  return "&"
+        case "lt":   return "<"
+        case "gt":   return ">"
+        case "quot": return "\""
+        case "apos": return "'"
+        case "nbsp": return "\u{00A0}"
+        default:
+            // Numeric entities: &#39; (decimal) and &#x27; (hex).
+            if entity.hasPrefix("#x") || entity.hasPrefix("#X") {
+                guard let code = UInt32(entity.dropFirst(2), radix: 16),
+                      let scalar = Unicode.Scalar(code) else { return nil }
+                return Character(scalar)
+            }
+            if entity.hasPrefix("#") {
+                guard let code = UInt32(entity.dropFirst(1)),
+                      let scalar = Unicode.Scalar(code) else { return nil }
+                return Character(scalar)
+            }
+            return nil
+        }
     }
 
     private static func parseExplicit(_ value: String) -> Bool? {

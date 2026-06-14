@@ -39,8 +39,8 @@ struct AppSettings: Equatable, Codable {
     static let `default` = AppSettings(
         podcastPollMinutes: 5,
         downloadOverWifi: true,
-        downloadOverCellular: true,
-        notifyNewEpisodes: true,
+        downloadOverCellular: false,
+        notifyNewEpisodes: false,
         skipBackSeconds: 15,
         skipForwardSeconds: 30,
         keepScreenAwakeDuringPlayback: false,

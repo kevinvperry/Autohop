@@ -169,6 +169,39 @@ final class RSSParserTests: XCTestCase {
         XCTAssertNil(episode.episodeLink)
     }
 
+    func testDecodesDoubleEncodedEntitiesInTitle() throws {
+        // Real-world Omny/Megaphone feeds double-encode: source `&amp;amp;` arrives
+        // from XMLParser as a literal `&amp;`. The parser must repair it to `&`.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>KIIS &amp;amp; Co</title>
+            <item>
+              <guid isPermaLink="false">abc-123</guid>
+              <title>Lauren's hit &amp;amp; run &amp;#8212; bonus</title>
+              <enclosure url="https://e.com/a.mp3" length="1" type="audio/mpeg"/>
+            </item>
+          </channel>
+        </rss>
+        """
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+
+        XCTAssertEqual(episode.title, "Lauren's hit & run — bonus")
+        XCTAssertEqual(feed.title, "KIIS & Co")
+        // guid must NOT be entity-decoded (identity field).
+        XCTAssertEqual(episode.guid, "abc-123")
+    }
+
+    func testLeavesCorrectlyEncodedTitleUntouched() throws {
+        // Single-encoded `&amp;` is fully decoded by XMLParser to `&`; the repair
+        // pass must be a no-op (no entities remain) and not corrupt anything.
+        let xml = "<rss version=\"2.0\"><channel><title>S</title><item><title>Tom &amp; Jerry</title><enclosure url=\"https://e.com/a.mp3\" length=\"1\" type=\"audio/mpeg\"/></item></channel></rss>"
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        XCTAssertEqual(try XCTUnwrap(feed.latestEpisode).title, "Tom & Jerry")
+    }
+
     private func fixtureData(named name: String, extension fileExtension: String) throws -> Data {
         let url = try XCTUnwrap(
             Bundle.module.url(

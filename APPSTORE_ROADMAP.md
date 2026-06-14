@@ -3,6 +3,7 @@
 **Status legend:** ✅ done · 🔄 in progress · ⬜ not started · 🧍 needs you (Apple account / device / asset / decision)
 **Owner:** **[Me]** = doable in-repo by the assistant · **[You]** = requires your Apple account, hardware, or a manual store action.
 **Last updated:** 2026-06-14
+**STATUS: SUBMITTED — v1.0 (build 1) "Waiting for Review" as of 2026-06-14. Apple ID 6777946512. Awaiting review outcome (24–48h).**
 
 > **v1 scope decision: iPhone only.** `TARGETED_DEVICE_FAMILY = 1`. iPad layout/screenshots are out of scope for v1.
 
@@ -21,8 +22,8 @@
 | B5 | iPhone-only cleanup (orientation keys + website badge) | P0 | Me | ✅ |
 | C6 | Apple Developer Program enrollment | P0 | You | ⬜ |
 | C7 | Signing & team in Xcode | P0 | You | ✅ auto-signing, team Kevin Perry, runs on device |
-| C8 | Release archive + validate | P0 | You | ⬜ |
-| D9 | Create App Store Connect record | P0 | You | ⬜ |
+| C8 | Release archive + validate | P0 | You | ✅ validation successful (1.0/build 1) |
+| D9 | Create App Store Connect record | P0 | You | ✅ Apple ID 6777946512, SKU autohop-1 |
 | D10 | Category selection | P0 | You | ⬜ |
 | D11 | Screenshots (6.9"/6.7" iPhone) | P0 | You | ✅ 6 shots @ 1290×2796 (6.9" slot) |
 | D12 | Listing copy (name/subtitle/desc/keywords) | P0 | Me | ✅ draft (Appendix 1) |
@@ -84,6 +85,14 @@
 - ✅ **F22 — Accessibility labels added** to the icon-only custom player controls that lacked them: Play/Pause (dynamic), Audio controls, Sleep timer, Share, Archive, and the full-screen-video Close button. (The new Sleep Schedule indicator, Still Listening button, and Support drill-down rows were already labelled or text-based.) 🧍 Remaining: an on-device VoiceOver + Dynamic Type spot-check by you before submission.
 - ✅ **F23 — `swift test` fixed.** `RSSParserTests` used `@testable import Autohop`; it now uses a conditional import (`AutohopCore` under SwiftPM via an `AUTOHOP_SPM` define, app module under the Xcode test bundle). Running it surfaced — and I fixed — a **real RSS parser bug**: when a `<media:content>` element (no `length`) preceded the `<enclosure>` (with `length`), the file size was lost; `RSSParser.captureMediaURL` now fills `fileSizeBytes` from whichever playable element carries a real length for the chosen URL. **All 4 tests pass** (`swift test --filter RSSParserTests`, 0 failures).
   - Note: this environment has an intermittent SwiftPM "modified during the build" clock-skew flake on incremental builds; a clean build (`swift package clean`) produces a stable green run.
+
+## H. Pre-archive enhancements (2026-06-14)
+
+- ✅ **Share Sheet — richer cards (Tier 1+2).** Parser now captures the episode web page (`<item><link>`) into `Episode.episodeLink`; the share sheet shares that (fallback: `episodeLink → http(s) permalink guid → enclosure`) wrapped in `LPLinkMetadata` (card image + "Episode — Podcast" title) so recipients get a rich, openable preview instead of a raw enclosure URL. Verified on device. Tiers 3 (text blurb) + 4 (duration on card) logged in `FUTURE_VERSIONS.md`.
+- ✅ **Entity-decoding bug fixed.** Double-encoded feeds (Omny/Megaphone `&amp;amp;`) showed literal `&amp;` in titles. `RSSParser.decodingEntities()` repairs display fields (title/subtitle/author/description, episode + channel) — never guid/dates/URLs. Regression tests added; verified on device after a feed refresh. (Single source of truth = parser, so every screen benefits.)
+- ✅ **Default settings review.** New-install / new-subscription defaults changed: Download over Cellular → **Off**; new-subscription Speed → **1×**, Vocal Boost → **Off**, Trim Silence → **Off**; global Notify New Episodes → **Off** (per-podcast notifications already Off). Existing subscriptions/installs unaffected (one-shot migrations use hardcoded values). Full defaults table captured during review.
+
+- ✅ **Archive validation fix (iPad multitasking, code 90474).** First `Validate App` failed: the iPhone orientation set lacked `PortraitUpsideDown` "to support iPad multitasking" — i.e. the bundle was going up **iPad-capable**. Root cause: `TARGETED_DEVICE_FAMILY` was only set at the project base in `project.yml`, and the app **target** configs resolved to `1,2`. Fixed by setting `TARGETED_DEVICE_FAMILY: "1"` explicitly on the **app target** in `project.yml` (both app configs now `= 1`; orientations left at 3 since the bundle is now genuinely iPhone-only). Also baked `DEVELOPMENT_TEAM: QT3N6256FG` into `project.yml` so automatic-signing team survives every `xcodegen generate` (it was being wiped on regen).
 
 ## G. Website / post-approval
 
