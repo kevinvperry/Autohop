@@ -19,14 +19,45 @@ import Foundation
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     @Published public private(set) var subscriptions: [Subscription] = []
-    private let fileURL: URL?
+    /// Record store. Exposed within the module so CloudSyncEngine can read
+    /// pending sync-state and cached CKRecord system fields.
+    let database: AutohopDatabase?
+    /// Legacy JSON file — used only for the one-time import into GRDB, then
+    /// renamed to `*.migrated`. nil once migrated or when no legacy file exists.
+    private let legacyFileURL: URL?
     private static let saveQueue = DispatchQueue(label: "com.autohop.subscriptionStore.save", qos: .utility)
     // Coalesces rapid save() calls (e.g. during a 70-feed refresh cycle) into one disk write.
     private var pendingSave = false
     private var saveCoalesced = false
+    /// Snapshot of what last reached disk, keyed by id, so save() writes only
+    /// the rows that actually changed.
+    private var persistedSnapshot: [UUID: Subscription] = [:]
 
-    public init(fileURL: URL? = nil) {
-        self.fileURL = fileURL ?? Self.defaultFileURL()
+    /// - Parameter fileURL: legacy JSON location (defaults to the historical
+    ///   subscriptions.json path). Kept as a parameter so existing callers are
+    ///   unchanged; it now seeds the one-time GRDB import.
+    /// - Parameter databasePath: SQLite file location. Defaults to the app's
+    ///   Application Support directory.
+    public init(fileURL: URL? = nil, databasePath: String? = nil) {
+        self.legacyFileURL = fileURL ?? Self.defaultLegacyFileURL()
+        // When an explicit fileURL is given (tests/CLI), keep the SQLite file
+        // beside it so each location stays isolated and a reload finds the same
+        // database. The app uses the default paths.
+        let resolvedPath = databasePath
+            ?? fileURL.map { Self.databasePath(besideLegacyFile: $0) }
+            ?? Self.defaultDatabasePath()
+        self.database = try? AutohopDatabase(path: resolvedPath)
+        load()
+    }
+
+    /// Test seam: a store backed entirely by an in-memory database (no disk).
+    public static func inMemory() -> SubscriptionStore {
+        SubscriptionStore(inMemoryDatabase: try? AutohopDatabase())
+    }
+
+    private init(inMemoryDatabase: AutohopDatabase?) {
+        self.legacyFileURL = nil
+        self.database = inMemoryDatabase
         load()
     }
 
@@ -523,6 +554,131 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
+    // MARK: - Cross-device sync (remote → local)
+
+    /// Applies a remote episode-state record into the local store with
+    /// field-level last-write-wins (see `EpisodeSyncState.merged`). The merged
+    /// projection is persisted and, when the episode exists locally, its
+    /// played/completed/lastPlayed fields are updated without creating new dirty
+    /// stamps. Returns true if a local domain episode was updated.
+    @discardableResult
+    public func applyRemoteEpisodeState(_ remote: EpisodeSyncState) -> Bool {
+        guard let database else { return false }
+
+        let localProjection = try? database.episodeSyncState(guid: remote.guid)
+        let location = locateEpisode(guid: remote.guid)
+
+        let baseline: EpisodeSyncState
+        if let localProjection {
+            baseline = localProjection
+        } else if let location {
+            var seeded = EpisodeSyncState(
+                episode: subscriptions[location.sub].episodes[location.ep],
+                subscriptionID: subscriptions[location.sub].id
+            )
+            seeded.markClean() // no local opinion yet → remote wins
+            baseline = seeded
+        } else {
+            // No projection and no local episode: adopt the remote values as
+            // clean authoritative state so they aren't lost before the feed
+            // brings the episode in (full self-heal is a later step).
+            var adopted = remote
+            adopted.markClean()
+            try? database.saveEpisodeSyncState(adopted)
+            return false
+        }
+
+        let merged = baseline.merged(withRemote: remote)
+        try? database.saveEpisodeSyncState(merged)
+
+        guard let location else { return false }
+
+        var episode = subscriptions[location.sub].episodes[location.ep]
+        episode.playedState = merged.playedState
+        episode.wasCompleted = merged.wasCompleted
+        episode.lastPlayedAt = merged.lastPlayedAt
+        subscriptions[location.sub].episodes[location.ep] = episode
+        if subscriptions[location.sub].latestEpisode?.id == episode.id {
+            subscriptions[location.sub].latestEpisode = episode
+        }
+        save()
+        return true
+    }
+
+    /// Outcome of applying a remote subscription record.
+    public enum RemoteSubscriptionOutcome {
+        /// Handled locally (settings applied, unsubscribe processed, or no-op).
+        case applied
+        /// The podcast isn't present on this device and needs to be created by
+        /// fetching its feed — the caller (AppState, which has FeedService)
+        /// materialises it, then re-applies this state.
+        case needsMaterialization(SubscriptionSyncState)
+    }
+
+    /// Applies a remote subscription-settings record with field-level LWW.
+    /// Updates an existing subscription's settings, processes an unsubscribe, or
+    /// reports that a new subscribed podcast must be materialised from its feed.
+    @discardableResult
+    public func applyRemoteSubscriptionState(_ remote: SubscriptionSyncState) -> RemoteSubscriptionOutcome {
+        guard let database else { return .applied }
+
+        let localProjection = try? database.subscriptionSyncState(id: remote.subscriptionID)
+        let existingIndex = subscriptions.firstIndex { $0.id == remote.subscriptionID }
+
+        let baseline: SubscriptionSyncState
+        if let localProjection {
+            baseline = localProjection
+        } else if let existingIndex {
+            var seeded = SubscriptionSyncState(subscription: subscriptions[existingIndex], subscribed: true)
+            seeded.markClean()
+            baseline = seeded
+        } else {
+            // Unknown podcast.
+            if remote.subscribed {
+                var adopted = remote
+                adopted.markClean()
+                try? database.saveSubscriptionSyncState(adopted)
+                return .needsMaterialization(remote)
+            }
+            return .applied // unsubscribe for something we never had
+        }
+
+        let merged = baseline.merged(withRemote: remote)
+        try? database.saveSubscriptionSyncState(merged)
+
+        // Remote unsubscribe wins → remove locally.
+        if !merged.subscribed {
+            if let existingIndex {
+                remove(subscriptionID: subscriptions[existingIndex].id)
+            }
+            return .applied
+        }
+
+        guard let existingIndex else { return .applied }
+
+        var sub = subscriptions[existingIndex]
+        sub.title = merged.title
+        sub.priorityRank = merged.priorityRank
+        sub.notificationsEnabled = merged.notificationsEnabled
+        sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
+        sub.playbackPreference = merged.playbackPreference
+        sub.autoArchiveSettings = merged.autoArchiveSettings
+        sub.chapterFilter = merged.chapterFilter
+        subscriptions[existingIndex] = sub
+        normalizePriorityOrder()
+        save()
+        return .applied
+    }
+
+    private func locateEpisode(guid: String) -> (sub: Int, ep: Int)? {
+        for (s, subscription) in subscriptions.enumerated() {
+            if let e = subscription.episodes.firstIndex(where: { $0.guid == guid }) {
+                return (s, e)
+            }
+        }
+        return nil
+    }
+
     private func updateLatestEpisode(subscriptionID: UUID, update: (inout Episode) -> Void) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
               var episode = subscriptions[index].latestEpisode
@@ -621,23 +777,59 @@ public final class SubscriptionStore: ObservableObject {
     // MARK: - Persistence
 
     private func load() {
-        guard let fileURL,
-              FileManager.default.fileExists(atPath: fileURL.path)
-        else { return }
+        guard let database else { return }
+
+        // One-time migration: if the GRDB store is empty but a legacy
+        // subscriptions.json exists, import it, then rename the file so the
+        // import never runs again (kept, not deleted, so it's recoverable).
+        if database.isEmpty, let imported = importLegacyFileIfPresent() {
+            subscriptions = imported.sorted { $0.priorityRank < $1.priorityRank }
+            normalizePriorityOrder()
+            try? database.replaceAll(with: subscriptions)
+            persistedSnapshot = snapshotByID(subscriptions)
+            return
+        }
 
         do {
-            let data = try Data(contentsOf: fileURL)
-            subscriptions = try JSONDecoder().decode([Subscription].self, from: data)
+            subscriptions = try database.loadSubscriptions()
                 .sorted { $0.priorityRank < $1.priorityRank }
             normalizePriorityOrder()
+            persistedSnapshot = snapshotByID(subscriptions)
         } catch {
             subscriptions = []
+            persistedSnapshot = [:]
         }
+    }
+
+    /// Decodes the legacy JSON file (reusing the same decoder so Subscription's
+    /// legacy-key migration still runs) and renames it to `*.migrated`.
+    /// Returns nil when there is no legacy file to import.
+    private func importLegacyFileIfPresent() -> [Subscription]? {
+        guard let legacyFileURL,
+              FileManager.default.fileExists(atPath: legacyFileURL.path)
+        else { return nil }
+
+        defer {
+            let migratedURL = legacyFileURL.appendingPathExtension("migrated")
+            try? FileManager.default.removeItem(at: migratedURL) // clear any prior leftover
+            try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
+        }
+
+        do {
+            let data = try Data(contentsOf: legacyFileURL)
+            return try JSONDecoder().decode([Subscription].self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    private func snapshotByID(_ subs: [Subscription]) -> [UUID: Subscription] {
+        Dictionary(subs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private func save() {
         objectWillChange.send()
-        guard let fileURL else { return }
+        guard let database else { return }
         // Coalesce saves issued while a write is in flight: rerun once it lands
         // so the final state always reaches disk (dropping them loses data).
         if pendingSave {
@@ -645,19 +837,15 @@ public final class SubscriptionStore: ObservableObject {
             return
         }
         pendingSave = true
-        // Snapshot on main actor, then encode + write on background queue.
+        // Snapshot on main actor, diff + write on the background queue. GRDB's
+        // DatabaseQueue is thread-safe, so calling it off-main is fine.
         let snapshot = subscriptions
-        Self.saveQueue.async { [weak self, fileURL] in
-            do {
-                let directory = fileURL.deletingLastPathComponent()
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let data = try JSONEncoder().encode(snapshot)
-                try data.write(to: fileURL, options: [.atomic])
-            } catch {
-                // In-memory state remains usable.
-            }
+        let previous = persistedSnapshot
+        Self.saveQueue.async { [weak self, weak database] in
+            try? database?.persist(current: snapshot, previous: previous)
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.persistedSnapshot = self.snapshotByID(snapshot)
                 self.pendingSave = false
                 if self.saveCoalesced {
                     self.saveCoalesced = false
@@ -668,21 +856,43 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Waits until every queued write has reached disk. Lets tests (and shutdown
-    /// paths) reload from the file without racing the background save queue.
+    /// paths) reload from the store without racing the background save queue.
     public func flushPendingSaves() async {
         while pendingSave || saveCoalesced {
             try? await Task.sleep(for: .milliseconds(10))
         }
     }
 
-    private static func defaultFileURL() -> URL? {
-        guard let appSupport = try? FileManager.default.url(
+    private static func defaultLegacyFileURL() -> URL? {
+        appSupportURL()?.appendingPathComponent("Autohop/subscriptions.json")
+    }
+
+    /// SQLite path sitting beside an explicit legacy file, e.g.
+    /// `…/subscriptions.json` → `…/subscriptions.sqlite`.
+    private static func databasePath(besideLegacyFile fileURL: URL) -> String {
+        fileURL.deletingPathExtension().appendingPathExtension("sqlite").path
+    }
+
+    private static func defaultDatabasePath() -> String {
+        // Falls back to a temporary path if Application Support is unavailable,
+        // so the store always has a working database.
+        guard let url = appSupportURL()?.appendingPathComponent("Autohop/autohop.sqlite") else {
+            return NSTemporaryDirectory() + "autohop.sqlite"
+        }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        return url.path
+    }
+
+    private static func appSupportURL() -> URL? {
+        try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
-        ) else { return nil }
-        return appSupport.appendingPathComponent("Autohop/subscriptions.json")
+        )
     }
 }
 

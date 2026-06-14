@@ -35,6 +35,9 @@ struct AppSettings: Equatable, Codable {
     var trimSilenceLowDefaultMigrated: Bool
     var playbackSpeed160Migrated: Bool
     var autoArchiveSettingsMigrated: Bool
+    // Cross-device iCloud sync (CloudKit). Opt-in, OFF by default so the
+    // on-device privacy stance holds until the user explicitly enables it.
+    var iCloudSyncEnabled: Bool
 
     static let `default` = AppSettings(
         podcastPollMinutes: 5,
@@ -58,7 +61,8 @@ struct AppSettings: Equatable, Codable {
         vocalBoostLevelMigrated: false,
         trimSilenceLowDefaultMigrated: false,
         playbackSpeed160Migrated: false,
-        autoArchiveSettingsMigrated: false
+        autoArchiveSettingsMigrated: false,
+        iCloudSyncEnabled: false
     )
 
     private enum CodingKeys: String, CodingKey {
@@ -84,6 +88,7 @@ struct AppSettings: Equatable, Codable {
         case trimSilenceLowDefaultMigrated
         case playbackSpeed160Migrated
         case autoArchiveSettingsMigrated
+        case iCloudSyncEnabled
     }
 
     init(
@@ -108,7 +113,8 @@ struct AppSettings: Equatable, Codable {
         vocalBoostLevelMigrated: Bool,
         trimSilenceLowDefaultMigrated: Bool,
         playbackSpeed160Migrated: Bool,
-        autoArchiveSettingsMigrated: Bool
+        autoArchiveSettingsMigrated: Bool,
+        iCloudSyncEnabled: Bool
     ) {
         self.podcastPollMinutes = podcastPollMinutes
         self.downloadOverWifi = downloadOverWifi
@@ -132,6 +138,7 @@ struct AppSettings: Equatable, Codable {
         self.trimSilenceLowDefaultMigrated = trimSilenceLowDefaultMigrated
         self.playbackSpeed160Migrated = playbackSpeed160Migrated
         self.autoArchiveSettingsMigrated = autoArchiveSettingsMigrated
+        self.iCloudSyncEnabled = iCloudSyncEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -158,5 +165,6 @@ struct AppSettings: Equatable, Codable {
         trimSilenceLowDefaultMigrated = try container.decodeIfPresent(Bool.self, forKey: .trimSilenceLowDefaultMigrated) ?? Self.default.trimSilenceLowDefaultMigrated
         playbackSpeed160Migrated = try container.decodeIfPresent(Bool.self, forKey: .playbackSpeed160Migrated) ?? Self.default.playbackSpeed160Migrated
         autoArchiveSettingsMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveSettingsMigrated) ?? Self.default.autoArchiveSettingsMigrated
+        iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? Self.default.iCloudSyncEnabled
     }
 }

@@ -40,6 +40,15 @@ configs:
   Debug: debug
   Release: release
 
+# ── Swift Package dependencies ───────────────────────────────────────────────
+# The app target compiles the AutohopCore sources directly (see below), so the
+# GRDB SQLite dependency that AutohopDatabase.swift needs is declared here for
+# the Xcode build. Keep the version in sync with Package.swift.
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    from: 6.29.0
+
 # ── Targets ──────────────────────────────────────────────────────────────────
 
 targets:
@@ -121,6 +130,8 @@ targets:
         UIBackgroundModes:
           - audio
           - fetch
+          # CKSyncEngine receives remote record changes via silent push (step 3).
+          - remote-notification
 
         # ── Background task identifiers ────────────────────────────────────
         # Must match BackgroundTaskCoordinator.feedRefreshIdentifier exactly.
@@ -163,6 +174,16 @@ targets:
       path: Autohop.entitlements
       properties:
         com.apple.developer.usernotifications.time-sensitive: true
+        # Cross-device sync (build step 3). Requires the CloudKit capability to
+        # be enabled on the Apple Developer account / provisioning profile.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.kevinperry.autohop
+        com.apple.developer.icloud-services:
+          - CloudKit
+        # Push entitlement for CKSyncEngine silent change pushes. "development"
+        # is correct for debug/sandbox; Xcode rewrites it to "production" when
+        # archiving for distribution.
+        aps-environment: development
 
     # System frameworks — AVKit pulls in AVFoundation transitively but listed
     # explicitly so the linker flags are unambiguous.
@@ -172,6 +193,8 @@ targets:
       - sdk: MediaPlayer.framework
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
+      - sdk: CloudKit.framework
+      - package: GRDB
 
     scheme:
       gatherCoverageData: false

@@ -1,0 +1,407 @@
+import Foundation
+import GRDB
+
+// AI CONTEXT — Persistence/AutohopDatabase.swift
+// GRDB (SQLite) backing store introduced as build-step 1 of the cross-device
+// sync work (see SYNC_DESIGN.md). Replaces the single subscriptions.json blob
+// with one row per subscription and one row per episode, written incrementally
+// (only changed rows touch disk) inside a transaction. This is a like-for-like
+// backend swap: SubscriptionStore keeps its identical @Published [Subscription]
+// facade and public API; only persistence moved here.
+//
+// Also hosts the field-level sync-state projections (steps 2-4): per-episode and
+// per-subscription rows with a JSON payload + indexed `hasPendingChanges` + a
+// cached CKRecord `systemFields` blob, maintained centrally from `persist`.
+
+/// SQLite-backed persistence for subscriptions, episodes, and their sync state.
+/// Thread-safe: GRDB's `DatabaseQueue` serialises all access; the JSON
+/// encoder/decoder are only touched inside those serialised closures, so the
+/// type is safe to share across threads.
+final class AutohopDatabase: @unchecked Sendable {
+    private let dbQueue: DatabaseQueue
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(path: String) throws {
+        dbQueue = try DatabaseQueue(path: path)
+        try Self.migrator.migrate(dbQueue)
+    }
+
+    /// In-memory database for tests.
+    init() throws {
+        dbQueue = try DatabaseQueue()
+        try Self.migrator.migrate(dbQueue)
+    }
+
+    // MARK: - Schema
+
+    private static var migrator: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+
+        migrator.registerMigration("v1_subscriptions_and_episodes") { db in
+            try db.create(table: "subscription") { t in
+                t.column("id", .text).primaryKey()
+                t.column("feedURL", .text).notNull().unique()
+                t.column("priorityRank", .integer).notNull().defaults(to: 0)
+                t.column("browseDate", .double)
+                t.column("excludeFromAutoFeedRefresh", .boolean).notNull().defaults(to: false)
+                t.column("latestEpisodeID", .text)
+                t.column("payload", .blob).notNull()
+            }
+
+            try db.create(table: "episode") { t in
+                t.column("id", .text).primaryKey()
+                t.column("subscriptionID", .text)
+                    .notNull()
+                    .indexed()
+                    .references("subscription", onDelete: .cascade)
+                t.column("guid", .text).notNull().indexed()
+                t.column("orderIndex", .integer).notNull().defaults(to: 0)
+                t.column("payload", .blob).notNull()
+            }
+        }
+
+        // Build step 2: field-level sync-state projections (see SyncState.swift).
+        // Stored independently of the domain tables (NOT cascade-deleted) so an
+        // unsubscribe can leave a `subscribed = false` tombstone to push.
+        // `hasPendingChanges` is indexed so "what needs syncing" is a cheap query.
+        migrator.registerMigration("v2_sync_state") { db in
+            try db.create(table: "subscription_sync_state") { t in
+                t.column("subscriptionID", .text).primaryKey()
+                t.column("payload", .blob).notNull()
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false).indexed()
+            }
+            try db.create(table: "episode_sync_state") { t in
+                t.column("guid", .text).primaryKey()
+                t.column("subscriptionID", .text).notNull().indexed()
+                t.column("payload", .blob).notNull()
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false).indexed()
+            }
+        }
+
+        // Build step 3b: cache the last-known CKRecord system fields per episode
+        // so CKSyncEngine can save updates with the correct change tag (avoiding
+        // perpetual serverRecordChanged conflicts).
+        migrator.registerMigration("v3_cloudkit_system_fields") { db in
+            try db.alter(table: "episode_sync_state") { t in
+                t.add(column: "systemFields", .blob)
+            }
+        }
+
+        // Build step 4: same CKRecord system-field cache for subscription records.
+        migrator.registerMigration("v4_subscription_system_fields") { db in
+            try db.alter(table: "subscription_sync_state") { t in
+                t.add(column: "systemFields", .blob)
+            }
+        }
+
+        return migrator
+    }
+
+    // MARK: - Row types
+
+    private struct SubscriptionRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "subscription"
+        var id: String
+        var feedURL: String
+        var priorityRank: Int
+        var browseDate: Date?
+        var excludeFromAutoFeedRefresh: Bool
+        var latestEpisodeID: String?
+        var payload: Data
+    }
+
+    private struct EpisodeRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "episode"
+        var id: String
+        var subscriptionID: String
+        var guid: String
+        var orderIndex: Int
+        var payload: Data
+    }
+
+    private struct SubscriptionSyncRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "subscription_sync_state"
+        var subscriptionID: String
+        var payload: Data
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+    }
+
+    private struct EpisodeSyncRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "episode_sync_state"
+        var guid: String
+        var subscriptionID: String
+        var payload: Data
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+    }
+
+    // MARK: - Loading
+
+    /// Reconstructs every subscription (with its episodes and latestEpisode)
+    /// from the row tables. Ordering of subscriptions is left to the caller —
+    /// SubscriptionStore re-normalises priority on load exactly as before.
+    func loadSubscriptions() throws -> [Subscription] {
+        try dbQueue.read { db in
+            let subRows = try SubscriptionRow
+                .order(Column("priorityRank"))
+                .fetchAll(db)
+
+            return try subRows.map { row in
+                var subscription = try decoder.decode(Subscription.self, from: row.payload)
+
+                let episodeRows = try EpisodeRow
+                    .filter(Column("subscriptionID") == row.id)
+                    .order(Column("orderIndex"))
+                    .fetchAll(db)
+                let episodes = try episodeRows.map { try decoder.decode(Episode.self, from: $0.payload) }
+
+                subscription.episodes = episodes
+                if let latestID = row.latestEpisodeID {
+                    subscription.latestEpisode = episodes.first { $0.id.uuidString == latestID } ?? episodes.first
+                } else {
+                    subscription.latestEpisode = nil
+                }
+                return subscription
+            }
+        }
+    }
+
+    var isEmpty: Bool {
+        (try? dbQueue.read { db in try SubscriptionRow.fetchCount(db) == 0 }) ?? true
+    }
+
+    // MARK: - Incremental persist
+
+    /// Writes only what changed between `previous` and `current` inside a single
+    /// transaction: removed subscriptions are deleted (cascading to episodes),
+    /// and a subscription whose value differs is fully rewritten (row + episode
+    /// rows). Unchanged subscriptions touch no disk.
+    func persist(current: [Subscription], previous: [UUID: Subscription]) throws {
+        try dbQueue.write { db in
+            let currentIDs = Set(current.map(\.id))
+
+            for removedID in previous.keys where !currentIDs.contains(removedID) {
+                try SubscriptionRow.deleteOne(db, key: removedID.uuidString)
+                // Leave a tombstone so other devices learn about the unsubscribe.
+                try tombstoneSubscriptionSyncState(removedID, into: db)
+            }
+
+            for subscription in current {
+                if let prior = previous[subscription.id], prior == subscription { continue }
+                try write(subscription, into: db)
+            }
+        }
+    }
+
+    /// Bulk replace — used by the one-time JSON import.
+    func replaceAll(with subscriptions: [Subscription]) throws {
+        try dbQueue.write { db in
+            try EpisodeRow.deleteAll(db)
+            try SubscriptionRow.deleteAll(db)
+            for subscription in subscriptions {
+                try write(subscription, into: db)
+            }
+        }
+    }
+
+    // MARK: - Private write helpers
+
+    private func write(_ subscription: Subscription, into db: Database) throws {
+        var stripped = subscription
+        stripped.episodes = []
+        stripped.latestEpisode = nil
+
+        let subRow = SubscriptionRow(
+            id: subscription.id.uuidString,
+            feedURL: subscription.feedURL.absoluteString,
+            priorityRank: subscription.priorityRank,
+            browseDate: subscription.browseDate,
+            excludeFromAutoFeedRefresh: subscription.excludeFromAutoFeedRefresh,
+            latestEpisodeID: subscription.latestEpisode?.id.uuidString,
+            payload: try encoder.encode(stripped)
+        )
+        try subRow.save(db)
+
+        // Replace this subscription's episodes wholesale (simple + correct for
+        // step 1; episode-level diffing arrives with the sync columns).
+        try EpisodeRow
+            .filter(Column("subscriptionID") == subscription.id.uuidString)
+            .deleteAll(db)
+
+        for (index, episode) in subscription.episodes.enumerated() {
+            let episodeRow = EpisodeRow(
+                id: episode.id.uuidString,
+                subscriptionID: subscription.id.uuidString,
+                guid: episode.guid,
+                orderIndex: index,
+                payload: try encoder.encode(episode)
+            )
+            try episodeRow.save(db)
+
+            try recordEpisodeSyncState(episode, subscriptionID: subscription.id, into: db)
+        }
+
+        try recordSubscriptionSyncState(subscription, into: db)
+    }
+
+    // MARK: - Sync-state recording (build step 2)
+
+    /// Updates the subscription's sync projection, stamping only the fields that
+    /// changed. A first sighting seeds a fully-dirty projection (a new local
+    /// subscription must be pushed in full).
+    private func recordSubscriptionSyncState(_ subscription: Subscription, into db: Database) throws {
+        var state: SubscriptionSyncState
+        if let row = try SubscriptionSyncRow.fetchOne(db, key: subscription.id.uuidString) {
+            state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+            state.apply(subscription, subscribed: true)
+        } else {
+            state = SubscriptionSyncState(subscription: subscription, subscribed: true)
+        }
+        try save(subscriptionState: state, into: db)
+    }
+
+    /// Updates an episode's sync projection. Pristine, never-tracked episodes are
+    /// skipped so the dirty set stays limited to episodes the user actually
+    /// touched (played/archived) — matching Pocket Casts' modified-flag semantics.
+    private func recordEpisodeSyncState(_ episode: Episode, subscriptionID: UUID, into db: Database) throws {
+        if let row = try EpisodeSyncRow.fetchOne(db, key: episode.guid) {
+            var state = try decoder.decode(EpisodeSyncState.self, from: row.payload)
+            state.apply(episode)
+            try save(episodeState: state, into: db)
+        } else if !EpisodeSyncState.isPristine(episode) {
+            let state = EpisodeSyncState(episode: episode, subscriptionID: subscriptionID)
+            try save(episodeState: state, into: db)
+        }
+        // pristine + untracked → nothing to record yet.
+    }
+
+    private func tombstoneSubscriptionSyncState(_ id: UUID, into db: Database) throws {
+        guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return }
+        var state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+        state.subscribed = false // stamps the field dirty
+        try save(subscriptionState: state, into: db)
+    }
+
+    private func save(subscriptionState state: SubscriptionSyncState, into db: Database) throws {
+        let existingSystemFields = try SubscriptionSyncRow.fetchOne(db, key: state.subscriptionID.uuidString)?.systemFields
+        let row = SubscriptionSyncRow(
+            subscriptionID: state.subscriptionID.uuidString,
+            payload: try encoder.encode(state),
+            hasPendingChanges: state.hasPendingChanges,
+            systemFields: existingSystemFields
+        )
+        try row.save(db)
+    }
+
+    private func save(episodeState state: EpisodeSyncState, into db: Database) throws {
+        // Preserve any cached CKRecord system fields across re-saves.
+        let existingSystemFields = try EpisodeSyncRow.fetchOne(db, key: state.guid)?.systemFields
+        let row = EpisodeSyncRow(
+            guid: state.guid,
+            subscriptionID: state.subscriptionID.uuidString,
+            payload: try encoder.encode(state),
+            hasPendingChanges: state.hasPendingChanges,
+            systemFields: existingSystemFields
+        )
+        try row.save(db)
+    }
+
+    // MARK: - Sync-state queries (consumed by the CloudKit step)
+
+    /// Episode projections with unsynced local changes.
+    func pendingEpisodeSyncStates() throws -> [EpisodeSyncState] {
+        try dbQueue.read { db in
+            try EpisodeSyncRow
+                .filter(Column("hasPendingChanges") == true)
+                .fetchAll(db)
+                .map { try decoder.decode(EpisodeSyncState.self, from: $0.payload) }
+        }
+    }
+
+    /// Subscription projections with unsynced local changes.
+    func pendingSubscriptionSyncStates() throws -> [SubscriptionSyncState] {
+        try dbQueue.read { db in
+            try SubscriptionSyncRow
+                .filter(Column("hasPendingChanges") == true)
+                .fetchAll(db)
+                .map { try decoder.decode(SubscriptionSyncState.self, from: $0.payload) }
+        }
+    }
+
+    /// Clears the dirty stamps on the given projections after a successful push.
+    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID]) throws {
+        try dbQueue.write { db in
+            for guid in episodeGuids {
+                guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { continue }
+                var state = try decoder.decode(EpisodeSyncState.self, from: row.payload)
+                state.markClean()
+                try save(episodeState: state, into: db)
+            }
+            for id in subscriptionIDs {
+                guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { continue }
+                var state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+                state.markClean()
+                try save(subscriptionState: state, into: db)
+            }
+        }
+    }
+
+    /// Single episode projection by guid.
+    func episodeSyncState(guid: String) throws -> EpisodeSyncState? {
+        try dbQueue.read { db in
+            guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { return nil }
+            return try decoder.decode(EpisodeSyncState.self, from: row.payload)
+        }
+    }
+
+    /// Upsert a projection directly (used when applying a merged remote change).
+    func saveEpisodeSyncState(_ state: EpisodeSyncState) throws {
+        try dbQueue.write { db in try save(episodeState: state, into: db) }
+    }
+
+    /// Cached CKRecord system fields for an episode, if we've seen its server record.
+    func episodeSystemFields(guid: String) throws -> Data? {
+        try dbQueue.read { db in
+            try EpisodeSyncRow.fetchOne(db, key: guid)?.systemFields
+        }
+    }
+
+    /// Store CKRecord system fields for an episode (no-op if the projection row
+    /// doesn't exist yet).
+    func storeEpisodeSystemFields(_ data: Data?, guid: String) throws {
+        try dbQueue.write { db in
+            guard var row = try EpisodeSyncRow.fetchOne(db, key: guid) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+
+    // MARK: Subscription sync-state accessors
+
+    func subscriptionSyncState(id: UUID) throws -> SubscriptionSyncState? {
+        try dbQueue.read { db in
+            guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return nil }
+            return try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+        }
+    }
+
+    func saveSubscriptionSyncState(_ state: SubscriptionSyncState) throws {
+        try dbQueue.write { db in try save(subscriptionState: state, into: db) }
+    }
+
+    func subscriptionSystemFields(id: UUID) throws -> Data? {
+        try dbQueue.read { db in
+            try SubscriptionSyncRow.fetchOne(db, key: id.uuidString)?.systemFields
+        }
+    }
+
+    func storeSubscriptionSystemFields(_ data: Data?, id: UUID) throws {
+        try dbQueue.write { db in
+            guard var row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+}
