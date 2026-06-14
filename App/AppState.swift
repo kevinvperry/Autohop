@@ -278,6 +278,10 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
+        listeningHistoryStore.syncDatabase = subscriptionStore.database
+        cloudSyncEngine.onRemoteHistoryEntry = { [weak self] entry in
+            await MainActor.run { self?.listeningHistoryStore.applyRemote(entry) }
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }
@@ -2906,6 +2910,8 @@ final class ListeningHistoryStore: ObservableObject {
 
     private var lastSavedAt: Date?
     private let maxEntries = 500
+    /// Record store for cross-device history sync; set by AppState. nil = no sync.
+    var syncDatabase: AutohopDatabase?
 
     private static let fileURL: URL? = {
         guard let appSupport = try? FileManager.default.url(
@@ -2970,6 +2976,7 @@ final class ListeningHistoryStore: ObservableObject {
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
+        recordPending(id: key)
         saveThrottled()
     }
 
@@ -3025,6 +3032,31 @@ final class ListeningHistoryStore: ObservableObject {
             ))
         }
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        recordPending(id: key)
+        save()
+    }
+
+    /// Records a changed entry as pending for cross-device sync.
+    private func recordPending(id: String) {
+        guard let syncDatabase, let entry = entries.first(where: { $0.id == id }) else { return }
+        try? syncDatabase.recordHistoryEntry(entry)
+    }
+
+    /// Merges a remote history entry with record-level last-write-wins
+    /// (the entry with the newer `lastListenedAt` wins the whole record).
+    @MainActor
+    func applyRemote(_ remote: ListeningHistoryEntry) {
+        if let index = entries.firstIndex(where: { $0.id == remote.id }) {
+            guard remote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
+            entries[index] = remote
+        } else {
+            entries.append(remote)
+        }
+        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        if entries.count > maxEntries {
+            entries.removeLast(entries.count - maxEntries)
+        }
+        try? syncDatabase?.saveSyncedHistoryEntry(remote) // clean — don't re-push
         save()
     }
 

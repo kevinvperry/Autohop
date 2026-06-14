@@ -95,6 +95,19 @@ final class AutohopDatabase: @unchecked Sendable {
             }
         }
 
+        // Build step 5a: listening-history sync. Record-level LWW by
+        // `lastListenedAt` — the whole entry (denormalized title/artwork) is the
+        // payload, so no per-field projection is needed.
+        migrator.registerMigration("v5_history_sync_state") { db in
+            try db.create(table: "history_sync_state") { t in
+                t.column("id", .text).primaryKey()
+                t.column("payload", .blob).notNull()
+                t.column("lastListenedAt", .double).notNull().defaults(to: 0)
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false).indexed()
+                t.column("systemFields", .blob)
+            }
+        }
+
         return migrator
     }
 
@@ -133,6 +146,15 @@ final class AutohopDatabase: @unchecked Sendable {
         var guid: String
         var subscriptionID: String
         var payload: Data
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+    }
+
+    private struct HistorySyncRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "history_sync_state"
+        var id: String
+        var payload: Data
+        var lastListenedAt: Double
         var hasPendingChanges: Bool
         var systemFields: Data?
     }
@@ -331,7 +353,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     /// Clears the dirty stamps on the given projections after a successful push.
-    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID]) throws {
+    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID], historyIDs: [String] = []) throws {
         try dbQueue.write { db in
             for guid in episodeGuids {
                 guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { continue }
@@ -344,6 +366,11 @@ final class AutohopDatabase: @unchecked Sendable {
                 var state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
                 state.markClean()
                 try save(subscriptionState: state, into: db)
+            }
+            for id in historyIDs {
+                guard var row = try HistorySyncRow.fetchOne(db, key: id) else { continue }
+                row.hasPendingChanges = false
+                try row.save(db)
             }
         }
     }
@@ -400,6 +427,69 @@ final class AutohopDatabase: @unchecked Sendable {
     func storeSubscriptionSystemFields(_ data: Data?, id: UUID) throws {
         try dbQueue.write { db in
             guard var row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+
+    // MARK: Listening-history sync-state accessors (build step 5a)
+
+    /// Records a locally-changed history entry as pending (preserving any cached
+    /// system fields). Called from ListeningHistoryStore on every mutation.
+    func recordHistoryEntry(_ entry: ListeningHistoryEntry) throws {
+        try dbQueue.write { db in
+            let existing = try HistorySyncRow.fetchOne(db, key: entry.id)?.systemFields
+            let row = HistorySyncRow(
+                id: entry.id,
+                payload: try encoder.encode(entry),
+                lastListenedAt: entry.lastListenedAt.timeIntervalSince1970,
+                hasPendingChanges: true,
+                systemFields: existing
+            )
+            try row.save(db)
+        }
+    }
+
+    /// Upserts a history entry already reconciled with the server (clean — not re-pushed).
+    func saveSyncedHistoryEntry(_ entry: ListeningHistoryEntry) throws {
+        try dbQueue.write { db in
+            let existing = try HistorySyncRow.fetchOne(db, key: entry.id)?.systemFields
+            let row = HistorySyncRow(
+                id: entry.id,
+                payload: try encoder.encode(entry),
+                lastListenedAt: entry.lastListenedAt.timeIntervalSince1970,
+                hasPendingChanges: false,
+                systemFields: existing
+            )
+            try row.save(db)
+        }
+    }
+
+    func pendingHistoryEntries() throws -> [ListeningHistoryEntry] {
+        try dbQueue.read { db in
+            try HistorySyncRow
+                .filter(Column("hasPendingChanges") == true)
+                .fetchAll(db)
+                .compactMap { try? decoder.decode(ListeningHistoryEntry.self, from: $0.payload) }
+        }
+    }
+
+    func historyEntry(id: String) throws -> ListeningHistoryEntry? {
+        try dbQueue.read { db in
+            guard let row = try HistorySyncRow.fetchOne(db, key: id) else { return nil }
+            return try decoder.decode(ListeningHistoryEntry.self, from: row.payload)
+        }
+    }
+
+    func historySystemFields(id: String) throws -> Data? {
+        try dbQueue.read { db in
+            try HistorySyncRow.fetchOne(db, key: id)?.systemFields
+        }
+    }
+
+    func storeHistorySystemFields(_ data: Data?, id: String) throws {
+        try dbQueue.write { db in
+            guard var row = try HistorySyncRow.fetchOne(db, key: id) else { return }
             row.systemFields = data
             try row.save(db)
         }

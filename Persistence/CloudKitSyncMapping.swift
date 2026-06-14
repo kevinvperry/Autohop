@@ -19,6 +19,7 @@ public enum CloudKitSync {
     public static let zoneName = "AutohopSync"
     public static let episodeRecordType = "EpisodeState"
     public static let subscriptionRecordType = "SubscriptionState"
+    public static let historyRecordType = "HistoryEntry"
 
     private static let jsonEncoder = JSONEncoder()
     private static let jsonDecoder = JSONDecoder()
@@ -33,6 +34,10 @@ public enum CloudKitSync {
 
     public static func subscriptionRecordID(id: UUID) -> CKRecord.ID {
         CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+    }
+
+    public static func historyRecordID(id: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: id, zoneID: zoneID)
     }
 
     // MARK: - Episode mapping
@@ -202,5 +207,30 @@ public enum CloudKitSync {
             chapterFilter: Synced(wrappedValue: decodeStruct(SubKey.chapterFilter, default: ChapterFilter()),
                                   modifiedAt: record[SubKey.chapterFilterModifiedAt] as? Date)
         )
+    }
+
+    // MARK: - Listening-history mapping (record-level LWW by lastListenedAt)
+
+    private enum HistKey {
+        static let entry = "entry"
+        static let lastListenedAt = "lastListenedAt"
+    }
+
+    public static func makeRecord(from entry: ListeningHistoryEntry) -> CKRecord {
+        let record = CKRecord(recordType: historyRecordType, recordID: historyRecordID(id: entry.id))
+        populate(record, from: entry)
+        return record
+    }
+
+    /// History is merged at the record level (whole entry wins by lastListenedAt),
+    /// so the full entry is always written as a JSON blob.
+    public static func populate(_ record: CKRecord, from entry: ListeningHistoryEntry) {
+        record[HistKey.entry] = try? jsonEncoder.encode(entry)
+        record[HistKey.lastListenedAt] = entry.lastListenedAt
+    }
+
+    public static func historyEntry(from record: CKRecord) -> ListeningHistoryEntry? {
+        guard let data = record[HistKey.entry] as? Data else { return nil }
+        return try? jsonDecoder.decode(ListeningHistoryEntry.self, from: data)
     }
 }

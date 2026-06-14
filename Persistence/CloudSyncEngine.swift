@@ -34,6 +34,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// re-applies the state. Set by AppState (which owns FeedService).
     var onSubscriptionNeedsMaterialization: ((SubscriptionSyncState) async -> Void)?
 
+    /// Invoked when a remote listening-history entry arrives — the app layer
+    /// (ListeningHistoryStore) merges it with record-level LWW. Set by AppState.
+    var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
+
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
     /// - Parameter database: the store's record database, passed explicitly so
@@ -106,12 +110,16 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         guard let engine, let database else { return }
         let episodes = (try? database.pendingEpisodeSyncStates()) ?? []
         let subscriptions = (try? database.pendingSubscriptionSyncStates()) ?? []
+        let history = (try? database.pendingHistoryEntries()) ?? []
 
         var changes = episodes.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(guid: $0.guid))
         }
         changes += subscriptions.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.subscriptionRecordID(id: $0.subscriptionID))
+        }
+        changes += history.map {
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.historyRecordID(id: $0.id))
         }
         guard !changes.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: changes)
@@ -178,6 +186,16 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             return record
         }
 
+        // History entry? (recordName == composite history key)
+        if let entry = try? database.historyEntry(id: name) {
+            let record = cachedOrNewRecord(
+                systemFields: try? database.historySystemFields(id: name),
+                recordType: CloudKitSync.historyRecordType, recordID: recordID
+            )
+            CloudKitSync.populate(record, from: entry)
+            return record
+        }
+
         return nil // nothing local to send (e.g. a since-deleted record)
     }
 
@@ -212,6 +230,12 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             if case .needsMaterialization(let state) = outcome {
                 await onSubscriptionNeedsMaterialization?(state)
             }
+
+        case CloudKitSync.historyRecordType:
+            guard let remote = CloudKitSync.historyEntry(from: record) else { return }
+            // App layer merges (record-level LWW) and persists the clean row.
+            await onRemoteHistoryEntry?(remote)
+            try? database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
 
         default:
             break
@@ -255,6 +279,9 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 try? database?.storeSubscriptionSystemFields(Self.systemFields(of: record), id: id)
                 try? database?.markSynced(episodeGuids: [], subscriptionIDs: [id])
             }
+        case CloudKitSync.historyRecordType:
+            try? database?.storeHistorySystemFields(Self.systemFields(of: record), id: name)
+            try? database?.markSynced(episodeGuids: [], subscriptionIDs: [], historyIDs: [name])
         default:
             break
         }
