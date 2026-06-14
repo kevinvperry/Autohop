@@ -38,6 +38,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// (ListeningHistoryStore) merges it with record-level LWW. Set by AppState.
     var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
 
+    /// Invoked after another device's stats partition was stored — the app layer
+    /// (ListeningStatsStore) reloads its remote cache and refreshes. Set by AppState.
+    var onRemoteStatsChanged: (() async -> Void)?
+
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
     /// - Parameter database: the store's record database, passed explicitly so
@@ -111,6 +115,8 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let episodes = (try? database.pendingEpisodeSyncStates()) ?? []
         let subscriptions = (try? database.pendingSubscriptionSyncStates()) ?? []
         let history = (try? database.pendingHistoryEntries()) ?? []
+        let stats = (try? database.pendingStatsDays()) ?? []
+        let deviceID = DeviceIdentity.current
 
         var changes = episodes.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(guid: $0.guid))
@@ -120,6 +126,9 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         }
         changes += history.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.historyRecordID(id: $0.id))
+        }
+        changes += stats.map {
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.statsRecordID(deviceID: deviceID, dayKey: $0.dayKey))
         }
         guard !changes.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: changes)
@@ -196,7 +205,24 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             return record
         }
 
+        // Stats partition? (recordName == "deviceID:dayKey")
+        if let dayKey = Self.statsDayKey(fromRecordName: name), let day = try? database.statsDay(dayKey: dayKey) {
+            let record = cachedOrNewRecord(
+                systemFields: try? database.statsSystemFields(dayKey: dayKey),
+                recordType: CloudKitSync.statsRecordType, recordID: recordID
+            )
+            CloudKitSync.populate(record, deviceID: DeviceIdentity.current, day: day)
+            return record
+        }
+
         return nil // nothing local to send (e.g. a since-deleted record)
+    }
+
+    /// Extracts the dayKey from a "deviceID:dayKey" stats record name.
+    private static func statsDayKey(fromRecordName name: String) -> String? {
+        let parts = name.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        return String(parts[1])
     }
 
     private func cachedOrNewRecord(systemFields: Data?, recordType: String, recordID: CKRecord.ID) -> CKRecord {
@@ -236,6 +262,12 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             // App layer merges (record-level LWW) and persists the clean row.
             await onRemoteHistoryEntry?(remote)
             try? database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
+
+        case CloudKitSync.statsRecordType:
+            guard let (deviceID, day) = CloudKitSync.statsPartition(from: record) else { return }
+            guard deviceID != DeviceIdentity.current else { return } // our own record echoed back
+            try? database?.applyRemoteStatsPartition(deviceID: deviceID, day: day)
+            await onRemoteStatsChanged?()
 
         default:
             break
@@ -282,6 +314,11 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         case CloudKitSync.historyRecordType:
             try? database?.storeHistorySystemFields(Self.systemFields(of: record), id: name)
             try? database?.markSynced(episodeGuids: [], subscriptionIDs: [], historyIDs: [name])
+        case CloudKitSync.statsRecordType:
+            if let dayKey = Self.statsDayKey(fromRecordName: name) {
+                try? database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
+                try? database?.markSynced(episodeGuids: [], subscriptionIDs: [], statsDayKeys: [dayKey])
+            }
         default:
             break
         }

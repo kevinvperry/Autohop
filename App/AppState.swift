@@ -282,6 +282,10 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onRemoteHistoryEntry = { [weak self] entry in
             await MainActor.run { self?.listeningHistoryStore.applyRemote(entry) }
         }
+        listeningStatsStore.syncDatabase = subscriptionStore.database
+        cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
+            await MainActor.run { self?.listeningStatsStore.reloadRemoteStats() }
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }

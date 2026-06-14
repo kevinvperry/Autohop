@@ -61,9 +61,20 @@ struct level (deliberate v1 simplification).
    creates the podcast, then applies settings. Migration v4 caches subscription
    system fields. Unit-tested; real-device cross-device verification pending.
 
+5. ✅ **Listening history + stats**
+   - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
+     migration v5). ListeningHistoryStore records pending on mutation + merges via
+     applyRemote; denormalized title/artwork kept.
+   - 5b Stats: **additive — partition by `(deviceID, dayKey)` and sum on read**
+     (never LWW). `DeviceIdentity.current` (UserDefaults UUID); DayStats record
+     per device-day; `stats_sync_state` (this device's pending) + `remote_stats`
+     (other devices) tables (migration v6). `DayStats.merged` sums; ListeningStats
+     `combinedDay` folds remote partitions into every read path (summary/streaks/
+     per-show/lifetime). Engine skips its own echoed records by deviceID.
+     legacyBaseline sync deferred (kept per-device for v1). Unit-tested incl.
+     cross-device summing; real-device verification pending.
+
 ### Remaining
-5. **Listening history + stats** — history LWW by `lastListenedAt`; **stats are
-   additive: partition by `(deviceID, dayKey)` and sum on read** (never LWW).
 6. **Active-player-wins + self-heal guards** — ignore remote position/state while
    actively playing that episode; apply stashed remote state when the feed later
    yields a missing episode.

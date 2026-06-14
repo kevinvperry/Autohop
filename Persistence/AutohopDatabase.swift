@@ -108,6 +108,24 @@ final class AutohopDatabase: @unchecked Sendable {
             }
         }
 
+        // Build step 5b: stats sync. ADDITIVE, not LWW — each device owns its own
+        // (deviceID, dayKey) partition. `stats_sync_state` holds THIS device's
+        // day buckets pending push; `remote_stats` holds OTHER devices' partitions
+        // so the Stats page can sum across devices on read.
+        migrator.registerMigration("v6_stats_sync") { db in
+            try db.create(table: "stats_sync_state") { t in
+                t.column("dayKey", .text).primaryKey()
+                t.column("payload", .blob).notNull()
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false).indexed()
+                t.column("systemFields", .blob)
+            }
+            try db.create(table: "remote_stats") { t in
+                t.column("id", .text).primaryKey() // "deviceID:dayKey"
+                t.column("dayKey", .text).notNull().indexed()
+                t.column("payload", .blob).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -157,6 +175,21 @@ final class AutohopDatabase: @unchecked Sendable {
         var lastListenedAt: Double
         var hasPendingChanges: Bool
         var systemFields: Data?
+    }
+
+    private struct StatsSyncRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "stats_sync_state"
+        var dayKey: String
+        var payload: Data
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+    }
+
+    private struct RemoteStatsRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "remote_stats"
+        var id: String
+        var dayKey: String
+        var payload: Data
     }
 
     // MARK: - Loading
@@ -353,7 +386,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     /// Clears the dirty stamps on the given projections after a successful push.
-    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID], historyIDs: [String] = []) throws {
+    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
         try dbQueue.write { db in
             for guid in episodeGuids {
                 guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { continue }
@@ -369,6 +402,11 @@ final class AutohopDatabase: @unchecked Sendable {
             }
             for id in historyIDs {
                 guard var row = try HistorySyncRow.fetchOne(db, key: id) else { continue }
+                row.hasPendingChanges = false
+                try row.save(db)
+            }
+            for dayKey in statsDayKeys {
+                guard var row = try StatsSyncRow.fetchOne(db, key: dayKey) else { continue }
                 row.hasPendingChanges = false
                 try row.save(db)
             }
@@ -492,6 +530,77 @@ final class AutohopDatabase: @unchecked Sendable {
             guard var row = try HistorySyncRow.fetchOne(db, key: id) else { return }
             row.systemFields = data
             try row.save(db)
+        }
+    }
+
+    // MARK: Stats sync-state accessors (build step 5b)
+
+    /// Records THIS device's day bucket as pending push (preserving system fields).
+    func recordStatsDay(_ day: DayStats) throws {
+        try dbQueue.write { db in
+            let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)?.systemFields
+            let row = StatsSyncRow(
+                dayKey: day.dayKey,
+                payload: try encoder.encode(day),
+                hasPendingChanges: true,
+                systemFields: existing
+            )
+            try row.save(db)
+        }
+    }
+
+    func pendingStatsDays() throws -> [DayStats] {
+        try dbQueue.read { db in
+            try StatsSyncRow
+                .filter(Column("hasPendingChanges") == true)
+                .fetchAll(db)
+                .compactMap { try? decoder.decode(DayStats.self, from: $0.payload) }
+        }
+    }
+
+    func statsDay(dayKey: String) throws -> DayStats? {
+        try dbQueue.read { db in
+            guard let row = try StatsSyncRow.fetchOne(db, key: dayKey) else { return nil }
+            return try decoder.decode(DayStats.self, from: row.payload)
+        }
+    }
+
+    func statsSystemFields(dayKey: String) throws -> Data? {
+        try dbQueue.read { db in
+            try StatsSyncRow.fetchOne(db, key: dayKey)?.systemFields
+        }
+    }
+
+    func storeStatsSystemFields(_ data: Data?, dayKey: String) throws {
+        try dbQueue.write { db in
+            guard var row = try StatsSyncRow.fetchOne(db, key: dayKey) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+
+    /// Upserts another device's day partition (for summing on read).
+    func applyRemoteStatsPartition(deviceID: String, day: DayStats) throws {
+        try dbQueue.write { db in
+            let row = RemoteStatsRow(
+                id: "\(deviceID):\(day.dayKey)",
+                dayKey: day.dayKey,
+                payload: try encoder.encode(day)
+            )
+            try row.save(db)
+        }
+    }
+
+    /// All other-device day partitions, grouped by dayKey, for the Stats page to
+    /// sum with the local buckets.
+    func remoteStatsByDayKey() throws -> [String: [DayStats]] {
+        try dbQueue.read { db in
+            var result: [String: [DayStats]] = [:]
+            for row in try RemoteStatsRow.fetchAll(db) {
+                guard let day = try? decoder.decode(DayStats.self, from: row.payload) else { continue }
+                result[row.dayKey, default: []].append(day)
+            }
+            return result
         }
     }
 }

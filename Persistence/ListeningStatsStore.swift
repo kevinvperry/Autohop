@@ -107,6 +107,25 @@ public struct DayStats: Codable, Equatable {
         timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
     }
 
+    /// Sums this day's buckets with another device's same-day partition — the
+    /// core of additive cross-device stats (SYNC_DESIGN.md step 5b). NEVER
+    /// last-write-wins: each device contributes its own listening for the day.
+    public func merged(with other: DayStats) -> DayStats {
+        var r = self
+        r.wallClockSeconds += other.wallClockSeconds
+        for h in 0..<24 { r.hourSeconds[h] += other.hourSeconds[h] }
+        for (k, v) in other.perShowSeconds { r.perShowSeconds[k, default: 0] += v }
+        for (k, v) in other.perShowTimeSaved { r.perShowTimeSaved[k, default: 0] += v }
+        r.timeSavedVariableSpeed += other.timeSavedVariableSpeed
+        r.timeSavedTrimSilence += other.timeSavedTrimSilence
+        r.timeSavedManualSkip += other.timeSavedManualSkip
+        r.timeSavedAutoSkip += other.timeSavedAutoSkip
+        r.episodesStarted += other.episodesStarted
+        r.episodesCompleted += other.episodesCompleted
+        r.manualSkipForwardCount += other.manualSkipForwardCount
+        return r
+    }
+
     // MARK: Codable — graceful decoding of day buckets saved before perShowTimeSaved existed
 
     enum CodingKeys: String, CodingKey {
@@ -197,6 +216,36 @@ public final class ListeningStatsStore: ObservableObject {
     private let fileURL: URL?
     private let legacyFileURL: URL?
 
+    /// Record store for cross-device stats sync; set by AppState. nil = no sync.
+    var syncDatabase: AutohopDatabase? {
+        didSet { reloadRemoteStats() }
+    }
+    /// Other devices' day partitions (dayKey → list), summed with local buckets
+    /// on every read. Never merged into `data.days` (that would double-count).
+    private var remoteByDayKey: [String: [DayStats]] = [:]
+
+    /// Reloads remote partitions from the database and refreshes the Stats view.
+    /// Also the handler the sync engine calls when a remote partition arrives.
+    public func reloadRemoteStats() {
+        remoteByDayKey = (try? syncDatabase?.remoteStatsByDayKey()) ?? [:]
+        bumpRevision()
+    }
+
+    /// This device's bucket for `key`, summed with every other device's partition.
+    private func combinedDay(_ key: String) -> DayStats {
+        var day = data.days[key] ?? DayStats(dayKey: key)
+        for remote in remoteByDayKey[key] ?? [] { day = day.merged(with: remote) }
+        return day
+    }
+
+    private func allDayKeys() -> [String] {
+        Array(Set(data.days.keys).union(remoteByDayKey.keys))
+    }
+
+    private func recordDayPending(_ day: DayStats) {
+        try? syncDatabase?.recordStatsDay(day)
+    }
+
     /// A day counts toward streaks once it has at least this much listening.
     public static let streakMinimumSeconds: TimeInterval = 60
 
@@ -246,6 +295,7 @@ public final class ListeningStatsStore: ObservableObject {
 
         data.days[day.dayKey] = day
         data.showTitles[showKey] = showTitle
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -294,6 +344,7 @@ public final class ListeningStatsStore: ObservableObject {
     /// and smoke tests — normal recording goes through the add/record methods.
     public func importDay(_ day: DayStats) {
         data.days[day.dayKey] = day
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -309,7 +360,8 @@ public final class ListeningStatsStore: ObservableObject {
     /// Lifetime totals in the legacy shape consumed by `StatsView`.
     public var lifetime: PlaybackStats {
         var stats = data.legacyBaseline ?? PlaybackStats(startedAt: data.startedAt)
-        for day in data.days.values {
+        for key in allDayKeys() {
+            let day = combinedDay(key)
             stats.totalListeningSeconds += day.wallClockSeconds
             stats.timeSavedVariableSpeed += day.timeSavedVariableSpeed
             stats.timeSavedTrimSilence += day.timeSavedTrimSilence
@@ -325,7 +377,7 @@ public final class ListeningStatsStore: ObservableObject {
         case .last(let count):
             buckets = recentDays(count)
         case .lifetime:
-            buckets = data.days.values.sorted { $0.dayKey < $1.dayKey }
+            buckets = allDayKeys().sorted().map { combinedDay($0) }
         }
 
         var result = ListeningStatsSummary(days: buckets)
@@ -359,9 +411,8 @@ public final class ListeningStatsStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         var totals: [String: TimeInterval] = [:]
         for offset in count..<(count * 2) {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: today),
-                  let day = data.days[dayKey(for: date)] else { continue }
-            for (show, seconds) in day.perShowSeconds {
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+            for (show, seconds) in combinedDay(dayKey(for: date)).perShowSeconds {
                 totals[show, default: 0] += seconds
             }
         }
@@ -387,9 +438,7 @@ public final class ListeningStatsStore: ObservableObject {
 
     public var longestStreakDays: Int {
         let qualifyingKeys = Set(
-            data.days.values
-                .filter { $0.wallClockSeconds >= Self.streakMinimumSeconds }
-                .map(\.dayKey)
+            allDayKeys().filter { combinedDay($0).wallClockSeconds >= Self.streakMinimumSeconds }
         )
         guard !qualifyingKeys.isEmpty else { return 0 }
 
@@ -435,6 +484,7 @@ public final class ListeningStatsStore: ObservableObject {
         var day = bucket(for: Date())
         change(&day)
         data.days[day.dayKey] = day
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -449,13 +499,12 @@ public final class ListeningStatsStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         return (0..<count).reversed().compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
-            let key = dayKey(for: date)
-            return data.days[key] ?? DayStats(dayKey: key)
+            return combinedDay(dayKey(for: date))
         }
     }
 
     private func qualifies(_ date: Date) -> Bool {
-        (data.days[dayKey(for: date)]?.wallClockSeconds ?? 0) >= Self.streakMinimumSeconds
+        combinedDay(dayKey(for: date)).wallClockSeconds >= Self.streakMinimumSeconds
     }
 
     private func dayKey(for date: Date) -> String {
