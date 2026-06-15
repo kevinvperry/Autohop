@@ -288,8 +288,8 @@ final class AppState: ObservableObject {
         }
         // Active-player-wins: tell the store which episode is loaded in the
         // player so a remote played/archived change can't interrupt it.
-        subscriptionStore.nowPlayingGuidProvider = { [weak playbackEngine] in
-            playbackEngine?.currentEpisode?.guid
+        subscriptionStore.nowPlayingGuidProvider = { [weak self] in
+            self?.playbackEngine.currentEpisode?.guid
         }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
