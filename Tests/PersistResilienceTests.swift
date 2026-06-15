@@ -27,4 +27,18 @@ final class PersistResilienceTests: XCTestCase {
         // ...and the sync projection was re-seeded (decodable + pending to push).
         XCTAssertEqual(try db.pendingSubscriptionSyncStates().count, 1)
     }
+
+    func testProactiveHealReseedsUndecodableRowWithoutAnEdit() throws {
+        let db = try AutohopDatabase()
+        let sub = Subscription(id: UUID(), feedURL: URL(string: "https://f.com/feed")!, title: "Show", priorityRank: 1)
+        try db.persist(current: [sub], previous: [:]) // normal good state
+
+        // Corrupt the row as an older shape would leave it.
+        try db._testWriteCorruptSubscriptionSyncRow(id: sub.id)
+        XCTAssertTrue(try db.pendingSubscriptionSyncStates().isEmpty) // corrupt row skipped
+
+        // The launch-time heal re-seeds it WITHOUT any edit/persist.
+        try db.reseedUndecodableSyncState(for: [sub])
+        XCTAssertEqual(try db.pendingSubscriptionSyncStates().count, 1)
+    }
 }

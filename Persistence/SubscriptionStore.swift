@@ -795,6 +795,9 @@ public final class SubscriptionStore: ObservableObject {
                 .sorted { $0.priorityRank < $1.priorityRank }
             normalizePriorityOrder()
             persistedSnapshot = snapshotByID(subscriptions)
+            // Heal any sync-state rows left by an older projection shape so they
+            // re-seed and push on this launch, not only when next edited.
+            try? database.reseedUndecodableSyncState(for: subscriptions)
         } catch {
             subscriptions = []
             persistedSnapshot = [:]

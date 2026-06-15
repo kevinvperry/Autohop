@@ -261,6 +261,35 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    /// Proactively repairs sync-state rows left by an older projection shape so
+    /// the first launch after an upgrade heals cleanly (rather than waiting for
+    /// each subscription to be edited). For every loaded subscription whose
+    /// projection row is missing or undecodable, a fresh (fully-dirty) projection
+    /// is re-seeded so it pushes; undecodable episode rows are likewise repaired.
+    /// A no-op once everything decodes.
+    func reseedUndecodableSyncState(for subscriptions: [Subscription]) throws {
+        try dbQueue.write { db in
+            for subscription in subscriptions {
+                let subRow = try SubscriptionSyncRow.fetchOne(db, key: subscription.id.uuidString)
+                let subDecodes = subRow.flatMap { try? decoder.decode(SubscriptionSyncState.self, from: $0.payload) } != nil
+                if !subDecodes {
+                    try save(subscriptionState: SubscriptionSyncState(subscription: subscription, subscribed: true), into: db)
+                }
+
+                for episode in subscription.episodes {
+                    guard let epRow = try EpisodeSyncRow.fetchOne(db, key: episode.guid) else { continue }
+                    let epDecodes = (try? decoder.decode(EpisodeSyncState.self, from: epRow.payload)) != nil
+                    guard !epDecodes else { continue }
+                    if EpisodeSyncState.isPristine(episode) {
+                        try EpisodeSyncRow.deleteOne(db, key: episode.guid)
+                    } else {
+                        try save(episodeState: EpisodeSyncState(episode: episode, subscriptionID: subscription.id), into: db)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Private write helpers
 
     private func write(_ subscription: Subscription, into db: Database) throws {
