@@ -1573,7 +1573,7 @@ private struct UpNextRow: View {
         .overlay(alignment: .topTrailing) {
             if episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {
-                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.mediaKind == .video { VideoPillSmall() }
                     if episode.isExplicit == true { ExplicitPillSmall() }
                 }
                 .padding(.horizontal, 14)

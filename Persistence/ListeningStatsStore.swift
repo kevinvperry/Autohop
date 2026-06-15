@@ -190,6 +190,14 @@ public struct ListeningStatsSummary {
 
 public enum StatsPeriod: Equatable {
     case last(days: Int)
+    /// The current calendar week so far — Monday 00:00 up to now. Resets each
+    /// Monday. Variable length (1 day on Monday … up to 7 by Sunday).
+    case currentWeek
+    /// The current calendar month so far — the 1st 00:00 up to now. Resets on
+    /// the 1st of each month.
+    case currentMonth
+    /// The current calendar year so far — Jan 1 00:00 up to now. Resets on Jan 1.
+    case currentYear
     case lifetime
 }
 
@@ -376,6 +384,12 @@ public final class ListeningStatsStore: ObservableObject {
         switch period {
         case .last(let count):
             buckets = recentDays(count)
+        case .currentWeek:
+            buckets = days(from: startOfCurrentWeek())
+        case .currentMonth:
+            buckets = days(from: startOfCurrentMonth())
+        case .currentYear:
+            buckets = days(from: startOfCurrentYear())
         case .lifetime:
             buckets = allDayKeys().sorted().map { combinedDay($0) }
         }
@@ -407,16 +421,47 @@ public final class ListeningStatsStore: ObservableObject {
     /// `period` — feeds rank-movement badges in the Top Shows list. Returns nil
     /// for `.lifetime`, which has no previous period to compare against.
     public func previousPeriodShowSeconds(for period: StatsPeriod) -> [String: TimeInterval]? {
-        guard case .last(let count) = period else { return nil }
-        let today = calendar.startOfDay(for: Date())
         var totals: [String: TimeInterval] = [:]
-        for offset in count..<(count * 2) {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
-            for (show, seconds) in combinedDay(dayKey(for: date)).perShowSeconds {
-                totals[show, default: 0] += seconds
+        switch period {
+        case .lifetime:
+            return nil
+        case .last(let count):
+            let today = calendar.startOfDay(for: Date())
+            for offset in count..<(count * 2) {
+                guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+                for (show, seconds) in combinedDay(dayKey(for: date)).perShowSeconds {
+                    totals[show, default: 0] += seconds
+                }
             }
+        case .currentWeek:
+            // Compare against the previous full Monday–Sunday week.
+            guard let lastMonday = calendar.date(byAdding: .day, value: -7, to: startOfCurrentWeek()) else { return nil }
+            accumulate(&totals, from: lastMonday, upTo: startOfCurrentWeek())
+        case .currentMonth:
+            // Compare against the previous full calendar month.
+            let thisMonth = startOfCurrentMonth()
+            guard let prevMonth = calendar.date(byAdding: .month, value: -1, to: thisMonth) else { return nil }
+            accumulate(&totals, from: prevMonth, upTo: thisMonth)
+        case .currentYear:
+            // Compare against the previous full calendar year.
+            let thisYear = startOfCurrentYear()
+            guard let prevYear = calendar.date(byAdding: .year, value: -1, to: thisYear) else { return nil }
+            accumulate(&totals, from: prevYear, upTo: thisYear)
         }
         return totals
+    }
+
+    /// Adds every day's per-show seconds in the half-open range [start, end).
+    private func accumulate(_ totals: inout [String: TimeInterval], from start: Date, upTo end: Date) {
+        var cursor = calendar.startOfDay(for: start)
+        let stop = calendar.startOfDay(for: end)
+        while cursor < stop {
+            for (show, seconds) in combinedDay(dayKey(for: cursor)).perShowSeconds {
+                totals[show, default: 0] += seconds
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
     }
 
     /// Consecutive days with listening ending today (or yesterday, if today is
@@ -499,6 +544,42 @@ public final class ListeningStatsStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         return (0..<count).reversed().compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            return combinedDay(dayKey(for: date))
+        }
+    }
+
+    /// Monday 00:00 of the week containing `date`, independent of locale
+    /// (the app treats Monday as the first day of the week for Stats).
+    func startOfWeek(for date: Date) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        // Gregorian weekday: Sun=1 … Sat=7, so Monday=2.
+        let weekday = calendar.component(.weekday, from: startOfDay)
+        let daysSinceMonday = (weekday - 2 + 7) % 7
+        return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay) ?? startOfDay
+    }
+
+    /// Monday 00:00 of the current week.
+    func startOfCurrentWeek() -> Date { startOfWeek(for: Date()) }
+
+    /// The 1st 00:00 of the current month.
+    func startOfCurrentMonth() -> Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+            ?? calendar.startOfDay(for: Date())
+    }
+
+    /// Jan 1 00:00 of the current year.
+    func startOfCurrentYear() -> Date {
+        calendar.date(from: calendar.dateComponents([.year], from: Date()))
+            ?? calendar.startOfDay(for: Date())
+    }
+
+    /// Day buckets from `start` (start-of-day) through today, oldest first.
+    private func days(from start: Date) -> [DayStats] {
+        let first = calendar.startOfDay(for: start)
+        let today = calendar.startOfDay(for: Date())
+        let span = (calendar.dateComponents([.day], from: first, to: today).day ?? 0) + 1
+        return (0..<max(span, 1)).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: first) else { return nil }
             return combinedDay(dayKey(for: date))
         }
     }

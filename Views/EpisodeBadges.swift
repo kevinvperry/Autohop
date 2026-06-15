@@ -5,11 +5,11 @@ import SwiftUI
 // effect variants. Pure presentation; shared across episode lists, preview,
 // queue, and detail pages.
 
-// MARK: - Video Badge (small)
+// MARK: - Video Pill (small)
 //
-// TV-icon pill shown centred below episode artwork for video episodes.
+// TV-icon pill shown in the top-trailing overlay of episode rows for video episodes.
 
-struct VideoBadge: View {
+struct VideoPillSmall: View {
     var body: some View {
         let icon = Image(systemName: "tv.fill")
             .font(.caption.bold())
@@ -25,11 +25,11 @@ struct VideoBadge: View {
     }
 }
 
-// MARK: - Video Badge Large
+// MARK: - Video Pill (large)
 //
-// "Video" text pill — large counterpart to VideoBadge.
+// "Video" text pill — large counterpart to VideoPillSmall, used in detail headers.
 
-struct VideoBadgeLarge: View {
+struct VideoPillLarge: View {
     var body: some View {
         let label = Text("Video")
             .font(.caption.bold())
@@ -47,9 +47,9 @@ struct VideoBadgeLarge: View {
 
 // MARK: - Explicit Pill (large)
 //
-// "Explicit" text pill shown centred below episode artwork for explicit episodes.
+// "Explicit" text pill used in detail headers for explicit shows/episodes.
 
-struct ExplicitPill: View {
+struct ExplicitPillLarge: View {
     var body: some View {
         let label = Text("Explicit")
             .font(.caption.bold())
@@ -67,7 +67,7 @@ struct ExplicitPill: View {
 
 // MARK: - Explicit Pill Small
 //
-// "E in a square" icon pill — small counterpart to ExplicitPill, styled like the iTunes explicit badge.
+// "E in a square" icon pill — small counterpart to ExplicitPillLarge, styled like the iTunes explicit badge.
 
 struct ExplicitPillSmall: View {
     private var badge: some View {

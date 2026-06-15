@@ -184,7 +184,7 @@ private struct ArchivedEpisodeRow: View {
         .overlay(alignment: .topTrailing) {
             if archivedEpisode?.mediaKind == .video || archivedEpisode?.isExplicit == true {
                 HStack(spacing: 3) {
-                    if archivedEpisode?.mediaKind == .video { VideoBadge() }
+                    if archivedEpisode?.mediaKind == .video { VideoPillSmall() }
                     if archivedEpisode?.isExplicit == true { ExplicitPillSmall() }
                 }
             }
@@ -310,7 +310,7 @@ private struct DownloadActivityRow: View {
         .overlay(alignment: .topTrailing) {
             if activity.mediaKind == .video || episode?.isExplicit == true {
                 HStack(spacing: 3) {
-                    if activity.mediaKind == .video { VideoBadge() }
+                    if activity.mediaKind == .video { VideoPillSmall() }
                     if episode?.isExplicit == true { ExplicitPillSmall() }
                 }
             }

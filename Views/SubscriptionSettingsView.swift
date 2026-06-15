@@ -783,8 +783,8 @@ struct EpisodeDetailView: View {
                         let showExplicit = ep.isExplicit == true
                         if showVideo || showExplicit {
                             HStack(spacing: 6) {
-                                if showVideo { VideoBadgeLarge() }
-                                if showExplicit { ExplicitPill() }
+                                if showVideo { VideoPillLarge() }
+                                if showExplicit { ExplicitPillLarge() }
                             }
                         }
 

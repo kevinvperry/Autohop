@@ -337,7 +337,9 @@ final class AppState: ObservableObject {
 
         refreshUpNextEpisode()
         startNetworkMonitor()
-        subscriptionStore.cleanupExpiredPreviewSubscriptions()
+        subscriptionStore.cleanupExpiredPreviewSubscriptions(
+            subscriptionIDsWithHistory: Set(listeningHistoryStore.entries.map(\.subscriptionID))
+        )
     }
 
     /// Creates a podcast that another device subscribed to, by fetching its feed,

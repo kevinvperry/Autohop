@@ -448,14 +448,14 @@ enum SupportGuide {
         summary: "On-device listening insights and time saved",
         blocks: [
             .paragraph("Access your listening stats from the **Menu (☰) → Stats**."),
-            .paragraph("Pick a time period at the top of the page — **7 Days, 30 Days, 90 Days, 1 Year, or All Time** — and every chart below responds to it. All stats are computed and stored entirely on your device."),
+            .paragraph("Pick a time period at the top of the page — **This Week, the current month (e.g. June), the current year (e.g. 2026), or Lifetime** — and every chart below responds to it. The first three are calendar periods that start fresh and fill in as they go: This Week runs Monday to Sunday (resets every Monday), the month resets on the 1st, and the year resets on January 1st. All stats are computed and stored entirely on your device."),
             .heading("What the page shows"),
             .table(headers: nil, rows: [
                 ["Hero card", "Total time listened in the period, time saved by Autohop, episodes finished, and your current listening streak (a day counts once you listen for at least a minute)."],
-                ["Listening Heatmap", "A calendar-style grid (7/30/90-day views) where each square is a day — the deeper the purple, the more you listened. The caption calls out your busiest day. On 1 Year and All Time this becomes a month-by-month bar chart."],
+                ["Listening Heatmap", "A calendar-style grid (This Week and current-month views) where each square is a day, with weeks starting on Monday — the deeper the purple, the more you listened. The caption calls out your busiest day. On the year and Lifetime views this becomes a month-by-month bar chart."],
                 ["Listening Clock", "A 24-hour dial showing when you listen — midnight at the top, noon at the bottom. The caption shows your peak listening hour."],
-                ["Top Shows", "Your most-listened podcasts for the period, ranked with artwork and relative listening bars. Shows you've unsubscribed from still appear. Tap any show to expand a detail card — episodes finished, time saved on that show, its share of your listening, average completion, and how soon after release you typically listen. Tap Show All to see your top 50, including how each show's rank moved against the previous period."],
-                ["Shows You're Drifting From", "On 7, 30, and 90-day views, Autohop highlights up to five subscribed shows you keep abandoning or archiving unplayed — each with a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. The section only appears when a show genuinely qualifies."],
+                ["Top Shows", "Your most-listened podcasts for the period, ranked with artwork and relative listening bars. Shows you've unsubscribed from still appear. Tap any show to expand a detail card — episodes finished, time saved on that show, its share of your listening, average completion, and how soon after release you typically listen. Tap Show All to see your top 50, including how each show's rank moved against the previous comparable period (the previous week, month, or year)."],
+                ["Shows You're Drifting From", "On This Week and current-month views, Autohop highlights up to five subscribed shows you keep abandoning or archiving unplayed — each with a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. The section only appears when a show genuinely qualifies."],
             ]),
             .heading("Time Saved breakdown"),
             .table(headers: nil, rows: [
@@ -464,7 +464,7 @@ enum SupportGuide {
                 ["Trim Silence", "Time saved by silence removal. Counts only the frames actually dropped from the audio stream."],
                 ["Auto Skipping", "Time saved by per-podcast start skip and end skip settings firing automatically at episode boundaries."],
             ]),
-            .paragraph("The **Total** row sums all four categories. Time saved totals you accumulated in earlier versions of Autohop are preserved and included in the All Time view."),
+            .paragraph("The **Total** row sums all four categories. Time saved totals you accumulated in earlier versions of Autohop are preserved and included in the Lifetime view."),
         ]
     )
 

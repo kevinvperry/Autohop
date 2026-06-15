@@ -6,8 +6,8 @@ import SwiftUI
 //   • a search result not yet subscribed (init(result:))
 //   • a browse-only preview subscription (init(browseSubscription:))
 //   • an active subscription (init(subscriptionID:))
-// Layout: centred Header-SubscriptionPage (artwork · title · VideoBadgeLarge/
-// ExplicitPill · description · author/categories) · Subscribe⇄Unsubscribe button
+// Layout: centred Header-SubscriptionPage (artwork · title · VideoPillLarge/
+// ExplicitPillLarge · description · author/categories) · Subscribe⇄Unsubscribe button
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
 // Next) and trailing (Archive / Play Last) swipes — NO share swipe. Toolbar
@@ -279,8 +279,8 @@ struct PodcastDetailView: View {
                 // Video / Explicit pills centred between title and description.
                 if showVideo || showExplicit {
                     HStack(spacing: 6) {
-                        if showVideo { VideoBadgeLarge() }
-                        if showExplicit { ExplicitPill() }
+                        if showVideo { VideoPillLarge() }
+                        if showExplicit { ExplicitPillLarge() }
                     }
                 }
 
@@ -473,7 +473,7 @@ struct PodcastDetailView: View {
         .overlay(alignment: .topTrailing) {
             if episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {
-                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.mediaKind == .video { VideoPillSmall() }
                     if episode.isExplicit == true { ExplicitPillSmall() }
                 }
             }

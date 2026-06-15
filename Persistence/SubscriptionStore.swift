@@ -245,11 +245,15 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Removes browse-only subscriptions whose `browseDate` is older than 30 days,
-    /// provided no episode has been played or downloaded (i.e. truly unacted-on).
-    public func cleanupExpiredPreviewSubscriptions() {
+    /// provided no episode has been played or downloaded and the show has no
+    /// listening history (i.e. truly unacted-on). `subscriptionIDsWithHistory`
+    /// is the set of subscription IDs that have at least one listening-history
+    /// entry — those are spared so their history stays navigable.
+    public func cleanupExpiredPreviewSubscriptions(subscriptionIDsWithHistory: Set<UUID> = []) {
         let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
         let toRemove = subscriptions.filter { sub in
             guard let date = sub.browseDate, date < cutoff else { return false }
+            guard !subscriptionIDsWithHistory.contains(sub.id) else { return false }
             let hasPlayedEpisode = sub.episodes.contains { $0.playedState != .unplayed }
             let hasDownloadedEpisode = sub.episodes.contains { $0.downloadState == .downloaded }
             return !hasPlayedEpisode && !hasDownloadedEpisode

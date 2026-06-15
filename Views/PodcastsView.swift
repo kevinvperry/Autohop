@@ -249,7 +249,7 @@ struct PodcastsView: View {
             if let episode = sub.latestEpisode,
                episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {
-                    if episode.mediaKind == .video { VideoBadge() }
+                    if episode.mediaKind == .video { VideoPillSmall() }
                     if episode.isExplicit == true { ExplicitPillSmall() }
                 }
             }
