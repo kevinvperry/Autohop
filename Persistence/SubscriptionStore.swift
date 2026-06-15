@@ -85,6 +85,7 @@ public final class SubscriptionStore: ObservableObject {
             isExplicit: parsedFeed.isExplicit
         )
         subscription.description = parsedFeed.description
+        subscription.subscribedAt = Date()
 
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
@@ -130,6 +131,7 @@ public final class SubscriptionStore: ObservableObject {
             isExplicit: isExplicit
         )
         subscription.description = description
+        subscription.subscribedAt = Date()
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
         if insertAtBottom {
@@ -278,6 +280,11 @@ public final class SubscriptionStore: ObservableObject {
         var subscription = subscriptions.remove(at: index)
         subscription.excludeFromAutoFeedRefresh = false
         subscription.browseDate = nil
+        // Browse preview becoming a real subscription — start the backlog clock now
+        // so the existing catalogue isn't archived out from under the new subscriber.
+        if subscription.subscribedAt == nil {
+            subscription.subscribedAt = Date()
+        }
         subscriptions.insert(subscription, at: 0)
         reindexPriority()
         save()

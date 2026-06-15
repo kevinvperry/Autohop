@@ -125,15 +125,18 @@ final class PodcastPreviewViewModel: ObservableObject {
         return nil
     }
 
-    private let feedURL: URL
+    private let feedURL: URL?
     private let loader = EpisodeFeedLoader()
 
-    init(feedURL: URL) {
+    /// `feedURL` is nil when the view was opened straight from a subscription ID
+    /// (the subscription already exists, so no feed fetch is ever needed).
+    init(feedURL: URL?) {
         self.feedURL = feedURL
     }
 
     /// Fetches the feed (up to 50 episodes).  Call once on view appear.
     func load() async {
+        guard let feedURL else { return }
         feedPhase = .loading
         do {
             let feed = try await loader.fetch(feedURL: feedURL, limit: 50)
@@ -145,6 +148,7 @@ final class PodcastPreviewViewModel: ObservableObject {
 
     /// Re-fetches with no episode limit.  Only used when there is no subscription yet.
     func loadFullHistory() async {
+        guard let feedURL else { return }
         guard !isLoadingFullHistory else { return }
         isLoadingFullHistory = true
         do {

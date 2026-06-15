@@ -310,6 +310,12 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     /// Non-nil when this subscription was auto-created by opening a search preview.
     /// Used for 30-day browse history retention and cleanup.
     public var browseDate: Date?
+    /// When the user actually subscribed. Episodes published on/before this date are
+    /// the pre-existing back-catalogue the user never had a chance to engage with —
+    /// auto-archive leaves them browsable (unplayed) instead of archiving the whole
+    /// backlog the moment you subscribe. Nil for legacy subscriptions (decoded
+    /// before this field existed) → no backlog protection, old behaviour preserved.
+    public var subscribedAt: Date?
     public var refreshStats: RefreshStats
 
     public init(
@@ -345,6 +351,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         self.categories = categories
         self.isExplicit = isExplicit
         self.browseDate = nil
+        self.subscribedAt = nil
         self.refreshStats = RefreshStats()
     }
 
@@ -368,6 +375,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         case categories
         case isExplicit
         case browseDate
+        case subscribedAt
         case refreshStats
     }
 
@@ -391,6 +399,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
         isExplicit = try container.decodeIfPresent(Bool.self, forKey: .isExplicit)
         browseDate = try container.decodeIfPresent(Date.self, forKey: .browseDate)
+        subscribedAt = try container.decodeIfPresent(Date.self, forKey: .subscribedAt)
         refreshStats = try container.decodeIfPresent(RefreshStats.self, forKey: .refreshStats) ?? RefreshStats()
 
         autoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .autoArchiveSettings) ?? .default

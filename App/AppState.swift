@@ -31,6 +31,9 @@ import UIKit
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
+//    The inactive/limit passes skip a subscription's pre-existing back-catalogue
+//    (episodes published on/before Subscription.subscribedAt) so subscribing to a
+//    show never archives its whole backlog on day one.
 //  - Persistence side: playback positions saved (throttled ~10 s) to
 //    playback-position.json keyed by episode GUID/URL so re-fetched episodes
 //    resume correctly; listening history + stats recorded on playback ticks.
@@ -2188,8 +2191,17 @@ final class AppState: ObservableObject {
         let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
         guard limit > 0 else { return }
 
+        // Pre-subscription backlog stays browsable — only count episodes published
+        // after subscribing toward the keep-N limit (mirrors runAutoArchive).
+        let backlogCutoff = subscription.subscribedAt
         let active = subscription.episodes
-            .filter { $0.playedState != .archived }
+            .filter { episode in
+                guard episode.playedState != .archived else { return false }
+                if let backlogCutoff, let published = episode.publishedAt, published <= backlogCutoff {
+                    return false
+                }
+                return true
+            }
             .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
         guard active.count > limit else { return }
 
@@ -2253,6 +2265,16 @@ final class AppState: ObservableObject {
             let settings = subscription.autoArchiveSettings
             let allEpisodes = subscription.episodes.filter { $0.playedState != .archived }
 
+            // Episodes that already existed when the user subscribed are the
+            // pre-existing back-catalogue — leave them browsable (unplayed) rather
+            // than archiving the whole feed the moment you subscribe. Only episodes
+            // published after subscribing flow through the inactive/limit passes.
+            let backlogCutoff = subscription.subscribedAt
+            func isPreSubscriptionBacklog(_ episode: Episode) -> Bool {
+                guard let backlogCutoff, let published = episode.publishedAt else { return false }
+                return published <= backlogCutoff
+            }
+
             // ── Pass 1: After Played ──────────────────────────────────────────
             if let interval = settings.afterPlayed.interval {
                 for episode in allEpisodes {
@@ -2278,7 +2300,8 @@ final class AppState: ObservableObject {
                 for episode in allEpisodes {
                     guard episode.playedState == .unplayed,
                           episode.id != playingID,
-                          !archivedIDs.contains(episode.id)
+                          !archivedIDs.contains(episode.id),
+                          !isPreSubscriptionBacklog(episode)
                     else { continue }
 
                     // An episode is inactive if nothing has touched it recently.
@@ -2303,7 +2326,7 @@ final class AppState: ObservableObject {
             if limit > 0 {
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading }
+                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading && !isPreSubscriptionBacklog($0) }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }

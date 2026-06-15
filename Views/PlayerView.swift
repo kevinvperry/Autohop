@@ -580,7 +580,7 @@ struct PlayerView: View {
 
                 if let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NavigationLink {
-                        SubscriptionEpisodesView(subscriptionID: sub.id)
+                        PodcastDetailView(subscriptionID: sub.id)
                     } label: {
                         Text(sub.title)
                             .font(.system(size: 12))

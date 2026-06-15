@@ -15,8 +15,8 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 1. [Priority Stack](#1-priority-stack)
 2. [Find Podcasts (Search) & Discover](#2-find-podcasts-search)
    - [Search](#21-search)
-   - [Podcast Preview Page](#22-podcast-preview-page)
-   - [Subscribe Button Behaviour](#23-subscribe-button-behaviour)
+   - [Podcast Detail Page](#22-podcast-detail-page)
+   - [Subscribe / Unsubscribe Button Behaviour](#23-subscribe--unsubscribe-button-behaviour)
    - [Browse Subscriptions](#24-browse-subscriptions)
    - [Recently Viewed](#25-recently-viewed)
 3. [Queue](#3-queue)
@@ -99,7 +99,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 **How it works:**
 1. User types a search term. Results appear automatically after a short debounce (400ms).
 2. Results are fetched from the iTunes podcast catalog — no account or API key required.
-3. Tapping a result opens the **Podcast Preview** page.
+3. Tapping a result opens the **Podcast Detail** page.
 
 **Search states:**
 - **Idle** — prompt to search + Recently Viewed history list (if any) + "Enter RSS URL" button
@@ -112,46 +112,52 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Results filtering:** Podcasts with no RSS feed URL (Apple Podcasts exclusives) are silently excluded from results.
 
-**Already subscribed:** If the user taps a result for a podcast they are already actively subscribed to, they are redirected straight to the existing Podcast Episodes page — no duplicate subscription is created.
+**Already subscribed:** If the user taps a result for a podcast they are already actively subscribed to, the same Podcast Detail page opens in its subscribed state (header shows Unsubscribe; Refresh Feed and Show Settings appear in the toolbar) — no duplicate subscription is created.
 
 ---
 
-### 2.2 Podcast Preview Page
+### 2.2 Podcast Detail Page
 
-Tapping a search result (or a Recently Viewed row) opens the Podcast Preview page. The RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load.
+A single page (`PodcastDetailView`) serves every state of a podcast — an unsubscribed preview, a browse-only preview, and an active subscription. Tapping a search result, a Discover chart entry, a Recently Viewed row, a Priority Stack row, or the show name in the Player all open this same page. For a preview, the RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load. The mini-player bar is always docked at the bottom.
 
 **Page structure:**
-1. **Header** — 120×120pt artwork, title, explicit/video pills, description (2-line truncated), author · categories
-2. **Subscribe button** — full-width, purple, always labelled "Subscribe". See §2.3 for behaviour.
+1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, description (2-line truncated), author · categories.
+2. **Subscribe ⇄ Unsubscribe button** — full-width. Shows "Subscribe" (purple) until the show is actively subscribed, then "Unsubscribe" (grey). See §2.3 for behaviour.
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
+
+**Toolbar:**
+- Back chevron (always) and a Share button (always).
+- **Refresh Feed** and **Show Settings** (gear → Podcast Settings) appear **only when actively subscribed** — never on a preview or browse-only page.
 
 **Episode list:**
 - Shows up to 50 most recent episodes on first load.
-- Full status pills (Unplayed, Queued, Paused, Playing, Played, Archived), download progress bar, date, duration — identical to the Podcast Episodes page.
+- Full status pills (Unplayed, Queued, Paused, Playing, Played, Archived), small Video/Explicit badges as a top-trailing overlay, download progress bar, date, duration.
 - Every episode row is a `NavigationLink` to Episode Detail.
 - **Load Older Episodes** button appears when 50+ episodes are loaded. Fetches full episode history.
 
-**Episode swipe actions** — identical to Podcast Episodes page:
+**Episode swipe actions:**
 - Leading: **Play** (green), **Play Next** (blue)
 - Trailing: **Archive / Unarchive** (purple), **Play Last** (orange)
 
 ---
 
-### 2.3 Subscribe Button Behaviour
+### 2.3 Subscribe / Unsubscribe Button Behaviour
 
-The Subscribe button on the Podcast Preview page always shows the label "Subscribe". Its action depends on the current subscription state for that feed:
+The header button toggles between Subscribe and Unsubscribe based on the current subscription state for that feed:
 
-| Current state | Action |
-|---|---|
-| No subscription exists | Creates a new active subscription, inserts at top of Priority Stack |
-| Browse subscription exists (auto-created, inactive) | Activates it, clears browse status, moves to top of Priority Stack |
-| Already actively subscribed | User is redirected at search level — Subscribe button is never shown |
+| Current state | Button | Action |
+|---|---|---|
+| No subscription exists | **Subscribe** | Creates a new active subscription, inserts at top of Priority Stack |
+| Browse subscription exists (auto-created, inactive) | **Subscribe** | Activates it, clears browse status, moves to top of Priority Stack |
+| Actively subscribed | **Unsubscribe** | Shows a confirmation dialog; on confirm, removes the subscription. The page stays open with the button flipped back to Subscribe |
+
+Unsubscribing is also still available from the Podcast Settings page (§10.5).
 
 ---
 
 ### 2.4 Browse Subscriptions
 
-When a user opens a Podcast Preview page, Autohop silently creates a **browse subscription** in the background. This enables the fully interactive episode list from first load without requiring the user to explicitly subscribe.
+When a user opens the Podcast Detail page for an unsubscribed show, Autohop silently creates a **browse subscription** in the background. This enables the fully interactive episode list from first load without requiring the user to explicitly subscribe.
 
 **Browse subscriptions are invisible to the user** — they do not appear in the Priority Stack or anywhere else in the app. They are only visible in the Search sheet's Recently Viewed history.
 
@@ -176,7 +182,7 @@ Each row shows:
 - Title and author
 - "Viewed [date]" caption
 
-Tapping a row navigates back to the Podcast Preview page for that podcast, refreshing episodes and resetting the 30-day clock.
+Tapping a row navigates back to the Podcast Detail page for that podcast, refreshing episodes and resetting the 30-day clock.
 
 ---
 
@@ -196,7 +202,7 @@ Tapping a row navigates back to the Podcast Preview page for that podcast, refre
 
 **Data source:** Apple's public chart feeds — the Marketing Tools v2 feed for the Top 8 and the legacy iTunes RSS genre endpoint for the rails. No API key or account. Responses are cached on disk for 12 hours (`Caches/discover-charts`), so the page opens instantly on revisit. Pull to refresh re-fetches.
 
-**Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — already-subscribed shows go straight to their Podcast Episodes page; everything else opens Podcast Preview, which creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
+**Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — every entry opens the Podcast Detail page (§2.2), in its subscribed state for shows already subscribed, otherwise as a preview that creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
 
 ---
 
@@ -475,6 +481,8 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes, archiving older ones. Default of 1 keeps storage lean — the user always has the latest episode available. |
 
 **Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes."
+
+**Fresh-subscription backlog exemption:** When you subscribe to a show, its pre-existing back-catalogue (every episode published on or before the moment you subscribed, tracked by `Subscription.subscribedAt`) is left **browsable as Unplayed** — the Inactive Episodes and Episode Limit rules skip it. This stops subscribing to an established show from archiving its entire 50-episode backlog (and flooding Stats) on day one. Only episodes that arrive **after** you subscribe flow through the inactive/limit lifecycle. The newest episode still downloads immediately per the latest-episode principle. Legacy subscriptions created before this field existed have no `subscribedAt` and keep the old behaviour.
 
 ---
 

@@ -1363,9 +1363,9 @@ A full-screen sheet containing its own `NavigationStack`. Presented from `Podcas
 - **Author** — `.subheadline`, `.secondary`, `lineLimit(1)`
 - **Genre** — `.caption`, `.tertiary`, `lineLimit(1)`
 
-**Navigation destinations:**
-- `navigationDestination(for: PodcastSearchResult.self)` — checks for an existing active subscription at the tapped feed URL; if found, pushes `SubscriptionEpisodesView`; otherwise pushes `PodcastPreviewView`.
-- `navigationDestination(for: UUID.self)` — used by Recently Viewed rows. Routes to `PodcastPreviewView` (browse/inactive) or `SubscriptionEpisodesView` (active) by subscription ID.
+**Navigation destinations:** Both push `PodcastDetailView`, which renders every podcast state itself.
+- `navigationDestination(for: PodcastSearchResult.self)` — checks for an existing active subscription at the tapped feed URL; if found, pushes `PodcastDetailView(subscriptionID:)`; otherwise `PodcastDetailView(result:)`.
+- `navigationDestination(for: UUID.self)` — used by Recently Viewed rows. Pushes `PodcastDetailView(browseSubscription:)` (browse/inactive) or `PodcastDetailView(subscriptionID:)` (active) by subscription ID.
 
 **Recently Viewed row layout:**
 - **Artwork** — 44×44, `cornerRadius 9`
@@ -1377,30 +1377,33 @@ A full-screen sheet containing its own `NavigationStack`. Presented from `Podcas
 
 ---
 
-## Podcast Preview Page
+## Podcast Detail Page
 
-**Label: `View-PodcastPreview`**
+**Label: `View-PodcastDetail`**
 
-Pushed onto the `PodcastSearchView` navigation stack when a search result or Recently Viewed row is tapped. A `VStack` layout (not `ScrollView`) — the episode list is a `List` that fills remaining vertical space.
+The single page (`PodcastDetailView`) for a podcast in **every** state — an unsubscribed search/preview, a browse-only preview, or an active subscription. Replaces the former `PodcastPreviewView` and `SubscriptionEpisodesView` (merged June 2026). Pushed from Podcast Search, Discover, Recently Viewed, the Priority Stack, and the Player's show name. A `VStack` layout (not `ScrollView`) — the episode list is a `List` that fills remaining vertical space. `MiniPlayerBar` is always docked at the bottom.
 
-A browse subscription is created automatically in the background when the feed finishes loading (`.task`). This means the episode list is always fully interactive from first load. See FEATURES.md §2.4 for the full browse subscription lifecycle.
+For an unsubscribed preview, a browse subscription is created automatically in the background when the feed finishes loading (`.task`), so the episode list is fully interactive from first load. See FEATURES.md §2.4 for the full browse subscription lifecycle.
 
-**Toolbar:** Back button (`chevron.left.circle.fill`) + `ReturnToPlayerButton` — leading placement. Matches all other pushed pages.
+**Toolbar:**
+- Back button (`chevron.left.circle.fill`) — leading, always.
+- Share button (`square.and.arrow.up`) — trailing, always.
+- **Refresh Feed** (`arrow.clockwise`) and **Show Settings** (`gearshape` → `SubscriptionSettingsView`, `.primaryAction`) — shown **only when actively subscribed** (`!excludeFromAutoFeedRefresh`); absent on previews and browse pages.
 
-**Header** — matches `Header-SubscriptionPage` with the addition of a Subscribe button:
+**Header** — matches `Header-SubscriptionPage` with a Subscribe⇄Unsubscribe button appended:
 1. **Artwork** — 120×120 pt, `cornerRadius 20`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
 2. **Title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
-3. **Explicit / Video pills** — shown when applicable, centred below title
+3. **Video / Explicit pills** — `Badge-VideoBadgeLarge` + `Badge-ExplicitPill`, shown when applicable, centred between title and description
 4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, `lineLimit(2)`, HTML-stripped
 5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
-6. **Subscribe button** — full-width, height `50 pt`, `.borderedProminent`, `.purple` tint. Label always `Label("Subscribe", systemImage: "plus.circle.fill")`, `.headline`. Shows `ProgressView` while active. See FEATURES.md §2.3 for action behaviour.
+6. **Subscribe ⇄ Unsubscribe button** — full-width, height `50 pt`, `.borderedProminent`. When not actively subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`. When actively subscribed: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` — tapping shows a confirmation dialog before removing. Shows `ProgressView` while subscribing. See FEATURES.md §2.3.
 
-**Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary` — matches `SubscriptionEpisodesView`.
+**Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary`.
 
-**Episode list** — a `List` in a `RoundedRectangle(cornerRadius: 16)` card with `Color.white.opacity(0.08)` background. Identical layout, swipe actions, and status pills to `SubscriptionEpisodesView`:
+**Episode list** — a `List` in a `RoundedRectangle(cornerRadius: 16)` card with `Color.white.opacity(0.08)` background, using `ListRow-EpisodeRow` (Video/Explicit badges as a top-trailing overlay per DESIGN.md):
 - `NavigationLink` to `EpisodeDetailView` for each row
 - Leading swipe: Play (green), Play Next (blue)
-- Trailing swipe: Archive/Unarchive (purple), Play Last (orange)
+- Trailing swipe: Archive/Unarchive (purple), Play Last (orange) — **no Share swipe**
 - Download progress bar
 - **Load Older Episodes** button at ≥50 episodes — calls `appState.loadFullEpisodeHistory(for:)`
 
@@ -1606,7 +1609,7 @@ The artwork fills the largest square that fits after reserved height is subtract
 Centred, two-line stack placed directly below the artwork.
 
 - **Episode title** — `font(.system(size: 16, weight: .bold))`, `.white`, `multilineTextAlignment(.center)`, `lineLimit(2)`
-- **Subscription name** — `font(.system(size: 12))`, `Color(white: 0.55)`, `multilineTextAlignment(.center)`, `lineLimit(1)`. Tappable: `NavigationLink` to `SubscriptionEpisodesView` for that subscription.
+- **Subscription name** — `font(.system(size: 12))`, `Color(white: 0.55)`, `multilineTextAlignment(.center)`, `lineLimit(1)`. Tappable: `NavigationLink` to `PodcastDetailView` for that subscription.
 
 Empty state (no episode): title becomes `"No Episode"` at `Color(white: 0.3)`, subtitle becomes context-sensitive hint.
 
@@ -1619,7 +1622,7 @@ VStack(alignment: .center, spacing: 3) {
         .lineLimit(2)
         .frame(maxWidth: .infinity)
 
-    NavigationLink { SubscriptionEpisodesView(subscriptionID: sub.id) } label: {
+    NavigationLink { PodcastDetailView(subscriptionID: sub.id) } label: {
         Text(sub.title)
             .font(.system(size: 12))
             .foregroundStyle(Color(white: 0.55))

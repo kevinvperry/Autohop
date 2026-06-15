@@ -15,8 +15,8 @@ import SwiftUI
 // persisted in @AppStorage), and a search-field-shaped shortcut that presents
 // the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
-// results: active subscriptions go to SubscriptionEpisodesView, everything
-// else to PodcastPreviewView (invisible 30-day browse subscription — see
+// results: every entry routes to PodcastDetailView, which renders both the
+// preview (invisible 30-day browse subscription) and subscribed states — see
 // PAGES.md "Browse Subscription Lifecycle").
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
@@ -123,9 +123,9 @@ struct DiscoverView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .preview(let result):
-                    PodcastPreviewView(result: result)
+                    PodcastDetailView(result: result)
                 case .episodes(let subscriptionID):
-                    SubscriptionEpisodesView(subscriptionID: subscriptionID)
+                    PodcastDetailView(subscriptionID: subscriptionID)
                 }
             }
         }

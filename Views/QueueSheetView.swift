@@ -63,7 +63,7 @@ struct QueueSheetView: View {
                                         Text(episode.title)
                                             .font(.subheadline.bold())
                                             .foregroundStyle(.primary)
-                                            .lineLimit(2)
+                                            .lineLimit(isExpanded ? nil : 2)
                                             .onTapGesture {
                                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                                                     expandedEpisodeID = isExpanded ? nil : episode.id

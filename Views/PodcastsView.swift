@@ -11,7 +11,7 @@ import SwiftUI
 // (MenuSheetView) leading, + (DiscoverView sheet — parent of Podcast Search)
 // trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
-// at the bottom except during reorder. Rows navigate to SubscriptionEpisodesView.
+// at the bottom except during reorder. Rows navigate to PodcastDetailView.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editMode: EditMode = .inactive
@@ -90,7 +90,7 @@ struct PodcastsView: View {
                         ForEach(visibleSubscriptions) { subscription in
                             let isPlaying = subscription.latestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
                             NavigationLink {
-                                SubscriptionEpisodesView(subscriptionID: subscription.id)
+                                PodcastDetailView(subscriptionID: subscription.id)
                             } label: {
                                 subscriptionRow(subscription)
                             }

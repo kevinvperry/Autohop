@@ -15,10 +15,9 @@ Keep this file updated whenever a new page is added or an existing one is rename
 |---|---|---|---|
 | **Subscriptions** | `PodcastsView` | Full page | Your subscribed podcasts in priority order — the home page. Centered "Subscriptions" heading; action row below holds Reorder (mode toggle: status pills hide, drag grips show) and refresh-all. Tap a podcast to see its episodes. |
 | **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Reached only via the Discover page's search shortcut. |
-| **Discover** | `DiscoverView` | Sheet | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to Podcast Preview (or the episode page if already subscribed). |
-| **Podcast Preview** | `PodcastPreviewView` | Page (inside Search sheet) | Shows a podcast's artwork, description, and full episode list before subscribing. Subscribe button graduates it to a full subscription. Episodes are fully interactive from first load. |
+| **Discover** | `DiscoverView` | Sheet | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to the Podcast Detail page. |
+| **Podcast Detail** | `PodcastDetailView` | Page | A podcast's artwork, description, and full episode list — one page serving both the unsubscribed preview and a subscribed show. Header has a single Subscribe⇄Unsubscribe button (Unsubscribe asks for confirmation); the Refresh Feed and Show Settings toolbar items appear only when actively subscribed. Episodes are fully interactive from first load — swipe for Play, Play Next, Archive, and Play Last. |
 | **Add RSS Feed** | `AddFeedView` | Page | Manually enter a podcast RSS URL. Fallback for podcasts not found in the search directory. |
-| **Podcast Episodes** | `SubscriptionEpisodesView` | Page | Full episode list for a subscribed podcast. Header shows artwork, title, description. Swipe episodes for Play, Archive, and other actions. |
 | **Podcast Settings** | `SubscriptionSettingsView` | Page | Per-podcast configuration — playback speed, trim silence, auto-archive rules, notifications, and feed exclusion from auto-refresh. |
 | **Episode Detail** | `EpisodeDetailView` | Page | Full detail for a single episode — description, chapters, chapter artwork, playback controls, download and share actions. |
 | **Player** | `PlayerView` | Page (modal overlay) | Full-screen now-playing screen. Shows artwork, title, scrubber, playback controls, chapter list, plus sleep timer, AirPlay, share, and archive actions. A Sleep Schedule indicator pill (bed icon + minutes to the next prompt) appears in the top bar only while inside the active-hours window and pushes the Sleep Schedule page. While a "still listening?" prompt is live a full-screen overlay shows an oversized "Still Listening" confirm button. |
@@ -48,14 +47,13 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
 ├── [Sheet] Audio Controls (AudioControlsSheetView)
 ├── [Sheet] Episode Share (EpisodeShareSheet)
 └── Subscriptions (PodcastsView — home page, pushed above the Player)
-    ├── Podcast Episodes (SubscriptionEpisodesView)
+    ├── Podcast Detail (PodcastDetailView)
     │   ├── Episode Detail (EpisodeDetailView)
     │   └── Podcast Settings (SubscriptionSettingsView)
     ├── [Sheet] Discover (DiscoverView)               ← + button (also top Menu item)
-    │   ├── Podcast Preview (PodcastPreviewView)
-    │   ├── Podcast Episodes (SubscriptionEpisodesView, if already subscribed)
+    │   ├── Podcast Detail (PodcastDetailView)
     │   └── [Sheet] Podcast Search (PodcastSearchView) ← only entry point to Search
-    │       ├── Podcast Preview (PodcastPreviewView)
+    │       ├── Podcast Detail (PodcastDetailView)
     │       └── Add RSS Feed (AddFeedView)
     └── [Sheet] Menu (MenuSheetView)                  ← only path to the pages below
         ├── [Sheet] Discover (DiscoverView)           ← top menu item (same sheet as +)
@@ -93,4 +91,4 @@ Podcasts opened via Podcast Search or Discover but not explicitly subscribed to 
 | Inactive (user-set via Podcast Settings) | `true` | `nil` | Yes |
 | Active subscription | `false` | `nil` | Yes |
 
-Browse subscriptions are automatically deleted after 30 days if no episode has been played or downloaded. The clock resets each time the user reopens the Podcast Preview page.
+Browse subscriptions are automatically deleted after 30 days if no episode has been played or downloaded. The clock resets each time the user reopens the Podcast Detail page.
