@@ -520,7 +520,8 @@ public enum DownloadError: Error, Equatable {
     case cancelled
 }
 
-private extension DownloadManager {
+extension DownloadManager {
+    // Public because it satisfies a DownloadManaging protocol requirement.
     public func activeDownloadEpisodeIDs() async -> Set<UUID> {
         await withCheckedContinuation { continuation in
             session.getAllTasks { tasks in
@@ -532,7 +533,9 @@ private extension DownloadManager {
             }
         }
     }
+}
 
+private extension DownloadManager {
     func clearTaskTracking(taskID: Int) {
         guard let episodeID = episodeIDByTask.removeValue(forKey: taskID) else { return }
         taskIDByEpisodeID.removeValue(forKey: episodeID)

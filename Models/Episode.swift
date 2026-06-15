@@ -19,7 +19,7 @@ import Foundation
 //  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
 //  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
 //    (PodcastIndex JSON chapters) by AppState.
-public struct Episode: Identifiable, Equatable, Codable {
+public struct Episode: Identifiable, Equatable, Codable, Sendable {
     public var id: UUID
     public var subscriptionID: UUID
     public var guid: String
@@ -142,12 +142,12 @@ public struct Episode: Identifiable, Equatable, Codable {
     }
 }
 
-public enum EpisodeMediaKind: String, Codable {
+public enum EpisodeMediaKind: String, Codable, Sendable {
     case audio
     case video
 }
 
-public enum DownloadState: String, Codable {
+public enum DownloadState: String, Codable, Sendable {
     case notDownloaded
     case queued
     case downloading
@@ -155,7 +155,7 @@ public enum DownloadState: String, Codable {
     case failed
 }
 
-public enum PlayedState: String, Codable {
+public enum PlayedState: String, Codable, Sendable {
     case unplayed
     case playing
     case played

@@ -8,7 +8,7 @@ import Foundation
 // TrimSilenceAmount (off/low/medium/high — selects SilenceDetector tuning).
 // Any non-off boost or trim forces the AVAudioEngine playback path; video
 // episodes ignore both and always use AVPlayer.
-public enum TrimSilenceAmount: String, CaseIterable, Codable {
+public enum TrimSilenceAmount: String, CaseIterable, Codable, Sendable {
     case off
     case low
     case medium
@@ -24,7 +24,7 @@ public enum TrimSilenceAmount: String, CaseIterable, Codable {
     }
 }
 
-public enum VocalBoostLevel: String, CaseIterable, Codable {
+public enum VocalBoostLevel: String, CaseIterable, Codable, Sendable {
     case off
     case light
     case standard
@@ -53,7 +53,7 @@ public enum VocalBoostLevel: String, CaseIterable, Codable {
     }
 }
 
-public struct PlaybackPreference: Equatable, Codable {
+public struct PlaybackPreference: Equatable, Codable, Sendable {
     public var speed: Double
     public var startSkipSeconds: TimeInterval
     public var endSkipSeconds: TimeInterval
