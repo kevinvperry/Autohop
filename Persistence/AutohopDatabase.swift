@@ -308,8 +308,12 @@ final class AutohopDatabase: @unchecked Sendable {
     /// subscription must be pushed in full).
     private func recordSubscriptionSyncState(_ subscription: Subscription, into db: Database) throws {
         var state: SubscriptionSyncState
-        if let row = try SubscriptionSyncRow.fetchOne(db, key: subscription.id.uuidString) {
-            state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+        // Use try? so a stale/incompatible payload (e.g. an older projection
+        // shape) re-seeds a fresh projection instead of throwing — a decode
+        // failure here must NEVER roll back the whole persist transaction.
+        if let row = try SubscriptionSyncRow.fetchOne(db, key: subscription.id.uuidString),
+           let decoded = try? decoder.decode(SubscriptionSyncState.self, from: row.payload) {
+            state = decoded
             state.apply(subscription, subscribed: true)
         } else {
             state = SubscriptionSyncState(subscription: subscription, subscribed: true)
@@ -321,8 +325,10 @@ final class AutohopDatabase: @unchecked Sendable {
     /// skipped so the dirty set stays limited to episodes the user actually
     /// touched (played/archived) — matching Pocket Casts' modified-flag semantics.
     private func recordEpisodeSyncState(_ episode: Episode, subscriptionID: UUID, into db: Database) throws {
-        if let row = try EpisodeSyncRow.fetchOne(db, key: episode.guid) {
-            var state = try decoder.decode(EpisodeSyncState.self, from: row.payload)
+        // try? on the decode so a stale payload re-seeds rather than throwing
+        // and rolling back the whole persist transaction.
+        if let row = try EpisodeSyncRow.fetchOne(db, key: episode.guid),
+           var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) {
             state.apply(episode)
             try save(episodeState: state, into: db)
         } else if !EpisodeSyncState.isPristine(episode) {
@@ -333,8 +339,9 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     private func tombstoneSubscriptionSyncState(_ id: UUID, into db: Database) throws {
-        guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return }
-        var state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+        guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString),
+              var state = try? decoder.decode(SubscriptionSyncState.self, from: row.payload)
+        else { return } // no row, or an incompatible payload — nothing to tombstone
         state.subscribed = false // stamps the field dirty
         try save(subscriptionState: state, into: db)
     }
@@ -365,23 +372,24 @@ final class AutohopDatabase: @unchecked Sendable {
 
     // MARK: - Sync-state queries (consumed by the CloudKit step)
 
-    /// Episode projections with unsynced local changes.
+    /// Episode projections with unsynced local changes. A row that can't decode
+    /// (stale shape) is skipped rather than failing the whole query.
     func pendingEpisodeSyncStates() throws -> [EpisodeSyncState] {
         try dbQueue.read { db in
             try EpisodeSyncRow
                 .filter(Column("hasPendingChanges") == true)
                 .fetchAll(db)
-                .map { try decoder.decode(EpisodeSyncState.self, from: $0.payload) }
+                .compactMap { try? decoder.decode(EpisodeSyncState.self, from: $0.payload) }
         }
     }
 
-    /// Subscription projections with unsynced local changes.
+    /// Subscription projections with unsynced local changes. Undecodable rows skipped.
     func pendingSubscriptionSyncStates() throws -> [SubscriptionSyncState] {
         try dbQueue.read { db in
             try SubscriptionSyncRow
                 .filter(Column("hasPendingChanges") == true)
                 .fetchAll(db)
-                .map { try decoder.decode(SubscriptionSyncState.self, from: $0.payload) }
+                .compactMap { try? decoder.decode(SubscriptionSyncState.self, from: $0.payload) }
         }
     }
 
@@ -389,14 +397,14 @@ final class AutohopDatabase: @unchecked Sendable {
     func markSynced(episodeGuids: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
         try dbQueue.write { db in
             for guid in episodeGuids {
-                guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { continue }
-                var state = try decoder.decode(EpisodeSyncState.self, from: row.payload)
+                guard let row = try EpisodeSyncRow.fetchOne(db, key: guid),
+                      var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) else { continue }
                 state.markClean()
                 try save(episodeState: state, into: db)
             }
             for id in subscriptionIDs {
-                guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { continue }
-                var state = try decoder.decode(SubscriptionSyncState.self, from: row.payload)
+                guard let row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString),
+                      var state = try? decoder.decode(SubscriptionSyncState.self, from: row.payload) else { continue }
                 state.markClean()
                 try save(subscriptionState: state, into: db)
             }
@@ -575,6 +583,20 @@ final class AutohopDatabase: @unchecked Sendable {
         try dbQueue.write { db in
             guard var row = try StatsSyncRow.fetchOne(db, key: dayKey) else { return }
             row.systemFields = data
+            try row.save(db)
+        }
+    }
+
+    /// Test seam: writes an undecodable subscription sync payload, simulating a
+    /// row left by an older projection shape (the bug this guards against).
+    func _testWriteCorruptSubscriptionSyncRow(id: UUID) throws {
+        try dbQueue.write { db in
+            let row = SubscriptionSyncRow(
+                subscriptionID: id.uuidString,
+                payload: Data("not-decodable".utf8),
+                hasPendingChanges: false,
+                systemFields: nil
+            )
             try row.save(db)
         }
     }
