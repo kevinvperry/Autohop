@@ -74,10 +74,19 @@ struct level (deliberate v1 simplification).
      legacyBaseline sync deferred (kept per-device for v1). Unit-tested incl.
      cross-device summing; real-device verification pending.
 
-### Remaining
-6. **Active-player-wins + self-heal guards** — ignore remote position/state while
-   actively playing that episode; apply stashed remote state when the feed later
-   yields a missing episode.
+6. ✅ **Active-player-wins + self-heal guards**
+   - Active-player-wins: `SubscriptionStore.nowPlayingGuidProvider` (set by AppState
+     from `PlaybackEngine.currentEpisode`) — in `applyRemoteEpisodeState`, if the
+     remote record is for the episode loaded in the player, the local playedState
+     is kept and re-stamped so it pushes back, instead of a remote played/archived
+     interrupting playback.
+   - Self-heal: a remote episode-state stashed before the episode existed locally
+     is applied in `updateEpisodes` when the feed later brings that episode in.
+   3 unit tests.
+
+**All six steps complete.** Opt-in iCloud sync covers episode user-state,
+per-podcast settings + subscribe/unsubscribe, listening history, and additive
+per-device stats — with field-level LWW, active-player-wins, and self-heal.
 
 ## CloudKit setup notes
 - Container `iCloud.com.kevinperry.autohop`; CloudKit + Push + Background Modes

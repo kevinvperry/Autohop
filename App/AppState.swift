@@ -286,6 +286,11 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
             await MainActor.run { self?.listeningStatsStore.reloadRemoteStats() }
         }
+        // Active-player-wins: tell the store which episode is loaded in the
+        // player so a remote played/archived change can't interrupt it.
+        subscriptionStore.nowPlayingGuidProvider = { [weak playbackEngine] in
+            playbackEngine?.currentEpisode?.guid
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }

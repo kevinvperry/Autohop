@@ -32,6 +32,10 @@ public final class SubscriptionStore: ObservableObject {
     /// Snapshot of what last reached disk, keyed by id, so save() writes only
     /// the rows that actually changed.
     private var persistedSnapshot: [UUID: Subscription] = [:]
+    /// Returns the guid of the episode loaded in the player on this device, so a
+    /// remote played/archived change can't interrupt it (active-player-wins).
+    /// Set by AppState; nil when nothing is loaded.
+    public var nowPlayingGuidProvider: (() -> String?)?
 
     /// - Parameter fileURL: legacy JSON location (defaults to the historical
     ///   subscriptions.json path). Kept as a parameter so existing callers are
@@ -521,6 +525,21 @@ public final class SubscriptionStore: ObservableObject {
                     merged.wasCompleted = true
                 }
             }
+
+            // Self-heal: a remote episode-state may have arrived before this
+            // episode existed locally (stashed as a sync projection). Now that
+            // the feed brings it in, apply that synced state.
+            if existingByGUID[newEpisode.guid] == nil,
+               let projection = try? database?.episodeSyncState(guid: newEpisode.guid) {
+                merged.playedState = projection.playedState
+                merged.wasCompleted = projection.wasCompleted
+                merged.lastPlayedAt = projection.lastPlayedAt
+                if projection.playedState == .archived || projection.playedState == .played {
+                    merged.downloadState = .notDownloaded
+                    merged.localFileURL = nil
+                    merged.localFileName = nil
+                }
+            }
             return merged
         }
         subscriptions[index].episodes = mergedEpisodes
@@ -588,7 +607,18 @@ public final class SubscriptionStore: ObservableObject {
             return false
         }
 
-        let merged = baseline.merged(withRemote: remote)
+        var merged = baseline.merged(withRemote: remote)
+
+        // Active-player-wins: if this episode is loaded in the player on THIS
+        // device, don't let a remote played/archived state interrupt it — keep
+        // the local playedState and re-stamp it so it pushes back as authoritative.
+        if let location, remote.guid == nowPlayingGuidProvider?() {
+            let localPlayed = subscriptions[location.sub].episodes[location.ep].playedState
+            if merged.playedState != localPlayed {
+                merged.$playedState = Synced(wrappedValue: localPlayed, modifiedAt: Date())
+            }
+        }
+
         try? database.saveEpisodeSyncState(merged)
 
         guard let location else { return false }
