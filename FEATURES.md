@@ -79,10 +79,10 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Toolbar buttons (left to right):**
 - Return to Player (play.circle.fill)
-- Hamburger menu (☰) → Discover, Downloads, Listening History, Stats, Import OPML, Settings
+- Hamburger menu (☰) → Discover, Downloads, Listening History, Stats, Sleep Schedule, Settings, Support
 - Reorder toggle ("Reorder" / "Done")
 - Refresh all feeds (arrow.clockwise)
-- Add Podcast / Discover (+) — opens the Discover charts sheet (search lives inside it)
+- Add Podcast / Discover (+) — pushes the Discover charts page (search lives inside it)
 
 ---
 
@@ -121,8 +121,8 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 A single page (`PodcastDetailView`) serves every state of a podcast — an unsubscribed preview, a browse-only preview, and an active subscription. Tapping a search result, a Discover chart entry, a Recently Viewed row, a Priority Stack row, or the show name in the Player all open this same page. For a preview, the RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load. The mini-player bar is always docked at the bottom.
 
 **Page structure:**
-1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, description (2-line truncated), author · categories.
-2. **Subscribe ⇄ Unsubscribe button** — full-width. Shows "Subscribe" (purple) until the show is actively subscribed, then "Unsubscribe" (grey). See §2.3 for behaviour.
+1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, show description (truncated to ~3 lines with a "…more" toggle that expands to the full text when long enough), author · categories.
+2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until actively subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown **only when actively subscribed**. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same flag exposed in Podcast Settings and Notification Settings, and still gated by the global notification toggle.
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
 
 **Toolbar:**

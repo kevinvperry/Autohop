@@ -1394,9 +1394,9 @@ For an unsubscribed preview, a browse subscription is created automatically in t
 1. **Artwork** — 120×120 pt, `cornerRadius 20`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
 2. **Title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
 3. **Video / Explicit pills** — `Badge-VideoPillLarge` + `Badge-ExplicitPillLarge`, shown when applicable, centred between title and description
-4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, `lineLimit(2)`, HTML-stripped
+4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, HTML-stripped. Collapsed to `lineLimit(3)` with a trailing **"…more"** toggle; a hidden measurement probe (`DescriptionTruncationKey` preference) only shows the toggle when the text actually overflows 3 lines, and tapping it expands to the full untruncated description.
 5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
-6. **Subscribe ⇄ Unsubscribe button** — full-width, height `50 pt`, `.borderedProminent`. When not actively subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`. When actively subscribed: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` — tapping shows a confirmation dialog before removing. Shows `ProgressView` while subscribing. See FEATURES.md §2.3.
+6. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (height `50 pt`, `.borderedProminent`; not subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`; subscribed: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` → confirmation dialog before removing; `ProgressView` while subscribing) laid out beside a **notification bell** button (`bell.fill`/`bell.slash`, purple-tinted iOS-glass capsule) shown **only when actively subscribed**, toggling `Subscription.notificationsEnabled` in place. See FEATURES.md §2.2/§2.3.
 
 **Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary`.
 

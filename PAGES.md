@@ -15,8 +15,8 @@ Keep this file updated whenever a new page is added or an existing one is rename
 |---|---|---|---|
 | **Subscriptions** | `PodcastsView` | Full page | Your subscribed podcasts in priority order — the home page. Centered "Subscriptions" heading; action row below holds Reorder (mode toggle: status pills hide, drag grips show) and refresh-all. Tap a podcast to see its episodes. |
 | **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Reached only via the Discover page's search shortcut. |
-| **Discover** | `DiscoverView` | Sheet | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to the Podcast Detail page. |
-| **Podcast Detail** | `PodcastDetailView` | Page | A podcast's artwork, description, and full episode list — one page serving both the unsubscribed preview and a subscribed show. Header has a single Subscribe⇄Unsubscribe button (Unsubscribe asks for confirmation); the Refresh Feed and Show Settings toolbar items appear only when actively subscribed. Episodes are fully interactive from first load — swipe for Play, Play Next, Archive, and Play Last. |
+| **Discover** | `DiscoverView` | Page | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to the Podcast Detail page. |
+| **Podcast Detail** | `PodcastDetailView` | Page | A podcast's artwork, description, and full episode list — one page serving both the unsubscribed preview and a subscribed show. Header has a Subscribe⇄Unsubscribe button (Unsubscribe asks for confirmation) with a per-podcast new-episode notification bell beside it once subscribed, and an expandable "…more" show description; the Refresh Feed and Show Settings toolbar items appear only when actively subscribed. Episodes are fully interactive from first load — swipe for Play, Play Next, Archive, and Play Last. |
 | **Add RSS Feed** | `AddFeedView` | Page | Manually enter a podcast RSS URL. Fallback for podcasts not found in the search directory. |
 | **Podcast Settings** | `SubscriptionSettingsView` | Page | Per-podcast configuration — playback speed, trim silence, auto-archive rules, notifications, and feed exclusion from auto-refresh. |
 | **Episode Detail** | `EpisodeDetailView` | Page | Full detail for a single episode — description, chapters, chapter artwork, playback controls, download and share actions. |
@@ -31,7 +31,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Listening History** | `ListeningHistoryView` | Page (Menu or App Settings) | Log of all episodes listened to, with duration and date. Grouped by time period. Minimum 60s playback threshold. |
 | **Stats** | `StatsView` | Page (inside Menu) | Listening stats over a selectable period (This Week / current month / current year / Lifetime — all calendar-anchored, resetting at the start of each period; the month and year pills are dynamically labelled, e.g. "June" and "2026") — time listened, time saved, episodes finished, streak, listening heatmap (or monthly trend chart), 24-hour listening clock, top shows, Shows You're Drifting From, and time-saved breakdown. Tapping a Top Shows or drifting-shows row expands an inline per-show detail card. |
 | **Sleep Schedule** | `SleepScheduleView` | Page (inside Menu) | Recurring nightly sleep timer: on/off toggle, active-hours window (may span midnight), and prompt duration (10/15/20/40/60 min or End of Episode). During the window, after the duration a soft chime asks "Are you still listening?" over the continuing playback — any transport command confirms; no response within 60 s fades playback out and rewinds to where the chime started. |
-| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item), Downloads, Listening History, Stats, Sleep Schedule, App Settings, and Support (last item), plus the Import OPML action. (Find Podcasts lives behind the + button only.) |
+| **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item — dismisses the Menu and pushes the Discover page), Downloads, Listening History, Stats, Sleep Schedule, App Settings, and Support (last item). (Find Podcasts lives behind the + button only.) |
 | **Support** | `SupportView` | Page (inside Menu, last item) | In-app User Guide. A drill-down list of ~16 topic sections (icon + title + summary); tapping one pushes a native dark-themed detail page (`SupportSectionView`) rendering paragraphs, callouts, tables, status pills, and swipe-action cards. Content lives in `SupportContent.swift` and mirrors the website Support page. |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
 | **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback and feed issues. Dev/support tool. |
@@ -50,13 +50,13 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
     ├── Podcast Detail (PodcastDetailView)
     │   ├── Episode Detail (EpisodeDetailView)
     │   └── Podcast Settings (SubscriptionSettingsView)
-    ├── [Sheet] Discover (DiscoverView)               ← + button (also top Menu item)
+    ├── Discover (DiscoverView — pushed page)         ← + button (also top Menu item)
     │   ├── Podcast Detail (PodcastDetailView)
     │   └── [Sheet] Podcast Search (PodcastSearchView) ← only entry point to Search
     │       ├── Podcast Detail (PodcastDetailView)
     │       └── Add RSS Feed (AddFeedView)
     └── [Sheet] Menu (MenuSheetView)                  ← only path to the pages below
-        ├── [Sheet] Discover (DiscoverView)           ← top menu item (same sheet as +)
+        ├── Discover (DiscoverView — pushed page)     ← top menu item (same page as +)
         ├── Downloads (DownloadsView)
         ├── Listening History (ListeningHistoryView)
         ├── Stats (StatsView)
@@ -74,7 +74,7 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
 Every screen uses exactly one of three exit patterns:
 
 1. **Pushed page** — brand back chevron (`chevron.left.circle.fill`) top-left; nothing else in that corner. `MiniPlayerBar` docks at the bottom (hidden during Subscriptions reorder mode); tapping it pops to the Player.
-2. **Informational sheet** — `SheetCloseButton` (✕) top-right; drag-to-dismiss. No "Done"/"Cancel". (Queue, Menu, Podcast Search, Discover, Audio Controls, Sleep Timer — timer presets apply and close in one tap.)
+2. **Informational sheet** — `SheetCloseButton` (✕) top-right; drag-to-dismiss. No "Done"/"Cancel". (Queue, Menu, Podcast Search, Audio Controls, Sleep Timer — timer presets apply and close in one tap.)
 3. **Editing sheet** — `Cancel` leading / `Save` trailing, reserved for forms that commit data (Edit Title, Edit Priority, skip-interval editor).
 
 Player top bar: quiet icon circle (top-left) pushes Subscriptions — the only nav exit; the Sleep Schedule indicator pill sits next to it (only inside the active-hours window) and pushes the Sleep Schedule page; purple **Queue** button (top-right, with count badge) opens the Queue sheet. One path per page — no duplicate routes.

@@ -115,6 +115,16 @@ final class RSSParserTests: XCTestCase {
 
         XCTAssertEqual(feed.title, "3AW Breakfast with Ross and Russel")
         XCTAssertEqual(episode.chapters.count, 5)
+        // Single-encoded `&amp;` in a chapter title must decode to `&`.
+        XCTAssertEqual(
+            episode.chapters[0].title,
+            "3AW Breakfast with Ross Stevenson & Russel Howcroft - Fri 22nd May, 2026 - Highlights"
+        )
+        // The episode title carrying the same entity decodes too.
+        XCTAssertEqual(
+            episode.title,
+            "3AW Breakfast with Ross Stevenson & Russel Howcroft - Fri 22nd May, 2026 - Highlights"
+        )
         XCTAssertEqual(episode.chapters[1].title, "Marker 01")
         XCTAssertEqual(episode.chapters[1].startSeconds, 1_008)
         XCTAssertEqual(episode.chapters[4].title, "Marker 04")
@@ -192,6 +202,38 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(feed.title, "KIIS & Co")
         // guid must NOT be entity-decoded (identity field).
         XCTAssertEqual(episode.guid, "abc-123")
+    }
+
+    func testDecodesDoubleEncodedEntitiesInChapterTitle() throws {
+        // Chapter titles are XML attributes, so they follow the same single-layer
+        // XMLParser decode + double-encode repair path as element text. A source
+        // `&amp;amp;` arrives as a literal `&amp;` and must be repaired to `&`.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss
+          xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+          xmlns:psc="http://podlove.org/simple-chapters"
+          version="2.0">
+          <channel>
+            <title>Show</title>
+            <item>
+              <title>Ep</title>
+              <guid isPermaLink="false">abc-123</guid>
+              <enclosure url="https://e.com/a.mp3" length="1" type="audio/mpeg"/>
+              <psc:chapters>
+                <psc:chapter start="00:00:00" title="Ross &amp;amp; Russel"/>
+                <psc:chapter start="00:01:00" title="Tom &amp; Jerry"/>
+              </psc:chapters>
+            </item>
+          </channel>
+        </rss>
+        """
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+
+        XCTAssertEqual(episode.chapters.count, 2)
+        XCTAssertEqual(episode.chapters[0].title, "Ross & Russel")
+        XCTAssertEqual(episode.chapters[1].title, "Tom & Jerry")
     }
 
     func testLeavesCorrectlyEncodedTitleUntouched() throws {

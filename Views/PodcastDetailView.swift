@@ -7,7 +7,10 @@ import SwiftUI
 //   • a browse-only preview subscription (init(browseSubscription:))
 //   • an active subscription (init(subscriptionID:))
 // Layout: centred Header-SubscriptionPage (artwork · title · VideoPillLarge/
-// ExplicitPillLarge · description · author/categories) · Subscribe⇄Unsubscribe button
+// ExplicitPillLarge · expandable "…more" description · author/categories) ·
+// subscribeRow (Subscribe⇄Unsubscribe button, plus a per-podcast new-episode
+// notification bell shown beside it only when actively subscribed, bound to
+// Subscription.notificationsEnabled)
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
 // Next) and trailing (Archive / Play Last) swipes — NO share swipe. Toolbar
@@ -29,6 +32,13 @@ struct PodcastDetailView: View {
     @State private var episodeToShare: Episode?
     @State private var showExpandedArtwork = false
     @State private var showUnsubscribeConfirm = false
+    /// Whether the header show-description is expanded to its full untruncated text.
+    @State private var descriptionExpanded = false
+    /// True only when the show-description is long enough to be truncated at 3
+    /// lines — drives whether the "…more" toggle is shown at all.
+    @State private var descriptionTruncated = false
+    /// The episode whose row is tap-expanded to show its full title + description.
+    @State private var expandedEpisodeID: UUID?
     /// Header/feed-URL fallback captured from the subscription so the page stays
     /// populated (and re-subscribable) after the user taps Unsubscribe.
     @State private var snapshot: PodcastSearchResult?
@@ -225,16 +235,30 @@ struct PodcastDetailView: View {
             }
             .padding(.horizontal, 20)
 
-            List {
-                episodeContent
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 18)
+            episodeListCard
+                .padding(.horizontal, 20)
+                .padding(.bottom, 18)
         }
+    }
+
+    /// The Episodes list inside an iOS-glass card, matching the bell button and
+    /// toolbar capsule.
+    @ViewBuilder
+    private var episodeListCard: some View {
+        let list = List {
+            episodeContent
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+
+        Group {
+            if #available(iOS 26, *) {
+                list.glassEffect(in: RoundedRectangle(cornerRadius: 16))
+            } else {
+                list.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: - Header
@@ -250,62 +274,106 @@ struct PodcastDetailView: View {
         let showVideo: Bool = sub?.latestEpisode?.mediaKind == .video
         let showExplicit: Bool = sub?.isExplicit == true
 
-        return VStack(spacing: 12) {
-            CachedArtworkImage(url: artworkURL) {
-                ZStack {
-                    LinearGradient(
-                        colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "waveform")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-            .frame(width: 120, height: 120)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-            .onTapGesture { showExpandedArtwork = true }
-            .sheet(isPresented: $showExpandedArtwork) {
-                ExpandedArtworkSheet(url: artworkURL)
-            }
-
-            VStack(spacing: 4) {
-                Text(title)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-
-                // Video / Explicit pills centred between title and description.
-                if showVideo || showExplicit {
-                    HStack(spacing: 6) {
-                        if showVideo { VideoPillLarge() }
-                        if showExplicit { ExplicitPillLarge() }
+        return VStack(alignment: .leading, spacing: 16) {
+            // Top band: artwork on the left, title + pills stacked to its right.
+            HStack(alignment: .top, spacing: 16) {
+                CachedArtworkImage(url: artworkURL) {
+                    ZStack {
+                        LinearGradient(
+                            colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        Image(systemName: "waveform")
+                            .font(.system(size: 30, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.65))
                     }
                 }
+                .frame(width: 128, height: 128)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+                .onTapGesture { showExpandedArtwork = true }
+                .sheet(isPresented: $showExpandedArtwork) {
+                    ExpandedArtworkSheet(url: artworkURL)
+                }
 
-                if let desc = description.map(stripHTML), !desc.isEmpty {
-                    Text(desc)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Video / Explicit pills below the title.
+                    if showVideo || showExplicit {
+                        HStack(spacing: 6) {
+                            if showVideo { VideoPillLarge() }
+                            if showExplicit { ExplicitPillLarge() }
+                        }
+                    }
+
+                    // Description sits in the right column beside the artwork, with
+                    // an inline purple "…more"/"…less" toggle.
+                    if let desc = description.map(stripHTML), !desc.isEmpty {
+                        Group {
+                            if descriptionExpanded {
+                                // Full text with an inline "…less" toggle.
+                                Text(desc)
+                                    .foregroundColor(.secondary)
+                                + Text("  …less")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundColor(.purple)
+                            } else {
+                                // Truncated to 3 lines. The inline "…more" is only
+                                // overlaid when the text actually overflows.
+                                Text(desc)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                                    .overlay(alignment: .bottomTrailing) {
+                                        if descriptionTruncated {
+                                            Text("…more")
+                                                .font(.footnote.weight(.semibold))
+                                                .foregroundStyle(Color.purple)
+                                                .padding(.leading, 28)
+                                                .background(Color.black)
+                                        }
+                                    }
+                            }
+                        }
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 6) {
-                    if let author {
-                        Text(author).fontWeight(.bold).lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(descriptionTruncationProbe(desc))
+                        .onPreferenceChange(DescriptionTruncationKey.self) { descriptionTruncated = $0 }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard descriptionTruncated else { return }
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                descriptionExpanded.toggle()
+                            }
+                        }
                     }
-                    if author != nil, !categories.isEmpty { Text("·") }
-                    if !categories.isEmpty {
-                        Text(categories.joined(separator: ", ")).fontWeight(.bold).lineLimit(1)
-                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            subscribeButton
+            VStack(spacing: 2) {
+                if let author {
+                    Text(author)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                if !categories.isEmpty {
+                    Text(categories.joined(separator: ", "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            subscribeRow
         }
         .frame(maxWidth: .infinity)
     }
@@ -319,23 +387,90 @@ struct PodcastDetailView: View {
                 Task { await subscribe() }
             }
         } label: {
-            Group {
+            let content = Group {
                 if isSubscribing {
                     ProgressView().tint(.white)
                 } else if isActivelySubscribed {
-                    Label("Unsubscribe", systemImage: "checkmark.circle.fill")
+                    Label("Subscribed", systemImage: "checkmark.circle.fill")
                         .font(.headline)
                 } else {
                     Label("Subscribe", systemImage: "plus.circle.fill")
                         .font(.headline)
                 }
             }
+            .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: 46)
+
+            // Purple-tinted iOS glass to match the glass bell/toolbar capsule.
+            if #available(iOS 26, *) {
+                content.glassEffect(.regular.tint(.purple), in: RoundedRectangle(cornerRadius: 13))
+            } else {
+                content.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 13))
+                    .background(Color.purple.opacity(0.85), in: RoundedRectangle(cornerRadius: 13))
+            }
         }
-        .buttonStyle(.borderedProminent)
-        .tint(isActivelySubscribed ? .gray : .purple)
+        .buttonStyle(.plain)
         .disabled(isSubscribing)
+    }
+
+    /// Hidden probe that reports whether `desc` overflows 3 lines at the current
+    /// width, by comparing the 3-line-limited height to the full height.
+    private func descriptionTruncationProbe(_ desc: String) -> some View {
+        Text(desc)
+            .font(.footnote)
+            .lineLimit(3)
+            .background(
+                GeometryReader { limited in
+                    Text(desc)
+                        .font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(
+                            GeometryReader { full in
+                                Color.clear.preference(
+                                    key: DescriptionTruncationKey.self,
+                                    value: full.size.height > limited.size.height + 1
+                                )
+                            }
+                        )
+                        .hidden()
+                }
+            )
+            .hidden()
+    }
+
+    /// New-episode notification toggle, shown beside the Subscribe button for an
+    /// active subscription. Bound to `Subscription.notificationsEnabled`.
+    @ViewBuilder
+    private var bellButton: some View {
+        if let sub = subscription, isActivelySubscribed {
+            let enabled = sub.notificationsEnabled
+            Button {
+                appState.subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: !enabled)
+            } label: {
+                let icon = Image(systemName: enabled ? "bell.fill" : "bell.slash")
+                    .font(.subheadline)
+                    .foregroundStyle(enabled ? Color.purple : .secondary)
+                    .frame(width: 46, height: 46)
+
+                // Match the toolbar capsule / Video-Explicit pills: real iOS glass.
+                if #available(iOS 26, *) {
+                    icon.glassEffect(in: RoundedRectangle(cornerRadius: 13))
+                } else {
+                    icon.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 13))
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(enabled ? "Disable new-episode notifications" : "Enable new-episode notifications")
+        }
+    }
+
+    /// Subscribe button plus the notification bell, laid out side by side.
+    private var subscribeRow: some View {
+        HStack(spacing: 12) {
+            subscribeButton
+            bellButton
+        }
     }
 
     // MARK: - Episode list
@@ -361,10 +496,12 @@ struct PodcastDetailView: View {
                     } label: {
                         episodeRow(episode, sub: sub)
                     }
+                    // Idle rows are clear so the card's glass shows through; the
+                    // playing row keeps the faint purple tint.
                     .listRowBackground(
                         appState.currentPlayerEpisode?.id == episode.id
                             ? Color.purple.opacity(0.08)
-                            : Color.white.opacity(0.08)
+                            : Color.clear
                     )
                     .swipeActions(edge: .leading, allowsFullSwipe: false) {
                         leadingSwipe(episode: episode, sub: sub)
@@ -393,7 +530,7 @@ struct PodcastDetailView: View {
                             Spacer()
                         }
                     }
-                    .listRowBackground(Color.white.opacity(0.08))
+                    .listRowBackground(Color.clear)
                     .disabled(isLoadingOlderEpisodes)
                 }
             }
@@ -410,7 +547,8 @@ struct PodcastDetailView: View {
     // MARK: - Episode row (ListRow-EpisodeRow)
 
     private func episodeRow(_ episode: Episode, sub: Subscription) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let isExpanded = expandedEpisodeID == episode.id
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL) {
                     ZStack {
@@ -430,13 +568,23 @@ struct PodcastDetailView: View {
                     Text(episode.title)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        .lineLimit(isExpanded ? nil : 2)
+                        // Reserve room on the right so the title never runs under
+                        // the floating video/explicit pills.
+                        .padding(.trailing, 30)
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                expandedEpisodeID = isExpanded ? nil : episode.id
+                            }
+                        }
 
+                    // Episode description: first 3 lines always visible; tap the
+                    // title to expand to the full text.
                     if let desc = episode.description.map(stripHTML), !desc.isEmpty {
                         Text(desc)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(3)
+                            .lineLimit(isExpanded ? nil : 3)
                     }
 
                     HStack(spacing: 4) {
@@ -456,6 +604,7 @@ struct PodcastDetailView: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .padding(.top, 3)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -468,6 +617,7 @@ struct PodcastDetailView: View {
                     .padding(.leading, 56)
                     .padding(.top, 6)
             }
+
         }
         .padding(.vertical, 6)
         .overlay(alignment: .topTrailing) {
@@ -476,6 +626,9 @@ struct PodcastDetailView: View {
                     if episode.mediaKind == .video { VideoPillSmall() }
                     if episode.isExplicit == true { ExplicitPillSmall() }
                 }
+                // Push the pills out over the trailing nav-arrow column so they sit
+                // above the chevron rather than overlapping the headline.
+                .offset(x: 18)
             }
         }
     }
@@ -666,6 +819,14 @@ private func stripHTML(_ html: String) -> String {
         .components(separatedBy: .whitespacesAndNewlines)
         .filter { !$0.isEmpty }
         .joined(separator: " ")
+}
+
+/// Reports whether the show-description overflows its 3-line limit.
+private struct DescriptionTruncationKey: PreferenceKey {
+    static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
 }
 
 private func decodeHTMLEntities(_ text: String) -> String {

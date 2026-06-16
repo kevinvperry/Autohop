@@ -31,11 +31,14 @@ struct VideoPillSmall: View {
 
 struct VideoPillLarge: View {
     var body: some View {
-        let label = Text("Video")
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+        let label = HStack(spacing: 4) {
+            Image(systemName: "tv.fill")
+            Text("Video")
+        }
+        .font(.caption.bold())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())
@@ -51,11 +54,21 @@ struct VideoPillLarge: View {
 
 struct ExplicitPillLarge: View {
     var body: some View {
-        let label = Text("Explicit")
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+        let label = HStack(spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.white)
+                    .frame(width: 11, height: 11)
+                Text("E")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.black)
+            }
+            Text("Explicit")
+        }
+        .font(.caption.bold())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())

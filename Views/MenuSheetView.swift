@@ -2,7 +2,8 @@ import SwiftUI
 
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
-// Discover (top item, presented as its own sheet), Downloads, Listening
+// Discover (top item — dismisses the Menu, then posts .autohopOpenDiscover so
+// RootView pushes DiscoverView as a full page on the main stack), Downloads, Listening
 // History, Stats, Sleep Schedule, App Settings, and Support (last item — the
 // in-app User Guide, SupportView, which mirrors the website Support page).
 // NavRules: one path per page; Find Podcasts lives behind + only; OPML import
@@ -11,7 +12,6 @@ struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showDiscover = false
     @State private var appearTime: Date?
 
     private let logger = AppLogger.shared
@@ -20,7 +20,10 @@ struct MenuSheetView: View {
         NavigationStack {
             List {
                 Button {
-                    showDiscover = true
+                    // Discover opens as a full page on the main stack, not inside
+                    // this sheet — dismiss, then ask RootView to push it.
+                    dismiss()
+                    NotificationCenter.default.post(name: .autohopOpenDiscover, object: nil)
                 } label: {
                     Label("Discover", systemImage: "safari")
                         .foregroundStyle(.primary)
@@ -72,7 +75,6 @@ struct MenuSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showDiscover) { DiscoverView() }
         .onAppear {
             let t = Date()
             appearTime = t

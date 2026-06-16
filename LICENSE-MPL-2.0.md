@@ -32,9 +32,11 @@ Beyond the two covered files, Autohop gratefully acknowledges Pocket Casts
 for iOS as a broader source of **design ideas and inspiration**. Several
 Autohop features follow conventions that Pocket Casts established or
 popularised — including the concepts of silence trimming and a volume/vocal
-boost as per-podcast audio effects, an up-next style playback queue,
-episode auto-archive housekeeping, and on-device listening statistics
-(time listened / time saved). These are *concepts and UX conventions*, not
+boost as per-podcast audio effects, the dark "audio effects" controls
+sheet for adjusting speed/trim/boost mid-playback, an up-next style
+playback queue, episode auto-archive housekeeping, and on-device
+listening statistics (time listened / time saved). These are *concepts
+and UX conventions*, not
 copied code or assets: every implementation outside the two covered files
 is original Autohop work (independent algorithms, layouts, and visual
 design), and no Pocket Casts artwork, strings, or interface assets are

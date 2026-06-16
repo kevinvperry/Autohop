@@ -8,8 +8,8 @@ import SwiftUI
 // Reorder mode so they never fight the drag grips). Pill logic: archived
 // episodes show Played (not Archived) when Episode.wasCompleted is true, so
 // auto-archive doesn't erase the "you finished this" signal. Toolbar: hamburger menu
-// (MenuSheetView) leading, + (DiscoverView sheet — parent of Podcast Search)
-// trailing; Reorder and
+// (MenuSheetView) leading, + (pushes DiscoverView as a full page via
+// navigationDestination — parent of Podcast Search) trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
 // at the bottom except during reorder. Rows navigate to PodcastDetailView.
 struct PodcastsView: View {
@@ -44,7 +44,7 @@ struct PodcastsView: View {
                                 editMode = editMode == .active ? .inactive : .active
                             }
                         } label: {
-                            Label(
+                            let reorderLabel = Label(
                                 editMode == .active ? "Done" : "Reorder",
                                 systemImage: editMode == .active ? "checkmark" : "arrow.up.arrow.down"
                             )
@@ -52,10 +52,21 @@ struct PodcastsView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(
-                                editMode == .active ? Color.purple : Color.white.opacity(0.1),
-                                in: Capsule()
-                            )
+
+                            // iOS glass; purple-tinted while in the active "Done" state.
+                            if #available(iOS 26, *) {
+                                if editMode == .active {
+                                    reorderLabel.glassEffect(.regular.tint(.purple), in: Capsule())
+                                } else {
+                                    reorderLabel.glassEffect(in: Capsule())
+                                }
+                            } else {
+                                reorderLabel.background(
+                                    editMode == .active ? Color.purple.opacity(0.85) : Color.clear,
+                                    in: Capsule()
+                                )
+                                .background(.ultraThinMaterial, in: Capsule())
+                            }
                         }
                         .buttonStyle(.plain)
 
@@ -72,13 +83,25 @@ struct PodcastsView: View {
                             Button {
                                 refreshAll()
                             } label: {
-                                if isRefreshingAll {
-                                    ProgressView()
+                                let refreshIcon = Group {
+                                    if isRefreshingAll {
+                                        ProgressView()
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                                .frame(width: 36, height: 36)
+
+                                // Circular iOS glass button.
+                                if #available(iOS 26, *) {
+                                    refreshIcon.glassEffect(in: Circle())
                                 } else {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 14, weight: .semibold))
+                                    refreshIcon.background(.ultraThinMaterial, in: Circle())
                                 }
                             }
+                            .buttonStyle(.plain)
                             .disabled(isRefreshingAll)
                             .accessibilityLabel("Refresh all feeds")
                         }
@@ -86,29 +109,9 @@ struct PodcastsView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
 
-                    List {
-                        ForEach(visibleSubscriptions) { subscription in
-                            let isPlaying = subscription.latestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
-                            NavigationLink {
-                                PodcastDetailView(subscriptionID: subscription.id)
-                            } label: {
-                                subscriptionRow(subscription)
-                            }
-                            .listRowBackground(isPlaying ? Color.purple.opacity(0.08) : Color.white.opacity(0.08))
-                            .moveDisabled(editMode != .active)
-                        }
-                        .onMove { from, to in
-                            guard editMode == .active else { return }
-                            appState.subscriptionStore.reorder(from: from, to: to)
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .environment(\.editMode, $editMode)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 18)
+                    priorityListCard
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 18)
                 }
             }
         }
@@ -140,7 +143,7 @@ struct PodcastsView: View {
             }
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
-        .sheet(isPresented: $showDiscover) { DiscoverView() }
+        .navigationDestination(isPresented: $showDiscover) { DiscoverView() }
     }
 
     private func refreshAll() {
@@ -149,6 +152,42 @@ struct PodcastsView: View {
             await appState.refreshAllSubscriptions(includeBackoffFeeds: true)
             isRefreshingAll = false
         }
+    }
+
+    /// The Priority Stack list inside an iOS-glass card, matching the bell button
+    /// and toolbar capsule (same treatment as PodcastDetailView's episode list).
+    @ViewBuilder
+    private var priorityListCard: some View {
+        let list = List {
+            ForEach(visibleSubscriptions) { subscription in
+                let isPlaying = subscription.latestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
+                NavigationLink {
+                    PodcastDetailView(subscriptionID: subscription.id)
+                } label: {
+                    subscriptionRow(subscription)
+                }
+                // Idle rows are clear so the card's glass shows through; the
+                // playing row keeps the faint purple tint.
+                .listRowBackground(isPlaying ? Color.purple.opacity(0.08) : Color.clear)
+                .moveDisabled(editMode != .active)
+            }
+            .onMove { from, to in
+                guard editMode == .active else { return }
+                appState.subscriptionStore.reorder(from: from, to: to)
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.editMode, $editMode)
+
+        Group {
+            if #available(iOS 26, *) {
+                list.glassEffect(in: RoundedRectangle(cornerRadius: 16))
+            } else {
+                list.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func subscriptionRow(_ sub: Subscription) -> some View {
@@ -164,6 +203,9 @@ struct PodcastsView: View {
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        // Reserve room on the right so the title never runs under
+                        // the floating video/explicit pills.
+                        .padding(.trailing, 30)
 
                     if let episode = sub.latestEpisode {
                         Text(episode.title)
@@ -233,6 +275,9 @@ struct PodcastsView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                 }
+                // A little extra separation between the status-pill row and the
+                // titles above.
+                .padding(.top, 3)
 
                 if episode.downloadState == .downloading,
                    let progress = appState.downloadProgress[episode.id] {
@@ -252,6 +297,9 @@ struct PodcastsView: View {
                     if episode.mediaKind == .video { VideoPillSmall() }
                     if episode.isExplicit == true { ExplicitPillSmall() }
                 }
+                // Push the pills out over the trailing nav-arrow column so they sit
+                // above the chevron rather than overlapping the headline.
+                .offset(x: 18)
             }
         }
     }

@@ -149,7 +149,7 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             let durationSeconds = attributeDict["duration"].flatMap(Self.parseTimecode)
             let chapter = ParsedChapter(
                 position: chapterPosition,
-                title: title,
+                title: Self.decodingEntities(title),
                 startSeconds: startSeconds,
                 durationSeconds: durationSeconds,
                 source: .pscChapters

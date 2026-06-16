@@ -13,10 +13,14 @@ import SwiftUI
 enum AppRoute: Hashable {
     case podcasts
     case sleepSchedule
+    case discover
 }
 
 extension Notification.Name {
     static let autohopReturnToPlayer = Notification.Name("autohopReturnToPlayer")
+    /// Posted by the Menu to push Discover as a full page on the main stack
+    /// (rather than inside the Menu sheet).
+    static let autohopOpenDiscover = Notification.Name("autohopOpenDiscover")
 }
 
 /// Standard close control for informational sheets (NavRules-SheetClose).
@@ -95,11 +99,18 @@ struct MiniPlayerBar: View {
                     Button {
                         Task { await appState.togglePlayPause() }
                     } label: {
-                        Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                        let playIcon = Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                            .contentShape(Circle())
+
+                        // Centred play/pause icon in a round iOS glass button.
+                        if #available(iOS 26, *) {
+                            playIcon.glassEffect(in: Circle())
+                        } else {
+                            playIcon.background(.ultraThinMaterial, in: Circle())
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(appState.isPlaying ? "Pause" : "Play")
@@ -153,6 +164,8 @@ struct RootView: View {
                             PodcastsView()
                         case .sleepSchedule:
                             SleepScheduleView()
+                        case .discover:
+                            DiscoverView()
                         }
                     }
             }
@@ -171,6 +184,9 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
             navigationPath = NavigationPath()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenDiscover)) { _ in
+            navigationPath.append(AppRoute.discover)
         }
     }
 }

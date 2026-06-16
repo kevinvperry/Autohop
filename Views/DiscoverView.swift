@@ -24,7 +24,10 @@ struct DiscoverView: View {
 
     @StateObject private var viewModel = DiscoverViewModel()
     @AppStorage("discoverCountryCode") private var storedCountryCode = ""
-    @State private var path = NavigationPath()
+    /// Drives the push to Podcast Detail on the ambient stack. Set after the
+    /// async feed resolve completes (Discover is a pushed page, not a sheet, so
+    /// it no longer owns a NavigationStack/path of its own).
+    @State private var pendingRoute: Route?
     @State private var showSearch = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
@@ -89,46 +92,46 @@ struct DiscoverView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Group {
-                switch viewModel.phase {
-                case .loading:
-                    ProgressView("Loading charts…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .failed(let message):
-                    ContentUnavailableView {
-                        Label("Charts Unavailable", systemImage: "antenna.radiowaves.left.and.right.slash")
-                    } description: {
-                        Text(message)
-                    } actions: {
-                        Button("Retry") {
-                            Task { await viewModel.reload(country: country.code) }
-                        }
-                        .buttonStyle(.bordered)
+        Group {
+            switch viewModel.phase {
+            case .loading:
+                ProgressView("Loading charts…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed(let message):
+                ContentUnavailableView {
+                    Label("Charts Unavailable", systemImage: "antenna.radiowaves.left.and.right.slash")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Retry") {
+                        Task { await viewModel.reload(country: country.code) }
                     }
-                case .loaded:
-                    chartsContent
+                    .buttonStyle(.bordered)
                 }
-            }
-            .navigationTitle("Discover")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    countryMenu
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    SheetCloseButton { dismiss() }
-                }
-            }
-            .navigationDestination(for: Route.self) { route in
-                switch route {
-                case .preview(let result):
-                    PodcastDetailView(result: result)
-                case .episodes(let subscriptionID):
-                    PodcastDetailView(subscriptionID: subscriptionID)
-                }
+            case .loaded:
+                chartsContent
             }
         }
+        .navigationTitle("Discover")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                countryMenu
+            }
+        }
+        .navigationDestination(item: $pendingRoute) { route in
+            switch route {
+            case .preview(let result):
+                PodcastDetailView(result: result)
+            case .episodes(let subscriptionID):
+                PodcastDetailView(subscriptionID: subscriptionID)
+            }
+        }
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
         .task(id: country.code) {
             await viewModel.load(country: country.code)
@@ -138,9 +141,6 @@ struct DiscoverView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("This show doesn't have a public RSS feed, so it can't be played in Autohop.")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
-            dismiss()
         }
     }
 
@@ -507,9 +507,9 @@ struct DiscoverView: View {
             if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
                 $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
             }) {
-                path.append(Route.episodes(activeSub.id))
+                pendingRoute = .episodes(activeSub.id)
             } else {
-                path.append(Route.preview(result))
+                pendingRoute = .preview(result)
             }
         }
     }

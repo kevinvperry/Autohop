@@ -45,7 +45,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
-- Stats page: time listened, time saved, episodes finished, and streaks over 7/30/90-day, 1-year, and lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
+- Stats page: time listened, time saved, episodes finished, and streaks over calendar-anchored This Week / this month / this year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
