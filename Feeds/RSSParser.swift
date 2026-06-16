@@ -27,31 +27,66 @@ public final class RSSParser: NSObject {
         return try delegate.buildFeed()
     }
 
-    private static func dataByEscapingBareAmpersands(in data: Data) -> Data {
-        guard var xml = String(data: data, encoding: .utf8) else { return data }
-        let knownEntities = ["amp", "lt", "gt", "quot", "apos"]
-        var output = ""
-        output.reserveCapacity(xml.count)
+    // Internal (not private) so the linear-time guarantee can be unit-tested directly without
+    // routing a pathologically large single text node through XMLParser.
+    static func dataByEscapingBareAmpersands(in data: Data) -> Data {
+        let ampersand = UInt8(ascii: "&")
+        // Fast path: nothing to repair.
+        guard data.contains(ampersand) else { return data }
 
-        while let ampersandRange = xml.range(of: "&") {
-            output += xml[..<ampersandRange.lowerBound]
-            xml.removeSubrange(..<ampersandRange.upperBound)
+        let semicolon = UInt8(ascii: ";")
+        let hash = UInt8(ascii: "#")
+        let knownEntities: Set<[UInt8]> = [
+            Array("amp".utf8), Array("lt".utf8), Array("gt".utf8),
+            Array("quot".utf8), Array("apos".utf8)
+        ]
+        // Longest thing we treat as an entity name: a numeric ref like "#x10FFFF" (8) or the named
+        // entities (≤4). A bounded look-ahead keeps the whole pass O(n).
+        //
+        // This works on UTF-8 BYTES, not Swift `Character`s, deliberately: the previous version
+        // mutated the source String with removeSubrange on every ampersand (O(n²)); iterating it as
+        // a `Character` collection instead is also pathologically slow on large feeds (grapheme
+        // breaking + index arithmetic per scalar). Byte indexing is O(1) with tiny constants, and
+        // ASCII `&`/`;`/`#` can't appear inside a multi-byte UTF-8 sequence, so byte scanning is safe.
+        let maxEntityNameLength = 9
 
-            if let semicolonIndex = xml.firstIndex(of: ";") {
-                let entity = String(xml[..<semicolonIndex])
-                let isNumericEntity = entity.hasPrefix("#")
-                let isKnownEntity = knownEntities.contains(entity)
-                if isNumericEntity || isKnownEntity {
-                    output += "&"
+        let bytes = [UInt8](data)
+        let count = bytes.count
+        let ampReplacement = Array("&amp;".utf8)
+        var output = [UInt8]()
+        output.reserveCapacity(count + 16)
+
+        var i = 0
+        while i < count {
+            let byte = bytes[i]
+            guard byte == ampersand else {
+                output.append(byte)
+                i += 1
+                continue
+            }
+
+            // Look ahead a bounded distance for the terminating ';'.
+            let limit = min(count, i + 1 + maxEntityNameLength)
+            var semicolonIndex = -1
+            var j = i + 1
+            while j < limit {
+                if bytes[j] == semicolon { semicolonIndex = j; break }
+                j += 1
+            }
+            if semicolonIndex >= 0 {
+                let entity = Array(bytes[(i + 1)..<semicolonIndex])
+                if entity.first == hash || knownEntities.contains(entity) {
+                    output.append(ampersand) // already a valid entity — leave it intact
+                    i += 1
                     continue
                 }
             }
 
-            output += "&amp;"
+            output.append(contentsOf: ampReplacement)
+            i += 1
         }
 
-        output += xml
-        return Data(output.utf8)
+        return Data(output)
     }
 }
 

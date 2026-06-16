@@ -107,6 +107,9 @@ final class FeedService: FeedServicing {
             if http.statusCode == 304 {
                 return .notModified
             }
+            // Reject error responses (404/500/captive-portal HTML, etc.) instead of parsing the
+            // body as a feed. 304 is handled above; everything else must be a success status.
+            try HTTPResponseValidation.validate(http)
             newValidators.etag = http.value(forHTTPHeaderField: "ETag")
             newValidators.lastModified = http.value(forHTTPHeaderField: "Last-Modified")
         }

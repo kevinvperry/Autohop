@@ -823,11 +823,23 @@ public final class SubscriptionStore: ObservableObject {
         // One-time migration: if the GRDB store is empty but a legacy
         // subscriptions.json exists, import it, then rename the file so the
         // import never runs again (kept, not deleted, so it's recoverable).
-        if database.isEmpty, let imported = importLegacyFileIfPresent() {
+        if database.isEmpty, let imported = decodeLegacyFileIfPresent() {
             subscriptions = imported.sorted { $0.priorityRank < $1.priorityRank }
             normalizePriorityOrder()
-            try? database.replaceAll(with: subscriptions)
-            persistedSnapshot = snapshotByID(subscriptions)
+            do {
+                try database.replaceAll(with: subscriptions)
+                persistedSnapshot = snapshotByID(subscriptions)
+                // Import decoded AND reached disk — only now retire the legacy file so the
+                // migration never re-runs. If we renamed earlier and the write had failed,
+                // the source would be gone with the data unsaved.
+                retireLegacyFile()
+            } catch {
+                // Persist failed — keep the legacy file so the migration retries next launch.
+                AppLogger.shared.error("subscriptions.legacyImportPersistFailed", "Legacy import decoded but failed to persist; keeping source file", metadata: [
+                    "error": String(describing: error)
+                ])
+                persistedSnapshot = [:]
+            }
             return
         }
 
@@ -846,25 +858,36 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Decodes the legacy JSON file (reusing the same decoder so Subscription's
-    /// legacy-key migration still runs) and renames it to `*.migrated`.
-    /// Returns nil when there is no legacy file to import.
-    private func importLegacyFileIfPresent() -> [Subscription]? {
+    /// legacy-key migration still runs). Returns nil when there is no legacy file
+    /// or it cannot be decoded — in which case the source file is left untouched so
+    /// the caller can retry the migration on a future launch. The file is only
+    /// retired (via `retireLegacyFile()`) once the import has reached the database.
+    private func decodeLegacyFileIfPresent() -> [Subscription]? {
         guard let legacyFileURL,
               FileManager.default.fileExists(atPath: legacyFileURL.path)
         else { return nil }
-
-        defer {
-            let migratedURL = legacyFileURL.appendingPathExtension("migrated")
-            try? FileManager.default.removeItem(at: migratedURL) // clear any prior leftover
-            try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
-        }
 
         do {
             let data = try Data(contentsOf: legacyFileURL)
             return try JSONDecoder().decode([Subscription].self, from: data)
         } catch {
+            AppLogger.shared.error("subscriptions.legacyDecodeFailed", "Legacy subscriptions file present but could not be decoded; keeping it for retry", metadata: [
+                "error": String(describing: error)
+            ])
             return nil
         }
+    }
+
+    /// Renames the legacy file to `*.migrated` so the one-time import never re-runs.
+    /// Called only after a successful decode + persist; the file is kept (not deleted)
+    /// so the migration remains recoverable.
+    private func retireLegacyFile() {
+        guard let legacyFileURL,
+              FileManager.default.fileExists(atPath: legacyFileURL.path)
+        else { return }
+        let migratedURL = legacyFileURL.appendingPathExtension("migrated")
+        try? FileManager.default.removeItem(at: migratedURL) // clear any prior leftover
+        try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
     }
 
     private func snapshotByID(_ subs: [Subscription]) -> [UUID: Subscription] {
@@ -886,10 +909,25 @@ public final class SubscriptionStore: ObservableObject {
         let snapshot = subscriptions
         let previous = persistedSnapshot
         Self.saveQueue.async { [weak self, weak database] in
-            try? database?.persist(current: snapshot, previous: previous)
+            let didPersist: Bool
+            do {
+                try database?.persist(current: snapshot, previous: previous)
+                didPersist = true
+            } catch {
+                didPersist = false
+                AppLogger.shared.error("subscriptions.persistFailed", "Failed to persist subscriptions snapshot", metadata: [
+                    "error": String(describing: error)
+                ])
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.persistedSnapshot = self.snapshotByID(snapshot)
+                // Only advance the persisted snapshot when the write actually reached disk.
+                // Otherwise later saves would diff against a snapshot that was never written and
+                // silently drop the failed mutation. Leaving it unchanged means the next edit's
+                // diff still includes those changes and retries them.
+                if didPersist {
+                    self.persistedSnapshot = self.snapshotByID(snapshot)
+                }
                 self.pendingSave = false
                 if self.saveCoalesced {
                     self.saveCoalesced = false

@@ -38,7 +38,8 @@ actor PodcastSearchService {
             URLQueryItem(name: "entity", value: "podcast"),
             URLQueryItem(name: "limit", value: "25"),
         ]
-        let (data, _) = try await session.data(from: components.url!)
+        let (data, httpResponse) = try await session.data(from: components.url!)
+        try HTTPResponseValidation.validate(httpResponse)
         let response = try JSONDecoder().decode(iTunesSearchResponse.self, from: data)
         return response.results.compactMap { raw in
             guard let feedString = raw.feedUrl, let feedURL = URL(string: feedString) else { return nil }

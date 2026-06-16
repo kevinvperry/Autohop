@@ -18,7 +18,8 @@ actor EpisodeFeedLoader {
 
     /// Fetches and parses the feed at `url`.  Pass `limit: nil` to load all episodes.
     func fetch(feedURL: URL, limit: Int? = 50) async throws -> ParsedFeed {
-        let (data, _) = try await session.data(from: feedURL)
+        let (data, response) = try await session.data(from: feedURL)
+        try HTTPResponseValidation.validate(response)
         return try RSSParser().parse(data: data, maxEpisodes: limit)
     }
 }

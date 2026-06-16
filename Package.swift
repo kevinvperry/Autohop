@@ -81,6 +81,7 @@ let package = Package(
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Feeds/ParsedFeed.swift",
+                "Feeds/HTTPResponseValidation.swift",
                 "Feeds/RSSParser.swift",
                 "Feeds/OPMLService.swift",
                 "Persistence/SubscriptionStore.swift",

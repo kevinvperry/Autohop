@@ -244,6 +244,29 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(feed.latestEpisode).title, "Tom & Jerry")
     }
 
+    func testMixedAmpersandRepairAndNoQuadraticBlowup() throws {
+        // A bare `&` in a URL query, a valid named entity, and a valid numeric entity must all be
+        // handled: bare ones escaped (then decoded by XMLParser to `&`), valid ones preserved.
+        let title = "A & B &amp; C &#8212; D"
+        let xml = "<rss version=\"2.0\"><channel><title>S</title><item><title>\(title)</title>"
+            + "<enclosure url=\"https://e.com/a.mp3?x=1&y=2\" length=\"1\" type=\"audio/mpeg\"/></item></channel></rss>"
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+        XCTAssertEqual(episode.title, "A & B & C — D")
+        XCTAssertEqual(episode.audioURL?.absoluteString, "https://e.com/a.mp3?x=1&y=2")
+
+        // Performance: the ampersand-repair prepass must be linear. The old removeSubrange-per-
+        // ampersand pass was O(n²) and took ~25 min on this input. Test the prepass directly (not
+        // via full parse) so we measure only the repair, not XMLParser's own large-node handling.
+        let many = String(repeating: "Tom & Jerry & friends ", count: 60_000) // ~120k bare ampersands
+        let bigData = Data(many.utf8)
+        let start = Date()
+        let repaired = RSSParser.dataByEscapingBareAmpersands(in: bigData)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0, "Ampersand repair should be linear, not O(n²)")
+        // Sanity: every bare ampersand was escaped.
+        XCTAssertFalse(String(data: repaired, encoding: .utf8)!.contains(" & "))
+    }
+
     private func fixtureData(named name: String, extension fileExtension: String) throws -> Data {
         let url = try XCTUnwrap(
             Bundle.module.url(

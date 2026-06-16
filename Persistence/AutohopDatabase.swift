@@ -22,6 +22,11 @@ final class AutohopDatabase: @unchecked Sendable {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
+    /// Test seam: when set, the next `persist(current:previous:)` throws instead of
+    /// writing, simulating a disk-full / locked-database failure so tests can verify
+    /// the store does not advance its persisted snapshot past an unwritten change.
+    var _testFailNextPersist = false
+
     init(path: String) throws {
         dbQueue = try DatabaseQueue(path: path)
         try Self.migrator.migrate(dbQueue)
@@ -234,6 +239,10 @@ final class AutohopDatabase: @unchecked Sendable {
     /// and a subscription whose value differs is fully rewritten (row + episode
     /// rows). Unchanged subscriptions touch no disk.
     func persist(current: [Subscription], previous: [UUID: Subscription]) throws {
+        if _testFailNextPersist {
+            _testFailNextPersist = false
+            throw _TestPersistError.injectedFailure
+        }
         try dbQueue.write { db in
             let currentIDs = Set(current.map(\.id))
 
@@ -573,7 +582,12 @@ final class AutohopDatabase: @unchecked Sendable {
     // MARK: Stats sync-state accessors (build step 5b)
 
     /// Records THIS device's day bucket as pending push (preserving system fields).
+    /// Test seam: counts `recordStatsDay` calls so tests can assert the per-tick stats
+    /// writes during playback are coalesced rather than issued ~twice a second.
+    var _testStatsDayWriteCount = 0
+
     func recordStatsDay(_ day: DayStats) throws {
+        _testStatsDayWriteCount += 1
         try dbQueue.write { db in
             let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)?.systemFields
             let row = StatsSyncRow(
@@ -615,6 +629,8 @@ final class AutohopDatabase: @unchecked Sendable {
             try row.save(db)
         }
     }
+
+    enum _TestPersistError: Error { case injectedFailure }
 
     /// Test seam: writes an undecodable subscription sync payload, simulating a
     /// row left by an older projection shape (the bug this guards against).

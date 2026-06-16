@@ -201,7 +201,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Downloads artwork from `url`, writes it to a temp file, and returns a
     /// `UNNotificationAttachment` suitable for use as a notification thumbnail.
     private func makeArtworkAttachment(from url: URL) async -> UNNotificationAttachment? {
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              HTTPResponseValidation.isAcceptable(response) else { return nil }
+        // Defend against non-image or oversized responses from arbitrary artwork hosts.
+        guard data.count <= 5 * 1024 * 1024 else { return nil }
+        if let mime = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"),
+           !mime.lowercased().hasPrefix("image/") {
+            return nil
+        }
         let ext = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

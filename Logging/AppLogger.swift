@@ -137,14 +137,29 @@ final class AppLogger: ObservableObject {
 
     static func redactSensitiveText(_ text: String) -> String {
         var redacted = text
+        // Strip URL query strings (signed CDN tokens commonly live here).
         redacted = redacted.replacingOccurrences(
-            of: #"(?i)(https?://[^\s?]+)\?[^\s]+"#,
+            of: #"(?i)(https?://[^\s?#]+)\?[^\s#]*"#,
             with: "$1?[redacted]",
             options: .regularExpression
         )
+        // Strip URL fragments too — credentials occasionally arrive after `#`.
         redacted = redacted.replacingOccurrences(
-            of: #"(?i)((?:auth|token|access_token|api_key|apikey|key|signature|sig|expires|policy|x-amz-signature)=)[^\s&]+"#,
+            of: #"(?i)(https?://[^\s#]+)#[^\s]+"#,
+            with: "$1#[redacted]",
+            options: .regularExpression
+        )
+        // Redact `key=value` credentials anywhere (query params, metadata values). The list covers
+        // the common credential keys including auth/cookie/jwt locations Codex flagged.
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)((?:authorization|auth|access_token|refresh_token|token|api_key|apikey|x-api-key|key|secret|password|passwd|signature|sig|expires|policy|x-amz-signature|cookie|set-cookie|jwt)=)[^\s&]+"#,
             with: "$1[redacted]",
+            options: .regularExpression
+        )
+        // Redact bearer tokens in Authorization-style strings (`Bearer <token>`).
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)\bbearer\s+[A-Za-z0-9._~+/\-]+=*"#,
+            with: "Bearer [redacted]",
             options: .regularExpression
         )
         return redacted

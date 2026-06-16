@@ -112,7 +112,8 @@ actor PodcastChartsService {
         if let cached: [ChartPodcast] = cachedCharts(key: key) { return cached }
 
         let url = URL(string: "https://rss.marketingtools.apple.com/api/v2/\(country)/podcasts/top/\(limit)/podcasts.json")!
-        let (data, _) = try await session.data(from: url)
+        let (data, httpResponse) = try await session.data(from: url)
+        try HTTPResponseValidation.validate(httpResponse)
         let response = try JSONDecoder().decode(MarketingToolsFeed.self, from: data)
         let charts = response.feed.results.enumerated().map { index, raw in
             ChartPodcast(
@@ -134,7 +135,8 @@ actor PodcastChartsService {
         if let cached: [ChartPodcast] = cachedCharts(key: key) { return cached }
 
         let url = URL(string: "https://itunes.apple.com/\(country)/rss/toppodcasts/limit=\(limit)/genre=\(genre.id)/json")!
-        let (data, _) = try await session.data(from: url)
+        let (data, httpResponse) = try await session.data(from: url)
+        try HTTPResponseValidation.validate(httpResponse)
         let response = try JSONDecoder().decode(LegacyChartsFeed.self, from: data)
         let charts = (response.feed.entry ?? []).enumerated().compactMap { index, raw -> ChartPodcast? in
             guard let id = raw.id.attributes?.imID else { return nil }
@@ -164,7 +166,8 @@ actor PodcastChartsService {
             URLQueryItem(name: "entity", value: "podcast"),
             URLQueryItem(name: "country", value: country),
         ]
-        let (data, _) = try await session.data(from: components.url!)
+        let (data, httpResponse) = try await session.data(from: components.url!)
+        try HTTPResponseValidation.validate(httpResponse)
         let response = try JSONDecoder().decode(LookupResponse.self, from: data)
         guard let raw = response.results.first,
               let feedString = raw.feedUrl,

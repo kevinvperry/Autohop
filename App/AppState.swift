@@ -1746,7 +1746,9 @@ final class AppState: ObservableObject {
                 playbackEngine.seek(to: safeResumeTime)
                 currentPlayerTime = safeResumeTime
             } else {
-                currentPlayerTime = 0
+                // No resume — playback begins at the start-skip offset, so report that rather than 0
+                // (otherwise Now Playing and history tracking briefly show 0 until the first tick).
+                currentPlayerTime = subscription.playbackPreference.startSkipSeconds
             }
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
@@ -2800,7 +2802,8 @@ final class AppState: ObservableObject {
     }
 
     private func fetchExternalChapters(url: URL, episodeID: UUID) async -> [Chapter]? {
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              HTTPResponseValidation.isAcceptable(response) else { return nil }
         struct JSONChapters: Decodable {
             struct JSONChapter: Decodable {
                 var startTime: TimeInterval

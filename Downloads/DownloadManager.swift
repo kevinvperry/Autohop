@@ -228,9 +228,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             // Always purge stale map entries so the episode can be re-downloaded regardless of
-            // whether a live URLSession task exists (e.g. after a force-kill).
-            if let taskID = self.taskIDByEpisodeID.removeValue(forKey: episodeID) {
-                self.episodeIDByTask.removeValue(forKey: taskID)
+            // whether a live URLSession task exists (e.g. after a force-kill). Capture the task ID
+            // first — we still need it to cancel the live task below.
+            let removedTaskID = self.taskIDByEpisodeID.removeValue(forKey: episodeID)
+            if let removedTaskID {
+                self.episodeIDByTask.removeValue(forKey: removedTaskID)
             }
             if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID) {
                 self.taskIDByMediaURL.removeValue(forKey: url)
@@ -238,7 +240,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             self.resumeDataByEpisodeID.removeValue(forKey: episodeID)
             self.lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
 
-            guard let taskID = self.taskIDByEpisodeID[episodeID] else {
+            guard let taskID = removedTaskID else {
                 // No live task — map entries already cleared above; nothing more to cancel.
                 self.logger.info("download.cancelNoTask", "Cancel requested but no live task found — maps cleared", metadata: [
                     "episodeID": episodeID.uuidString
@@ -411,6 +413,26 @@ extension DownloadManager: URLSessionDownloadDelegate {
             ?? downloadTask.currentRequest?.url
             ?? URL(string: "https://placeholder.invalid")!
 
+        // Validate the HTTP response before storing anything. A background download task still
+        // delivers a body to didFinishDownloadingTo on 4xx/5xx (an HTML error/login/captive-portal
+        // page), which must never be stored as episode media and marked downloaded.
+        if let status = Self.rejectableHTTPStatus(of: downloadTask.response) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.httpError", "Download rejected: non-success HTTP status", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "status": "\(status)"
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.httpStatus(status))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
+
         let placeholder = Episode(
             id: episodeID,
             subscriptionID: meta?.subscriptionID ?? UUID(),
@@ -518,6 +540,9 @@ public enum DownloadError: Error, Equatable {
     case duplicateDownload
     case paused
     case cancelled
+    /// The host returned a non-success HTTP status (e.g. 404/500). The delivered body
+    /// (often an HTML error/login page) must not be stored as episode media.
+    case httpStatus(Int)
 }
 
 extension DownloadManager {
@@ -527,11 +552,27 @@ extension DownloadManager {
             session.getAllTasks { tasks in
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { continuation.resume(returning: []); return }
-                    let ids = Set(tasks.compactMap { self.episodeIDByTask[$0.taskIdentifier] })
+                    // Decode the episode ID straight from each task's taskDescription rather than the
+                    // in-memory episodeIDByTask map: that map is rebuilt asynchronously after init
+                    // (rebuildTaskMapsFromLiveSession), so at startup it may still be empty when
+                    // AppState reconciles. taskDescription is set on the task itself and is always
+                    // authoritative, avoiding a race that would mark live downloads as failed.
+                    let ids = Set(tasks.compactMap { self.decodeTaskMeta($0.taskDescription)?.episodeID })
                     continuation.resume(returning: ids)
                 }
             }
         }
+    }
+}
+
+extension DownloadManager {
+    /// Returns the offending HTTP status code if `response` is a non-success HTTP response,
+    /// or `nil` when it is acceptable (a 2xx HTTP response, or a non-HTTP response we cannot
+    /// classify — e.g. `file://`, which is left to downstream playability checks).
+    /// Internal so it can be exercised by unit/smoke tests without a live network.
+    static func rejectableHTTPStatus(of response: URLResponse?) -> Int? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        return (200...299).contains(http.statusCode) ? nil : http.statusCode
     }
 }
 

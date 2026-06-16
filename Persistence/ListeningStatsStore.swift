@@ -250,8 +250,35 @@ public final class ListeningStatsStore: ObservableObject {
         Array(Set(data.days.keys).union(remoteByDayKey.keys))
     }
 
+    // The sync database row stores the FULL day bucket, not a delta, so these writes can be
+    // coalesced freely: until flushed the in-memory `data.days` is authoritative, and the next
+    // flush re-writes the complete, current bucket. This avoids ~2 SQLite write transactions per
+    // second during playback (addListeningTime fires every 0.5 s).
+    private var pendingStatsDayKeys = Set<String>()
+    private var lastStatsDayWriteAt: Date?
+    private let statsDayWriteThrottle: TimeInterval = 10
+
     private func recordDayPending(_ day: DayStats) {
-        try? syncDatabase?.recordStatsDay(day)
+        guard syncDatabase != nil else { return }
+        pendingStatsDayKeys.insert(day.dayKey)
+        if let last = lastStatsDayWriteAt, Date().timeIntervalSince(last) < statsDayWriteThrottle {
+            return // coalesce — flushed on the throttle window or at a lifecycle checkpoint
+        }
+        flushPendingStatsDays()
+    }
+
+    /// Writes every coalesced day bucket to the sync database. Called on the write throttle and at
+    /// lifecycle checkpoints (pause / background / explicit save) so the sync projection is current
+    /// without a write on every playback tick.
+    public func flushPendingStatsDays() {
+        guard let syncDatabase, !pendingStatsDayKeys.isEmpty else { return }
+        for key in pendingStatsDayKeys {
+            if let day = data.days[key] {
+                try? syncDatabase.recordStatsDay(day)
+            }
+        }
+        pendingStatsDayKeys.removeAll()
+        lastStatsDayWriteAt = Date()
     }
 
     /// A day counts toward streaks once it has at least this much listening.
@@ -510,6 +537,9 @@ public final class ListeningStatsStore: ObservableObject {
     // MARK: - Persistence
 
     public func save() {
+        // A full save is a real persistence checkpoint (pause / background / shutdown) — make sure
+        // any coalesced stats-day writes reach the sync database too.
+        flushPendingStatsDays()
         guard let url = fileURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
