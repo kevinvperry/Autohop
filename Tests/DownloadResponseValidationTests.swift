@@ -59,4 +59,43 @@ final class DownloadResponseValidationTests: XCTestCase {
         XCTAssertEqual(DownloadError.httpStatus(404), DownloadError.httpStatus(404))
         XCTAssertNotEqual(DownloadError.httpStatus(404), DownloadError.httpStatus(500))
     }
+
+    // MARK: - Implausibly small body (LOG-DL-001: 17-byte body for a 30 MB episode)
+
+    func testRejectsTinyBodyWhenFeedDeclaredLarge() {
+        // The exact logged case: 17 bytes received, feed declared ~30 MB.
+        XCTAssertTrue(DownloadManager.isImplausiblySmallDownload(actualBytes: 17, expectedBytes: 30_304_896))
+    }
+
+    func testRejectsZeroBytes() {
+        XCTAssertTrue(DownloadManager.isImplausiblySmallDownload(actualBytes: 0, expectedBytes: 30_304_896))
+        XCTAssertTrue(DownloadManager.isImplausiblySmallDownload(actualBytes: 0, expectedBytes: nil))
+    }
+
+    func testAcceptsFullSizeDownload() {
+        XCTAssertFalse(DownloadManager.isImplausiblySmallDownload(actualBytes: 30_304_896, expectedBytes: 30_304_896))
+    }
+
+    func testAcceptsPlausibleSmallerThanDeclared() {
+        // 50 KB actual against a 100 KB declared clip — above the 5%/64 KB floor, so accepted.
+        XCTAssertFalse(DownloadManager.isImplausiblySmallDownload(actualBytes: 51_200, expectedBytes: 102_400))
+    }
+
+    func testUnknownExpectedRejectsOnlyTinyBodies() {
+        XCTAssertTrue(DownloadManager.isImplausiblySmallDownload(actualBytes: 17, expectedBytes: nil))
+        XCTAssertFalse(DownloadManager.isImplausiblySmallDownload(actualBytes: 200_000, expectedBytes: nil))
+    }
+
+    func testFloorBoundary() {
+        // 64 KB exactly against a large declared size is accepted; just under is rejected.
+        XCTAssertFalse(DownloadManager.isImplausiblySmallDownload(actualBytes: 65_536, expectedBytes: 30_304_896))
+        XCTAssertTrue(DownloadManager.isImplausiblySmallDownload(actualBytes: 65_535, expectedBytes: 30_304_896))
+    }
+
+    func testIncompleteDownloadErrorEquatable() {
+        XCTAssertEqual(DownloadError.incompleteDownload(actualBytes: 17, expectedBytes: 30),
+                       DownloadError.incompleteDownload(actualBytes: 17, expectedBytes: 30))
+        XCTAssertNotEqual(DownloadError.incompleteDownload(actualBytes: 17, expectedBytes: 30),
+                          DownloadError.incompleteDownload(actualBytes: 18, expectedBytes: 30))
+    }
 }

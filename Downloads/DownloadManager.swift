@@ -171,7 +171,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
         task.taskDescription = encodeTaskMeta(
             episodeID: episode.id,
             subscriptionID: episode.subscriptionID,
-            audioURL: episode.audioURL
+            audioURL: episode.audioURL,
+            expectedBytes: episode.fileSizeBytes
         )
         continuations[task.taskIdentifier] = continuation
         episodeIDByTask[task.taskIdentifier] = episode.id
@@ -347,11 +348,14 @@ public final class DownloadManager: NSObject, DownloadManaging {
         var episodeID: UUID
         var subscriptionID: UUID
         var audioURL: URL
+        // Feed-declared enclosure length, used to sanity-check the completed transfer size.
+        // Optional + decoded with `try?` so descriptions written by older builds still decode.
+        var expectedBytes: Int64?
     }
 
-    private func encodeTaskMeta(episodeID: UUID, subscriptionID: UUID, audioURL: URL) -> String? {
+    private func encodeTaskMeta(episodeID: UUID, subscriptionID: UUID, audioURL: URL, expectedBytes: Int64?) -> String? {
         guard let data = try? JSONEncoder().encode(
-            TaskMeta(episodeID: episodeID, subscriptionID: subscriptionID, audioURL: audioURL)
+            TaskMeta(episodeID: episodeID, subscriptionID: subscriptionID, audioURL: audioURL, expectedBytes: expectedBytes)
         ) else { return nil }
         return String(data: data, encoding: .utf8)
     }
@@ -428,6 +432,28 @@ extension DownloadManager: URLSessionDownloadDelegate {
                     "status": "\(status)"
                 ])
                 self.continuations[taskID]?.resume(throwing: DownloadError.httpStatus(status))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
+
+        // Reject implausibly small bodies — a 200 response can still deliver a tiny error/placeholder
+        // body (e.g. 17 bytes where the feed declared ~30 MB) that must not be stored as media.
+        let actualBytes = ((try? fileManager.attributesOfItem(atPath: location.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        if Self.isImplausiblySmallDownload(actualBytes: actualBytes, expectedBytes: meta?.expectedBytes) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            let expected = meta?.expectedBytes
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.tooSmall", "Download rejected: body too small to be valid media", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "actualBytes": "\(actualBytes)",
+                    "expectedBytes": expected.map(String.init) ?? "unknown"
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.incompleteDownload(actualBytes: actualBytes, expectedBytes: expected))
                 self.continuations.removeValue(forKey: taskID)
             }
             return
@@ -543,6 +569,10 @@ public enum DownloadError: Error, Equatable {
     /// The host returned a non-success HTTP status (e.g. 404/500). The delivered body
     /// (often an HTML error/login page) must not be stored as episode media.
     case httpStatus(Int)
+    /// The transfer completed with a status 200 but the body is implausibly small for audio media
+    /// (e.g. a 17-byte error/placeholder body where the feed declared ~30 MB). Treated as a
+    /// retryable failure rather than a successful download.
+    case incompleteDownload(actualBytes: Int64, expectedBytes: Int64?)
 }
 
 extension DownloadManager {
@@ -573,6 +603,23 @@ extension DownloadManager {
     static func rejectableHTTPStatus(of response: URLResponse?) -> Int? {
         guard let http = response as? HTTPURLResponse else { return nil }
         return (200...299).contains(http.statusCode) ? nil : http.statusCode
+    }
+
+    /// True when a completed (HTTP-200) transfer is too small to be real audio media, so it must not
+    /// be stored as a downloaded episode. Catches error/placeholder bodies a host returns with a 200
+    /// (e.g. 17 bytes where the feed declared ~30 MB), which the status check alone cannot detect.
+    /// Internal so it is unit-testable without a live download.
+    static func isImplausiblySmallDownload(actualBytes: Int64, expectedBytes: Int64?) -> Bool {
+        if actualBytes <= 0 { return true }
+        if let expected = expectedBytes, expected > 0 {
+            // Reject when we received far less than the feed declared: below 5% of expected, capped
+            // at a 64 KB floor so genuinely small clips with a large declared size still pass.
+            let floor = min(Int64(65536), expected / 20)
+            return actualBytes < floor
+        }
+        // Expected size unknown — keep the bar very low so legitimate short clips are never rejected;
+        // only obviously-tiny bodies (error pages) are caught.
+        return actualBytes < 1024
     }
 }
 
