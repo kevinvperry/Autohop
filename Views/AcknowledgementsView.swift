@@ -34,7 +34,12 @@ struct AcknowledgementsView: View {
                 }
                 .font(.footnote)
             }
+            .listRowBackground(Color.white.opacity(0.08))
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

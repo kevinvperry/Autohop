@@ -13,7 +13,9 @@ import Charts
 // rose chart), Top Shows (+ Show All page with rank-movement badges vs. the
 // previous comparable period — prior week / calendar month / calendar year),
 // "Shows You're Drifting From" (ShowEngagementAnalyzer, heatmap ranges only,
-// omitted when empty), time-saved breakdown, privacy footer. Tapping a Top Shows or
+// omitted when empty), time-saved breakdown, data-downloaded card (total bytes
+// + episode count / average size, forward-only from June 2026), privacy footer.
+// Tapping a Top Shows or
 // drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
 // All on-device data only.
 // MARK: - StatsView
@@ -134,6 +136,7 @@ private struct StatsContentView: View {
                 topShowsSection(summary)
                 driftingShowsSection(summary)
                 timeSavedSection(summary)
+                dataDownloadedSection(summary)
 
                 privacyFooter
             }
@@ -444,12 +447,18 @@ private struct StatsContentView: View {
     @ViewBuilder
     private func driftingShowsSection(_ summary: ListeningStatsSummary) -> some View {
         if range.usesHeatmap, let since = range.sinceDate {
-            // Unsubscribed shows are excluded — drift from a show you already left is resolved.
+            // Only real, active subscriptions qualify. Unsubscribed shows are
+            // excluded (drift from a show you already left is resolved), and so are
+            // invisible browse/preview subscriptions (browseDate != nil) auto-created
+            // when previewing a podcast in search — the user never subscribed to those.
             let shows = ShowEngagementAnalyzer.strugglingShows(
                 entries: historyStore.entries,
                 since: since,
                 excluding: hiddenDriftShowIDs
-            ).filter { appState.subscriptionStore.subscription(id: $0.subscriptionID) != nil }
+            ).filter {
+                guard let sub = appState.subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
+                return sub.browseDate == nil
+            }
 
             if !shows.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
@@ -600,6 +609,36 @@ private struct StatsContentView: View {
             }
             .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
         }
+    }
+
+    // MARK: - Data downloaded
+
+    private func dataDownloadedSection(_ summary: ListeningStatsSummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeading("Data Downloaded", icon: "arrow.down.circle")
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(formattedBytes(summary.bytesDownloaded))
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(.cyan)
+                    .contentTransition(.numericText())
+                Text(downloadContextLine(summary))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
+    /// "12 episodes · avg 45 MB each", or a friendly empty state.
+    private func downloadContextLine(_ summary: ListeningStatsSummary) -> String {
+        let count = summary.episodesDownloaded
+        guard count > 0 else { return "No episodes downloaded in this period" }
+        let episodeWord = count == 1 ? "episode" : "episodes"
+        let average = summary.bytesDownloaded / Int64(count)
+        return "\(count) \(episodeWord) · avg \(formattedBytes(average)) each"
     }
 
     private func timeSavedRow(icon: String, label: String, seconds: TimeInterval) -> some View {
@@ -1249,4 +1288,10 @@ private func formattedLongDuration(_ seconds: TimeInterval) -> String {
     }
     if minutes > 0 { return "\(minutes)m" }
     return "\(totalSeconds % 60)s"
+}
+
+/// Human-readable data size using the file/decimal convention (e.g. "1.2 GB",
+/// "45 MB") — matches how iOS reports cellular and storage usage.
+private func formattedBytes(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
 }

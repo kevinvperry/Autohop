@@ -5,7 +5,8 @@ import Foundation
 // calendar day in DayStats records (wall-clock seconds, 24-hour histogram,
 // per-show seconds and per-show time saved keyed by subscription UUID with a
 // title map that survives unsubscribes, four time-saved categories, episodes
-// started/completed, manual skip count). Persisted to listening-stats.json; saves throttled to
+// started/completed, manual skip count, and bytes/episodes downloaded
+// (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause/background (AutohopApp).
 // Legacy lifetime totals from playback-stats.json are imported once as
 // `legacyBaseline` so pre-daily-bucketing history isn't lost.
@@ -74,6 +75,13 @@ public struct DayStats: Codable, Equatable {
     public var episodesStarted: Int
     public var episodesCompleted: Int
     public var manualSkipForwardCount: Int
+    /// Bytes downloaded on this day (sum of completed episode download sizes).
+    /// Forward-only: tracking began June 2026, so days before then are 0 and
+    /// any period sum reflects traffic since this build, not all-time history.
+    public var bytesDownloaded: Int64
+    /// Number of episodes whose download completed on this day — pairs with
+    /// `bytesDownloaded` for the "N episodes · avg size" stat line.
+    public var episodesDownloaded: Int
 
     public init(
         dayKey: String,
@@ -87,7 +95,9 @@ public struct DayStats: Codable, Equatable {
         timeSavedAutoSkip: TimeInterval = 0,
         episodesStarted: Int = 0,
         episodesCompleted: Int = 0,
-        manualSkipForwardCount: Int = 0
+        manualSkipForwardCount: Int = 0,
+        bytesDownloaded: Int64 = 0,
+        episodesDownloaded: Int = 0
     ) {
         self.dayKey = dayKey
         self.wallClockSeconds = wallClockSeconds
@@ -101,6 +111,8 @@ public struct DayStats: Codable, Equatable {
         self.episodesStarted = episodesStarted
         self.episodesCompleted = episodesCompleted
         self.manualSkipForwardCount = manualSkipForwardCount
+        self.bytesDownloaded = bytesDownloaded
+        self.episodesDownloaded = episodesDownloaded
     }
 
     public var totalTimeSaved: TimeInterval {
@@ -123,6 +135,8 @@ public struct DayStats: Codable, Equatable {
         r.episodesStarted += other.episodesStarted
         r.episodesCompleted += other.episodesCompleted
         r.manualSkipForwardCount += other.manualSkipForwardCount
+        r.bytesDownloaded += other.bytesDownloaded
+        r.episodesDownloaded += other.episodesDownloaded
         return r
     }
 
@@ -132,6 +146,7 @@ public struct DayStats: Codable, Equatable {
         case dayKey, wallClockSeconds, hourSeconds, perShowSeconds, perShowTimeSaved
         case timeSavedVariableSpeed, timeSavedTrimSilence, timeSavedManualSkip, timeSavedAutoSkip
         case episodesStarted, episodesCompleted, manualSkipForwardCount
+        case bytesDownloaded, episodesDownloaded
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,6 +164,9 @@ public struct DayStats: Codable, Equatable {
         episodesStarted = try c.decode(Int.self, forKey: .episodesStarted)
         episodesCompleted = try c.decode(Int.self, forKey: .episodesCompleted)
         manualSkipForwardCount = try c.decode(Int.self, forKey: .manualSkipForwardCount)
+        // Absent in JSON written before download-data tracking (2026-06).
+        bytesDownloaded = try c.decodeIfPresent(Int64.self, forKey: .bytesDownloaded) ?? 0
+        episodesDownloaded = try c.decodeIfPresent(Int.self, forKey: .episodesDownloaded) ?? 0
     }
 }
 
@@ -165,6 +183,10 @@ public struct ListeningStatsSummary {
     public var episodesStarted: Int = 0
     public var episodesCompleted: Int = 0
     public var manualSkipForwardCount: Int = 0
+    /// Bytes downloaded over the period (forward-only, since June 2026).
+    public var bytesDownloaded: Int64 = 0
+    /// Episodes downloaded over the period — pairs with `bytesDownloaded`.
+    public var episodesDownloaded: Int = 0
     /// Wall-clock seconds per subscription UUID string, summed over the period.
     public var perShowSeconds: [String: TimeInterval] = [:]
     /// Time saved per subscription UUID string, summed over the period. Empty
@@ -375,6 +397,17 @@ public final class ListeningStatsStore: ObservableObject {
         mutateToday { $0.episodesCompleted += 1 }
     }
 
+    /// Records one completed episode download of `bytes` against today's bucket.
+    /// Called from AppState's download-success path. Forward-only — there is no
+    /// historical byte data to backfill, so totals accrue from this build onward.
+    public func recordDownload(bytes: Int64) {
+        guard bytes > 0 else { return }
+        mutateToday {
+            $0.bytesDownloaded += bytes
+            $0.episodesDownloaded += 1
+        }
+    }
+
     /// Replaces the bucket for the day's `dayKey`. For backfill/migration tooling
     /// and smoke tests — normal recording goes through the add/record methods.
     public func importDay(_ day: DayStats) {
@@ -431,6 +464,8 @@ public final class ListeningStatsStore: ObservableObject {
             result.episodesStarted += day.episodesStarted
             result.episodesCompleted += day.episodesCompleted
             result.manualSkipForwardCount += day.manualSkipForwardCount
+            result.bytesDownloaded += day.bytesDownloaded
+            result.episodesDownloaded += day.episodesDownloaded
             for (show, seconds) in day.perShowSeconds {
                 result.perShowSeconds[show, default: 0] += seconds
             }

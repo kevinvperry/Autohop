@@ -4,12 +4,18 @@ import Foundation
 // Pure functions (no I/O, smoke-tested in StatsSmokeTests) powering the Stats
 // page's "Shows You're Drifting From" section. Classifies each listening-
 // history entry into completed / abandoned / archivedUnplayed(deliberate:),
-// aggregates per show, and flags shows with struggleScore ≥ 0.4, ≥ 4 resolved
-// episodes, AND ≥ 2 genuine drift signals (abandoned or deliberately archived)
-// — the last rule guarantees auto-archive churn alone (e.g. episode-limit
-// cycling through news bulletins) can never flag a show. Thresholds are the
-// constants below; medianStopSeconds feeds the "you usually stop around the
-// N-minute mark" insight line.
+// aggregates per show, then flags a show via either of two paths:
+//   • DRIFT — struggleScore ≥ 0.4, ≥ 4 resolved episodes, AND ≥ 2 genuine
+//     drift signals (abandoned mid-listen or deliberately archived unplayed).
+//     The genuine-signal rule means auto-archive churn can't flag a show the
+//     user is actively using (some completions + lots of limit cycling).
+//   • NEGLECT (ghost subscription) — completed == 0 AND ≥ minNeglectedAutoArchives
+//     auto-archived unplayed: new episodes keep arriving and aging out of the
+//     episode limit while the user never finishes one. The discriminator from
+//     healthy high-volume use is the completion COUNT, not the auto-archive rate
+//     (both a happy news listener and a lapsed one sit near a 100% auto rate).
+// Thresholds are the constants below; medianStopSeconds feeds the "you usually
+// stop around the N-minute mark" insight line.
 
 // MARK: - EpisodeOutcome
 
@@ -55,6 +61,15 @@ public struct ShowEngagement: Identifiable {
         return badness / Double(totalResolved)
     }
 
+    /// A "ghost" subscription: the user has never finished an episode this period,
+    /// yet the episode limit keeps auto-archiving unplayed ones — new episodes
+    /// arrive and age out without ever being listened to. This is the neglect
+    /// path into the drifting list, distinct from engaged-then-drifted shows.
+    /// See `ShowEngagementAnalyzer.minNeglectedAutoArchives`.
+    public var isNeglected: Bool {
+        completed == 0 && archivedUnplayedAuto >= ShowEngagementAnalyzer.minNeglectedAutoArchives
+    }
+
     public init(subscriptionID: UUID, title: String) {
         self.subscriptionID = subscriptionID
         self.title = title
@@ -80,13 +95,22 @@ public enum ShowEngagementAnalyzer {
     public static let minResolvedEpisodes = 4
     /// Minimum struggle score for a show to appear in the drifting list.
     public static let minStruggleScore = 0.4
-    /// A show must have at least this many *genuine* drift signals (abandoned
-    /// mid-listen or deliberately archived unplayed) to be flagged. Auto-archive
-    /// churn still raises the score, but can never flag a show by itself: a
-    /// high-volume feed the episode limit cycles through sits at a 100% auto
-    /// rate forever, so no rate threshold separates limit churn from drift —
-    /// only evidence the user actually engaged and pulled away does.
+    /// To qualify via the DRIFT path a show must have at least this many *genuine*
+    /// drift signals (abandoned mid-listen or deliberately archived unplayed).
+    /// Auto-archive churn raises the score but can't satisfy this path on its own:
+    /// a high-volume feed the episode limit cycles through sits at a 100% auto
+    /// rate, so no rate threshold separates limit churn from drift — only evidence
+    /// the user engaged and pulled away does. Shows the user never engages with at
+    /// all are caught separately by the NEGLECT path (see `minNeglectedAutoArchives`).
     public static let minGenuineBadEpisodes = 2
+    /// A show with zero completions and at least this many auto-archived unplayed
+    /// episodes is a "ghost" subscription: new episodes keep arriving and aging
+    /// out of the episode limit while the user never finishes one. This is the
+    /// neglect path — separate from drift, which needs evidence the user engaged
+    /// and pulled away. Completion count (not the auto-archive rate) separates a
+    /// ghost sub from healthy high-volume use, where the user finishes some
+    /// episodes and lets the rest cycle.
+    public static let minNeglectedAutoArchives = 4
     /// Maximum shows surfaced in the drifting list.
     public static let maxStrugglingShows = 5
     /// Minimum abandoned episodes before the median stop point is considered meaningful.
@@ -181,8 +205,10 @@ public enum ShowEngagementAnalyzer {
         }
     }
 
-    /// The shows worth surfacing in "Shows You're Drifting From": enough resolved
-    /// episodes, a high enough struggle score, and not muted by the user.
+    /// The shows worth surfacing in "Shows You're Drifting From": either a ghost
+    /// subscription (the neglect path) or genuine drift — enough resolved
+    /// episodes, a high enough struggle score, and real drift signals. Muted
+    /// shows are always excluded.
     public static func strugglingShows(
         entries: [ListeningHistoryEntry],
         since: Date,
@@ -191,8 +217,11 @@ public enum ShowEngagementAnalyzer {
         Array(
             engagements(entries: entries, since: since)
                 .filter {
-                    !muted.contains($0.subscriptionID)
-                        && $0.totalResolved >= minResolvedEpisodes
+                    guard !muted.contains($0.subscriptionID) else { return false }
+                    // Neglect path: a ghost subscription qualifies on its own.
+                    if $0.isNeglected { return true }
+                    // Drift path: real engagement that trailed off.
+                    return $0.totalResolved >= minResolvedEpisodes
                         && $0.struggleScore >= minStruggleScore
                         && $0.abandoned + $0.archivedUnplayedDeliberate >= minGenuineBadEpisodes
                 }
@@ -204,6 +233,11 @@ public enum ShowEngagementAnalyzer {
 
     /// Blunt one-line summary for a struggling show, picked by dominant signal.
     public static func label(for engagement: ShowEngagement) -> String {
+        // Ghost subscription: episodes keep auto-archiving and the user has never
+        // finished — or even abandoned mid-listen — a single one. Pure neglect.
+        if engagement.isNeglected, engagement.abandoned == 0, engagement.archivedUnplayedDeliberate == 0 {
+            return "Downloaded \(engagement.archivedUnplayedAuto), never played"
+        }
         if engagement.archivedUnplayed >= engagement.abandoned, engagement.archivedUnplayed > 0 {
             return "Archived \(engagement.archivedUnplayed) of the last \(engagement.totalResolved) unplayed"
         }

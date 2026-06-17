@@ -30,6 +30,10 @@ struct NotificationSettingsView: View {
             podcastsSection
         }
         .listSectionSpacing(28)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Notification Settings")
         .navigationBarTitleDisplayMode(.inline)
         .miniPlayerBar()
@@ -61,15 +65,19 @@ struct NotificationSettingsView: View {
         } footer: {
             Text("Until notifications are allowed in iOS Settings, the toggles below will have no effect.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
     private var masterSection: some View {
         Section {
-            Toggle("New episode notifications", isOn: masterBinding)
+            Toggle(isOn: masterBinding) {
+                SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+            }
         } footer: {
             Text("The master switch for new-episode notifications. A podcast only notifies when this and its own toggle below are both on.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -97,6 +105,7 @@ struct NotificationSettingsView: View {
                 Text("Subscribe to a podcast to manage its notifications here.")
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Bindings & actions

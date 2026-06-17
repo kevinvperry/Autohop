@@ -15,6 +15,12 @@ import UniformTypeIdentifiers
 // (downloaded episode count), About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
 // All section footer copy here must stay in sync with FEATURES.md §15.
+// Visual style: dark page (scrollContentBackground hidden over black), each
+// section a white.opacity(0.08) card with .tint(.purple), and a purple
+// SettingsRowLabel glyph on every control row — matching the Default Playback
+// card (PlaybackControlsCard is passed fill: white.opacity(0.08) here) and the
+// linked sub-screens (NotificationSettings / AddFeed / DiagnosticLog /
+// Acknowledgements), which share the same recipe.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -49,6 +55,10 @@ struct SettingsView: View {
             acknowledgementsSection
         }
         .listSectionSpacing(28)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -91,23 +101,44 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Section styling
+
+    // Dark "card" fill for every section, matching the app's design system
+    // (`white.opacity(0.08)` rounded rows on the black page background) and the
+    // Default Playback card. Applied per-section via `.listRowBackground`.
+    private let cardBackground = Color.white.opacity(0.08)
+
+    // Purple leading icon + primary-coloured title for every toggle, link, stepper
+    // and value row. Thin wrapper over the shared SettingsRowLabel (defined in
+    // PlaybackControlsCard.swift) so the whole settings flow uses one glyph style.
+    private func rowLabel(_ title: String, systemImage: String) -> some View {
+        SettingsRowLabel(title: title, systemImage: systemImage)
+    }
+
     // MARK: - Sections
 
     @ViewBuilder
     private var pollingSection: some View {
         Section {
             Stepper(value: pollBinding, in: 1...60, step: 1) {
-                LabeledContent("Radar sensitivity") {
+                LabeledContent {
                     Text("\(appState.settingsStore.appSettings.podcastPollMinutes) min")
                         .foregroundStyle(.secondary)
+                } label: {
+                    rowLabel("Radar sensitivity", systemImage: "antenna.radiowaves.left.and.right")
                 }
             }
-            NavigationLink("Notification Settings") { NotificationSettingsView() }
+            NavigationLink {
+                NotificationSettingsView()
+            } label: {
+                rowLabel("Notification Settings", systemImage: "bell.badge")
+            }
         } header: {
             Text("Release Radar")
         } footer: {
-            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster. Checks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data. Notification Settings controls which podcasts notify you when a new episode arrives.")
+            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster.\n\nChecks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data. Notification Settings controls which podcasts notify you when a new episode arrives.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -136,45 +167,72 @@ struct SettingsView: View {
         } footer: {
             Text("Auto Archive normally runs on its own (at most every 30 minutes). This forces an immediate pass over every podcast using its own Auto Archive rules.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var downloadingSection: some View {
         Section {
-            NavigationLink("Downloads") { DownloadsView() }
-            Toggle("Download over WiFi", isOn: wifiBinding)
-            Toggle("Download over cellular", isOn: cellularBinding)
+            NavigationLink {
+                DownloadsView()
+            } label: {
+                rowLabel("Downloads", systemImage: "arrow.down.circle")
+            }
+            Toggle(isOn: wifiBinding) {
+                rowLabel("Download over WiFi", systemImage: "wifi")
+            }
+            Toggle(isOn: cellularBinding) {
+                rowLabel("Download over cellular", systemImage: "cellularbars")
+            }
         } header: {
             Text("Downloading")
         } footer: {
             Text("New episodes download automatically so the queue always plays from files on your device. Downloads use Wi-Fi only by default — turn on cellular to also download over mobile data.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var controlsSection: some View {
         Section {
-            Toggle("Keep Screen Awake", isOn: keepScreenAwakeBinding)
-            Toggle("Lock Screen Scrubbing", isOn: lockScreenScrubbingBinding)
-            Toggle("Queue Badge", isOn: queueBadgeBinding)
+            Toggle(isOn: keepScreenAwakeBinding) {
+                rowLabel("Keep Screen Awake", systemImage: "sun.max")
+            }
+            Toggle(isOn: lockScreenScrubbingBinding) {
+                rowLabel("Lock Screen Scrubbing", systemImage: "lock.iphone")
+            }
+            Toggle(isOn: queueBadgeBinding) {
+                rowLabel("Queue Badge", systemImage: "app.badge")
+            }
             Button {
                 openSkipEditor(.back)
             } label: {
-                LabeledContent("Skip back", value: "\(Int(appState.settingsStore.appSettings.skipBackSeconds))s")
+                LabeledContent {
+                    Text("\(Int(appState.settingsStore.appSettings.skipBackSeconds))s")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    rowLabel("Skip back", systemImage: "gobackward")
+                }
             }
             .buttonStyle(.plain)
 
             Button {
                 openSkipEditor(.forward)
             } label: {
-                LabeledContent("Skip forward", value: "\(Int(appState.settingsStore.appSettings.skipForwardSeconds))s")
+                LabeledContent {
+                    Text("\(Int(appState.settingsStore.appSettings.skipForwardSeconds))s")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    rowLabel("Skip forward", systemImage: "goforward")
+                }
             }
             .buttonStyle(.plain)
         } header: {
             Text("Controls")
         } footer: {
-            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Skip durations also apply to the Lock Screen and Control Centre buttons.")
+            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play.\n\nSkip durations also apply to the Lock Screen and Control Centre buttons.")
         }
+        .listRowBackground(cardBackground)
     }
 
     // Default playback settings for NEW subscriptions and non-subscribed (browse)
@@ -189,28 +247,33 @@ struct SettingsView: View {
                 preference: preference,
                 onSpeedChange: { appState.updateDefaultPlaybackSpeed($0) },
                 onTrimChange: { appState.updateDefaultTrimSilence($0) },
-                onVocalChange: { appState.updateDefaultVocalBoost($0) }
+                onVocalChange: { appState.updateDefaultVocalBoost($0) },
+                fill: cardBackground
             )
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
         } header: {
             Text("Default Playback")
         } footer: {
-            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings. Vocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps (audio episodes only).")
+            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings.\n\nVocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps (audio episodes only).")
         }
 
         Section {
             Stepper(value: defaultStartSkipBinding, in: 0...300, step: 5) {
-                LabeledContent("Start skip") {
+                LabeledContent {
                     Text(skipLabel(preference.startSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    rowLabel("Start skip", systemImage: "forward.end")
                 }
             }
 
             Stepper(value: defaultEndSkipBinding, in: 0...300, step: 5) {
-                LabeledContent("End skip") {
+                LabeledContent {
                     Text(skipLabel(preference.endSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    rowLabel("End skip", systemImage: "backward.end")
                 }
             }
         } header: {
@@ -218,38 +281,57 @@ struct SettingsView: View {
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var syncSection: some View {
         Section {
-            Toggle("iCloud Sync", isOn: iCloudSyncBinding)
+            Toggle(isOn: iCloudSyncBinding) {
+                rowLabel("iCloud Sync", systemImage: "icloud")
+            }
         } header: {
             Text("Sync")
         } footer: {
-            Text("Private by default — your subscriptions, played state and stats stay on this device unless you turn on iCloud Sync. When enabled, your listening syncs across your devices signed into the same iCloud account.")
+            Text("Private by default — your subscriptions, played state and stats stay on this device unless you turn on iCloud Sync.\n\nWhen enabled, your listening syncs across your devices signed into the same iCloud account.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var diagnosticsSection: some View {
         Section {
-            Toggle("Enable Diagnostic Log", isOn: diagnosticLoggingBinding)
+            Toggle(isOn: diagnosticLoggingBinding) {
+                rowLabel("Enable Diagnostic Log", systemImage: "waveform.path.ecg")
+            }
             if appState.settingsStore.appSettings.diagnosticLoggingEnabled {
-                NavigationLink("View Diagnostic Log") { DiagnosticLogView() }
+                NavigationLink {
+                    DiagnosticLogView()
+                } label: {
+                    rowLabel("View Diagnostic Log", systemImage: "doc.text.magnifyingglass")
+                }
             }
         } header: {
             Text("Diagnostics")
         } footer: {
             Text("The diagnostic log records app events to help diagnose playback issues. Disable when not needed to preserve battery and storage.")
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var subscriptionsSection: some View {
         Section("Subscriptions") {
-            NavigationLink("Manage podcasts") { PodcastsView() }
-            NavigationLink("Add RSS Feed") { AddFeedView() }
+            NavigationLink {
+                PodcastsView()
+            } label: {
+                rowLabel("Manage podcasts", systemImage: "square.stack")
+            }
+            NavigationLink {
+                AddFeedView()
+            } label: {
+                rowLabel("Add RSS Feed", systemImage: "dot.radiowaves.up.forward")
+            }
 
             Button {
                 showOPMLImporter = true
@@ -280,17 +362,20 @@ struct SettingsView: View {
             }
             .disabled(appState.subscriptionStore.subscriptions.isEmpty)
         }
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
     private var acknowledgementsSection: some View {
         Section {
-            NavigationLink("Open Source Acknowledgements") {
+            NavigationLink {
                 AcknowledgementsView()
+            } label: {
+                rowLabel("Open Source Acknowledgements", systemImage: "doc.plaintext")
             }
             // Version row — tap 5 times to unlock developer tools for this session.
             HStack {
-                Text("Version")
+                rowLabel("Version", systemImage: "info.circle")
                 Spacer()
                 Text(appVersion)
                     .foregroundStyle(developerModeUnlocked ? .purple : .secondary)
@@ -312,6 +397,7 @@ struct SettingsView: View {
                     .foregroundStyle(.purple)
             }
         }
+        .listRowBackground(cardBackground)
     }
 
     private var appVersion: String {
@@ -326,20 +412,33 @@ struct SettingsView: View {
             let downloadedEpisodes = appState.subscriptionStore.subscriptions
                 .flatMap(\.episodes)
                 .filter { $0.downloadState == .downloaded }
-            LabeledContent("Downloaded episodes", value: "\(downloadedEpisodes.count)")
-            LabeledContent("Total size") {
+            LabeledContent {
+                Text("\(downloadedEpisodes.count)")
+                    .foregroundStyle(.secondary)
+            } label: {
+                rowLabel("Downloaded episodes", systemImage: "tray.full")
+            }
+            LabeledContent {
                 if let bytes = totalDownloadedBytes {
                     Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                        .foregroundStyle(.secondary)
                 } else {
                     ProgressView().controlSize(.mini)
                 }
+            } label: {
+                rowLabel("Total size", systemImage: "internaldrive")
             }
-            NavigationLink("Manage Downloads") { DownloadsView() }
+            NavigationLink {
+                DownloadsView()
+            } label: {
+                rowLabel("Manage Downloads", systemImage: "slider.horizontal.3")
+            }
         } header: {
             Text("Storage")
         } footer: {
             Text("To free up space, archive episodes or tighten a podcast's Episode Limit in its Auto Archive settings.")
         }
+        .listRowBackground(cardBackground)
         .onAppear {
             Task.detached(priority: .utility) {
                 let fm = FileManager.default
@@ -551,6 +650,8 @@ private struct SkipDurationEditSheet: View {
                 }
             }
         }
+        .tint(.purple)
+        .preferredColorScheme(.dark)
     }
 
     private func adjust(by delta: TimeInterval) {

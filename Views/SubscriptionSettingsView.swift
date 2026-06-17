@@ -11,7 +11,11 @@ import SwiftUI
 // exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
 // (only when latest episode has chapters; position-based), Feed (read-only
 // URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
-// with FEATURES.md §10. stripHTML/decodeHTMLEntities below clean feed-supplied
+// with FEATURES.md §10. Visual style matches App Settings: dark page
+// (scrollContentBackground hidden over black), white.opacity(0.08) section
+// cards, .tint(.purple), and purple SettingsRowLabel glyphs on control rows; the
+// Playback card is passed fill: white.opacity(0.08) to match.
+// stripHTML/decodeHTMLEntities below clean feed-supplied
 // description text for display. The podcast's episode list lives in
 // PodcastDetailView (reached by tapping a row); this file also hosts
 // EpisodeDetailView, whose status pills treat archived episodes with
@@ -112,6 +116,11 @@ struct SubscriptionSettingsView: View {
                 )
             }
         }
+        .listSectionSpacing(28)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle(subscription?.title ?? "Subscription")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -194,10 +203,12 @@ struct SubscriptionSettingsView: View {
                 draftTitle = sub.title
                 showTitleEditor = true
             } label: {
-                LabeledContent("Title") {
+                LabeledContent {
                     Text(sub.title)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                } label: {
+                    SettingsRowLabel(title: "Title", systemImage: "textformat")
                 }
             }
             .buttonStyle(.plain)
@@ -206,17 +217,25 @@ struct SubscriptionSettingsView: View {
                 draftPriorityRank = sub.priorityRank
                 showPriorityEditor = true
             } label: {
-                LabeledContent("Priority rank") {
+                LabeledContent {
                     Text("#\(sub.priorityRank)")
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Priority rank", systemImage: "number")
                 }
             }
             .buttonStyle(.plain)
 
             if let author = sub.author {
-                LabeledContent("Author", value: author)
+                LabeledContent {
+                    Text(author)
+                        .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Author", systemImage: "person")
+                }
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -234,16 +253,20 @@ struct SubscriptionSettingsView: View {
 
         Section {
             Stepper(value: startSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent("Start skip") {
+                LabeledContent {
                     Text(skipLabel(sub.playbackPreference.startSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Start skip", systemImage: "forward.end")
                 }
             }
 
             Stepper(value: endSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent("End skip") {
+                LabeledContent {
                     Text(skipLabel(sub.playbackPreference.endSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "End skip", systemImage: "backward.end")
                 }
             }
         } header: {
@@ -251,6 +274,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Sound Controls Card
@@ -261,42 +285,55 @@ struct SubscriptionSettingsView: View {
             preference: sub.playbackPreference,
             onSpeedChange: { appState.updatePlaybackSpeed(for: sub.id, speed: $0) },
             onTrimChange: { appState.updateTrimSilence(for: sub.id, amount: $0) },
-            onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) }
+            onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) },
+            fill: Color.white.opacity(0.08)
         )
     }
 
     @ViewBuilder
     private func automationSection(_ sub: Subscription) -> some View {
         Section {
-            Toggle("New episode notifications", isOn: notificationsBinding(sub))
-            Toggle("Exclude from Auto Feed Refresh", isOn: autoFeedRefreshExclusionBinding(sub))
+            Toggle(isOn: notificationsBinding(sub)) {
+                SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+            }
+            Toggle(isOn: autoFeedRefreshExclusionBinding(sub)) {
+                SettingsRowLabel(title: "Exclude from Auto Feed Refresh", systemImage: "arrow.triangle.2.circlepath")
+            }
         } header: {
             Text("Automation")
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
 
         Section {
-            Picker("Played Episodes", selection: afterPlayedBinding(sub)) {
+            Picker(selection: afterPlayedBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterPlayed.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Played Episodes", systemImage: "checkmark.circle")
             }
-            Picker("Inactive Episodes", selection: afterInactiveBinding(sub)) {
+            Picker(selection: afterInactiveBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterInactive.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Inactive Episodes", systemImage: "clock")
             }
-            Picker("Episode Limit", selection: episodeLimitBinding(sub)) {
+            Picker(selection: episodeLimitBinding(sub)) {
                 ForEach(AutoArchiveSettings.EpisodeLimit.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Episode Limit", systemImage: "archivebox")
             }
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -339,14 +376,21 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Skips are position-based and apply to all future episodes of this podcast.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
     private func feedSection(_ sub: Subscription) -> some View {
         Section("Feed") {
-            LabeledContent("URL", value: sub.feedURL.absoluteString)
-                .lineLimit(2)
+            LabeledContent {
+                Text(sub.feedURL.absoluteString)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } label: {
+                SettingsRowLabel(title: "URL", systemImage: "link")
+            }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -356,6 +400,7 @@ struct SubscriptionSettingsView: View {
                 showDeleteConfirm = true
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Bindings
@@ -522,6 +567,8 @@ private struct EditTitleSheet: View {
                 }
             }
         }
+        .tint(.purple)
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -553,6 +600,8 @@ private struct EditPrioritySheet: View {
                 }
             }
         }
+        .tint(.purple)
+        .preferredColorScheme(.dark)
     }
 }
 

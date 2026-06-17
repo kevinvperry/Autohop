@@ -7,13 +7,21 @@ import SwiftUI
 // global Default Playback panel (SettingsView). It is purely presentational:
 // it reads a PlaybackPreference and reports edits through three closures, so the
 // caller decides whether the change targets a subscription or the global default.
+// The `fill` parameter sets the card colour: it defaults to the standalone
+// near-black, but SettingsView passes white.opacity(0.08) so the card matches the
+// other dark cards on the (black-backed) App Settings page. This file also hosts
+// SettingsRowLabel — the shared purple-icon row label used across the settings flow.
 struct PlaybackControlsCard: View {
     let preference: PlaybackPreference
     let onSpeedChange: (Double) -> Void
     let onTrimChange: (TrimSilenceAmount) -> Void
     let onVocalChange: (VocalBoostLevel) -> Void
+    // Card fill colour. Defaults to the standalone near-black used by the audio
+    // controls sheet and the per-podcast Playback section. SettingsView overrides
+    // it with white.opacity(0.08) so the card matches the other dark cards on the
+    // (black-backed) App Settings page.
+    var fill: Color = Color(red: 0.10, green: 0.10, blue: 0.13)
 
-    private let darkBG = Color(red: 0.10, green: 0.10, blue: 0.13)
     private let dividerColor = Color(white: 0.20)
 
     var body: some View {
@@ -24,9 +32,12 @@ struct PlaybackControlsCard: View {
             Divider().background(dividerColor).padding(.leading, 60)
             vocalBoostRow
         }
-        .background(darkBG)
+        .background(fill)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
+        // No horizontal padding: callers zero out listRowInsets, so the row already
+        // fills the standard grouped-section region. Any extra padding here would
+        // inset the card *inside* that region, making it narrower than sibling
+        // sections — so the card spans the full width to match the grey cards.
         .padding(.vertical, 8)
         .preferredColorScheme(.dark)
     }
@@ -170,5 +181,23 @@ struct PlaybackControlsCard: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .animation(.easeInOut(duration: 0.22), value: isOn)
+    }
+}
+
+// Shared purple-icon + primary-title row label used across the App Settings flow
+// (SettingsView and its linked sub-screens). Mirrors the Speed / Trim Silence /
+// Vocal Boost rows above so every control row gets a consistent purple glyph.
+struct SettingsRowLabel: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.purple)
+        }
     }
 }

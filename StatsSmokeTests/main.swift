@@ -54,6 +54,9 @@ func runSmokeTest() throws {
     store.addAutoSkip(45) // no subscription — counts in the category total only
     store.recordEpisodeStarted(subscriptionID: showA, showTitle: "Show A")
     store.recordEpisodeCompleted(subscriptionID: showA)
+    store.recordDownload(bytes: 30_000_000)
+    store.recordDownload(bytes: 20_000_000)
+    store.recordDownload(bytes: 0) // ignored — no traffic
 
     let today = store.summary(for: .last(days: 1))
     require(today.days.count == 1, "Expected exactly one day bucket for .last(days: 1)")
@@ -64,6 +67,8 @@ func runSmokeTest() throws {
     require(approx(today.timeSavedAutoSkip, 45), "Expected 45s auto skip saving")
     require(today.manualSkipForwardCount == 1, "Expected 1 manual skip")
     require(today.episodesStarted == 1 && today.episodesCompleted == 1, "Expected 1 started + 1 completed")
+    require(today.episodesDownloaded == 2, "Expected 2 downloads recorded (zero-byte ignored), got \(today.episodesDownloaded)")
+    require(today.bytesDownloaded == 50_000_000, "Expected 50 MB downloaded, got \(today.bytesDownloaded)")
     require(approx(today.hourSeconds.reduce(0, +), 60), "Hour histogram should sum to wall clock")
     require(approx(today.perShowSeconds[showA.uuidString] ?? 0, 60), "Expected per-show attribution")
     // Per-show time saved: 30s variable speed + 12s trim + 30s manual skip; the
@@ -77,6 +82,12 @@ func runSmokeTest() throws {
     """
     let legacyDay = try JSONDecoder().decode(DayStats.self, from: Data(legacyDayJSON.utf8))
     require(legacyDay.perShowTimeSaved.isEmpty, "Expected pre-tracking day to decode with empty perShowTimeSaved")
+    require(legacyDay.bytesDownloaded == 0 && legacyDay.episodesDownloaded == 0, "Expected pre-tracking day to decode with zero download data")
+
+    // Cross-device merge sums download data additively (never last-write-wins).
+    let mergedDownloads = DayStats(dayKey: "2026-06-18", bytesDownloaded: 100, episodesDownloaded: 1)
+        .merged(with: DayStats(dayKey: "2026-06-18", bytesDownloaded: 250, episodesDownloaded: 2))
+    require(mergedDownloads.bytesDownloaded == 350 && mergedDownloads.episodesDownloaded == 3, "Expected download data to merge additively")
 
     // 2. Period aggregation and streaks over synthetic history.
     // Qualifying days: today (60s), 1-3 days ago, then a gap, then 5-6 days ago.
@@ -108,6 +119,7 @@ func runSmokeTest() throws {
     require(approx(reloaded.lifetime.totalListeningSeconds, store.lifetime.totalListeningSeconds), "Expected lifetime to survive reload")
     require(reloaded.currentStreakDays == 4, "Expected streak to survive reload")
     require(reloaded.showTitles[showA.uuidString] == "Show A", "Expected titles to survive reload")
+    require(reloaded.summary(for: .last(days: 1)).bytesDownloaded == 50_000_000, "Expected download data to survive reload")
 
     // 4. Legacy baseline import on first launch.
     let migratedDir = tempDir.appendingPathComponent("migrated", isDirectory: true)
@@ -248,16 +260,34 @@ func runEngagementSmokeTest() {
     require(strugglingIDs.contains(abandoner), "Expected abandoner flagged")
     require(strugglingIDs.contains(archiver), "Expected archiver flagged")
     require(!strugglingIDs.contains(healthy), "Expected healthy show not flagged")
+    // Some completions + half-weighted auto archives keep this below threshold,
+    // and completed > 0 means it's healthy high-volume use, not a ghost sub.
     require(!strugglingIDs.contains(autoChurn), "Expected auto-churn below threshold")
-    // Auto-only signal can never flag a show, even at a 100% archive rate —
-    // that's the episode limit churning a high-volume feed, not drift.
-    require(!strugglingIDs.contains(legacy), "Expected auto-only legacy show not flagged despite 0.5 score")
+    // Neglect path: a feed that only ever auto-archives unplayed (0 completions,
+    // ≥ minNeglectedAutoArchives) is a ghost subscription and IS flagged.
+    require(strugglingIDs.contains(legacy), "Expected auto-only legacy show flagged as neglect")
+    require(ShowEngagementAnalyzer.label(for: byID[legacy]!) == "Downloaded 4, never played", "Unexpected legacy neglect label: \(ShowEngagementAnalyzer.label(for: byID[legacy]!))")
 
     let allAutoFeed = UUID()
     let allAutoEntries = (0..<55).map { _ in
         historyEntry(show: allAutoFeed, title: "Daily News", listened: 0, position: 0, status: .archived, kind: .autoArchived, percent: 0)
     }
-    require(ShowEngagementAnalyzer.strugglingShows(entries: allAutoEntries, since: since).isEmpty, "Expected 55/55 auto-archived feed not flagged")
+    let allAutoFlagged = ShowEngagementAnalyzer.strugglingShows(entries: allAutoEntries, since: since)
+    require(allAutoFlagged.map(\.subscriptionID) == [allAutoFeed], "Expected 55/55 auto-archived daily feed flagged as a ghost subscription")
+    require(ShowEngagementAnalyzer.label(for: allAutoFlagged[0]) == "Downloaded 55, never played", "Unexpected ghost-sub label: \(ShowEngagementAnalyzer.label(for: allAutoFlagged[0]))")
+
+    // Healthy high-volume use must NOT be flagged: the user finishes some
+    // episodes and lets many auto-archive. The struggle score climbs past 0.4,
+    // but completed > 0 (not neglect) and no genuine drift signals (not drift).
+    let busyButHealthy = UUID()
+    var busyEntries = (0..<2).map { _ in
+        historyEntry(show: busyButHealthy, title: "Daily Briefing", listened: 3600, position: 3600, status: .played, kind: .finishedNaturally, percent: 1.0)
+    }
+    busyEntries += (0..<20).map { _ in
+        historyEntry(show: busyButHealthy, title: "Daily Briefing", listened: 0, position: 0, status: .archived, kind: .autoArchived, percent: 0)
+    }
+    require(ShowEngagementAnalyzer.strugglingShows(entries: busyEntries, since: since).isEmpty, "Expected healthy high-volume feed (2 finished, 20 auto) not flagged")
+
     require(strugglingIDs.first == abandoner, "Expected abandoner ranked first (score 1.0)")
 
     let muted = ShowEngagementAnalyzer.strugglingShows(entries: entries, since: since, excluding: [abandoner])

@@ -32,6 +32,9 @@ struct DiagnosticLogView: View {
                 }
             }
         }
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Diagnostic Log")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

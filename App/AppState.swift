@@ -546,6 +546,10 @@ final class AppState: ObservableObject {
                     )
                 }
                 state.downloadProgress.removeValue(forKey: episodeID)
+                // Background downloads are the bulk of auto-downloads — record
+                // their actual on-disk size against today's download-data stat too.
+                let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
+                state.listeningStatsStore.recordDownload(bytes: downloadedBytes)
                 if let sub = state.subscriptionStore.subscription(id: subscriptionID),
                    let ep = state.subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID) {
                     state.downloadActivityStore.complete(
@@ -1304,6 +1308,11 @@ final class AppState: ObservableObject {
                 )
             }
             downloadProgress.removeValue(forKey: episode.id)
+            // Record actual on-disk size against today's download-data stat. Falls
+            // back to the feed-declared size if the file can't be stat'd.
+            let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value
+                ?? episode.fileSizeBytes ?? 0
+            listeningStatsStore.recordDownload(bytes: downloadedBytes)
             if showCompletionMessage {
                 downloadMessage = "Downloaded \(episode.title)."
             }
