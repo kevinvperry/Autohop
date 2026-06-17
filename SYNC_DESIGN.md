@@ -102,3 +102,19 @@ per-device stats — with field-level LWW, active-player-wins, and self-heal.
 `RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift` (35 total). The
 `CloudSyncEngine` itself is build/on-device-verified (CKSyncEngine can't run in
 `swift test`).
+
+## Diagnostics / observability
+`CloudSyncEngine` is instrumented through `AppLogger` with `sync.*` event keys —
+the primary way to debug sync on-device, since it can't be unit-tested. Grep the
+Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
+
+- **Lifecycle:** `sync.toggle`, `sync.engineActivated` (restoredState), `sync.stopped`, `sync.startAborted`/`sync.accountStatusFailed`, `sync.account*` (signIn/signOut/switch).
+- **Push:** `sync.queued` (per-type counts), `sync.pushed` (saved count), `sync.pushFailed` (CK error code — ERROR), `sync.zoneRecreate`, `sync.recordGone`.
+- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`.
+- **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
+
+Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
+events (`sync.pushFailed`, `sync.dbWriteFailed`, `sync.accountStatusFailed`) use
+`AppLogger.error(..., alwaysPersist: true)`, so they are recorded even when the
+Diagnostics toggle is off; INFO/WARN remain gated. The log file stays capped at
+~1 MB with rotation.

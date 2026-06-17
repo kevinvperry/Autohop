@@ -81,6 +81,7 @@
 		A5729B362C8965382EBBD58A /* pack-a4a5452f4a26972dc2686456116554ac5a725bc5.rev in Resources */ = {isa = PBXBuildFile; fileRef = F70E92CF93C5DA273135C5E4 /* pack-a4a5452f4a26972dc2686456116554ac5a725bc5.rev */; };
 		B0AF83B1F0EB3A7573F5904D /* EpisodeFeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4085481A5FB344177B51FA3 /* EpisodeFeedLoader.swift */; };
 		B210DB81D2DA8717E99F54FA /* SubscriptionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */; };
+		0F1E2D3C4B5A69788796A5B4 /* PlaybackControlsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* PlaybackControlsCard.swift */; };
 		B2D8AA4F677325CBEB0D4784 /* ChapterService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89A48F1CC784F17C10C516E /* ChapterService.swift */; };
 		B36A05FF57EB14C5A6F3B297 /* sendemail-validate.sample in Resources */ = {isa = PBXBuildFile; fileRef = CB905A9BC8E2D10E8B4EB156 /* sendemail-validate.sample */; };
 		B906D18D9FCC95E6F2D41F01 /* SilenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE8C5CD51F36B650901B3F2 /* SilenceDetector.swift */; };
@@ -180,6 +181,7 @@
 		347E5DA5762F15B832B17049 /* CloudSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncEngine.swift; sourceTree = "<group>"; };
 		3565F21462B26325EB4EB477 /* RSSParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSParser.swift; sourceTree = "<group>"; };
 		35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionSettingsView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C /* PlaybackControlsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackControlsCard.swift; sourceTree = "<group>"; };
 		35CBB8EF6C6B99FA4E00949D /* icloud-sync */ = {isa = PBXFileReference; lastKnownFileType = text; path = "icloud-sync"; sourceTree = "<group>"; };
 		37105C01AB41D0EE542AC9C5 /* Autohop.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Autohop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		37C2D2BA2408F2EF182B3B32 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
@@ -601,6 +603,7 @@
 				14DF66C0C501F07FFA8E90B1 /* SleepTimerSheetView.swift */,
 				302ED5C15F04FA1D1453D26F /* StatsView.swift */,
 				35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */,
+				A1B2C3D4E5F60718293A4B5C /* PlaybackControlsCard.swift */,
 				2A7E25B19C8E70DF788BDA18 /* SupportContent.swift */,
 				EFF7CF11EF28BCAC4E54C4FB /* SupportView.swift */,
 			);
@@ -1822,6 +1825,7 @@
 				FD4EBB3959512A24B22A416D /* StatsView.swift in Sources */,
 				0F9ED9645CB156B3BE61DEE6 /* Subscription.swift in Sources */,
 				B210DB81D2DA8717E99F54FA /* SubscriptionSettingsView.swift in Sources */,
+				0F1E2D3C4B5A69788796A5B4 /* PlaybackControlsCard.swift in Sources */,
 				9F4594BC013D8842420C917F /* SubscriptionStore.swift in Sources */,
 				864AC2465FB83D9BC594AC37 /* SupportContent.swift in Sources */,
 				1E678C6F6C451BF5F5A403C9 /* SupportView.swift in Sources */,

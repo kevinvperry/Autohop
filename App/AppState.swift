@@ -294,6 +294,11 @@ final class AppState: ObservableObject {
         subscriptionStore.nowPlayingGuidProvider = { [weak self] in
             self?.playbackEngine.currentEpisode?.guid
         }
+        // New/activated subscriptions seed their playback settings from the
+        // global default panel; browse feeds resolve it live (effectivePreference).
+        subscriptionStore.defaultPlaybackPreferenceProvider = { [weak self] in
+            self?.settingsStore.appSettings.defaultPlaybackPreference ?? .default
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }
@@ -1599,6 +1604,53 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Default Playback Preference (global, for new + non-subscribed feeds)
+
+    // These edit AppSettings.defaultPlaybackPreference only. They never touch an
+    // existing subscription's own playbackPreference — that snapshot was taken
+    // when the feed was subscribed to. When the episode currently playing belongs
+    // to a non-subscribed (browse) feed, the change is applied live, since browse
+    // playback resolves through effectivePreference(for:).
+
+    private func mutateDefaultPlaybackPreference(_ mutate: (inout PlaybackPreference) -> Void) {
+        var preference = settingsStore.appSettings.defaultPlaybackPreference
+        mutate(&preference)
+        settingsStore.appSettings.defaultPlaybackPreference = preference
+        if let episode = currentPlayerEpisode,
+           let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
+           subscription.browseDate != nil {
+            applyEffectivePreferenceToCurrentEpisode()
+            if !sharedListeningActive {
+                playbackEngine.updateVocalBoost(effectivePreference(for: subscription).vocalBoostLevel)
+            }
+        }
+    }
+
+    func updateDefaultPlaybackSpeed(_ speed: Double) {
+        logger.info("settings.defaultSpeed", "Default playback speed changed", metadata: [
+            "speed": PlaybackPreference.speedLabel(speed)
+        ])
+        mutateDefaultPlaybackPreference { $0.speed = speed }
+    }
+
+    func updateDefaultVocalBoost(_ level: VocalBoostLevel) {
+        logger.info("settings.defaultVocalBoost", "Default Vocal Boost changed", metadata: ["level": level.title])
+        mutateDefaultPlaybackPreference { $0.vocalBoostLevel = level }
+    }
+
+    func updateDefaultTrimSilence(_ amount: TrimSilenceAmount) {
+        logger.info("settings.defaultTrimSilence", "Default Trim Silence changed", metadata: ["amount": amount.title])
+        mutateDefaultPlaybackPreference { $0.trimSilence = amount }
+    }
+
+    func updateDefaultStartSkip(_ seconds: TimeInterval) {
+        mutateDefaultPlaybackPreference { $0.startSkipSeconds = seconds }
+    }
+
+    func updateDefaultEndSkip(_ seconds: TimeInterval) {
+        mutateDefaultPlaybackPreference { $0.endSkipSeconds = seconds }
+    }
+
     // MARK: - Shared Listening (global temporary override)
 
     // While active, every podcast plays at sharedListeningSpeed (1.0–1.3x) with
@@ -1635,7 +1687,11 @@ final class AppState: ObservableObject {
     /// The subscription's preference with the Shared Listening override applied.
     /// All playback paths must read speed/trim through this, never directly.
     func effectivePreference(for subscription: Subscription) -> PlaybackPreference {
-        var preference = subscription.playbackPreference
+        // Non-subscribed (browse-only) feeds always follow the live global
+        // default — they never carry user-customised settings of their own.
+        var preference = subscription.browseDate != nil
+            ? settingsStore.appSettings.defaultPlaybackPreference
+            : subscription.playbackPreference
         if settingsStore.appSettings.sharedListeningActive {
             preference.speed = settingsStore.appSettings.sharedListeningSpeed
             preference.trimSilence = .off
@@ -1735,25 +1791,26 @@ final class AppState: ObservableObject {
             // Reset volume to full before starting — clears any residual sleep-timer fade.
             playbackEngine.setVolume(1.0)
 
+            let preference = effectivePreference(for: subscription)
             try await playbackEngine.play(
                 playableEpisode,
-                preference: effectivePreference(for: subscription),
+                preference: preference,
                 filter: subscription.chapterFilter
             )
 
             // Restore mid-episode position (overrides start-skip when > 0).
-            if safeResumeTime > subscription.playbackPreference.startSkipSeconds {
+            if safeResumeTime > preference.startSkipSeconds {
                 playbackEngine.seek(to: safeResumeTime)
                 currentPlayerTime = safeResumeTime
             } else {
                 // No resume — playback begins at the start-skip offset, so report that rather than 0
                 // (otherwise Now Playing and history tracking briefly show 0 until the first tick).
-                currentPlayerTime = subscription.playbackPreference.startSkipSeconds
+                currentPlayerTime = preference.startSkipSeconds
             }
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
             // Fresh start only — resuming a partially played episode is not a new "start".
-            if safeResumeTime <= subscription.playbackPreference.startSkipSeconds {
+            if safeResumeTime <= preference.startSkipSeconds {
                 listeningStatsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
             }
             currentPlayerEpisode = playableEpisode
@@ -1777,7 +1834,7 @@ final class AppState: ObservableObject {
                 "podcast": subscription.title,
                 "duration": playableEpisode.durationSeconds.map { "\(Int($0))" } ?? "unknown",
                 "speed": PlaybackPreference.speedLabel(effectiveSpeed(for: subscription)),
-                "vocalBoost": subscription.playbackPreference.vocalBoostLevel.title,
+                "vocalBoost": preference.vocalBoostLevel.title,
                 "sharedListening": "\(sharedListeningActive)"
             ])
 

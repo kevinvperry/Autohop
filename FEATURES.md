@@ -681,7 +681,23 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
-### 15.5 Subscriptions
+### 15.5 Default Playback
+
+The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Playback section (§10.2), plus Start skip / End skip steppers, presented here as the **global defaults**. Stored in `AppSettings.defaultPlaybackPreference` (a `PlaybackPreference`). The shared card view is `Views/PlaybackControlsCard.swift`.
+
+| Setting | Options | Default | Notes |
+|---|---|---|---|
+| Speed | 1.0x – 2.5x (0.1x steps) | **1.0x** | Default speed for new subscriptions and non-subscribed feed playback. |
+| Vocal Boost | Off / Light / Standard / Strong | **Off** | See [Vocal Boost](#43-vocal-boost). |
+| Trim Silence | Off / Low / Medium / High | **Off** | Audio episodes only. See [Trim Silence](#42-trim-silence). |
+| Start skip | 0 – 300s (5s steps) | **0 (off)** | Auto-skips N seconds at episode start. |
+| End skip | 0 – 300s (5s steps) | **0 (off)** | Auto-skips N seconds at episode end. |
+
+**Scope:** These defaults apply in two places: (1) every **new subscription** snapshots the current default at the moment it becomes a real subscription (`SubscriptionStore` seeds `playbackPreference` on add / OPML import / browse-preview activation); (2) playback of episodes from **non-subscribed (browse-only) feeds** resolves the default **live** through `AppState.effectivePreference(for:)` — a browse feed always reflects the current default, even retroactively. Editing the default **never** changes the settings of podcasts already subscribed to; those keep their own per-podcast values (§10.2). The one-shot migrations that moved pre-existing users to 1.6x / Strong / Low affected per-subscription values only and are independent of this panel.
+
+---
+
+### 15.6 Subscriptions
 
 | Setting | Type | Description |
 |---|---|---|
@@ -693,7 +709,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
-### 15.6 Storage
+### 15.7 Storage
 
 | Display | Description |
 |---|---|
@@ -701,7 +717,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
-### 15.7 About
+### 15.8 About
 
 | Item | Description |
 |---|---|
@@ -759,6 +775,8 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | sleepScheduleEndMinutes | 360 (6:00am) |
 | sleepScheduleDurationMinutes | 20 (0 = end of episode) |
 | diagnosticLoggingEnabled | false |
+| iCloudSyncEnabled | false |
+| defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
 
 ### `Subscription.init` defaults
 | Property | Default |

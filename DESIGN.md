@@ -74,6 +74,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
+| `Card-PlaybackControls` | Shared dark Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`), same visual as `AudioControls-Sheet`. Reused by the per-podcast Playback section and the global Default Playback panel in App Settings |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
 | `Buttons-EpisodePage` | Four equal-width circle buttons in one row: Play (green) · Play Next (blue) · Play Last (orange) · Archive/Unarchive (purple) |

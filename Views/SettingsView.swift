@@ -6,7 +6,10 @@ import UniformTypeIdentifiers
 // Notification Settings link — the global notifications toggle now lives on
 // NotificationSettingsView as the master switch), Auto Archive (run-now button), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
-// lock screen scrubbing, skip back/forward duration sheets), Subscriptions
+// lock screen scrubbing, skip back/forward duration sheets), Default Playback
+// (global defaults for new + non-subscribed feeds via the shared
+// PlaybackControlsCard + start/end skip steppers; writes
+// AppSettings.defaultPlaybackPreference, never touches existing subs), Subscriptions
 // (manage podcasts, add RSS, OPML import/export — Listening History moved to
 // the Menu sheet, NavRules: one path per page), Storage
 // (downloaded episode count), About (acknowledgements, version — tapping the
@@ -36,6 +39,7 @@ struct SettingsView: View {
             autoArchiveSection
             downloadingSection
             controlsSection
+            defaultPlaybackSection
             subscriptionsSection
             syncSection
             storageSection
@@ -170,6 +174,49 @@ struct SettingsView: View {
             Text("Controls")
         } footer: {
             Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Skip durations also apply to the Lock Screen and Control Centre buttons.")
+        }
+    }
+
+    // Default playback settings for NEW subscriptions and non-subscribed (browse)
+    // feed playback. Mirrors the per-podcast Playback section in
+    // SubscriptionSettingsView; editing here never changes existing subscriptions.
+    @ViewBuilder
+    private var defaultPlaybackSection: some View {
+        let preference = appState.settingsStore.appSettings.defaultPlaybackPreference
+
+        Section {
+            PlaybackControlsCard(
+                preference: preference,
+                onSpeedChange: { appState.updateDefaultPlaybackSpeed($0) },
+                onTrimChange: { appState.updateDefaultTrimSilence($0) },
+                onVocalChange: { appState.updateDefaultVocalBoost($0) }
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        } header: {
+            Text("Default Playback")
+        } footer: {
+            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings. Vocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps (audio episodes only).")
+        }
+
+        Section {
+            Stepper(value: defaultStartSkipBinding, in: 0...300, step: 5) {
+                LabeledContent("Start skip") {
+                    Text(skipLabel(preference.startSkipSeconds))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Stepper(value: defaultEndSkipBinding, in: 0...300, step: 5) {
+                LabeledContent("End skip") {
+                    Text(skipLabel(preference.endSkipSeconds))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Default Episode Trim")
+        } footer: {
+            Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
     }
 
@@ -383,6 +430,24 @@ struct SettingsView: View {
             get: { appState.settingsStore.appSettings.diagnosticLoggingEnabled },
             set: { appState.settingsStore.appSettings.diagnosticLoggingEnabled = $0 }
         )
+    }
+
+    private var defaultStartSkipBinding: Binding<TimeInterval> {
+        Binding(
+            get: { appState.settingsStore.appSettings.defaultPlaybackPreference.startSkipSeconds },
+            set: { appState.updateDefaultStartSkip($0) }
+        )
+    }
+
+    private var defaultEndSkipBinding: Binding<TimeInterval> {
+        Binding(
+            get: { appState.settingsStore.appSettings.defaultPlaybackPreference.endSkipSeconds },
+            set: { appState.updateDefaultEndSkip($0) }
+        )
+    }
+
+    private func skipLabel(_ seconds: TimeInterval) -> String {
+        seconds == 0 ? "Off" : "\(Int(seconds))s"
     }
 
     private func openSkipEditor(_ control: SkipControl) {

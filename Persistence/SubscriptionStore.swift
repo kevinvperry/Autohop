@@ -37,6 +37,18 @@ public final class SubscriptionStore: ObservableObject {
     /// Set by AppState; nil when nothing is loaded.
     public var nowPlayingGuidProvider: (() -> String?)?
 
+    /// Supplies the global default PlaybackPreference (from AppSettings). Used to
+    /// seed a subscription's own playbackPreference at the moment it becomes a
+    /// real subscription. Set by AppState; falls back to `.default` when nil.
+    /// Browse-only (preview) subscriptions resolve their preference live through
+    /// AppState.effectivePreference(for:), so seeding only matters once a feed is
+    /// actually subscribed to — after which the snapshot is independent.
+    public var defaultPlaybackPreferenceProvider: (() -> PlaybackPreference)?
+
+    private var seededDefaultPlaybackPreference: PlaybackPreference {
+        defaultPlaybackPreferenceProvider?() ?? .default
+    }
+
     /// - Parameter fileURL: legacy JSON location (defaults to the historical
     ///   subscriptions.json path). Kept as a parameter so existing callers are
     ///   unchanged; it now seeds the one-time GRDB import.
@@ -86,6 +98,7 @@ public final class SubscriptionStore: ObservableObject {
         )
         subscription.description = parsedFeed.description
         subscription.subscribedAt = Date()
+        subscription.playbackPreference = seededDefaultPlaybackPreference
 
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
@@ -132,6 +145,7 @@ public final class SubscriptionStore: ObservableObject {
         )
         subscription.description = description
         subscription.subscribedAt = Date()
+        subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
         if insertAtBottom {
@@ -289,6 +303,10 @@ public final class SubscriptionStore: ObservableObject {
         if subscription.subscribedAt == nil {
             subscription.subscribedAt = Date()
         }
+        // Snapshot the current global default now that this is a real subscription.
+        // While it was browse-only its preference was resolved live; from here it
+        // owns an independent copy that later default changes won't touch.
+        subscription.playbackPreference = seededDefaultPlaybackPreference
         subscriptions.insert(subscription, at: 0)
         reindexPriority()
         save()

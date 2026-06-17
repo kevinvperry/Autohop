@@ -5,8 +5,11 @@ import Foundation
 // level, event key, message, key=value metadata) to autohop-diagnostic.log on
 // a serial queue, capped at ~1 MB with truncation. isEnabled mirrors the
 // hidden Diagnostics toggle (Settings → About → tap version 5×); when off,
-// writes are no-ops. Read by DiagnosticLogView. Event keys are dot-namespaced
-// ("background.schedule", "download.stalled", ...) — grep-friendly.
+// writes are no-ops — EXCEPT errors logged with alwaysPersist:true, which are
+// always recorded (used by CloudSyncEngine so a sync failure that happens
+// before a user enables diagnostics still leaves a trace). Read by
+// DiagnosticLogView. Event keys are dot-namespaced ("background.schedule",
+// "download.stalled", "sync.pushFailed", ...) — grep-friendly.
 final class AppLogger: ObservableObject {
     static let shared = AppLogger()
 
@@ -46,8 +49,12 @@ final class AppLogger: ObservableObject {
         write(level: "WARN", event: event, message: message, metadata: metadata)
     }
 
-    func error(_ event: String, _ message: String, metadata: [String: String] = [:]) {
-        write(level: "ERROR", event: event, message: message, metadata: metadata)
+    /// - Parameter alwaysPersist: when true, the entry is written even if the
+    ///   Diagnostics toggle is off. Reserve for errors a user would need a trace
+    ///   of after the fact (e.g. iCloud sync failures). The file stays capped and
+    ///   rotated, so these can't grow unbounded.
+    func error(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
+        write(level: "ERROR", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 
     func contents() -> String {
@@ -88,8 +95,8 @@ final class AppLogger: ObservableObject {
         }
     }
 
-    private func write(level: String, event: String, message: String, metadata: [String: String]) {
-        guard isEnabled else { return }
+    private func write(level: String, event: String, message: String, metadata: [String: String], force: Bool = false) {
+        guard isEnabled || force else { return }
         let timestamp = dateFormatter.string(from: Date())
         let metadataText = metadata.isEmpty
             ? ""

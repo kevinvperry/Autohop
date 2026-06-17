@@ -38,6 +38,12 @@ struct AppSettings: Equatable, Codable {
     // Cross-device iCloud sync (CloudKit). Opt-in, OFF by default so the
     // on-device privacy stance holds until the user explicitly enables it.
     var iCloudSyncEnabled: Bool
+    // Default playback settings (speed / trim silence / vocal boost / start /
+    // end skip) applied to every NEW subscription at the moment it becomes a
+    // real subscription, and used live for playback of non-subscribed (browse)
+    // feeds. Editing this NEVER touches existing subscriptions' own settings —
+    // see AppState.effectivePreference(for:) and SubscriptionStore seeding.
+    var defaultPlaybackPreference: PlaybackPreference
 
     static let `default` = AppSettings(
         podcastPollMinutes: 5,
@@ -62,7 +68,8 @@ struct AppSettings: Equatable, Codable {
         trimSilenceLowDefaultMigrated: false,
         playbackSpeed160Migrated: false,
         autoArchiveSettingsMigrated: false,
-        iCloudSyncEnabled: false
+        iCloudSyncEnabled: false,
+        defaultPlaybackPreference: .default
     )
 
     private enum CodingKeys: String, CodingKey {
@@ -89,6 +96,7 @@ struct AppSettings: Equatable, Codable {
         case playbackSpeed160Migrated
         case autoArchiveSettingsMigrated
         case iCloudSyncEnabled
+        case defaultPlaybackPreference
     }
 
     init(
@@ -114,7 +122,8 @@ struct AppSettings: Equatable, Codable {
         trimSilenceLowDefaultMigrated: Bool,
         playbackSpeed160Migrated: Bool,
         autoArchiveSettingsMigrated: Bool,
-        iCloudSyncEnabled: Bool
+        iCloudSyncEnabled: Bool,
+        defaultPlaybackPreference: PlaybackPreference
     ) {
         self.podcastPollMinutes = podcastPollMinutes
         self.downloadOverWifi = downloadOverWifi
@@ -139,6 +148,7 @@ struct AppSettings: Equatable, Codable {
         self.playbackSpeed160Migrated = playbackSpeed160Migrated
         self.autoArchiveSettingsMigrated = autoArchiveSettingsMigrated
         self.iCloudSyncEnabled = iCloudSyncEnabled
+        self.defaultPlaybackPreference = defaultPlaybackPreference
     }
 
     init(from decoder: Decoder) throws {
@@ -166,5 +176,6 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated = try container.decodeIfPresent(Bool.self, forKey: .playbackSpeed160Migrated) ?? Self.default.playbackSpeed160Migrated
         autoArchiveSettingsMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveSettingsMigrated) ?? Self.default.autoArchiveSettingsMigrated
         iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? Self.default.iCloudSyncEnabled
+        defaultPlaybackPreference = try container.decodeIfPresent(PlaybackPreference.self, forKey: .defaultPlaybackPreference) ?? Self.default.defaultPlaybackPreference
     }
 }

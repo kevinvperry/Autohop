@@ -5,7 +5,9 @@ import SwiftUI
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
 // (editable title, numeric priority rank, read-only author), Playback (speed
 // 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
-// AppState if this podcast is playing), Automation (per-podcast notifications,
+// AppState if this podcast is playing; the dark Speed/Trim/Vocal card is the
+// shared Views/PlaybackControlsCard, also used by SettingsView's global
+// Default Playback panel), Automation (per-podcast notifications,
 // exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
 // (only when latest episode has chapters; position-based), Feed (read-only
 // URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
@@ -255,162 +257,12 @@ struct SubscriptionSettingsView: View {
 
     @ViewBuilder
     private func soundControlsCard(_ sub: Subscription) -> some View {
-        let darkBG = Color(red: 0.10, green: 0.10, blue: 0.13)
-        let dividerColor = Color(white: 0.20)
-
-        VStack(spacing: 0) {
-            soundSpeedRow(sub)
-            Divider().background(dividerColor).padding(.leading, 60)
-            soundTrimSilenceRow(sub)
-            Divider().background(dividerColor).padding(.leading, 60)
-            soundVocalBoostRow(sub)
-        }
-        .background(darkBG)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .preferredColorScheme(.dark)
-    }
-
-    private func soundRowIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.purple)
-            .frame(width: 26)
-    }
-
-    private func soundSpeedRow(_ sub: Subscription) -> some View {
-        let speed = sub.playbackPreference.speed
-        let options = PlaybackPreference.speedOptions
-
-        return HStack(spacing: 14) {
-            soundRowIcon("speedometer")
-
-            Text("Speed")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-
-            Spacer()
-
-            HStack(spacing: 0) {
-                Button {
-                    guard let idx = options.firstIndex(where: { abs($0 - speed) < 0.01 }), idx > 0
-                    else { return }
-                    appState.updatePlaybackSpeed(for: sub.id, speed: options[idx - 1])
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 38)
-                }
-                .buttonStyle(.borderless)
-
-                Text(PlaybackPreference.speedLabel(speed))
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 46)
-
-                Button {
-                    guard let idx = options.firstIndex(where: { abs($0 - speed) < 0.01 }), idx < options.count - 1
-                    else { return }
-                    appState.updatePlaybackSpeed(for: sub.id, speed: options[idx + 1])
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 38)
-                }
-                .buttonStyle(.borderless)
-            }
-            .background(Color(white: 0.20))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
-    private func soundTrimSilenceRow(_ sub: Subscription) -> some View {
-        let trimSilence = sub.playbackPreference.trimSilence
-        let isOn = trimSilence != .off
-        let levels: [TrimSilenceAmount] = [.low, .medium, .high]
-
-        return VStack(spacing: 14) {
-            HStack(spacing: 14) {
-                soundRowIcon("scissors")
-
-                Text("Trim Silence")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                Spacer()
-
-                Toggle("", isOn: Binding(
-                    get: { isOn },
-                    set: { on in appState.updateTrimSilence(for: sub.id, amount: on ? .low : .off) }
-                ))
-                .labelsHidden()
-                .tint(.purple)
-            }
-
-            if isOn {
-                Picker("", selection: Binding(
-                    get: { trimSilence },
-                    set: { appState.updateTrimSilence(for: sub.id, amount: $0) }
-                )) {
-                    ForEach(levels, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .tint(.purple)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .animation(.easeInOut(duration: 0.22), value: isOn)
-    }
-
-    private func soundVocalBoostRow(_ sub: Subscription) -> some View {
-        let level = sub.playbackPreference.vocalBoostLevel
-        let isOn = level != .off
-        let levels: [VocalBoostLevel] = [.light, .standard, .strong]
-
-        return VStack(spacing: 14) {
-            HStack(spacing: 14) {
-                soundRowIcon("speaker.wave.2.fill")
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Vocal Boost")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("Voices sound clearer")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color(white: 0.50))
-                }
-
-                Spacer()
-
-                Toggle("", isOn: Binding(
-                    get: { isOn },
-                    set: { on in appState.updateVocalBoost(for: sub.id, level: on ? .strong : .off) }
-                ))
-                .labelsHidden()
-                .tint(.purple)
-            }
-
-            if isOn {
-                Picker("", selection: Binding(
-                    get: { level },
-                    set: { appState.updateVocalBoost(for: sub.id, level: $0) }
-                )) {
-                    ForEach(levels, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .tint(.purple)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .animation(.easeInOut(duration: 0.22), value: isOn)
+        PlaybackControlsCard(
+            preference: sub.playbackPreference,
+            onSpeedChange: { appState.updatePlaybackSpeed(for: sub.id, speed: $0) },
+            onTrimChange: { appState.updateTrimSilence(for: sub.id, amount: $0) },
+            onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) }
+        )
     }
 
     @ViewBuilder
