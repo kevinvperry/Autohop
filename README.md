@@ -49,8 +49,10 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
+- Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned
+- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history, and stats in step across your devices over your private CloudKit database; downloads stay per-device
 - OPML import and export for subscription portability
-- New episode push notifications (global and per-podcast)
+- New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
@@ -64,6 +66,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
 | [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference). |
 | [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
+| [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
+| [`ASSESSMENT.md`](ASSESSMENT.md) | Machine-oriented code/feature/security assessment: performance, bugs, stale code, and security findings with `file:line` anchors and severities. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
 | [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the two covered files. |
 

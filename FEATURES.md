@@ -48,9 +48,11 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
     - [Auto Archive](#152-auto-archive)
     - [Downloading](#153-downloading)
     - [Controls](#154-controls)
-    - [Subscriptions](#155-subscriptions)
-    - [Storage](#156-storage)
-    - [About](#157-about)
+    - [Default Playback](#155-default-playback)
+    - [Subscriptions](#156-subscriptions)
+    - [Sync (iCloud)](#157-sync-icloud)
+    - [Storage](#158-storage)
+    - [About](#159-about)
 16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
 
 ---
@@ -359,7 +361,7 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Download controls (global, in Settings):**
 - Download over WiFi (default: on)
-- Download over cellular (default: on)
+- Download over cellular (default: off)
 
 ---
 
@@ -623,12 +625,12 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
-| Global | New episode notifications | **On** | Settings → Release Radar → Notification Settings |
+| Global | New episode notifications | **Off** | Settings → Release Radar → Notification Settings |
 | Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation, or Settings → Release Radar → Notification Settings |
 
-**Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. New podcasts default to off at the per-podcast level — the user opts in only for shows they want to be notified about.
+**Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. Both default off, so the app is silent until the user explicitly opts in — first by enabling the global toggle, then per show.
 
-**iOS permission:** Standard `UNUserNotificationCenter` authorisation is required. Managed by `NotificationService`, which is also the app's `UNUserNotificationCenterDelegate` (installed in `AppDelegate`).
+**iOS permission:** `UNUserNotificationCenter` authorisation is **not requested at launch**. `NotificationService.configure()` (called from `AppDelegate`) only installs the delegate + notification categories; the system permission prompt is deferred until the user opts in — enabling a notification toggle, or turning on Sleep Schedule (`NotificationService.requestPermission()`). `NotificationService` is also the app's `UNUserNotificationCenterDelegate`.
 
 **Sleep Schedule prompt notification:** Separate from new-episode alerts, `NotificationService` also posts the time-sensitive "Are you still listening?" lock-screen notification with its background "Still Listening" action button (see §8.1). This is generated locally on demand and is not gated by the per-podcast notification toggles.
 
@@ -647,7 +649,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
-| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **On**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. If iOS notification permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
+| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
 
 ---
 
@@ -665,7 +667,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 |---|---|---|---|
 | Downloads | Navigation link | — | Opens the Downloads page showing active, queued, and completed downloads. |
 | Download over WiFi | Toggle | **On** | Allow downloads on Wi-Fi networks. |
-| Download over cellular | Toggle | **On** | Allow downloads over mobile data. Turn off to restrict downloads to Wi-Fi only. |
+| Download over cellular | Toggle | **Off** | Allow downloads over mobile data. Off by default so the download-first queue only stocks up over Wi-Fi until the user opts in. |
 
 ---
 
@@ -703,13 +705,26 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 |---|---|---|
 | Manage podcasts | Navigation link | Opens the Priority Stack (PodcastsView) to reorder, add, or remove subscriptions. |
 | Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
-| Listening History | Navigation link | Opens Listening History. See [Section 11](#11-listening-history). |
 | Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
 | Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
 
+(Listening History is reached from the Menu, not this section.)
+
 ---
 
-### 15.7 Storage
+### 15.7 Sync (iCloud)
+
+Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **Off by default** — the on-device privacy stance holds until the user enables it. Stored in `AppSettings.iCloudSyncEnabled`; the engine is `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper), started/stopped by AppState as the toggle changes.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, priority, notifications), subscribe/unsubscribe, and listening history. |
+
+**What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys.
+
+---
+
+### 15.8 Storage
 
 | Display | Description |
 |---|---|
@@ -717,7 +732,7 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 
 ---
 
-### 15.8 About
+### 15.9 About
 
 | Item | Description |
 |---|---|
@@ -743,11 +758,21 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 ### `PlaybackPreference.default`
 | Property | Default |
 |---|---|
-| speed | 1.6x |
+| speed | 1.0x |
 | startSkipSeconds | 0 (off) |
 | endSkipSeconds | 0 (off) |
-| vocalBoostLevel | .strong |
-| trimSilence | .low |
+| vocalBoostLevel | .off |
+| trimSilence | .off |
+
+> **Note on the 1.6x / Strong / Low values you may remember:** those are NOT the
+> default. They were applied to *already-subscribed* shows of pre-existing users
+> by one-shot first-launch migrations (`playbackSpeed160Migrated`,
+> `vocalBoostLevelMigrated`, `trimSilenceLowDefaultMigrated`). A brand-new
+> subscription is seeded from `AppSettings.defaultPlaybackPreference`, which
+> itself defaults to `PlaybackPreference.default` (1.0x / Off / Off). See §15.5.
+> (Code caveat: `PlaybackPreference`'s member-wise init and decoder fall back to
+> `.strong` vocal boost when the key is absent — a legacy-migration artifact that
+> disagrees with `.default`; see ASSESSMENT.md B3.)
 
 ### `AutoArchiveSettings.default`
 | Property | Default |
@@ -761,8 +786,8 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 |---|---|
 | podcastPollMinutes | 5 |
 | downloadOverWifi | true |
-| downloadOverCellular | true |
-| notifyNewEpisodes | true |
+| downloadOverCellular | false |
+| notifyNewEpisodes | false |
 | skipBackSeconds | 15 |
 | skipForwardSeconds | 30 |
 | keepScreenAwakeDuringPlayback | false |

@@ -147,7 +147,7 @@ struct SettingsView: View {
         } header: {
             Text("Downloading")
         } footer: {
-            Text("New episodes download automatically so the queue always plays from files on your device. Turn off cellular to limit downloading to Wi-Fi.")
+            Text("New episodes download automatically so the queue always plays from files on your device. Downloads use Wi-Fi only by default — turn on cellular to also download over mobile data.")
         }
     }
 

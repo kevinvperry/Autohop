@@ -45,6 +45,15 @@ public final class SubscriptionStore: ObservableObject {
     /// actually subscribed to — after which the snapshot is independent.
     public var defaultPlaybackPreferenceProvider: (() -> PlaybackPreference)?
 
+    /// Requests deletion of an episode's downloaded media file. Set by AppState to
+    /// call DownloadManager.deleteLocalFile(for:) — the store can't reach the
+    /// DownloadManager directly. Invoked when a remote played/archived state merges
+    /// in (applyRemoteEpisodeState) and this device still holds the download, so a
+    /// cross-device archive doesn't leave an orphaned file (ASSESSMENT.md B1). The
+    /// episode handed in still has its localFileURL/localFileName populated so the
+    /// file can be located before those fields are cleared.
+    public var onEpisodeFileShouldDelete: ((Episode) -> Void)?
+
     private var seededDefaultPlaybackPreference: PlaybackPreference {
         defaultPlaybackPreferenceProvider?() ?? .default
     }
@@ -656,6 +665,29 @@ public final class SubscriptionStore: ObservableObject {
         episode.playedState = merged.playedState
         episode.wasCompleted = merged.wasCompleted
         episode.lastPlayedAt = merged.lastPlayedAt
+
+        // A remote played/archived merge means the episode finished on another
+        // device; discard this device's local download to match the local
+        // markEpisodePlayed/markEpisodeArchived paths and the self-heal branch in
+        // updateEpisodes(). Without this, a cross-device archive leaves an orphaned
+        // media file (storage leak) and a "downloaded + archived" episode
+        // (ASSESSMENT.md B1). The actual file delete is surfaced through
+        // onEpisodeFileShouldDelete (set by AppState) since the store can't reach
+        // DownloadManager directly — mirroring nowPlayingGuidProvider.
+        if merged.playedState == .played || merged.playedState == .archived {
+            let hadLocalDownload = episode.downloadState == .downloaded
+                || episode.localFileURL != nil
+                || episode.localFileName != nil
+            if hadLocalDownload {
+                // Hand off the still-populated episode so the callback can locate
+                // the file before we null the fields below.
+                onEpisodeFileShouldDelete?(episode)
+            }
+            episode.downloadState = .notDownloaded
+            episode.localFileURL = nil
+            episode.localFileName = nil
+        }
+
         subscriptions[location.sub].episodes[location.ep] = episode
         if subscriptions[location.sub].latestEpisode?.id == episode.id {
             subscriptions[location.sub].latestEpisode = episode

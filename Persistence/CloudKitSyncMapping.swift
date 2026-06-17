@@ -1,6 +1,13 @@
 import Foundation
 import CloudKit
 
+// AI CONTEXT — Persistence/CloudKitSyncMapping.swift
+// Two things live here: (1) `DeviceIdentity` — the stable per-device UUID used to
+// partition stats records by (deviceID, dayKey); (2) `CloudKitSync` — the PURE
+// mapping between sync-state projections / history / stats and CloudKit CKRecords
+// (no networking, no CKSyncEngine), so it is fully unit-testable on macOS. The
+// detailed schema/merge contract is documented on the `CloudKitSync` enum below.
+
 // Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
 // Generated once and persisted in UserDefaults — stats records are keyed by
 // (deviceID, dayKey) so each device owns its own partition and they sum on read.

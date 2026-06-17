@@ -282,7 +282,7 @@ enum SupportGuide {
             .heading("Pausing and cancelling"),
             .paragraph("Open the **Downloads** page to see all active downloads. Tap a download row to pause it. Tap again to resume. Swipe left to cancel."),
             .heading("Cellular downloads"),
-            .paragraph("By default, Autohop downloads over both Wi-Fi and cellular. To restrict downloads to Wi-Fi only, go to **Settings → Downloading** and turn off **Download over cellular**. You can also turn off **Download over WiFi** if you want full manual control."),
+            .paragraph("By default, Autohop downloads over Wi-Fi only. To also download over mobile data, go to **Settings → Downloading** and turn on **Download over cellular**. You can also turn off **Download over WiFi** if you want full manual control."),
             .heading("Storage"),
             .paragraph("Downloaded episode files are stored in the app's private storage. Go to **Settings → Storage** to see how many episodes are currently downloaded. Episodes are automatically removed when archived (manually or by auto-archive policy)."),
         ]
@@ -479,7 +479,7 @@ enum SupportGuide {
             .paragraph("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Checks are tiny — the feed is only downloaded when it has actually changed — so new episodes appear within minutes of release without draining battery or data."),
             .table(headers: nil, rows: [
                 ["Radar sensitivity", "How often a feed is re-checked while a new episode drop is imminent. Range: 1–60 minutes. Default: 5 minutes. Lower means new episodes appear faster."],
-                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (on by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
+                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (off by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
             ]),
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [
@@ -489,7 +489,7 @@ enum SupportGuide {
             .table(headers: nil, rows: [
                 ["Downloads", "Navigate to the Downloads page showing active, completed, and recently archived episodes."],
                 ["Download over WiFi", "Allow downloads on Wi-Fi networks. On by default."],
-                ["Download over cellular", "Allow downloads over mobile data. On by default. Turn off to restrict downloads to Wi-Fi only."],
+                ["Download over cellular", "Allow downloads over mobile data. Off by default — turn on to download over cellular as well as Wi-Fi."],
             ]),
             .heading("Controls"),
             .table(headers: nil, rows: [

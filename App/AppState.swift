@@ -299,6 +299,12 @@ final class AppState: ObservableObject {
         subscriptionStore.defaultPlaybackPreferenceProvider = { [weak self] in
             self?.settingsStore.appSettings.defaultPlaybackPreference ?? .default
         }
+        // When a remote played/archived state arrives for an episode this device
+        // still has downloaded, drop the local media file (ASSESSMENT.md B1). The
+        // store clears the download fields itself; this just deletes the file.
+        subscriptionStore.onEpisodeFileShouldDelete = { [weak self] episode in
+            Task { try? await self?.downloadManager.deleteLocalFile(for: episode) }
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }

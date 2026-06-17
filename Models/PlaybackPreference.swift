@@ -2,12 +2,25 @@ import Foundation
 
 // AI CONTEXT — Models/PlaybackPreference.swift
 // Per-podcast audio settings stored on Subscription.playbackPreference and
-// consumed by PlaybackEngine: speed (1.0–2.5x, default 1.6x), start/end skip
-// seconds (real file time), VocalBoostLevel (off/light/standard/strong —
-// selects which stages of the high-pass→dynamics→limiter chain are active),
-// TrimSilenceAmount (off/low/medium/high — selects SilenceDetector tuning).
+// consumed by PlaybackEngine: speed (1.0–2.5x), start/end skip seconds (real
+// file time), VocalBoostLevel (off/light/standard/strong — selects which stages
+// of the high-pass→dynamics→limiter chain are active), TrimSilenceAmount
+// (off/low/medium/high — selects SilenceDetector tuning).
 // Any non-off boost or trim forces the AVAudioEngine playback path; video
 // episodes ignore both and always use AVPlayer.
+//
+// DEFAULTS — read carefully, there are two distinct notions:
+//  - `PlaybackPreference.default` = 1.0x / vocalBoost .off / trim .off. This is
+//    what a NEW subscription is seeded with (via AppSettings.defaultPlayback
+//    Preference, which itself defaults to .default).
+//  - Pre-existing users were moved to 1.6x / Strong / Low by ONE-SHOT migrations
+//    in AppState.bootstrap (playbackSpeed160Migrated / vocalBoostLevelMigrated /
+//    trimSilenceLowDefaultMigrated). Those are not "the default" — they are a
+//    historical migration of already-subscribed shows.
+// KNOWN INCONSISTENCY (see ASSESSMENT.md B3): the member-wise init defaults
+// vocalBoostLevel to .strong and init(from:) falls back to .strong when the key
+// is absent (intentional for the legacy migration), which disagrees with
+// `.default`'s .off. Align before relying on the init default.
 public enum TrimSilenceAmount: String, CaseIterable, Codable, Sendable {
     case off
     case low

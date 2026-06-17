@@ -35,13 +35,31 @@ popularised — including the concepts of silence trimming and a volume/vocal
 boost as per-podcast audio effects, the dark "audio effects" controls
 sheet for adjusting speed/trim/boost mid-playback, an up-next style
 playback queue, episode auto-archive housekeeping, and on-device
-listening statistics (time listened / time saved). These are *concepts
-and UX conventions*, not
-copied code or assets: every implementation outside the two covered files
-is original Autohop work (independent algorithms, layouts, and visual
-design), and no Pocket Casts artwork, strings, or interface assets are
-used. This acknowledgement is offered for transparency and credit, not
-because the MPL-2.0 requires it.
+listening statistics (time listened / time saved). The opt-in **cross-device
+sync** design (`Persistence/CloudSyncEngine.swift`, `Models/SyncState.swift`)
+was likewise informed by *studying* the Pocket Casts iOS sync engine —
+specifically its field-level conflict-resolution discipline — which Autohop
+re-applies on top of Apple's `CKSyncEngine`/CloudKit. The `@Synced`
+property wrapper in `Models/Synced.swift` (a value wrapper that stamps a
+`modifiedAt` date whenever the value changes, giving free field-level
+dirty-tracking) is **modelled on the concept of** Pocket Casts'
+`ModifiedDate` property wrapper. These are *concepts, patterns, and UX
+conventions*, not copied code or assets: every implementation outside the
+two MPL-covered files listed above is an original, independent Swift
+reimplementation (own algorithms, layouts, and visual design), and no
+Pocket Casts artwork, strings, or interface assets are used. This
+acknowledgement is offered for transparency and credit, not because the
+MPL-2.0 requires it.
+
+> **Maintainer note (for accuracy):** `Models/Synced.swift` is currently
+> licensed MIT, but its in-file header describes the wrapper as "Ported
+> from" Pocket Casts' `ModifiedDate`. If that file is a clean-room
+> reimplementation of the *concept* (as the project intends), the header
+> wording should read "modelled on / inspired by" to match this note. If
+> any portion is a literal port of MPL-2.0 source, the file must instead
+> carry the MPL-2.0 Exhibit A header and be added to the covered-files list
+> above. Resolve this before the source-availability link ships (see
+> ASSESSMENT.md, licensing finding).
 
 Each covered file carries the MPL-2.0 Exhibit A notice in its header, and
 its source code is made available as part of the Autohop source

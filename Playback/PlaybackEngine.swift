@@ -709,9 +709,12 @@ final class PlaybackEngine: PlaybackControlling {
                 }
 
                 guard buffer.frameLength > 0 else {
-                    // EOF — flush any gap buffers still in the detector.
-                    let flushBuffers = detector.flush()
-                    for buf in flushBuffers {
+                    // EOF — flush any gap buffers still in the detector. The trailing gap
+                    // is re-emitted verbatim so framesRemoved is 0, but route it through the
+                    // same accounting for completeness.
+                    let flushed = detector.flush()
+                    self.reportTrimSilenceSaved(frames: flushed.framesRemoved, sampleRate: sampleRate)
+                    for buf in flushed.buffers {
                         if self.engineReadCancelled { break }
                         sem.wait()
                         if self.engineReadCancelled { sem.signal(); break }
@@ -743,21 +746,21 @@ final class PlaybackEngine: PlaybackControlling {
                 // rendered position rather than a wall-clock estimate.
                 let chunkEndSeconds = Double(file.framePosition) / sampleRate
 
-                let outputBuffers = detector.process(
+                let processed = detector.process(
                     buffer: buffer,
                     currentFrame: file.framePosition,
                     totalFrames: totalFrames,
                     sampleRate: sampleRate
                 )
+                let outputBuffers = processed.buffers
 
-                // Accumulate silence savings: frames read minus frames scheduled for playback.
-                let inputFrames = AVAudioFrameCount(buffer.frameLength)
-                let outputFrames = outputBuffers.reduce(AVAudioFrameCount(0)) { $0 + $1.frameLength }
-                if outputFrames < inputFrames && sampleRate > 0 {
-                    let savedSeconds = Double(inputFrames - outputFrames) / sampleRate
-                    let cb = self.onTrimSilenceSaved
-                    DispatchQueue.main.async { cb?(savedSeconds) }
-                }
+                // Accumulate the silence actually saved. SilenceDetector reports the NET
+                // frames removed by this call (0 while a gap is still being accumulated, 0
+                // when a gap is too short and re-inserted, and the dropped frames net of the
+                // kept join buffers for a real gap). Summing that — instead of inferring from
+                // the per-buffer input/output delta — is the fix for the over-count in
+                // ASSESSMENT.md B2.
+                self.reportTrimSilenceSaved(frames: processed.framesRemoved, sampleRate: sampleRate)
 
                 for (i, buf) in outputBuffers.enumerated() {
                     if self.engineReadCancelled { break }
@@ -813,6 +816,17 @@ final class PlaybackEngine: PlaybackControlling {
 
             DispatchQueue.main.async { [weak self] in self?.engineReadFinished = true }
         }
+    }
+
+    /// Convert net trimmed frames (as reported by SilenceDetector) to seconds and add
+    /// them to the Stats "Trim Silence" time-saved category on the main actor. Called
+    /// from the background read loop; reading `onTrimSilenceSaved` here matches the
+    /// existing pattern (the closure is set once at setup).
+    private func reportTrimSilenceSaved(frames: AVAudioFrameCount, sampleRate: Double) {
+        guard frames > 0, sampleRate > 0 else { return }
+        let savedSeconds = Double(frames) / sampleRate
+        let cb = onTrimSilenceSaved
+        DispatchQueue.main.async { cb?(savedSeconds) }
     }
 
     private func stopEngineBufferLoop() {

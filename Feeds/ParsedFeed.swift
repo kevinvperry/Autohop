@@ -3,8 +3,11 @@ import Foundation
 // AI CONTEXT — Feeds/ParsedFeed.swift
 // Intermediate value types produced by RSSParser — feed-shaped data BEFORE it
 // becomes a Subscription/Episode (no UUIDs, no local state). SubscriptionStore
-// and FeedService convert these into model types; PodcastPreviewView renders
-// them directly for not-yet-subscribed podcasts.
+// and FeedService convert these into model types; PodcastDetailView renders them
+// directly for not-yet-subscribed (browse-preview) podcasts.
+// Also hosts the shared HTTPResponseValidation gate (see bottom of file) — placed
+// here because this file is compiled by BOTH the SwiftPM AutohopCore target and
+// the Xcode app target, so it needs no XcodeGen regeneration.
 public struct ParsedFeed: Equatable {
     public var title: String
     public var description: String?

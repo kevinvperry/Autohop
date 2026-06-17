@@ -5,9 +5,9 @@ Copyright © 2026 Kevin Perry.
 
 Autohop is open source. The project is licensed under the MIT License (see
 the LICENSE file), with the exception of the files identified below as
-MPL-2.0-covered (Playback/SilenceDetector.swift and
-Playback/PlaybackEngine.swift), which are subject to the Mozilla Public
-License, Version 2.0.
+MPL-2.0-covered (Playback/SilenceDetector.swift,
+Models/SilenceGapAccounting.swift, and Playback/PlaybackEngine.swift), which
+are subject to the Mozilla Public License, Version 2.0.
 
 This product includes software derived from third-party open-source projects,
 as detailed below.
@@ -27,6 +27,12 @@ architecturally based on Pocket Casts for iOS:
       and fade-in/fade-out join logic are ported from the Pocket Casts
       implementation. The code has been restructured into a Swift value-type
       struct and adapted to the Autohop buffer pipeline.
+
+  - Autohop/Models/SilenceGapAccounting.swift
+      Derived from: podcasts/AudioReadTask.swift
+      Nature: Direct algorithmic port. The gap-size thresholds and re-insert
+      counts (extracted from SilenceDetector.swift as a pure, headlessly
+      testable value type) are ported from the Pocket Casts implementation.
 
   - Autohop/Playback/PlaybackEngine.swift
       Derived from: podcasts/EffectsPlayer.swift
@@ -58,4 +64,5 @@ In accordance with MPL-2.0 Section 3.2, the complete source code of Autohop's
 modified versions of the above MPL-2.0-covered files is made available to all
 recipients of the Autohop binary in the public Autohop source repository:
 https://github.com/kevinvperry/Autohop
-(see Playback/SilenceDetector.swift and Playback/PlaybackEngine.swift).
+(see Playback/SilenceDetector.swift, Models/SilenceGapAccounting.swift, and
+Playback/PlaybackEngine.swift).

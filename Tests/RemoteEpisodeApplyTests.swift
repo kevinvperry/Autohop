@@ -62,6 +62,64 @@ final class RemoteEpisodeApplyTests: XCTestCase {
         XCTAssertEqual(store.subscription(id: sub)?.episodes.first?.playedState, .played)
     }
 
+    func testRemoteArchiveClearsLocalDownload() async throws {
+        let (store, sub, episode) = try makeStoreWithEpisode()
+
+        // This device has the episode downloaded.
+        var downloaded = episode
+        downloaded.downloadState = .downloaded
+        downloaded.localFileURL = URL(fileURLWithPath: "/tmp/autohop-test-\(episode.id).mp3")
+        downloaded.localFileName = "\(episode.id).mp3"
+        store.updateLatestEpisode(subscriptionID: sub, episode: downloaded)
+        await store.flushPendingSaves()
+
+        // Capture the file-delete request surfaced to AppState.
+        var deleteRequest: Episode?
+        store.onEpisodeFileShouldDelete = { deleteRequest = $0 }
+
+        // Another device archives the episode.
+        var remoteEp = episode
+        remoteEp.playedState = .archived
+        let remote = EpisodeSyncState(episode: remoteEp, subscriptionID: sub, dirtyAt: Date())
+
+        let updated = store.applyRemoteEpisodeState(remote)
+        await store.flushPendingSaves()
+
+        XCTAssertTrue(updated)
+        let result = store.subscription(id: sub)?.episodes.first
+        XCTAssertEqual(result?.playedState, .archived)
+        XCTAssertEqual(result?.downloadState, .notDownloaded)
+        XCTAssertNil(result?.localFileURL)
+        XCTAssertNil(result?.localFileName)
+
+        // The delete callback fired with the file fields still populated so the
+        // DownloadManager can locate the media file.
+        XCTAssertEqual(deleteRequest?.id, episode.id)
+        XCTAssertEqual(deleteRequest?.localFileName, "\(episode.id).mp3")
+        XCTAssertNotNil(deleteRequest?.localFileURL)
+    }
+
+    func testRemotePlayedWithNoLocalDownloadSkipsDeleteCallback() async throws {
+        let (store, sub, episode) = try makeStoreWithEpisode()
+        await store.flushPendingSaves()
+
+        // No local download → the delete callback must not fire.
+        var deleteFired = false
+        store.onEpisodeFileShouldDelete = { _ in deleteFired = true }
+
+        var remoteEp = episode
+        remoteEp.playedState = .played
+        remoteEp.wasCompleted = true
+        let remote = EpisodeSyncState(episode: remoteEp, subscriptionID: sub, dirtyAt: Date())
+
+        let updated = store.applyRemoteEpisodeState(remote)
+        await store.flushPendingSaves()
+
+        XCTAssertTrue(updated)
+        XCTAssertFalse(deleteFired)
+        XCTAssertEqual(store.subscription(id: sub)?.episodes.first?.downloadState, .notDownloaded)
+    }
+
     func testUnknownEpisodeIsNotApplied() async throws {
         let (store, sub, _) = try makeStoreWithEpisode()
         await store.flushPendingSaves()
