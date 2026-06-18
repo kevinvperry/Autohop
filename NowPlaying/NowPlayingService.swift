@@ -8,7 +8,9 @@ import UIKit
 // rate) and remote commands (play/pause, skip ±N using the user's configured
 // intervals, next track, scrubbing — seek command is enabled/disabled live by
 // the Lock Screen Scrubbing setting). AppState.bootstrap() wires the handlers
-// once and pushes state updates on every tick/transition.
+// once and pushes state updates on every tick/transition. Artwork loads through
+// ArtworkImageCache at a 512 pt target and is guarded by currentArtworkURL so a
+// late image fetch cannot patch the lock-screen card for the wrong episode.
 
 /// Manages the lock-screen / Control Centre Now Playing card and remote controls.
 ///
@@ -20,6 +22,7 @@ final class NowPlayingService {
     static let shared = NowPlayingService()
 
     private var artworkCache: [URL: MPMediaItemArtwork] = [:]
+    private var currentArtworkURL: URL?
     private var commandsRegistered = false
     private var onSeek: ((TimeInterval) -> Void)?
 
@@ -114,6 +117,7 @@ final class NowPlayingService {
         if let url = artworkURL, let cached = artworkCache[url] {
             info[MPMediaItemPropertyArtwork] = cached
         }
+        currentArtworkURL = artworkURL
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
         if let url = artworkURL, artworkCache[url] == nil {
@@ -130,6 +134,7 @@ final class NowPlayingService {
     }
 
     func clear() {
+        currentArtworkURL = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
@@ -137,13 +142,17 @@ final class NowPlayingService {
 
     private func loadAndCacheArtwork(url: URL) {
         Task {
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data)
-            else { return }
+            let image = await ArtworkImageCache.shared.image(
+                for: url,
+                targetSize: CGSize(width: 512, height: 512),
+                scale: 1,
+                priority: .visible
+            )
+            guard let image else { return }
 
             let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            // Patch into current now-playing info if still the same URL.
             artworkCache[url] = artwork
+            guard currentArtworkURL == url else { return }
             if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
                 info[MPMediaItemPropertyArtwork] = artwork
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = info

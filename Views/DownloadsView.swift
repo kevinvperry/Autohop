@@ -4,6 +4,8 @@ import SwiftUI
 // by DownloadActivityStore: active downloads (progress, pause/resume/cancel),
 // failed (retry), and downloaded/recently archived episodes with file sizes
 // and delete actions routed through AppState (which owns file + model state).
+// Rows use CachedArtworkImage with a 44 pt target so this activity-heavy page
+// shares the app-wide downsampled artwork cache rather than decoding full covers.
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -131,7 +133,7 @@ private struct ArchivedEpisodeRow: View {
         HStack(alignment: .top, spacing: 12) {
             // Artwork column — 44×44 image + badges centred below
             VStack(alignment: .center, spacing: 4) {
-                CachedArtworkImage(url: entry.artworkURL) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     placeholderArtwork
                 }
                 .frame(width: 44, height: 44)
@@ -236,7 +238,7 @@ private struct DownloadActivityRow: View {
             HStack(alignment: .top, spacing: 12) {
                 // Artwork column — 44×44 image + badges centred below
                 VStack(alignment: .center, spacing: 4) {
-                    CachedArtworkImage(url: artworkURL) {
+                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                         placeholderArtwork
                     }
                     .frame(width: 44, height: 44)

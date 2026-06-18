@@ -12,6 +12,8 @@ import SwiftUI
 // navigationDestination — parent of Podcast Search) trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
 // at the bottom except during reorder. Rows navigate to PodcastDetailView.
+// Priority-list artwork uses 44 pt CachedArtworkImage thumbnails; feed refresh
+// updates Subscription.artworkURL so changed podcast art can flow into this cache.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editMode: EditMode = .inactive
@@ -355,7 +357,7 @@ struct PodcastsView: View {
     }
 
     private func artwork(url: URL?) -> some View {
-        CachedArtworkImage(url: url) {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {
             placeholderArtwork
         }
         .frame(width: 44, height: 44)

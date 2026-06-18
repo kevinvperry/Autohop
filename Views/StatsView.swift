@@ -17,7 +17,8 @@ import Charts
 // + episode count / average size, forward-only from June 2026), privacy footer.
 // Tapping a Top Shows or
 // drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
-// All on-device data only.
+// All on-device data only. Show rows use 44 pt CachedArtworkImage thumbnails so
+// stats-heavy lists share the same artwork cache variant as queues and settings.
 // MARK: - StatsView
 
 struct StatsView: View {
@@ -969,7 +970,7 @@ private struct StatsShowArtwork: View {
         let subscription = UUID(uuidString: subscriptionID)
             .flatMap { appState.subscriptionStore.subscription(id: $0) }
 
-        CachedArtworkImage(url: subscription?.artworkURL) {
+        CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
             ZStack {
                 LinearGradient(
                     colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],

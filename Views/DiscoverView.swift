@@ -17,7 +17,9 @@ import SwiftUI
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
 // results: every entry routes to PodcastDetailView, which renders both the
 // preview (invisible 30-day browse subscription) and subscribed states — see
-// PAGES.md "Browse Subscription Lifecycle").
+// PAGES.md "Browse Subscription Lifecycle"). Chart cards use CachedArtworkImage
+// with an explicit square target size so the shared artwork cache decodes covers
+// at card scale instead of retaining full-resolution storefront art in memory.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -468,7 +470,7 @@ struct DiscoverView: View {
     // MARK: - Shared pieces
 
     private func chartArtwork(_ url: URL?, size: CGFloat, cornerRadius: CGFloat, placeholderIconSize: CGFloat) -> some View {
-        CachedArtworkImage(url: url) {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: size, height: size)) {
             ZStack {
                 LinearGradient(
                     colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],

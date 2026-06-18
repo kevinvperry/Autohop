@@ -74,7 +74,9 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
-| `Card-PlaybackControls` | Shared dark Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`), same visual as `AudioControls-Sheet`. Reused by the per-podcast Playback section and the global Default Playback panel in App Settings |
+| `Card-PlaybackControls` | Shared dark Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`), same visual as `AudioControls-Sheet`. Reused by the per-podcast Playback section and the global Default Playback panel in App Settings. Takes a `fill` parameter (default near-black; settings pages pass `white.opacity(0.08)` to match their section cards) |
+| `Form-SettingsDark` | The shared dark-`Form` recipe for every settings page: `scrollContentBackground(.hidden)` over `Color.black`, each `Section` a `white.opacity(0.08)` card via `.listRowBackground`, `.tint(.purple)`, `.listSectionSpacing(28)` |
+| `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
 | `Buttons-EpisodePage` | Four equal-width circle buttons in one row: Play (green) · Play Next (blue) · Play Last (orange) · Archive/Unarchive (purple) |
@@ -2223,3 +2225,43 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 - **Table** — each row a `white.opacity(0.06)` card (`cornerRadius 12`): first cell a `.semibold` title, remaining cells labelled by the header (`**Header:** value`) or shown plain for two-column key/value tables.
 - **Pills** — adaptive `LazyVGrid` of capsule status chips (8pt colour dot + label, `color.opacity(0.18)` fill) reusing the `Episode Status Pill` colour set.
 - **Swipe-action cards** — two `white.opacity(0.06)` cards (Swipe Right / Swipe Left) listing each action as a colour dot + `**Label** — detail`, matching the Queue swipe semantics.
+
+## Settings Pages — Dark Form Style
+
+**Label: `Form-SettingsDark`**
+
+Every settings page (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, and the linked sub-screens `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) renders its `Form`/`List` with one shared recipe instead of the stock iOS grouped style:
+
+```swift
+.listSectionSpacing(28)
+.scrollContentBackground(.hidden)
+.background(Color.black.ignoresSafeArea())
+.tint(.purple)
+.preferredColorScheme(.dark)
+```
+
+Each `Section` gets a `white.opacity(0.08)` card via `.listRowBackground(Color.white.opacity(0.08))` (matching `ListRow-IdleBackground` / `Section-CardList`), so sections read as dark cards on black — identical to the rest of the app. The `Card-PlaybackControls` card on these pages is passed `fill: Color.white.opacity(0.08)` so it matches its sibling section cards exactly. Pop-up editor sheets (skip duration, edit title, edit priority) carry `.tint(.purple)` + `.preferredColorScheme(.dark)` to match.
+
+Long section footers (> ~5 rendered rows) are split into multiple paragraphs with `\n\n` at a natural idea boundary for readability.
+
+**Label: `SettingsRowLabel`**
+
+Every control row (toggle, link, stepper, picker, value row) uses the shared `SettingsRowLabel` (`Views/PlaybackControlsCard.swift`) as its label, so each setting carries a purple glyph the way the Speed / Trim Silence / Vocal Boost rows do:
+
+```swift
+struct SettingsRowLabel: View {
+    let title: String
+    let systemImage: String
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.purple)
+        }
+    }
+}
+```
+
+The icon is forced `.purple` while the title inherits the row's primary colour. Section group headers stay as plain text labels (no icon). Action buttons (Run Auto Archive, Import/Export OPML) keep their own `Label` and read as purple-tinted actions; destructive buttons (Unsubscribe) stay red.

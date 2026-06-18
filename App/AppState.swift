@@ -27,7 +27,10 @@ import UIKit
 //    them), refreshDueSubscriptions implements Release Radar due-date polling,
 //    refreshSubscriptionsForBackground serves BGAppRefreshTask (max 8 feeds,
 //    waits on an in-flight cycle instead of completing early). Per-feed failure
-//    backoff lives in feedFailureBackoffUntil.
+//    backoff lives in feedFailureBackoffUntil. Refresh also updates mutable
+//    feed metadata on the Subscription (author + artworkURL) so changed podcast
+//    art is picked up by the shared artwork cache after the next successful
+//    refresh instead of being frozen at subscribe time.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
@@ -2004,6 +2007,10 @@ final class AppState: ObservableObject {
                 subscriptionID: subscription.id,
                 episodes: result.episodes
             )
+            if let artworkURL = result.artworkURL {
+                subscriptionStore.updateArtworkURL(subscriptionID: subscription.id, artworkURL: artworkURL)
+            }
+            subscriptionStore.updateAuthor(subscriptionID: subscription.id, author: result.author)
             subscriptionStore.updateDescription(subscriptionID: subscription.id, description: result.description)
             subscriptionStore.updateCategories(subscriptionID: subscription.id, categories: result.categories)
             subscriptionStore.updateIsExplicit(subscriptionID: subscription.id, isExplicit: result.isExplicit)
@@ -3211,4 +3218,3 @@ final class ListeningHistoryStore: ObservableObject {
         return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
     }
 }
-

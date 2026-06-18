@@ -9,6 +9,8 @@ import UserNotifications
 // notification permission is denied, a banner with a deep link to the app's
 // system settings page is shown. Notifications fire only when BOTH the master
 // toggle and a podcast's toggle are on (gated in AppState.notifyNewEpisodeIfAllowed).
+// Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
+// downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
@@ -165,7 +167,7 @@ private struct NotificationPodcastRow: View {
     var body: some View {
         Toggle(isOn: $isOn) {
             HStack(spacing: 12) {
-                CachedArtworkImage(url: subscription.artworkURL) {
+                CachedArtworkImage(url: subscription.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     Image(systemName: "waveform")
                         .font(.body)
                         .foregroundStyle(.purple)

@@ -15,11 +15,16 @@ import SwiftUI
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
 // Next) and trailing (Archive / Play Last) swipes — NO share swipe. Toolbar
 // shows Refresh Feed + Show Settings only for an active subscription; the share
-// button and mini-player bar are always present.
+// button and mini-player bar are always present. Episode rows pass 44 pt target
+// sizes into CachedArtworkImage and lazily prefetch artwork around the visible
+// row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
+// prefetches are cancelled so long feeds with many distinct episode images do
+// not compete with on-screen artwork loads.
 
 struct PodcastDetailView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
 
     // Identity — at most one of these is set per entry point.
     private let searchResult: PodcastSearchResult?
@@ -39,9 +44,14 @@ struct PodcastDetailView: View {
     @State private var descriptionTruncated = false
     /// The episode whose row is tap-expanded to show its full title + description.
     @State private var expandedEpisodeID: UUID?
+    @State private var prefetchedArtworkURLs: Set<URL> = []
     /// Header/feed-URL fallback captured from the subscription so the page stays
     /// populated (and re-subscribable) after the user taps Unsubscribe.
     @State private var snapshot: PodcastSearchResult?
+
+    private let rowArtworkSize = CGSize(width: 44, height: 44)
+    private let artworkPrefetchForwardCount = 12
+    private let artworkPrefetchBackCount = 3
 
     /// From a search result (may not be subscribed yet).
     init(result: PodcastSearchResult) {
@@ -277,7 +287,7 @@ struct PodcastDetailView: View {
         return VStack(alignment: .leading, spacing: 16) {
             // Top band: artwork on the left, title + pills stacked to its right.
             HStack(alignment: .top, spacing: 16) {
-                CachedArtworkImage(url: artworkURL) {
+                CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: 128, height: 128)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -509,6 +519,9 @@ struct PodcastDetailView: View {
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         trailingSwipe(episode: episode, sub: sub)
                     }
+                    .onAppear {
+                        prefetchEpisodeArtwork(around: episode, episodes: episodes, fallbackURL: sub.artworkURL)
+                    }
                 }
 
                 if episodes.count >= 50 {
@@ -550,7 +563,7 @@ struct PodcastDetailView: View {
         let isExpanded = expandedEpisodeID == episode.id
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL) {
+                CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -631,6 +644,50 @@ struct PodcastDetailView: View {
                 .offset(x: 18)
             }
         }
+    }
+
+    private func prefetchEpisodeArtwork(around episode: Episode, episodes: [Episode], fallbackURL: URL?) {
+        guard let index = episodes.firstIndex(where: { $0.id == episode.id }) else { return }
+
+        let forwardRange = (index + 1)..<min(episodes.count, index + 1 + artworkPrefetchForwardCount)
+        let prefetchURLs = uniqueArtworkURLs(from: forwardRange.map { episodes[$0] }, fallbackURL: fallbackURL)
+        let newURLs = prefetchURLs.filter { prefetchedArtworkURLs.insert($0).inserted }
+
+        if !newURLs.isEmpty {
+            let scale = displayScale
+            let size = rowArtworkSize
+            Task {
+                await ArtworkImageCache.shared.prefetch(urls: newURLs, targetSize: size, scale: scale)
+            }
+        }
+
+        cancelDistantArtworkPrefetches(around: index, episodes: episodes, fallbackURL: fallbackURL)
+    }
+
+    private func cancelDistantArtworkPrefetches(around index: Int, episodes: [Episode], fallbackURL: URL?) {
+        let start = max(0, index - artworkPrefetchBackCount)
+        let end = min(episodes.count, index + 1 + artworkPrefetchForwardCount)
+        let keepURLs = Set(uniqueArtworkURLs(from: (start..<end).map { episodes[$0] }, fallbackURL: fallbackURL))
+        let staleURLs = prefetchedArtworkURLs.subtracting(keepURLs)
+        guard !staleURLs.isEmpty else { return }
+
+        prefetchedArtworkURLs.subtract(staleURLs)
+        let scale = displayScale
+        let size = rowArtworkSize
+        Task {
+            await ArtworkImageCache.shared.cancelPrefetch(urls: Array(staleURLs), targetSize: size, scale: scale)
+        }
+    }
+
+    private func uniqueArtworkURLs(from episodes: [Episode], fallbackURL: URL?) -> [URL] {
+        var seen = Set<URL>()
+        var urls: [URL] = []
+        for episode in episodes {
+            guard let url = episode.artworkURL ?? fallbackURL,
+                  seen.insert(url).inserted else { continue }
+            urls.append(url)
+        }
+        return urls
     }
 
     // MARK: - Swipe actions

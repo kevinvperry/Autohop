@@ -19,7 +19,9 @@ import SwiftUI
 // description text for display. The podcast's episode list lives in
 // PodcastDetailView (reached by tapping a row); this file also hosts
 // EpisodeDetailView, whose status pills treat archived episodes with
-// Episode.wasCompleted as Played.
+// Episode.wasCompleted as Played. Settings/detail artwork uses explicit
+// CachedArtworkImage targets (120 pt header/detail variants), sharing validated
+// source bytes with episode lists while avoiding full-size cover decodes.
 private func stripHTML(_ html: String) -> String {
     // Strip tags, then decode entities.
     let withoutTags = html.replacingOccurrences(
@@ -665,7 +667,7 @@ struct EpisodeDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 // Centred header — artwork · title · pills · show name
                 VStack(spacing: 12) {
-                    CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL) { placeholderArtwork }
+                    CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: 120, height: 120)) { placeholderArtwork }
                         .frame(width: 120, height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))

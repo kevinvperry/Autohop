@@ -21,6 +21,9 @@ import UniformTypeIdentifiers
 // card (PlaybackControlsCard is passed fill: white.opacity(0.08) here) and the
 // linked sub-screens (NotificationSettings / AddFeed / DiagnosticLog /
 // Acknowledgements), which share the same recipe.
+// Listening History rows in this file use 54 pt CachedArtworkImage thumbnails,
+// sharing source bytes with the rest of the app while keeping a distinct
+// memory variant sized for history cards.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -750,7 +753,7 @@ private struct ListeningHistoryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CachedArtworkImage(url: entry.artworkURL) {
+            CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 54, height: 54)) {
                 Image(systemName: "waveform")
                     .font(.title2)
                     .foregroundStyle(.purple)
@@ -815,4 +818,3 @@ private func formattedDuration(_ seconds: TimeInterval) -> String {
     }
     return "\(seconds)s"
 }
-

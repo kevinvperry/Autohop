@@ -8,7 +8,9 @@ import LinkPresentation
 // The link prefers the episode's web page (Episode.episodeLink, RSS <item><link>)
 // → an http(s) permalink guid → the raw enclosure as last resort, and is wrapped
 // in an LPLinkMetadata item source so recipients get a rich, branded preview
-// (card image + episode title) instead of a bare URL.
+// (card image + episode title) instead of a bare URL. Share-card artwork is
+// fetched through ArtworkImageCache at the rendered card-art size so sharing
+// reuses validated disk source bytes and avoids full-size cover decodes.
 
 // MARK: - Episode share sheet
 
@@ -132,7 +134,11 @@ struct EpisodeShareSheet: View {
 
     private func loadArtwork() async {
         guard let url = artworkURL else { return }
-        artworkImage = await ArtworkImageCache.shared.image(for: url)
+        artworkImage = await ArtworkImageCache.shared.image(
+            for: url,
+            targetSize: CGSize(width: 176, height: 176),
+            scale: 3
+        )
     }
 
     @MainActor

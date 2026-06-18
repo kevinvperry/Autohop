@@ -1,5 +1,17 @@
 # Autohop — Feature & Settings Reference
 
+<!--
+AI CONTEXT — FEATURES.md
+Canonical product/behaviour reference for Autohop features, settings, defaults,
+and implementation-facing notes that must stay aligned with Swift views/models,
+website support copy, App Store text, and in-app help. Update this file whenever
+a user-visible feature, setting label/default, navigation path, or cross-cutting
+implementation behaviour changes. Section 17 documents the shared artwork cache
+and lazy image-loading system: source-byte disk cache, downsampled memory
+variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
+the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
+-->
+
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
 
@@ -54,6 +66,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
     - [Storage](#158-storage)
     - [About](#159-about)
 16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
+17. [Artwork Cache & Lazy Image Loading](#17-artwork-cache--lazy-image-loading)
 
 ---
 
@@ -433,7 +446,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Access:** Priority page → tap podcast row → episode list → gear icon (⚙) in top-right toolbar.
 
-The settings page is titled with the podcast name and groups settings into sections:
+The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing — visually uniform with App Settings (§15).
 
 ---
 
@@ -641,6 +654,8 @@ Sum of all four time-saved categories, displayed in purple.
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
+The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing. The Default Playback card (§15.5) is matched to the other section cards, and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
+
 ---
 
 ### 15.1 Release Radar
@@ -751,6 +766,104 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 **Structure:** Drill-down navigation. Support opens to a scannable list of ~16 topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Queue, Player, Audio Controls, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, Listening History, Stats, App Settings.
 
 **Content blocks (native renderers):** paragraphs with inline Markdown bold, headings, bullet and numbered lists, tinted callouts (tip / note / warning), key-value and labelled tables (as cards), colour-coded status pills, and Queue-style swipe-action cards. The website's SVG diagrams are intentionally omitted — the surrounding text and tables carry the same information on a phone screen. See DESIGN.md `ListRow-SupportSection` and `Blocks-Support`.
+
+---
+
+## 17. Artwork Cache & Lazy Image Loading
+
+**What it is:** A shared image-loading system for podcast and episode artwork, implemented by `Views/CachedArtworkImage.swift`. It replaces scattered direct artwork downloads with one app-wide cache path for visible UI thumbnails, prefetch work, Now Playing artwork, episode share cards, and notification thumbnails.
+
+**Primary goals:**
+- Prioritise artwork the user can see right now.
+- Keep scrolling smooth on episode lists with many unique episode images.
+- Avoid repeated network requests for the same artwork URL.
+- Avoid decoding and storing full-size podcast covers when the UI only needs a 40-54 pt row thumbnail.
+- Keep disk usage bounded and self-healing.
+
+### User-facing behaviour
+
+Artwork appears progressively. On-screen images load first; nearby episode images are prefetched just ahead of scrolling; off-screen prefetch work is cancelled when it is no longer useful. Placeholders remain visible until each image is ready.
+
+This is especially important on Podcast Detail pages where a feed can expose a different image for every episode. The first visible rows get priority, then the next rows likely to be reached by scrolling are warmed in the background.
+
+### Shared cache architecture
+
+`CachedArtworkImage` is the SwiftUI component used by podcast/episode artwork call sites. `ArtworkImageCache` is the actor that owns the cache and load policy.
+
+| Layer | Behaviour |
+|---|---|
+| Memory cache | `NSCache<NSString, UIImage>` stores decoded display variants, capped at 80 MB. Keys include the source URL hash and requested pixel size, so a 44 pt row image and 320 pt detail image can coexist without fighting. |
+| Disk cache | Stores original validated source bytes once per artwork URL under `Caches/Autohop/Artwork`. Display variants are not written separately. |
+| Metadata | `_metadata.json` tracks original URL, byte size, created date, and last access date for every source file. Missing or changed files self-heal on later access/prune. |
+| Pruning | Disk cache is capped at 250 MB and 90 days since last access. Pruning removes expired/missing entries first, then trims least-recently-used files until under budget. |
+| Failure cooldown | Failed or invalid image URLs are held in a 5-minute negative cache, preventing fast scrolling from repeatedly retrying bad hosts. |
+
+### Validation and safety
+
+Remote artwork responses are accepted only when all of these are true:
+
+- HTTP status is 2xx.
+- MIME type is `image/*` when supplied.
+- Response body is no larger than 5 MB.
+- Expected content length is not greater than 5 MB.
+- Image decoding succeeds before a UI image is cached.
+
+Notification artwork uses the same `ArtworkImageCache.sourceData(for:)` path as UI artwork, so new-episode notification thumbnails share the same validation, source-byte disk cache, failure cooldown, and pruning rules.
+
+### Downsampling
+
+Fixed-size artwork call sites pass `targetSize` into `CachedArtworkImage`. The cache converts that to a pixel size using the current display scale and uses ImageIO thumbnail creation to decode near the displayed size.
+
+Examples:
+
+| UI location | Target |
+|---|---|
+| Priority Stack rows | 44 pt |
+| Queue rows | 44 pt |
+| Downloads rows | 44 pt |
+| Stats show rows | 44 pt |
+| Notification Settings rows | 44 pt |
+| Mini-player artwork | 40 pt |
+| Listening History rows | 54 pt |
+| Podcast detail header | 128 pt |
+| Podcast settings/detail artwork | 120 pt |
+| Episode detail fallback artwork | 320 pt |
+| Now Playing lock-screen artwork | 512 pt |
+
+The source bytes are reused across all of these sizes; only decoded in-memory variants differ.
+
+### Lazy loading and prefetch priority
+
+The cache exposes three priorities:
+
+| Priority | Use |
+|---|---|
+| `visible` | On-screen artwork and Now Playing artwork. Can cancel lower-priority prefetch work for the same variant. |
+| `prefetch` | Nearby off-screen episode rows expected to appear soon. |
+| `background` | Non-urgent consumers such as notification attachment source bytes. |
+
+`PodcastDetailView` performs row-window prefetching:
+
+- When an episode row appears, it prefetches artwork for the next 12 rows.
+- It keeps a small 3-row look-behind window.
+- It deduplicates URLs before prefetching, so shared podcast artwork is not fetched repeatedly.
+- It cancels stale prefetches outside the active window.
+- Visible row image requests always keep priority over prefetch work.
+
+### Unified artwork consumers
+
+The shared cache is used by:
+
+- `CachedArtworkImage` in Priority, Discover, Search, Podcast Detail, Queue, Downloads, Stats, Settings, Notification Settings, Subscription Settings, mini-player, and Player artwork surfaces.
+- `EpisodeShareSheet`, which requests artwork sized for the rendered share card.
+- `NowPlayingService`, which requests 512 pt artwork and guards against late loads patching the wrong lock-screen card.
+- `NotificationService`, which requests cached source bytes for new-episode notification thumbnails.
+
+Feed description images shown inside episode descriptions intentionally remain `AsyncImage`. Those are arbitrary HTML content images, not canonical podcast/episode artwork, and they should not share the podcast artwork cache policy.
+
+### Feed metadata refresh
+
+Successful feed refreshes update stored subscription artwork URLs and authors when the RSS feed changes. This means changed podcast cover art can flow into every shared-cache call site after refresh, instead of remaining stuck on the artwork URL captured at subscription time.
 
 ---
 

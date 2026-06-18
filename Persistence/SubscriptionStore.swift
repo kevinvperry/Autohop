@@ -10,6 +10,9 @@ import Foundation
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted — the merge also reconstructs wasCompleted from
 // playedEpisodeKeys when a finished episode was archived between refreshes),
+// feed metadata maintenance (updateAuthor / updateArtworkURL are used by
+// AppState.refreshSubscription so show art and author changes from RSS refreshes
+// reach every cached-artwork call site),
 // priorityRank normalization (contiguous 1..n after any insert/move/delete),
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
@@ -192,6 +195,18 @@ public final class SubscriptionStore: ObservableObject {
     public func updateDescription(subscriptionID: UUID, description: String?) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         subscriptions[index].description = description
+        save()
+    }
+
+    public func updateAuthor(subscriptionID: UUID, author: String?) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].author = author
+        save()
+    }
+
+    public func updateArtworkURL(subscriptionID: UUID, artworkURL: URL) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].artworkURL = artworkURL
         save()
     }
 

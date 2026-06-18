@@ -7,7 +7,8 @@ import SwiftUI
 // refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
 // leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
 // Play Next (blue) / Play Last (orange) overrides. Row offset/opacity state
-// animates removals.
+// animates removals. Rows use 44 pt CachedArtworkImage thumbnails, matching the
+// Priority/Downloads/Stats cache variant for reuse during repeated queue opens.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -277,7 +278,7 @@ struct QueueSheetView: View {
     }
 
     private func artwork(url: URL?, pinnedNext: Bool, pinnedLast: Bool) -> some View {
-        CachedArtworkImage(url: url) {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {
             placeholderArtwork
         }
         .frame(width: 44, height: 44)
@@ -297,4 +298,3 @@ struct QueueSheetView: View {
         }
     }
 }
-

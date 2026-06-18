@@ -10,6 +10,8 @@ import SwiftUI
 // before subscribing. Opening a result navigates to PodcastDetailView, which
 // renders both the preview and subscribed states (Subscribe⇄Unsubscribe).
 // Lifecycle rules: PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
+// Search and Recently Viewed rows use 44 pt CachedArtworkImage thumbnails so
+// catalog/browse art participates in the same shared downsampled cache.
 // MARK: - Search Sheet
 
 struct PodcastSearchView: View {
@@ -141,7 +143,7 @@ struct PodcastSearchView: View {
 
     private func recentlyViewedRow(_ sub: Subscription) -> some View {
         HStack(spacing: 12) {
-            CachedArtworkImage(url: sub.artworkURL) {
+            CachedArtworkImage(url: sub.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                 artworkPlaceholder(size: 15)
             }
             .frame(width: 44, height: 44)
@@ -194,7 +196,7 @@ struct PodcastSearchView: View {
 
     private func resultRow(_ result: PodcastSearchResult) -> some View {
         HStack(spacing: 12) {
-            CachedArtworkImage(url: result.artworkURL) {
+            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                 artworkPlaceholder(size: 15)
             }
             .frame(width: 44, height: 44)

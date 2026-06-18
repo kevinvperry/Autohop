@@ -22,6 +22,10 @@ import UIKit
 // VideoOrientationController. Scrubber uses local sliderValue + isSeeking so
 // engine ticks don't fight the user's drag. Also manages the
 // keep-screen-awake idle timer via appState.updateIdleTimer(playerVisible:).
+// Podcast/episode artwork shown in Now Playing, queue flashes, fallback detail
+// art, and queue rows goes through CachedArtworkImage with explicit target sizes;
+// HTML description images intentionally remain AsyncImage because they are feed
+// content, not canonical podcast/episode artwork.
 
 // MARK: - Root player
 
@@ -286,7 +290,7 @@ struct PlayerView: View {
                     .opacity(queueFlashArtworkURL == nil ? 1 : 0)
 
                     if let url = queueFlashArtworkURL {
-                        CachedArtworkImage(url: url) {
+                        CachedArtworkImage(url: url, targetSize: CGSize(width: 36, height: 36)) {
                             Rectangle().fill(Color(white: 0.2))
                         }
                         .frame(width: 36, height: 36)
@@ -466,7 +470,7 @@ struct PlayerView: View {
                             .padding(12)
                     }
                 } else {
-                    CachedArtworkImage(url: artworkURL) {
+                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: size, height: h)) {
                         Rectangle()
                             .fill(Color(white: 0.07))
                             .overlay(
@@ -887,7 +891,7 @@ struct PlayerView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 14)
                     } else if let url = detailsArtworkURL(for: ep) {
-                        CachedArtworkImage(url: url) {
+                        CachedArtworkImage(url: url, targetSize: CGSize(width: 320, height: 320)) {
                             Color(white: 0.07)
                         }
                         .aspectRatio(1, contentMode: .fit)
@@ -1516,7 +1520,7 @@ private struct UpNextRow: View {
 
             // Artwork column — 44×44 image + badges centred below
             VStack(alignment: .center, spacing: 4) {
-                CachedArtworkImage(url: sub?.artworkURL) {
+                CachedArtworkImage(url: sub?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],

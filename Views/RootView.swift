@@ -9,7 +9,9 @@ import SwiftUI
 // Shared nav chrome lives here: MiniPlayerBar (+ .miniPlayerBar() modifier)
 // and SheetCloseButton. NavRules: pushed page = back chevron top-left,
 // informational sheet = ✕ top-right, editing sheet = Cancel/Save.
-// Also shows the launch splash overlay briefly on cold start.
+// Also shows the launch splash overlay briefly on cold start. MiniPlayerBar
+// artwork uses a 40 pt CachedArtworkImage target so the always-visible chrome
+// reuses the shared artwork cache without decoding full covers.
 enum AppRoute: Hashable {
     case podcasts
     case sleepSchedule
@@ -63,7 +65,7 @@ struct MiniPlayerBar: View {
                 .frame(height: 2)
 
                 HStack(spacing: 12) {
-                    CachedArtworkImage(url: subscription?.artworkURL) {
+                    CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 40, height: 40)) {
                         Rectangle()
                             .fill(Color(white: 0.15))
                             .overlay(
