@@ -3,7 +3,14 @@ import Foundation
 // AI CONTEXT — Downloads/DownloadManager.swift
 // Background URLSession download layer ("com.autohop.downloads" identifier),
 // continuation-based: download() suspends until the URLSession delegate fires.
-// All mutable maps are accessed on the main queue only (no locks).
+// All mutable maps are accessed on the main queue only (no locks). The
+// duplicate/zombie guard keys live tasks by episodeID (primary) and by media URL
+// (secondary, for the same episode re-fetched with a new UUID). taskIDByMediaURL
+// is [URL: Set<Int>] (B6) so two episodes that share one enclosure URL can't
+// clobber each other's entry on insert or over-remove on completion —
+// removeMediaURLTask(_:for:) drops only the finishing task; download() blocks if
+// ANY suspected task for the URL/episode is still alive, else clears stale entries
+// and starts fresh.
 // HANDLES: resume-data save/restore on pause/cancel/failure; a stall watchdog
 // (no progress bytes for 10 min → cancel with resume data, notify AppState via
 // onWatchdogCancelled to schedule a retry); progress throttling (≤1/s/task);
@@ -48,7 +55,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // Map task → episode ID so progress callbacks know which episode to report.
     private var episodeIDByTask: [Int: UUID] = [:]
     private var taskIDByEpisodeID: [UUID: Int] = [:]
-    private var taskIDByMediaURL: [URL: Int] = [:]
+    // Keyed by media URL → the set of in-flight task IDs targeting that URL. A set
+    // (not a single Int) so two episodes that happen to share one enclosure URL
+    // (re-publishes, shared trailers) don't clobber each other's entry on insert
+    // or over-remove on completion (B6). Almost always holds exactly one ID.
+    private var taskIDByMediaURL: [URL: Set<Int>] = [:]
     private var resumeDataByEpisodeID: [UUID: Data] = [:]
     private var mediaURLByEpisodeID: [UUID: URL] = [:]
     private var lastLoggedProgressBucketByEpisodeID: [UUID: Int] = [:]
@@ -100,7 +111,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                     guard let meta = self.decodeTaskMeta(task.taskDescription) else { continue }
                     self.episodeIDByTask[task.taskIdentifier] = meta.episodeID
                     self.taskIDByEpisodeID[meta.episodeID] = task.taskIdentifier
-                    self.taskIDByMediaURL[meta.audioURL] = task.taskIdentifier
+                    self.taskIDByMediaURL[meta.audioURL, default: []].insert(task.taskIdentifier)
                     self.mediaURLByEpisodeID[meta.episodeID] = meta.audioURL
                     self.logger.info("download.taskReconnected", "Reconnected live task from previous session", metadata: [
                         "episodeID": meta.episodeID.uuidString,
@@ -118,35 +129,41 @@ public final class DownloadManager: NSObject, DownloadManaging {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
-                let suspectedTaskID = self.taskIDByEpisodeID[episode.id]
-                    ?? self.taskIDByMediaURL[episode.audioURL]
+                var suspectedTaskIDs = self.taskIDByMediaURL[episode.audioURL] ?? []
+                if let byEpisode = self.taskIDByEpisodeID[episode.id] {
+                    suspectedTaskIDs.insert(byEpisode)
+                }
 
-                guard let suspectedTaskID else {
+                guard !suspectedTaskIDs.isEmpty else {
                     // No in-memory map entry — safe to start immediately.
                     self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                     return
                 }
 
-                // Map entry exists — verify the URLSession task is still alive before blocking.
+                // Map entry exists — verify a URLSession task is still alive before blocking.
                 self.session.getAllTasks { [weak self] tasks in
                     DispatchQueue.main.async {
                         guard let self else { return }
-                        if tasks.contains(where: { $0.taskIdentifier == suspectedTaskID }) {
+                        let liveTaskIDs = Set(tasks.map(\.taskIdentifier))
+                        if let aliveTaskID = suspectedTaskIDs.first(where: { liveTaskIDs.contains($0) }) {
                             self.logger.warning("download.duplicateBlocked", "Duplicate download request blocked", metadata: [
                                 "episode": episode.title,
                                 "episodeID": episode.id.uuidString,
-                                "mediaURL": episode.audioURL.absoluteString
+                                "mediaURL": episode.audioURL.absoluteString,
+                                "taskID": "\(aliveTaskID)"
                             ])
                             continuation.resume(throwing: DownloadError.duplicateDownload)
                         } else {
-                            // Zombie: map entry exists but the URLSession task is gone. Clear stale
-                            // state and start a fresh download.
+                            // Zombie: map entries exist but no live URLSession task remains. Clear
+                            // stale state and start a fresh download.
                             self.logger.warning("download.zombieCleared", "Cleared zombie task entry; starting fresh download", metadata: [
                                 "episode": episode.title,
                                 "episodeID": episode.id.uuidString,
-                                "staleTaskID": "\(suspectedTaskID)"
+                                "staleTaskIDs": suspectedTaskIDs.map(String.init).joined(separator: ",")
                             ])
-                            self.clearZombieMapEntries(taskID: suspectedTaskID, episodeID: episode.id, audioURL: episode.audioURL)
+                            for staleTaskID in suspectedTaskIDs {
+                                self.clearZombieMapEntries(taskID: staleTaskID, episodeID: episode.id, audioURL: episode.audioURL)
+                            }
                             self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                         }
                     }
@@ -177,7 +194,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         continuations[task.taskIdentifier] = continuation
         episodeIDByTask[task.taskIdentifier] = episode.id
         taskIDByEpisodeID[episode.id] = task.taskIdentifier
-        taskIDByMediaURL[episode.audioURL] = task.taskIdentifier
+        taskIDByMediaURL[episode.audioURL, default: []].insert(task.taskIdentifier)
         mediaURLByEpisodeID[episode.id] = episode.audioURL
         lastLoggedProgressBucketByEpisodeID[episode.id] = 0
         progressLastReceivedAt[episode.id] = Date()
@@ -195,11 +212,21 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private func clearZombieMapEntries(taskID: Int, episodeID: UUID, audioURL: URL) {
         episodeIDByTask.removeValue(forKey: taskID)
         taskIDByEpisodeID.removeValue(forKey: episodeID)
-        taskIDByMediaURL.removeValue(forKey: audioURL)
+        removeMediaURLTask(taskID, for: audioURL)
         mediaURLByEpisodeID.removeValue(forKey: episodeID)
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
+    }
+
+    /// Removes a single task ID from the media-URL → task-IDs map, dropping the
+    /// URL key entirely once no tasks remain for it. Keeps a shared-URL sibling's
+    /// entry intact (B6).
+    private func removeMediaURLTask(_ taskID: Int, for url: URL) {
+        taskIDByMediaURL[url]?.remove(taskID)
+        if taskIDByMediaURL[url]?.isEmpty == true {
+            taskIDByMediaURL.removeValue(forKey: url)
+        }
     }
 
     public func pauseDownload(episodeID: UUID) {
@@ -235,8 +262,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
             if let removedTaskID {
                 self.episodeIDByTask.removeValue(forKey: removedTaskID)
             }
-            if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID) {
-                self.taskIDByMediaURL.removeValue(forKey: url)
+            if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID), let removedTaskID {
+                self.removeMediaURLTask(removedTaskID, for: url)
             }
             self.resumeDataByEpisodeID.removeValue(forKey: episodeID)
             self.lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
@@ -628,7 +655,7 @@ private extension DownloadManager {
         guard let episodeID = episodeIDByTask.removeValue(forKey: taskID) else { return }
         taskIDByEpisodeID.removeValue(forKey: episodeID)
         if let mediaURL = mediaURLByEpisodeID.removeValue(forKey: episodeID) {
-            taskIDByMediaURL.removeValue(forKey: mediaURL)
+            removeMediaURLTask(taskID, for: mediaURL)
         }
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)

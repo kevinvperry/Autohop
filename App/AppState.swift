@@ -16,7 +16,14 @@ import UIKit
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
 //    playNextEpisode), seek, chapter navigation, per-podcast audio settings
 //    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
-//  - Queue: downloadedQueue = QueueService priority order + manual overrides.
+//    External `podcast:chapters` are fetched AFTER play() begins (P7):
+//    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
+//    ephemeral session) so a slow endpoint never delays the first audio frame,
+//    then applies chapters live to the store, currentPlayerEpisode, and the
+//    engine (PlaybackControlling.updateChapters) iff that episode still plays.
+//  - Queue: downloadedQueue = QueueService priority order + manual overrides,
+//    MEMOIZED in cachedDownloadedQueue (P3) and invalidated synchronously in the
+//    subscriptionStore.objectWillChange sink + the pin didSets.
 //    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
 //    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
 //    Application Support/Autohop/queue-pins.json and clear on play/archive.
@@ -37,9 +44,14 @@ import UIKit
 //    The inactive/limit passes skip a subscription's pre-existing back-catalogue
 //    (episodes published on/before Subscription.subscribedAt) so subscribing to a
 //    show never archives its whole backlog on day one.
-//  - Persistence side: playback positions saved (throttled ~10 s) to
-//    playback-position.json keyed by episode GUID/URL so re-fetched episodes
-//    resume correctly; listening history + stats recorded on playback ticks.
+//  - Persistence side: playback positions held in an authoritative in-memory
+//    cache (savedPositionsCache, P2) loaded once and mutated through the
+//    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
+//    restorePlaybackPosition) never re-read/re-decode the file; writes stay
+//    immediate (savePlaybackPosition throttled ~10 s) to playback-position.json,
+//    keyed by episode GUID/URL so re-fetched episodes resume correctly.
+//    Listening history + stats recorded on playback ticks (recordProgress only
+//    accrues time; played/archived status transitions go through mark()).
 //  - OPML import/export with progress reporting.
 //
 // KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
@@ -83,8 +95,12 @@ final class AppState: ObservableObject {
     @Published var currentPlayerTime: TimeInterval = 0
     @Published var isPlaying: Bool = false
     @Published private(set) var upNextEpisode: Episode?
-    @Published private var queueOverrideEpisodeIDs: [UUID] = []
-    @Published private var queueDemotedEpisodeIDs: [UUID] = []
+    @Published private var queueOverrideEpisodeIDs: [UUID] = [] {
+        didSet { invalidateDownloadedQueueCache() }
+    }
+    @Published private var queueDemotedEpisodeIDs: [UUID] = [] {
+        didSet { invalidateDownloadedQueueCache() }
+    }
 
     // Per-episode download progress (0.0 – 1.0)
     @Published var downloadProgress: [UUID: Double] = [:]
@@ -162,6 +178,15 @@ final class AppState: ObservableObject {
 
     private typealias SavedPositions = [String: SavedPosition]
 
+    /// Authoritative in-memory copy of the saved playback positions (P2). Loaded
+    /// from disk once on first access and kept the source of truth thereafter, so
+    /// repeated reads (e.g. `savedPlaybackTime` called in a loop over the queue
+    /// during `playNextEpisode`/`restorePlaybackPosition`) never re-read+re-decode
+    /// the whole positions file. Mutators update this and write through to disk.
+    /// `nil` = not yet loaded. AppState is `@MainActor` and the sole owner of the
+    /// positions file, so this never goes stale behind our back.
+    private var savedPositionsCache: SavedPositions?
+
     // Throttle disk writes: save at most once every 10 s.
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
@@ -175,10 +200,24 @@ final class AppState: ObservableObject {
 
     // MARK: - Computed queue
 
+    /// Memoized result of `downloadedQueue` (P3). The underlying filter+sort over
+    /// every subscription is O(n log n) and the property is read many times per UI
+    /// update (badge, resourceContext, up-next refresh, …). Invalidated whenever
+    /// the subscriptions change (subscriptionStore.objectWillChange) or a queue pin
+    /// mutates (the @Published pin didSets). nil = needs recompute.
+    private var cachedDownloadedQueue: [Episode]?
+
     var downloadedQueue: [Episode] {
-        orderedQueueWithOverrides(
+        if let cachedDownloadedQueue { return cachedDownloadedQueue }
+        let computed = orderedQueueWithOverrides(
             queueService.downloadedQueue(from: subscriptionStore.subscriptions)
         )
+        cachedDownloadedQueue = computed
+        return computed
+    }
+
+    private func invalidateDownloadedQueueCache() {
+        cachedDownloadedQueue = nil
     }
 
     var nextPlayableEpisode: Episode? {
@@ -314,6 +353,10 @@ final class AppState: ObservableObject {
 
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
+                // Drop the memoized queue synchronously (P3): objectWillChange fires
+                // before the new value lands, and the main actor is single-threaded,
+                // so the next read recomputes from the updated subscriptions.
+                self?.invalidateDownloadedQueueCache()
                 Task { @MainActor in
                     guard let self else { return }
                     self.scheduleUpNextRefresh(reason: "state.changed")
@@ -1794,17 +1837,6 @@ final class AppState: ObservableObject {
         }
         playableEpisode.localFileURL = localFileURL
 
-        if playableEpisode.chapters.isEmpty, let chaptersURL = playableEpisode.externalChaptersURL {
-            if let fetched = await fetchExternalChapters(url: chaptersURL, episodeID: playableEpisode.id) {
-                playableEpisode.chapters = fetched
-                subscriptionStore.updateEpisodeChapters(
-                    subscriptionID: subscription.id,
-                    episodeID: playableEpisode.id,
-                    chapters: fetched
-                )
-            }
-        }
-
         do {
             // Reset volume to full before starting — clears any residual sleep-timer fade.
             playbackEngine.setVolume(1.0)
@@ -1837,6 +1869,19 @@ final class AppState: ObservableObject {
             historyTrackingEpisodeID = playableEpisode.id
             historyTrackingLastTime = currentPlayerTime
             playbackMessage = nil
+
+            // Chapters from an external `podcast:chapters` feed are fetched AFTER
+            // playback has started (P7) so a slow/hung endpoint never delays the
+            // first audio frame; they are applied live to the store, the now-
+            // playing episode, and the engine (chapter-skip) once they arrive.
+            if playableEpisode.chapters.isEmpty, let chaptersURL = playableEpisode.externalChaptersURL {
+                fetchExternalChaptersInBackground(
+                    url: chaptersURL,
+                    episodeID: playableEpisode.id,
+                    subscriptionID: subscription.id,
+                    filter: subscription.chapterFilter
+                )
+            }
 
             // Auto-restart the sleep timer if it fired recently and the user has resumed.
             if sleepTimerService.checkAutoRestart() {
@@ -2524,7 +2569,7 @@ final class AppState: ObservableObject {
     private func savePlaybackPosition() {
         guard let episode = currentPlayerEpisode,
               currentPlayerTime > 0,
-              let url = Self.positionFileURL
+              Self.positionFileURL != nil
         else { return }
         guard normalizedResumeTime(currentPlayerTime, duration: episode.durationSeconds) > 0 else {
             clearPlaybackPosition(for: episode)
@@ -2539,12 +2584,10 @@ final class AppState: ObservableObject {
             timeSeconds: currentPlayerTime,
             updatedAt: Date()
         )
-        var positions = loadSavedPositions()
+        var positions = savedPositions()
         positions[episodeKey] = position
         positions.removeValue(forKey: episode.id.uuidString)
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(positions) else { return }
-        try? data.write(to: url, options: [.atomic])
+        writeSavedPositions(positions)
     }
 
     func persistCurrentPlaybackPosition() {
@@ -2574,7 +2617,7 @@ final class AppState: ObservableObject {
     }
 
     private func restorePlaybackPosition() {
-        let positions = loadSavedPositions()
+        let positions = savedPositions()
         guard let restored = downloadedQueue
             .compactMap({ episode -> (Episode, SavedPosition)? in
                 let saved = positions[playbackPositionKey(for: episode)]
@@ -2623,14 +2666,22 @@ final class AppState: ObservableObject {
     }
 
     private func savedPlaybackTime(for episode: Episode) -> TimeInterval {
-        let positions = loadSavedPositions()
+        let positions = savedPositions()
         guard let position = positions[playbackPositionKey(for: episode)] ?? positions[episode.id.uuidString],
               position.subscriptionID == episode.subscriptionID
         else { return 0 }
         return normalizedResumeTime(position.timeSeconds, duration: episode.durationSeconds)
     }
 
-    private func loadSavedPositions() -> SavedPositions {
+    /// Returns the saved positions, loading from disk once and caching the result.
+    private func savedPositions() -> SavedPositions {
+        if let cached = savedPositionsCache { return cached }
+        let loaded = loadSavedPositionsFromDisk()
+        savedPositionsCache = loaded
+        return loaded
+    }
+
+    private func loadSavedPositionsFromDisk() -> SavedPositions {
         guard let url = Self.positionFileURL,
               FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url)
@@ -2651,32 +2702,35 @@ final class AppState: ObservableObject {
         return [:]
     }
 
-    private func clearPlaybackPosition(for episodeID: UUID) {
+    /// Updates the in-memory cache and writes it through to disk atomically;
+    /// removes the file when empty. Single source of truth for position writes.
+    private func writeSavedPositions(_ positions: SavedPositions) {
+        savedPositionsCache = positions
         guard let url = Self.positionFileURL else { return }
-        var positions = loadSavedPositions()
-        positions.removeValue(forKey: episodeID.uuidString)
         if positions.isEmpty {
             try? FileManager.default.removeItem(at: url)
-        } else if let data = try? JSONEncoder().encode(positions) {
-            try? data.write(to: url, options: [.atomic])
+            return
         }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(positions) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    private func clearPlaybackPosition(for episodeID: UUID) {
+        var positions = savedPositions()
+        positions.removeValue(forKey: episodeID.uuidString)
+        writeSavedPositions(positions)
     }
 
     private func clearPlaybackPosition(for episode: Episode) {
-        guard let url = Self.positionFileURL else { return }
-        var positions = loadSavedPositions()
+        var positions = savedPositions()
         positions.removeValue(forKey: playbackPositionKey(for: episode))
         positions.removeValue(forKey: episode.id.uuidString)
-        if positions.isEmpty {
-            try? FileManager.default.removeItem(at: url)
-        } else if let data = try? JSONEncoder().encode(positions) {
-            try? data.write(to: url, options: [.atomic])
-        }
+        writeSavedPositions(positions)
     }
 
     private func clearPlaybackPosition() {
-        guard let url = Self.positionFileURL else { return }
-        try? FileManager.default.removeItem(at: url)
+        writeSavedPositions([:])
     }
 
     private func normalizedResumeTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
@@ -2880,8 +2934,36 @@ final class AppState: ObservableObject {
         return duration
     }
 
+    /// Fetches external chapters off the playback-start path and applies them live
+    /// when (and only if) the same episode is still the one playing. (P7)
+    private func fetchExternalChaptersInBackground(url: URL, episodeID: UUID, subscriptionID: UUID, filter: ChapterFilter) {
+        Task { [weak self] in
+            guard let self,
+                  let fetched = await self.fetchExternalChapters(url: url, episodeID: episodeID),
+                  self.currentPlayerEpisode?.id == episodeID
+            else { return }
+
+            self.subscriptionStore.updateEpisodeChapters(
+                subscriptionID: subscriptionID,
+                episodeID: episodeID,
+                chapters: fetched
+            )
+            self.currentPlayerEpisode?.chapters = fetched
+            self.playbackEngine.updateChapters(fetched, filter: filter, for: episodeID)
+        }
+    }
+
+    /// Bounded chapter fetch: an ephemeral session with a short request timeout so
+    /// a slow/hung `podcast:chapters` endpoint can't linger on the default 60 s.
+    private static let chapterFetchSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 20
+        return URLSession(configuration: config)
+    }()
+
     private func fetchExternalChapters(url: URL, episodeID: UUID) async -> [Chapter]? {
-        guard let (data, response) = try? await URLSession.shared.data(from: url),
+        guard let (data, response) = try? await Self.chapterFetchSession.data(from: url),
               HTTPResponseValidation.isAcceptable(response) else { return nil }
         struct JSONChapters: Decodable {
             struct JSONChapter: Decodable {
@@ -3068,9 +3150,8 @@ final class ListeningHistoryStore: ObservableObject {
             entries[index].listenedSeconds += listenedSeconds
             entries[index].lastPositionSeconds = positionSeconds
             entries[index].lastListenedAt = now
-            if entries[index].status == .listened {
-                entries[index].status = .listened
-            }
+            // Status is intentionally left unchanged here: recordProgress only
+            // accrues listening time; played/archived transitions go through mark().
         } else {
             entries.append(ListeningHistoryEntry(
                 id: key,

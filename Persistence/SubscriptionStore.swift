@@ -355,8 +355,9 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Migrates all subscriptions to the new AutoArchiveSettings defaults.
-    /// The decoder handles legacy `autoArchivePolicy` → `autoArchiveSettings` conversion on load,
-    /// so this migration only needs to force-save to write the new key and drop the old one.
+    /// `Subscription.init(from:)` simply defaults a missing `autoArchiveSettings`
+    /// to `.default` (there is no legacy `autoArchivePolicy` key mapping); this
+    /// migration force-sets every subscription to `.default` and re-saves.
     public func migrateExistingSubscriptionsToAutoArchiveSettings() {
         for index in subscriptions.indices {
             // Ensure every subscription ends up with the new default values regardless

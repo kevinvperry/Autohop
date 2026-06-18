@@ -21,10 +21,10 @@ public enum DeviceIdentity {
     }
 }
 
-// AI CONTEXT — Persistence/CloudKitSyncMapping.swift
-// Pure mapping between the sync-state projections and CloudKit CKRecords (see
-// SYNC_DESIGN.md, steps 3a/4). No networking, no CKSyncEngine — just the record
-// schema and value translation, so it is fully unit-testable on macOS.
+// CloudKitSync — pure mapping between the sync-state projections and CloudKit
+// CKRecords (see SYNC_DESIGN.md, steps 3a/4). No networking, no CKSyncEngine —
+// just the record schema and value translation, so it is fully unit-testable on
+// macOS. (File-level AI CONTEXT header is at the top of the file.)
 //
 // Schema: one record per episode (type "EpisodeState", recordName = guid) and
 // one per subscription (type "SubscriptionState", recordName = subscriptionID),

@@ -26,7 +26,9 @@ the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
-dirty-tracking; nil stamp = clean. Projections (Models/SyncState.swift):
+dirty-tracking; nil stamp = clean. (`Synced` is a port of Pocket Casts'
+`ModifiedDate` wrapper and is **MPL-2.0-covered** — see NOTICE / LICENSE-MPL-2.0.md.)
+Projections (Models/SyncState.swift):
 - `EpisodeSyncState` (key `guid`): playedState, wasCompleted, lastPlayedAt.
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
   notificationsEnabled, excludeFromAutoFeedRefresh, playbackPreference,

@@ -6,8 +6,9 @@ Copyright © 2026 Kevin Perry.
 Autohop is open source. The project is licensed under the MIT License (see
 the LICENSE file), with the exception of the files identified below as
 MPL-2.0-covered (Playback/SilenceDetector.swift,
-Models/SilenceGapAccounting.swift, and Playback/PlaybackEngine.swift), which
-are subject to the Mozilla Public License, Version 2.0.
+Models/SilenceGapAccounting.swift, Playback/PlaybackEngine.swift, and
+Models/Synced.swift), which are subject to the Mozilla Public License,
+Version 2.0.
 
 This product includes software derived from third-party open-source projects,
 as detailed below.
@@ -41,6 +42,15 @@ architecturally based on Pocket Casts for iOS:
       system Audio Units) follows the architecture of the Pocket Casts
       implementation. No source code is copied verbatim.
 
+  - Autohop/Models/Synced.swift
+      Derived from: Modules/Sources/PocketCastsUtils/General/ModifiedDate.swift
+      Nature: Direct port. The `Synced` property wrapper's generic signature,
+      its stored value/modifiedAt pair, and its change-detecting wrappedValue
+      setter are ported from Pocket Casts' `ModifiedDate` property wrapper. The
+      wrapper has been renamed and extended with Autohop's own CloudKit
+      last-write-wins helpers (hasPendingChange, markClean, markDirty,
+      mergedSyncedField); Pocket Casts' SQLite Int→Bool decoder is omitted.
+
   - Autohop/Playback/SleepTimerService.swift
   - Autohop/Views/SleepTimerSheetView.swift
       Derived from: (none — original Autohop code)
@@ -54,15 +64,16 @@ architecturally based on Pocket Casts for iOS:
 Pocket Casts for iOS is copyright © Automattic, Inc. and contributors.
 Repository: https://github.com/Automattic/pocket-casts-ios
 
-The files marked "Derived from: podcasts/AudioReadTask.swift" and
-"Derived from: podcasts/EffectsPlayer.swift" above are subject to the
-Mozilla Public License, Version 2.0. A copy of the MPL-2.0 is included
-in this repository as LICENSE-MPL-2.0.md, and is also available at:
+The files marked "Derived from: podcasts/AudioReadTask.swift",
+"Derived from: podcasts/EffectsPlayer.swift", and "Derived from:
+Modules/Sources/PocketCastsUtils/General/ModifiedDate.swift" above are
+subject to the Mozilla Public License, Version 2.0. A copy of the MPL-2.0 is
+included in this repository as LICENSE-MPL-2.0.md, and is also available at:
 https://mozilla.org/MPL/2.0/
 
 In accordance with MPL-2.0 Section 3.2, the complete source code of Autohop's
 modified versions of the above MPL-2.0-covered files is made available to all
 recipients of the Autohop binary in the public Autohop source repository:
 https://github.com/kevinvperry/Autohop
-(see Playback/SilenceDetector.swift, Models/SilenceGapAccounting.swift, and
-Playback/PlaybackEngine.swift).
+(see Playback/SilenceDetector.swift, Models/SilenceGapAccounting.swift,
+Playback/PlaybackEngine.swift, and Models/Synced.swift).

@@ -17,10 +17,10 @@ import Foundation
 //    in AppState.bootstrap (playbackSpeed160Migrated / vocalBoostLevelMigrated /
 //    trimSilenceLowDefaultMigrated). Those are not "the default" — they are a
 //    historical migration of already-subscribed shows.
-// KNOWN INCONSISTENCY (see ASSESSMENT.md B3): the member-wise init defaults
-// vocalBoostLevel to .strong and init(from:) falls back to .strong when the key
-// is absent (intentional for the legacy migration), which disagrees with
-// `.default`'s .off. Align before relying on the init default.
+// The member-wise init's vocalBoostLevel default, init(from:)'s missing-key
+// fallback, and `.default` all now agree on .off (ASSESSMENT.md B3, resolved
+// 2026-06-18). The legacy `vocalBoostEnabled` boolean key still maps true→.strong
+// / false→.off for old persisted data.
 public enum TrimSilenceAmount: String, CaseIterable, Codable, Sendable {
     case off
     case low
@@ -100,7 +100,7 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         speed: Double,
         startSkipSeconds: TimeInterval,
         endSkipSeconds: TimeInterval,
-        vocalBoostLevel: VocalBoostLevel = .strong,
+        vocalBoostLevel: VocalBoostLevel = .off,
         trimSilence: TrimSilenceAmount = .off
     ) {
         self.speed = speed
@@ -127,9 +127,12 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         if let savedLevel = try container.decodeIfPresent(VocalBoostLevel.self, forKey: .vocalBoostLevel) {
             vocalBoostLevel = savedLevel
         } else if let savedEnabled = try container.decodeIfPresent(Bool.self, forKey: .vocalBoostEnabled) {
+            // Legacy boolean key: true mapped to Strong, false to Off.
             vocalBoostLevel = savedEnabled ? .strong : .off
         } else {
-            vocalBoostLevel = .strong
+            // Neither key present → fall back to the default (.off), matching
+            // `.default` and the member-wise init (see ASSESSMENT.md B3).
+            vocalBoostLevel = Self.default.vocalBoostLevel
         }
         trimSilence = try container.decodeIfPresent(TrimSilenceAmount.self, forKey: .trimSilence) ?? .off
     }

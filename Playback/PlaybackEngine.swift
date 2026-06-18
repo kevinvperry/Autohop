@@ -40,7 +40,11 @@ import Foundation
 // pausedByRouteChange / wasPlayingBeforeInterruption guards), start/end skip
 // (real file time, fires onAutoSkip), disabled-chapter skipping per
 // ChapterFilter, and a render watchdog that detects a running-but-silent
-// engine and recovers it.
+// engine and recovers it. Chapters present at play() time drive skip filtering
+// immediately; chapters that arrive LATER (external podcast:chapters fetched
+// after playback starts, P7) are applied to the live session via
+// updateChapters(_:filter:for:), which updates currentEpisode.chapters +
+// currentFilter only while the same episode is still playing.
 //
 // INVARIANTS:
 //  - Plays local files only (download-first); never streams.
@@ -75,6 +79,11 @@ protocol PlaybackControlling {
     func updatePlaybackSpeed(_ speed: Double)
     func updateVocalBoost(_ level: VocalBoostLevel)
     func updateTrimSilence(_ amount: TrimSilenceAmount)
+    /// Applies chapters that were fetched after playback already started (e.g. an
+    /// external `podcast:chapters` JSON feed) to the live session, so chapter
+    /// display and chapter-skip filtering work without the fetch having blocked
+    /// the first audio frame. No-op if `episodeID` is no longer the one playing.
+    func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID)
     func stop()
     /// Set the output volume on the active playback path. 0 = silent, 1 = full.
     func setVolume(_ volume: Float)
@@ -480,6 +489,17 @@ final class PlaybackEngine: PlaybackControlling {
         logger.info("playback.trimSilence", "Trim Silence updated mid-playback", metadata: [
             "episode": currentEpisode?.title ?? "none",
             "amount": amount.title
+        ])
+    }
+
+    func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {
+        guard var episode = currentEpisode, episode.id == episodeID else { return }
+        episode.chapters = chapters
+        currentEpisode = episode
+        currentFilter = chapters.isEmpty ? nil : filter
+        logger.info("playback.chaptersUpdated", "External chapters applied mid-playback", metadata: [
+            "episode": episode.title,
+            "count": "\(chapters.count)"
         ])
     }
 

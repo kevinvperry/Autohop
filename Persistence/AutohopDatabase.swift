@@ -5,9 +5,22 @@ import GRDB
 // GRDB (SQLite) backing store introduced as build-step 1 of the cross-device
 // sync work (see SYNC_DESIGN.md). Replaces the single subscriptions.json blob
 // with one row per subscription and one row per episode, written incrementally
-// (only changed rows touch disk) inside a transaction. This is a like-for-like
-// backend swap: SubscriptionStore keeps its identical @Published [Subscription]
-// facade and public API; only persistence moved here.
+// inside a single transaction. This is a like-for-like backend swap:
+// SubscriptionStore keeps its identical @Published [Subscription] facade and
+// public API; only persistence moved here.
+//
+// WRITE PATH (`persist(current:previous:)` → `write(_:previous:into:)`): diffs
+// against the prior snapshot so only genuinely-changed rows touch disk
+// (ASSESSMENT.md P1, resolved 2026-06-18). Per subscription: the subscription row
+// + its sync projection are rewritten only when a NON-episode field changed (the
+// episode-stripped value differs); episodes are diffed by `id` — a value-changed
+// episode re-encodes its payload + re-projects sync state, an episode that merely
+// moved gets a cheap `orderIndex`-only UPDATE (no re-encode, no re-projection),
+// added episodes insert, removed episodes delete. This replaced an older
+// delete-all-then-reinsert path whose per-episode sync round-trip amplified writes
+// on every episode state change. `_testEpisodeRowPayloadWrites` is the test seam
+// that counts payload encodes so the diff can be asserted. `replaceAll` (one-time
+// JSON import) passes `previous: nil` so every episode is treated as new.
 //
 // Also hosts the field-level sync-state projections (steps 2-4): per-episode and
 // per-subscription rows with a JSON payload + indexed `hasPendingChanges` + a
@@ -26,6 +39,12 @@ final class AutohopDatabase: @unchecked Sendable {
     /// writing, simulating a disk-full / locked-database failure so tests can verify
     /// the store does not advance its persisted snapshot past an unwritten change.
     var _testFailNextPersist = false
+
+    /// Test seam: counts how many episode-row payloads were encoded + written
+    /// (inserts + value-changed updates), so tests can prove the episode-level
+    /// diff only touches changed rows (P1). `orderIndex`-only updates and deletes
+    /// are deliberately not counted — they don't re-encode a payload.
+    var _testEpisodeRowPayloadWrites = 0
 
     init(path: String) throws {
         dbQueue = try DatabaseQueue(path: path)
@@ -253,8 +272,9 @@ final class AutohopDatabase: @unchecked Sendable {
             }
 
             for subscription in current {
-                if let prior = previous[subscription.id], prior == subscription { continue }
-                try write(subscription, into: db)
+                let prior = previous[subscription.id]
+                if let prior, prior == subscription { continue }
+                try write(subscription, previous: prior, into: db)
             }
         }
     }
@@ -265,7 +285,7 @@ final class AutohopDatabase: @unchecked Sendable {
             try EpisodeRow.deleteAll(db)
             try SubscriptionRow.deleteAll(db)
             for subscription in subscriptions {
-                try write(subscription, into: db)
+                try write(subscription, previous: nil, into: db)
             }
         }
     }
@@ -301,42 +321,99 @@ final class AutohopDatabase: @unchecked Sendable {
 
     // MARK: - Private write helpers
 
-    private func write(_ subscription: Subscription, into db: Database) throws {
+    /// Writes a subscription incrementally, diffing against `previous` (the
+    /// last-persisted snapshot of the same subscription, or `nil` for a first
+    /// sighting / bulk import). Only rows that actually changed touch disk:
+    ///
+    /// - the subscription row + its sync projection are rewritten only when a
+    ///   non-episode field changed (persist() also calls us when *only* an
+    ///   episode changed, in which case the stripped subscription is identical);
+    /// - an episode row is re-encoded + re-projected only when its value changed;
+    ///   an episode that merely moved gets a cheap `orderIndex`-only update;
+    ///   added episodes are inserted; removed episodes are deleted.
+    ///
+    /// This replaces the old delete-all-then-reinsert path, whose per-episode
+    /// sync-state round-trip caused write amplification on every episode state
+    /// change (download complete / played / archived / duration learned).
+    private func write(_ subscription: Subscription, previous: Subscription?, into db: Database) throws {
         var stripped = subscription
         stripped.episodes = []
         stripped.latestEpisode = nil
 
-        let subRow = SubscriptionRow(
-            id: subscription.id.uuidString,
-            feedURL: subscription.feedURL.absoluteString,
-            priorityRank: subscription.priorityRank,
-            browseDate: subscription.browseDate,
-            excludeFromAutoFeedRefresh: subscription.excludeFromAutoFeedRefresh,
-            latestEpisodeID: subscription.latestEpisode?.id.uuidString,
-            payload: try encoder.encode(stripped)
-        )
-        try subRow.save(db)
+        var priorStripped = previous
+        priorStripped?.episodes = []
+        priorStripped?.latestEpisode = nil
 
-        // Replace this subscription's episodes wholesale (simple + correct for
-        // step 1; episode-level diffing arrives with the sync columns).
-        try EpisodeRow
-            .filter(Column("subscriptionID") == subscription.id.uuidString)
-            .deleteAll(db)
-
-        for (index, episode) in subscription.episodes.enumerated() {
-            let episodeRow = EpisodeRow(
-                id: episode.id.uuidString,
-                subscriptionID: subscription.id.uuidString,
-                guid: episode.guid,
-                orderIndex: index,
-                payload: try encoder.encode(episode)
+        // Only rewrite the subscription row + re-project its sync state when a
+        // non-episode field actually changed.
+        if priorStripped != stripped {
+            let subRow = SubscriptionRow(
+                id: subscription.id.uuidString,
+                feedURL: subscription.feedURL.absoluteString,
+                priorityRank: subscription.priorityRank,
+                browseDate: subscription.browseDate,
+                excludeFromAutoFeedRefresh: subscription.excludeFromAutoFeedRefresh,
+                latestEpisodeID: subscription.latestEpisode?.id.uuidString,
+                payload: try encoder.encode(stripped)
             )
-            try episodeRow.save(db)
-
-            try recordEpisodeSyncState(episode, subscriptionID: subscription.id, into: db)
+            try subRow.save(db)
+            try recordSubscriptionSyncState(subscription, into: db)
         }
 
-        try recordSubscriptionSyncState(subscription, into: db)
+        // Index the previous episodes by id, remembering their position so a pure
+        // reorder (e.g. a feed refresh prepending new episodes) only rewrites the
+        // cheap orderIndex column rather than re-encoding every payload.
+        let priorEpisodes = previous?.episodes ?? []
+        var priorByID = [String: Episode](minimumCapacity: priorEpisodes.count)
+        var priorIndexByID = [String: Int](minimumCapacity: priorEpisodes.count)
+        for (index, episode) in priorEpisodes.enumerated() {
+            let key = episode.id.uuidString
+            priorByID[key] = episode
+            priorIndexByID[key] = index
+        }
+
+        var currentIDs = Set<String>(minimumCapacity: subscription.episodes.count)
+        for (index, episode) in subscription.episodes.enumerated() {
+            let key = episode.id.uuidString
+            currentIDs.insert(key)
+
+            if let prior = priorByID[key] {
+                if prior != episode {
+                    // Value changed → rewrite the row and re-project sync state.
+                    try writeEpisodeRow(episode, subscriptionID: subscription.id, orderIndex: index, into: db)
+                    try recordEpisodeSyncState(episode, subscriptionID: subscription.id, into: db)
+                } else if priorIndexByID[key] != index {
+                    // Only the position changed → cheap orderIndex update, no
+                    // re-encode and no sync re-projection (no field changed).
+                    try db.execute(
+                        sql: "UPDATE episode SET orderIndex = ? WHERE id = ?",
+                        arguments: [index, key]
+                    )
+                }
+                // Identical value + position → nothing to write.
+            } else {
+                // New episode.
+                try writeEpisodeRow(episode, subscriptionID: subscription.id, orderIndex: index, into: db)
+                try recordEpisodeSyncState(episode, subscriptionID: subscription.id, into: db)
+            }
+        }
+
+        // Delete rows for episodes that are no longer present.
+        for key in priorByID.keys where !currentIDs.contains(key) {
+            try EpisodeRow.deleteOne(db, key: key)
+        }
+    }
+
+    private func writeEpisodeRow(_ episode: Episode, subscriptionID: UUID, orderIndex: Int, into db: Database) throws {
+        let episodeRow = EpisodeRow(
+            id: episode.id.uuidString,
+            subscriptionID: subscriptionID.uuidString,
+            guid: episode.guid,
+            orderIndex: orderIndex,
+            payload: try encoder.encode(episode)
+        )
+        try episodeRow.save(db)
+        _testEpisodeRowPayloadWrites += 1
     }
 
     // MARK: - Sync-state recording (build step 2)
