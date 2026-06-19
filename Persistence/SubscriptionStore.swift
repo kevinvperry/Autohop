@@ -13,6 +13,10 @@ import Foundation
 // feed metadata maintenance (updateAuthor / updateArtworkURL are used by
 // AppState.refreshSubscription so show art and author changes from RSS refreshes
 // reach every cached-artwork call site),
+// Release Radar history seeding for newly added subscriptions
+// (seedReleaseObservations records initial ParsedFeed episodes into
+// RefreshStats.releaseObservations so the learned scheduler starts with the
+// feed's current RSS publish-date evidence),
 // priorityRank normalization (contiguous 1..n after any insert/move/delete),
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
@@ -119,6 +123,7 @@ public final class SubscriptionStore: ObservableObject {
         if !episodes.isEmpty {
             subscription.latestEpisode = episodes.first
             subscription.episodes = episodes
+            seedReleaseObservations(for: &subscription, episodes: episodes)
         }
 
         subscriptions.insert(subscription, at: 0)
@@ -160,6 +165,7 @@ public final class SubscriptionStore: ObservableObject {
         subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
+        seedReleaseObservations(for: &subscription, episodes: [latestEpisode])
         if insertAtBottom {
             subscriptions.append(subscription)
         } else {
@@ -844,6 +850,16 @@ public final class SubscriptionStore: ObservableObject {
             keys.insert("title-date:\(episode.title.lowercased())|\(Int(publishedAt.timeIntervalSince1970))")
         }
         return keys
+    }
+
+    private func seedReleaseObservations(for subscription: inout Subscription, episodes: [Episode]) {
+        var stats = subscription.refreshStats
+        stats.recordEpisodeObservations(
+            episodes,
+            previouslyKnownEpisodeKeys: [],
+            at: Date()
+        )
+        subscription.refreshStats = stats
     }
 
     private func episode(from parsedEpisode: ParsedEpisode, subscriptionID: UUID, feedArtworkURL: URL?) -> Episode? {

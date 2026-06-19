@@ -1,16 +1,32 @@
 import Foundation
 
 // AI CONTEXT — Models/Subscription.swift
-// Value types for one subscribed podcast and its per-podcast policies. All
-// persisted by SubscriptionStore. Contains:
+// Value types and pure refresh intelligence for one subscribed podcast and its
+// per-podcast policies. All persisted by SubscriptionStore except transient
+// scheduling/priority predictions. Contains:
 //  - AutoArchiveSettings: three independent rules (AfterPlayed delay,
 //    AfterInactive timeout, EpisodeLimit keep-N). Defaults: afterPlaying /
 //    1 week / keep 1. Enforced by AppState.runAutoArchive every ≤30 min.
 //  - ChapterFilter: set of DISABLED chapter position indices; position-based
 //    so a disabled slot skips that chapter in every future episode.
 //  - RefreshStats: Release Radar state — ETag/Last-Modified for HTTP
-//    conditional GETs, recentPublishDates history used to derive the median
-//    publish cadence and the next due date for adaptive feed polling.
+//    conditional GETs, last fetch/new-episode timing, legacy recentPublishDates,
+//    and capped releaseObservations. releaseObservations persist each episode's
+//    GUID/title/audio URL, RSS publishedAt, first/last seen time, date quality,
+//    and whether it was new when first observed; AppState/SubscriptionStore keep
+//    this updated so one-item feeds can still accumulate schedule history.
+//  - FeedScheduleProfiler: classifies observations into learning, unreliable
+//    dates, hourly, burst, weekday-daily, weekly, multi-slot, or random profiles.
+//    It learns active weekdays, typical minutes, burst windows, cadence, and
+//    confidence without touching app state or network code.
+//  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
+//    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
+//    rotation during active/missed windows, stand down during quiet periods, and
+//    fall back to the legacy cadence model when the profile is incomplete.
+//  - FeedRefreshPrioritizer: scores already-due feeds so AppState's timed and
+//    background cycles spend limited refresh slots on missed releases, active
+//    windows, high-confidence hourly/burst feeds, learning/random feeds, user
+//    priority rank, stale feeds, and overdue feeds before ordinary due work.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
 //    order), episodes array, playbackPreference, notificationsEnabled
 //    (default false), excludeFromAutoFeedRefresh, and browseDate — non-nil
@@ -142,11 +158,57 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     }
 }
 
+// MARK: - Feed release observations
+
+/// Quality marker for RSS publish dates captured in release observations.
+public enum FeedReleaseDateQuality: String, Codable, Sendable {
+    case missing
+    case plausible
+    case futureDated
+    case implausiblyOld
+}
+
+/// One episode's release signal as seen in a feed refresh.
+public struct FeedReleaseObservation: Equatable, Codable, Sendable {
+    public var episodeKey: String
+    public var guid: String
+    public var title: String
+    public var audioURL: URL?
+    public var publishedAt: Date?
+    public var firstSeenAt: Date
+    public var lastSeenAt: Date
+    public var dateQuality: FeedReleaseDateQuality
+    /// True when the episode was not present in the subscription before the fetch
+    /// that first recorded this observation.
+    public var wasNewWhenFirstSeen: Bool
+
+    public init(
+        episodeKey: String,
+        guid: String,
+        title: String,
+        audioURL: URL?,
+        publishedAt: Date?,
+        firstSeenAt: Date,
+        lastSeenAt: Date,
+        dateQuality: FeedReleaseDateQuality,
+        wasNewWhenFirstSeen: Bool
+    ) {
+        self.episodeKey = episodeKey
+        self.guid = guid
+        self.title = title
+        self.audioURL = audioURL
+        self.publishedAt = publishedAt
+        self.firstSeenAt = firstSeenAt
+        self.lastSeenAt = lastSeenAt
+        self.dateQuality = dateQuality
+        self.wasNewWhenFirstSeen = wasNewWhenFirstSeen
+    }
+}
+
 // MARK: - RefreshStats
 
-/// Per-feed fetch bookkeeping that drives adaptive refresh scheduling.
-/// The publishing-cadence model itself is derived from episode `publishedAt`
-/// dates at decision time — only fetch state and HTTP validators persist here.
+/// Per-feed fetch bookkeeping that drives adaptive refresh scheduling and stores
+/// longer release observations for the next-generation schedule learner.
 public struct RefreshStats: Equatable, Codable, Sendable {
     /// HTTP validators for conditional requests (304 Not Modified).
     public var etag: String?
@@ -161,8 +223,12 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     /// Feeds that expose only one item at a time (hourly news bulletins) carry too
     /// few dates to derive a cadence from the feed alone — this history fills the gap.
     public var recentPublishDates: [Date]
+    /// Longer per-episode observation history for schedule learning. Current
+    /// refresh scheduling intentionally does not read this yet.
+    public var releaseObservations: [FeedReleaseObservation]
 
     public static let maxRecentPublishDates = 10
+    public static let maxReleaseObservations = 200
 
     public init(
         etag: String? = nil,
@@ -170,7 +236,8 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         lastFetchedAt: Date? = nil,
         lastNewEpisodeAt: Date? = nil,
         consecutiveEmptyFetches: Int = 0,
-        recentPublishDates: [Date] = []
+        recentPublishDates: [Date] = [],
+        releaseObservations: [FeedReleaseObservation] = []
     ) {
         self.etag = etag
         self.lastModified = lastModified
@@ -178,6 +245,7 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         self.lastNewEpisodeAt = lastNewEpisodeAt
         self.consecutiveEmptyFetches = consecutiveEmptyFetches
         self.recentPublishDates = recentPublishDates
+        self.releaseObservations = releaseObservations
     }
 
     public init(from decoder: Decoder) throws {
@@ -188,6 +256,7 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         lastNewEpisodeAt = try container.decodeIfPresent(Date.self, forKey: .lastNewEpisodeAt)
         consecutiveEmptyFetches = try container.decodeIfPresent(Int.self, forKey: .consecutiveEmptyFetches) ?? 0
         recentPublishDates = try container.decodeIfPresent([Date].self, forKey: .recentPublishDates) ?? []
+        releaseObservations = try container.decodeIfPresent([FeedReleaseObservation].self, forKey: .releaseObservations) ?? []
     }
 
     public mutating func recordFetch(foundNewEpisode: Bool, publishedAt: Date? = nil, at date: Date = Date()) {
@@ -206,9 +275,568 @@ public struct RefreshStats: Equatable, Codable, Sendable {
             consecutiveEmptyFetches += 1
         }
     }
+
+    @discardableResult
+    public mutating func recordEpisodeObservations(
+        _ episodes: [Episode],
+        previouslyKnownEpisodeKeys: Set<String>,
+        at date: Date = Date()
+    ) -> Int {
+        guard !episodes.isEmpty else { return 0 }
+
+        var observationsByKey: [String: Int] = [:]
+        for (index, observation) in releaseObservations.enumerated() {
+            observationsByKey[observation.episodeKey] = observationsByKey[observation.episodeKey] ?? index
+        }
+        var newlyRecorded = 0
+
+        for episode in episodes {
+            let key = Self.releaseObservationKey(for: episode)
+            let dateQuality = Self.releaseDateQuality(for: episode.publishedAt, observedAt: date)
+
+            if let index = observationsByKey[key] {
+                releaseObservations[index].guid = episode.guid
+                releaseObservations[index].title = episode.title
+                releaseObservations[index].audioURL = episode.audioURL
+                releaseObservations[index].publishedAt = episode.publishedAt
+                releaseObservations[index].lastSeenAt = date
+                releaseObservations[index].dateQuality = dateQuality
+            } else {
+                let observation = FeedReleaseObservation(
+                    episodeKey: key,
+                    guid: episode.guid,
+                    title: episode.title,
+                    audioURL: episode.audioURL,
+                    publishedAt: episode.publishedAt,
+                    firstSeenAt: date,
+                    lastSeenAt: date,
+                    dateQuality: dateQuality,
+                    wasNewWhenFirstSeen: !previouslyKnownEpisodeKeys.contains(key)
+                )
+                releaseObservations.append(observation)
+                observationsByKey[key] = releaseObservations.count - 1
+                newlyRecorded += 1
+            }
+        }
+
+        releaseObservations.sort {
+            ($0.publishedAt ?? $0.firstSeenAt) < ($1.publishedAt ?? $1.firstSeenAt)
+        }
+        if releaseObservations.count > Self.maxReleaseObservations {
+            releaseObservations.removeFirst(releaseObservations.count - Self.maxReleaseObservations)
+        }
+        return newlyRecorded
+    }
+
+    public static func releaseObservationKey(for episode: Episode) -> String {
+        let trimmedGUID = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedGUID.isEmpty {
+            return "guid:\(trimmedGUID)"
+        }
+        return "audio:\(episode.audioURL.absoluteString)"
+    }
+
+    private static func releaseDateQuality(for publishedAt: Date?, observedAt: Date) -> FeedReleaseDateQuality {
+        guard let publishedAt else { return .missing }
+        if publishedAt > observedAt.addingTimeInterval(24 * 60 * 60) {
+            return .futureDated
+        }
+        if observedAt.timeIntervalSince(publishedAt) > 10 * 365 * 24 * 60 * 60 {
+            return .implausiblyOld
+        }
+        return .plausible
+    }
+
+    public func scheduleProfile(calendar: Calendar = .current) -> FeedScheduleProfile {
+        FeedScheduleProfiler.profile(from: releaseObservations, calendar: calendar)
+    }
+}
+
+// MARK: - Feed schedule profiling
+
+public enum FeedScheduleKind: String, Codable, Sendable {
+    case learning
+    case unreliableDates
+    case hourly
+    case burst
+    case dailyWeekdays
+    case weekly
+    case multiSlot
+    case random
+}
+
+public struct FeedScheduleWindow: Equatable, Codable, Sendable {
+    /// Swift Calendar weekday numbers: 1 = Sunday, 2 = Monday, ... 7 = Saturday.
+    public var activeWeekdays: [Int]
+    /// Minutes after local midnight.
+    public var startMinuteOfDay: Int
+    public var endMinuteOfDay: Int
+    public var typicalMinuteOfDay: Int
+    public var observedEpisodeCount: Int
+
+    public init(
+        activeWeekdays: [Int],
+        startMinuteOfDay: Int,
+        endMinuteOfDay: Int,
+        typicalMinuteOfDay: Int,
+        observedEpisodeCount: Int
+    ) {
+        self.activeWeekdays = activeWeekdays
+        self.startMinuteOfDay = startMinuteOfDay
+        self.endMinuteOfDay = endMinuteOfDay
+        self.typicalMinuteOfDay = typicalMinuteOfDay
+        self.observedEpisodeCount = observedEpisodeCount
+    }
+}
+
+public struct FeedScheduleProfile: Equatable, Codable, Sendable {
+    public var kind: FeedScheduleKind
+    public var confidence: Double
+    public var observationCount: Int
+    public var reliableDateCount: Int
+    /// Swift Calendar weekday numbers: 1 = Sunday, 2 = Monday, ... 7 = Saturday.
+    public var activeWeekdays: [Int]
+    public var typicalMinuteOfDay: Int?
+    public var typicalMinuteOfHour: Int?
+    public var cadenceSeconds: TimeInterval?
+    public var burstWindow: FeedScheduleWindow?
+    public var reason: String
+
+    public init(
+        kind: FeedScheduleKind,
+        confidence: Double,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int],
+        typicalMinuteOfDay: Int? = nil,
+        typicalMinuteOfHour: Int? = nil,
+        cadenceSeconds: TimeInterval? = nil,
+        burstWindow: FeedScheduleWindow? = nil,
+        reason: String
+    ) {
+        self.kind = kind
+        self.confidence = min(max(confidence, 0), 1)
+        self.observationCount = observationCount
+        self.reliableDateCount = reliableDateCount
+        self.activeWeekdays = activeWeekdays
+        self.typicalMinuteOfDay = typicalMinuteOfDay
+        self.typicalMinuteOfHour = typicalMinuteOfHour
+        self.cadenceSeconds = cadenceSeconds
+        self.burstWindow = burstWindow
+        self.reason = reason
+    }
+}
+
+public enum FeedScheduleProfiler {
+    private static let minimumReliableDates = 4
+    private static let hourlyMinimumDates = 6
+    private static let burstMinimumDays = 3
+
+    public static func profile(
+        from observations: [FeedReleaseObservation],
+        calendar: Calendar = .current
+    ) -> FeedScheduleProfile {
+        let observationCount = observations.count
+        let reliableObservations = observations
+            .filter { $0.dateQuality == .plausible }
+            .compactMap { observation -> (observation: FeedReleaseObservation, publishedAt: Date)? in
+                guard let publishedAt = observation.publishedAt else { return nil }
+                return (observation, publishedAt)
+            }
+            .sorted { $0.publishedAt < $1.publishedAt }
+        let reliableDateCount = reliableObservations.count
+        let activeWeekdays = sortedActiveWeekdays(
+            from: reliableObservations.map(\.publishedAt),
+            calendar: calendar
+        )
+
+        if observationCount >= minimumReliableDates,
+           reliableDateCount < max(2, observationCount / 2) {
+            return FeedScheduleProfile(
+                kind: .unreliableDates,
+                confidence: 0.75,
+                observationCount: observationCount,
+                reliableDateCount: reliableDateCount,
+                activeWeekdays: activeWeekdays,
+                reason: "Most observed episodes have missing or suspicious RSS publish dates."
+            )
+        }
+
+        guard reliableDateCount >= minimumReliableDates else {
+            return FeedScheduleProfile(
+                kind: .learning,
+                confidence: learningConfidence(reliableDateCount),
+                observationCount: observationCount,
+                reliableDateCount: reliableDateCount,
+                activeWeekdays: activeWeekdays,
+                reason: "Not enough reliable publish dates to classify this feed yet."
+            )
+        }
+
+        let dates = reliableObservations.map(\.publishedAt)
+        let minuteOfDayCluster = circularCluster(
+            minutes: dates.map { minuteOfDay(for: $0, calendar: calendar) },
+            modulo: 24 * 60
+        )
+        let minuteOfHourCluster = circularCluster(
+            minutes: dates.map { calendar.component(.minute, from: $0) },
+            modulo: 60
+        )
+        let intervals = zip(dates, dates.dropFirst()).map { $1.timeIntervalSince($0) }.filter { $0 > 0 }
+        let medianInterval = median(intervals)
+        let weekdayCounts = countsByWeekday(dates, calendar: calendar)
+
+        if let profile = hourlyProfile(
+            dates: dates,
+            minuteOfHourCluster: minuteOfHourCluster,
+            medianInterval: medianInterval,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
+        if let profile = burstProfile(
+            dates: dates,
+            calendar: calendar,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
+        if let profile = dailyWeekdaysProfile(
+            dates: dates,
+            minuteOfDayCluster: minuteOfDayCluster,
+            weekdayCounts: weekdayCounts,
+            medianInterval: medianInterval,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
+        if let profile = weeklyProfile(
+            dates: dates,
+            minuteOfDayCluster: minuteOfDayCluster,
+            weekdayCounts: weekdayCounts,
+            medianInterval: medianInterval,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
+        if let profile = multiSlotProfile(
+            dates: dates,
+            minuteOfDayCluster: minuteOfDayCluster,
+            weekdayCounts: weekdayCounts,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
+        return FeedScheduleProfile(
+            kind: .random,
+            confidence: min(0.8, 0.45 + Double(min(reliableDateCount, 12)) / 40.0),
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfDay: minuteOfDayCluster.center,
+            cadenceSeconds: medianInterval,
+            reason: "Reliable dates exist, but they do not form a stable hourly, burst, daily, weekly, or multi-slot pattern."
+        )
+    }
+
+    private static func hourlyProfile(
+        dates: [Date],
+        minuteOfHourCluster: (center: Int, spread: Int),
+        medianInterval: TimeInterval?,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        guard reliableDateCount >= hourlyMinimumDates,
+              let medianInterval,
+              (30 * 60)...(2 * 60 * 60) ~= medianInterval,
+              minuteOfHourCluster.spread <= 14
+        else { return nil }
+
+        let confidence = 0.62
+            + min(0.18, Double(reliableDateCount - hourlyMinimumDates) * 0.02)
+            + max(0, 0.15 - Double(minuteOfHourCluster.spread) / 100.0)
+        return FeedScheduleProfile(
+            kind: .hourly,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfHour: minuteOfHourCluster.center,
+            cadenceSeconds: medianInterval,
+            reason: "Episodes arrive at a near-hourly cadence around the same minute of the hour."
+        )
+    }
+
+    private static func burstProfile(
+        dates: [Date],
+        calendar: Calendar,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        let groupedByDay = Dictionary(grouping: dates) { calendar.startOfDay(for: $0) }
+        let burstDays = groupedByDay.values.compactMap { dayDates -> (start: Int, end: Int, center: Int, count: Int)? in
+            guard dayDates.count >= 2 else { return nil }
+            let minutes = dayDates.map { minuteOfDay(for: $0, calendar: calendar) }.sorted()
+            guard let first = minutes.first, let last = minutes.last else { return nil }
+            let span = last - first
+            guard span <= 120 else { return nil }
+            return (first, last, first + span / 2, dayDates.count)
+        }
+        guard burstDays.count >= burstMinimumDays else { return nil }
+
+        let centers = burstDays.map(\.center)
+        let centerCluster = circularCluster(minutes: centers, modulo: 24 * 60)
+        guard centerCluster.spread <= 90 else { return nil }
+
+        let start = median(burstDays.map(\.start)) ?? max(0, centerCluster.center - centerCluster.spread / 2)
+        let end = median(burstDays.map(\.end)) ?? min(24 * 60 - 1, centerCluster.center + centerCluster.spread / 2)
+        let averageEpisodesPerBurst = Double(burstDays.map(\.count).reduce(0, +)) / Double(burstDays.count)
+        let confidence = 0.58
+            + min(0.2, Double(burstDays.count - burstMinimumDays) * 0.04)
+            + min(0.12, max(0, averageEpisodesPerBurst - 2) * 0.04)
+            + max(0, 0.1 - Double(centerCluster.spread) / 900.0)
+
+        return FeedScheduleProfile(
+            kind: .burst,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfDay: centerCluster.center,
+            burstWindow: FeedScheduleWindow(
+                activeWeekdays: activeWeekdays,
+                startMinuteOfDay: start,
+                endMinuteOfDay: end,
+                typicalMinuteOfDay: centerCluster.center,
+                observedEpisodeCount: burstDays.map(\.count).reduce(0, +)
+            ),
+            reason: "Multiple episodes repeatedly appear within a short daily window, followed by quiet time."
+        )
+    }
+
+    private static func dailyWeekdaysProfile(
+        dates: [Date],
+        minuteOfDayCluster: (center: Int, spread: Int),
+        weekdayCounts: [Int: Int],
+        medianInterval: TimeInterval?,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        let weekdayTotal = weekdayCounts
+            .filter { isBusinessWeekday($0.key) }
+            .map(\.value)
+            .reduce(0, +)
+        let weekdayRatio = Double(weekdayTotal) / Double(max(dates.count, 1))
+        let distinctBusinessWeekdays = Set(activeWeekdays.filter(isBusinessWeekday)).count
+        guard reliableDateCount >= 6,
+              distinctBusinessWeekdays >= 3,
+              weekdayRatio >= 0.85,
+              minuteOfDayCluster.spread <= 90,
+              (medianInterval ?? 24 * 60 * 60) <= 3 * 24 * 60 * 60
+        else { return nil }
+
+        let confidence = 0.62
+            + min(0.16, Double(distinctBusinessWeekdays) * 0.025)
+            + min(0.12, Double(reliableDateCount - 6) * 0.015)
+            + max(0, 0.1 - Double(minuteOfDayCluster.spread) / 900.0)
+        return FeedScheduleProfile(
+            kind: .dailyWeekdays,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfDay: minuteOfDayCluster.center,
+            cadenceSeconds: medianInterval,
+            reason: "Episodes cluster around one time of day on business weekdays."
+        )
+    }
+
+    private static func weeklyProfile(
+        dates: [Date],
+        minuteOfDayCluster: (center: Int, spread: Int),
+        weekdayCounts: [Int: Int],
+        medianInterval: TimeInterval?,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        guard let dominant = weekdayCounts.max(by: { $0.value < $1.value }) else { return nil }
+        let dominantRatio = Double(dominant.value) / Double(max(dates.count, 1))
+        guard reliableDateCount >= 4,
+              dominantRatio >= 0.7,
+              minuteOfDayCluster.spread <= 120,
+              let medianInterval,
+              (5 * 24 * 60 * 60)...(9 * 24 * 60 * 60) ~= medianInterval
+        else { return nil }
+
+        let confidence = 0.6
+            + min(0.16, Double(reliableDateCount - 4) * 0.025)
+            + min(0.12, dominantRatio * 0.12)
+            + max(0, 0.1 - Double(minuteOfDayCluster.spread) / 1200.0)
+        return FeedScheduleProfile(
+            kind: .weekly,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: [dominant.key],
+            typicalMinuteOfDay: minuteOfDayCluster.center,
+            cadenceSeconds: medianInterval,
+            reason: "Episodes repeatedly land on the same weekday around the same time."
+        )
+    }
+
+    private static func multiSlotProfile(
+        dates: [Date],
+        minuteOfDayCluster: (center: Int, spread: Int),
+        weekdayCounts: [Int: Int],
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        let distinctWeekdays = Set(activeWeekdays)
+        guard reliableDateCount >= 6,
+              (2...4).contains(distinctWeekdays.count),
+              minuteOfDayCluster.spread <= 90
+        else { return nil }
+
+        let dominantRatio = Double(weekdayCounts.values.max() ?? 0) / Double(max(dates.count, 1))
+        guard dominantRatio < 0.7 else { return nil }
+
+        let confidence = 0.54
+            + min(0.16, Double(reliableDateCount - 6) * 0.02)
+            + max(0, 0.12 - Double(minuteOfDayCluster.spread) / 900.0)
+        return FeedScheduleProfile(
+            kind: .multiSlot,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfDay: minuteOfDayCluster.center,
+            reason: "Episodes recur on a small set of weekdays around the same time."
+        )
+    }
+
+    private static func countsByWeekday(_ dates: [Date], calendar: Calendar) -> [Int: Int] {
+        dates.reduce(into: [:]) { counts, date in
+            counts[calendar.component(.weekday, from: date), default: 0] += 1
+        }
+    }
+
+    private static func sortedActiveWeekdays(from dates: [Date], calendar: Calendar) -> [Int] {
+        countsByWeekday(dates, calendar: calendar)
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value { return lhs.key < rhs.key }
+                return lhs.value > rhs.value
+            }
+            .map(\.key)
+    }
+
+    private static func minuteOfDay(for date: Date, calendar: Calendar) -> Int {
+        calendar.component(.hour, from: date) * 60 + calendar.component(.minute, from: date)
+    }
+
+    private static func circularCluster(minutes: [Int], modulo: Int) -> (center: Int, spread: Int) {
+        let normalized = minutes.map { (($0 % modulo) + modulo) % modulo }.sorted()
+        guard let first = normalized.first else { return (0, modulo) }
+        guard normalized.count > 1 else { return (first, 0) }
+
+        var largestGap = -1
+        var largestGapIndex = 0
+        for index in normalized.indices {
+            let current = normalized[index]
+            let next = index == normalized.count - 1 ? normalized[0] + modulo : normalized[index + 1]
+            let gap = next - current
+            if gap > largestGap {
+                largestGap = gap
+                largestGapIndex = index
+            }
+        }
+
+        let startIndex = (largestGapIndex + 1) % normalized.count
+        let start = normalized[startIndex]
+        let spread = max(0, modulo - largestGap)
+        return ((start + spread / 2) % modulo, spread)
+    }
+
+    private static func median(_ values: [TimeInterval]) -> TimeInterval? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    private static func median(_ values: [Int]) -> Int? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    private static func isBusinessWeekday(_ weekday: Int) -> Bool {
+        (2...6).contains(weekday)
+    }
+
+    private static func learningConfidence(_ reliableDateCount: Int) -> Double {
+        min(0.45, Double(reliableDateCount) / Double(minimumReliableDates) * 0.45)
+    }
 }
 
 // MARK: - Feed refresh scheduling
+
+public enum FeedRefreshWindowState: String, CaseIterable, Codable, Sendable {
+    case learning
+    case unreliableDates
+    case randomSurveillance
+    case quiet
+    case preWindow
+    case activeWindow
+    case missedRelease
+    case fallback
+}
+
+public struct FeedRefreshPrediction: Equatable, Codable, Sendable {
+    public var nextDueAt: Date
+    public var state: FeedRefreshWindowState
+    public var profileKind: FeedScheduleKind
+    public var expectedWindowStart: Date?
+    public var expectedWindowEnd: Date?
+    public var recheckInterval: TimeInterval?
+    public var reason: String
+
+    public init(
+        nextDueAt: Date,
+        state: FeedRefreshWindowState,
+        profileKind: FeedScheduleKind,
+        expectedWindowStart: Date? = nil,
+        expectedWindowEnd: Date? = nil,
+        recheckInterval: TimeInterval? = nil,
+        reason: String
+    ) {
+        self.nextDueAt = nextDueAt
+        self.state = state
+        self.profileKind = profileKind
+        self.expectedWindowStart = expectedWindowStart
+        self.expectedWindowEnd = expectedWindowEnd
+        self.recheckInterval = recheckInterval
+        self.reason = reason
+    }
+}
 
 public enum FeedRefreshScheduling {
     /// Bounds for the derived publish cadence.
@@ -224,6 +852,12 @@ public enum FeedRefreshScheduling {
     /// Fraction of the median interval at which checking starts ahead of the expected drop.
     public static let windowOpenFraction = 0.75
 
+    private struct RefreshSlot {
+        var preWindowStart: Date
+        var windowStart: Date
+        var windowEnd: Date
+    }
+
     /// Median gap between recent episode publish dates (newest ~10), clamped.
     /// Returns nil when there are too few dated episodes to derive a cadence.
     public static func knownPublishInterval(publishDates: [Date]) -> TimeInterval? {
@@ -238,6 +872,216 @@ public enum FeedRefreshScheduling {
 
     public static func medianPublishInterval(publishDates: [Date]) -> TimeInterval {
         knownPublishInterval(publishDates: publishDates) ?? defaultPublishInterval
+    }
+
+    public static func nextDueAt(
+        profile: FeedScheduleProfile,
+        latestPublishedAt: Date?,
+        publishDates: [Date],
+        stats: RefreshStats,
+        minRecheckInterval: TimeInterval = defaultMinRecheckInterval,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date {
+        prediction(
+            profile: profile,
+            latestPublishedAt: latestPublishedAt,
+            publishDates: publishDates,
+            stats: stats,
+            minRecheckInterval: minRecheckInterval,
+            now: now,
+            calendar: calendar
+        ).nextDueAt
+    }
+
+    public static func prediction(
+        profile: FeedScheduleProfile,
+        latestPublishedAt: Date?,
+        publishDates: [Date],
+        stats: RefreshStats,
+        minRecheckInterval: TimeInterval = defaultMinRecheckInterval,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> FeedRefreshPrediction {
+        let baseRecheck = min(max(minRecheckInterval, 60), maxRecheckInterval)
+
+        switch profile.kind {
+        case .hourly:
+            guard let minute = profile.typicalMinuteOfHour else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return hourlyPrediction(
+                profile: profile,
+                targetMinute: minute,
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                now: now,
+                calendar: calendar
+            )
+
+        case .burst:
+            guard let burstWindow = profile.burstWindow else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return windowedPrediction(
+                profile: profile,
+                slots: dailySlots(
+                    activeWeekdays: burstWindow.activeWeekdays,
+                    windowStartMinute: burstWindow.startMinuteOfDay,
+                    windowEndMinute: min(24 * 60 - 1, burstWindow.endMinuteOfDay + 30),
+                    preWindowLead: 10 * 60,
+                    now: now,
+                    calendar: calendar
+                ),
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                missedRecheck: missedRecheckInterval,
+                now: now,
+                continueCheckingAfterPublishUntilWindowEnd: true,
+                activeReason: "Burst release window is active; keep checking because more episodes may follow.",
+                quietReason: "Burst window already produced an episode and has closed."
+            )
+
+        case .dailyWeekdays:
+            guard let minute = profile.typicalMinuteOfDay else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return windowedPrediction(
+                profile: profile,
+                slots: dailySlots(
+                    activeWeekdays: profile.activeWeekdays,
+                    windowStartMinute: max(0, minute - 5),
+                    windowEndMinute: min(24 * 60 - 1, minute + 45),
+                    preWindowLead: 10 * 60,
+                    now: now,
+                    calendar: calendar
+                ),
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                missedRecheck: missedRecheckInterval,
+                now: now,
+                continueCheckingAfterPublishUntilWindowEnd: false,
+                activeReason: "Learned weekday release window is open.",
+                quietReason: "Expected weekday episode appears to have arrived; wait for the next learned weekday window."
+            )
+
+        case .weekly:
+            guard let minute = profile.typicalMinuteOfDay else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return windowedPrediction(
+                profile: profile,
+                slots: dailySlots(
+                    activeWeekdays: profile.activeWeekdays,
+                    windowStartMinute: max(0, minute - 10),
+                    windowEndMinute: min(24 * 60 - 1, minute + 120),
+                    preWindowLead: 20 * 60,
+                    now: now,
+                    calendar: calendar
+                ),
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                missedRecheck: missedRecheckInterval,
+                now: now,
+                continueCheckingAfterPublishUntilWindowEnd: false,
+                activeReason: "Learned weekly release window is open.",
+                quietReason: "Expected weekly episode appears to have arrived; wait for the next learned weekly window."
+            )
+
+        case .multiSlot:
+            guard let minute = profile.typicalMinuteOfDay else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return windowedPrediction(
+                profile: profile,
+                slots: dailySlots(
+                    activeWeekdays: profile.activeWeekdays,
+                    windowStartMinute: max(0, minute - 5),
+                    windowEndMinute: min(24 * 60 - 1, minute + 60),
+                    preWindowLead: 10 * 60,
+                    now: now,
+                    calendar: calendar
+                ),
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                missedRecheck: missedRecheckInterval,
+                now: now,
+                continueCheckingAfterPublishUntilWindowEnd: false,
+                activeReason: "Learned multi-slot release window is open.",
+                quietReason: "Expected multi-slot episode appears to have arrived; wait for the next learned slot."
+            )
+
+        case .random:
+            let interval = min(baseRecheck, 15 * 60)
+            return regularPrediction(
+                profile: profile,
+                state: .randomSurveillance,
+                stats: stats,
+                recheckInterval: interval,
+                now: now,
+                reason: "Random feed: check regularly because no reliable quiet window is known."
+            )
+
+        case .learning:
+            return regularPrediction(
+                profile: profile,
+                state: .learning,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "Learning feed: check regularly until enough release history is captured."
+            )
+
+        case .unreliableDates:
+            return regularPrediction(
+                profile: profile,
+                state: .unreliableDates,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "RSS dates are unreliable; fall back to regular first-seen surveillance."
+            )
+        }
     }
 
     /// The next moment this feed deserves a fetch. Anchored to the latest episode's
@@ -283,6 +1127,376 @@ public enum FeedRefreshScheduling {
         }
         guard let lastFetch = stats.lastFetchedAt else { return now }
         return lastFetch.addingTimeInterval(recheck)
+    }
+
+    private static func hourlyPrediction(
+        profile: FeedScheduleProfile,
+        targetMinute: Int,
+        latestPublishedAt: Date?,
+        stats: RefreshStats,
+        baseRecheck: TimeInterval,
+        now: Date,
+        calendar: Calendar
+    ) -> FeedRefreshPrediction {
+        guard let hourStart = calendar.dateInterval(of: .hour, for: now)?.start else {
+            return regularPrediction(
+                profile: profile,
+                state: .fallback,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "Could not resolve the current hour; using regular checks."
+            )
+        }
+        let clampedMinute = max(0, min(59, targetMinute))
+        let slots = (-2...3).compactMap { offset -> RefreshSlot? in
+            guard let targetHour = calendar.date(byAdding: .hour, value: offset, to: hourStart) else { return nil }
+            let target = targetHour.addingTimeInterval(TimeInterval(clampedMinute * 60))
+            return RefreshSlot(
+                preWindowStart: target.addingTimeInterval(-3 * 60),
+                windowStart: target.addingTimeInterval(-2 * 60),
+                windowEnd: target.addingTimeInterval(15 * 60)
+            )
+        }
+        return windowedPrediction(
+            profile: profile,
+            slots: slots,
+            latestPublishedAt: latestPublishedAt,
+            stats: stats,
+            baseRecheck: min(baseRecheck, 5 * 60),
+            missedRecheck: { _, base in min(base, 10 * 60) },
+            now: now,
+            continueCheckingAfterPublishUntilWindowEnd: false,
+            activeReason: "Learned hourly release minute is near.",
+            quietReason: "Expected hourly episode appears to have arrived; wait for the next hour."
+        )
+    }
+
+    private static func windowedPrediction(
+        profile: FeedScheduleProfile,
+        slots: [RefreshSlot],
+        latestPublishedAt: Date?,
+        stats: RefreshStats,
+        baseRecheck: TimeInterval,
+        missedRecheck: (TimeInterval, TimeInterval) -> TimeInterval,
+        now: Date,
+        continueCheckingAfterPublishUntilWindowEnd: Bool,
+        activeReason: String,
+        quietReason: String
+    ) -> FeedRefreshPrediction {
+        let orderedSlots = slots.sorted { $0.preWindowStart < $1.preWindowStart }
+        guard !orderedSlots.isEmpty else {
+            return regularPrediction(
+                profile: profile,
+                state: .fallback,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "No schedule windows could be generated; using regular checks."
+            )
+        }
+
+        let nextSlot = orderedSlots.first { $0.preWindowStart > now }
+        let currentSlot = orderedSlots.last { $0.preWindowStart <= now }
+
+        guard let slot = currentSlot else {
+            let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
+            return FeedRefreshPrediction(
+                nextDueAt: nextDue,
+                state: .quiet,
+                profileKind: profile.kind,
+                expectedWindowStart: nextSlot?.windowStart,
+                expectedWindowEnd: nextSlot?.windowEnd,
+                reason: "Outside the learned release window; wait for the next pre-window check."
+            )
+        }
+
+        let publishedInSlot = latestPublishedAt.map { $0 >= slot.windowStart } ?? false
+        if publishedInSlot, !continueCheckingAfterPublishUntilWindowEnd {
+            let nextDue = nextSlot?.preWindowStart ?? slot.windowEnd.addingTimeInterval(baseRecheck)
+            return FeedRefreshPrediction(
+                nextDueAt: nextDue,
+                state: .quiet,
+                profileKind: profile.kind,
+                expectedWindowStart: nextSlot?.windowStart,
+                expectedWindowEnd: nextSlot?.windowEnd,
+                reason: quietReason
+            )
+        }
+
+        if now < slot.windowStart {
+            return FeedRefreshPrediction(
+                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: baseRecheck, now: now),
+                state: .preWindow,
+                profileKind: profile.kind,
+                expectedWindowStart: slot.windowStart,
+                expectedWindowEnd: slot.windowEnd,
+                recheckInterval: baseRecheck,
+                reason: "Pre-window is open; start checking shortly before the learned release time."
+            )
+        }
+
+        if now <= slot.windowEnd {
+            return FeedRefreshPrediction(
+                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: baseRecheck, now: now),
+                state: .activeWindow,
+                profileKind: profile.kind,
+                expectedWindowStart: slot.windowStart,
+                expectedWindowEnd: slot.windowEnd,
+                recheckInterval: baseRecheck,
+                reason: activeReason
+            )
+        }
+
+        if publishedInSlot {
+            let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
+            return FeedRefreshPrediction(
+                nextDueAt: nextDue,
+                state: .quiet,
+                profileKind: profile.kind,
+                expectedWindowStart: nextSlot?.windowStart,
+                expectedWindowEnd: nextSlot?.windowEnd,
+                reason: quietReason
+            )
+        }
+
+        let lateBy = now.timeIntervalSince(slot.windowEnd)
+        let interval = missedRecheck(lateBy, baseRecheck)
+        return FeedRefreshPrediction(
+            nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: interval, now: now),
+            state: .missedRelease,
+            profileKind: profile.kind,
+            expectedWindowStart: slot.windowStart,
+            expectedWindowEnd: slot.windowEnd,
+            recheckInterval: interval,
+            reason: "Expected release window passed without a matching episode; keep checking on the missed-release cadence."
+        )
+    }
+
+    private static func dailySlots(
+        activeWeekdays: [Int],
+        windowStartMinute: Int,
+        windowEndMinute: Int,
+        preWindowLead: TimeInterval,
+        now: Date,
+        calendar: Calendar
+    ) -> [RefreshSlot] {
+        let activeSet = Set(activeWeekdays)
+        guard let todayStart = calendar.dateInterval(of: .day, for: now)?.start else { return [] }
+        let clampedStart = max(0, min(24 * 60 - 1, windowStartMinute))
+        let clampedEnd = max(clampedStart, min(24 * 60 - 1, windowEndMinute))
+
+        return (-14...21).compactMap { dayOffset -> RefreshSlot? in
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: todayStart) else { return nil }
+            let weekday = calendar.component(.weekday, from: day)
+            guard activeSet.isEmpty || activeSet.contains(weekday) else { return nil }
+            let windowStart = day.addingTimeInterval(TimeInterval(clampedStart * 60))
+            let windowEnd = day.addingTimeInterval(TimeInterval(clampedEnd * 60))
+            return RefreshSlot(
+                preWindowStart: windowStart.addingTimeInterval(-preWindowLead),
+                windowStart: windowStart,
+                windowEnd: windowEnd
+            )
+        }
+    }
+
+    private static func regularPrediction(
+        profile: FeedScheduleProfile,
+        state: FeedRefreshWindowState,
+        stats: RefreshStats,
+        recheckInterval: TimeInterval,
+        now: Date,
+        reason: String
+    ) -> FeedRefreshPrediction {
+        FeedRefreshPrediction(
+            nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: recheckInterval, now: now),
+            state: state,
+            profileKind: profile.kind,
+            recheckInterval: recheckInterval,
+            reason: reason
+        )
+    }
+
+    private static func fallbackPrediction(
+        profile: FeedScheduleProfile,
+        latestPublishedAt: Date?,
+        publishDates: [Date],
+        stats: RefreshStats,
+        minRecheckInterval: TimeInterval,
+        now: Date
+    ) -> FeedRefreshPrediction {
+        FeedRefreshPrediction(
+            nextDueAt: nextDueAt(
+                latestPublishedAt: latestPublishedAt,
+                publishDates: publishDates,
+                stats: stats,
+                minRecheckInterval: minRecheckInterval,
+                now: now
+            ),
+            state: .fallback,
+            profileKind: profile.kind,
+            reason: "Profile is incomplete for prediction; using legacy cadence fallback."
+        )
+    }
+
+    private static func dueFromLastFetch(_ lastFetchedAt: Date?, interval: TimeInterval, now: Date) -> Date {
+        guard let lastFetchedAt else { return now }
+        return lastFetchedAt.addingTimeInterval(interval)
+    }
+
+    private static func missedRecheckInterval(lateBy: TimeInterval, baseRecheck: TimeInterval) -> TimeInterval {
+        if lateBy <= 2 * 60 * 60 {
+            return baseRecheck
+        }
+        if lateBy <= 12 * 60 * 60 {
+            return min(max(baseRecheck * 2, 10 * 60), 30 * 60)
+        }
+        return min(max(baseRecheck * 4, 30 * 60), 2 * 60 * 60)
+    }
+}
+
+// MARK: - Feed refresh prioritization
+
+public struct FeedRefreshPriority: Equatable, Codable, Sendable {
+    public var score: Double
+    public var reason: String
+    public var factors: [String]
+
+    public init(score: Double, reason: String, factors: [String]) {
+        self.score = score
+        self.reason = reason
+        self.factors = factors
+    }
+}
+
+public enum FeedRefreshPrioritizer {
+    public static func priority(
+        prediction: FeedRefreshPrediction,
+        profile: FeedScheduleProfile,
+        priorityRank: Int,
+        lastFetchedAt: Date?,
+        now: Date = Date()
+    ) -> FeedRefreshPriority {
+        var score = baseScore(for: prediction.state)
+        var factors = [factorLabel(for: prediction.state)]
+
+        let releaseWindowState = isReleaseWindowState(prediction.state)
+        let kindBoost = profileKindBoost(profile.kind, releaseWindowState: releaseWindowState)
+        if kindBoost > 0 {
+            score += kindBoost
+            factors.append("\(profile.kind.rawValue) profile")
+        }
+
+        let confidenceWeight = releaseWindowState ? 14.0 : 8.0
+        let confidenceBoost = min(max(profile.confidence, 0), 1) * confidenceWeight
+        if confidenceBoost >= 1 {
+            score += confidenceBoost
+            factors.append("confidence \(Int((profile.confidence * 100).rounded()))%")
+        }
+
+        let normalizedRank = max(priorityRank, 1)
+        let rankBoost = max(0, 18.0 - Double(normalizedRank - 1) * 2.0)
+        if rankBoost > 0 {
+            score += rankBoost
+            factors.append("priority rank \(normalizedRank)")
+        }
+
+        if let lastFetchedAt {
+            let hoursSinceFetch = max(0, now.timeIntervalSince(lastFetchedAt) / 3600)
+            let stalenessBoost = min(18, hoursSinceFetch / 2)
+            if stalenessBoost >= 1 {
+                score += stalenessBoost
+                factors.append("stale for \(Int(hoursSinceFetch.rounded()))h")
+            }
+        } else {
+            score += 12
+            factors.append("never fetched")
+        }
+
+        let overdueMinutes = max(0, now.timeIntervalSince(prediction.nextDueAt) / 60)
+        let overdueBoost = min(25, overdueMinutes / 5)
+        if overdueBoost >= 1 {
+            score += overdueBoost
+            factors.append("overdue by \(Int(overdueMinutes.rounded()))m")
+        }
+
+        let roundedScore = (score * 10).rounded() / 10
+        return FeedRefreshPriority(
+            score: roundedScore,
+            reason: factors.joined(separator: ", "),
+            factors: factors
+        )
+    }
+
+    private static func baseScore(for state: FeedRefreshWindowState) -> Double {
+        switch state {
+        case .missedRelease:
+            return 110
+        case .activeWindow:
+            return 90
+        case .preWindow:
+            return 70
+        case .learning:
+            return 55
+        case .randomSurveillance:
+            return 50
+        case .unreliableDates:
+            return 45
+        case .fallback:
+            return 35
+        case .quiet:
+            return 0
+        }
+    }
+
+    private static func factorLabel(for state: FeedRefreshWindowState) -> String {
+        switch state {
+        case .missedRelease:
+            return "missed expected release"
+        case .activeWindow:
+            return "active release window"
+        case .preWindow:
+            return "pre-release window"
+        case .learning:
+            return "learning schedule"
+        case .randomSurveillance:
+            return "random schedule surveillance"
+        case .unreliableDates:
+            return "unreliable RSS dates"
+        case .fallback:
+            return "fallback cadence"
+        case .quiet:
+            return "quiet window"
+        }
+    }
+
+    private static func isReleaseWindowState(_ state: FeedRefreshWindowState) -> Bool {
+        switch state {
+        case .preWindow, .activeWindow, .missedRelease:
+            return true
+        case .learning, .unreliableDates, .randomSurveillance, .quiet, .fallback:
+            return false
+        }
+    }
+
+    private static func profileKindBoost(
+        _ kind: FeedScheduleKind,
+        releaseWindowState: Bool
+    ) -> Double {
+        switch kind {
+        case .hourly:
+            return releaseWindowState ? 12 : 0
+        case .burst:
+            return releaseWindowState ? 14 : 0
+        case .dailyWeekdays, .weekly, .multiSlot:
+            return releaseWindowState ? 8 : 0
+        case .learning:
+            return 8
+        case .random:
+            return 6
+        case .unreliableDates:
+            return 0
+        }
     }
 }
 

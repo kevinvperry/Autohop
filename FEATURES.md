@@ -670,12 +670,63 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 ### 15.1 Release Radar
 
-Autohop learns each podcast's release schedule (median publish interval anchored to its last episode) and starts watching the feed just before a new episode is expected. Feeds that expose only a single item at a time (hourly news bulletins) carry no cadence in the feed itself, so Autohop persists the publish dates it has seen (`RefreshStats.recentPublishDates`) and derives the schedule from those; until enough history exists, such feeds are checked at the Radar sensitivity cadence, backing off automatically while nothing new appears. Checks use HTTP conditional requests (ETag/If-Modified-Since), so the feed body is only downloaded when it has actually changed. Background refresh uses the same due dates (BGAppRefreshTask, due-date priority queue, up to 8 feeds per cycle); if a refresh cycle is already in flight when a background task fires, the task waits for that cycle to finish instead of completing early (completing early lets iOS suspend the app mid-request and strand it). Manual pull-to-refresh always refreshes every feed.
+Release Radar is Autohop's automatic feed-refresh system. Its job is to detect and download new podcast episodes faster than ordinary podcast apps while avoiding wasteful checks during periods when a feed is predictably quiet.
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
 | Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
+
+**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked regularly so random releases are not missed.
+
+**Data captured from RSS:** Every feed refresh records per-episode release observations in `RefreshStats.releaseObservations` (capped at 200). Each observation stores the episode key, GUID, title, audio URL, RSS `publishedAt`, first/last seen times, whether it was new when first seen, and a publish-date quality marker (`missing`, `plausible`, `futureDated`, `implausiblyOld`). This history is stored on the subscription so schedule learning survives app launches and works even when the current RSS feed only exposes one item.
+
+**Initial seeding:** When a new subscription is added, `SubscriptionStore` seeds release observations from the episodes already present in the fetched feed. New subscriptions then continue to be checked at the Radar sensitivity cadence until enough reliable observations exist to classify the schedule.
+
+**Schedule profiles:** `FeedScheduleProfiler` classifies each podcast into one of these profile kinds:
+
+| Profile | Meaning | Refresh behaviour |
+|---|---|---|
+| `learning` | Not enough reliable publish dates yet. | Check at the Radar sensitivity cadence to gather data. |
+| `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to regular first-seen surveillance because published times cannot be trusted. |
+| `hourly` | Episodes arrive near-hourly around the same minute of the hour. | Open a short window around the learned minute and check on high rotation. |
+| `burst` | Multiple episodes repeatedly appear inside a short daily window, then the feed goes quiet. | Check before and through the burst; keep checking after the first episode because more may follow. |
+| `dailyWeekdays` | Episodes cluster around one time of day on business weekdays. | Check near the learned weekday time; stand down on weekends and after the expected episode arrives. |
+| `weekly` | Episodes repeatedly land on the same weekday around the same time. | Check near the learned weekly slot; stand down until the next expected week. |
+| `multiSlot` | Episodes recur on a small set of weekdays around a similar time. | Check near those learned slots. |
+| `random` | Reliable dates exist, but no stable hourly/burst/daily/weekly pattern emerges. | Check regularly because no safe quiet window is known. |
+
+**Due prediction:** `FeedRefreshScheduling` converts a profile into the next time a feed deserves a fetch. Learned profiles create explicit release windows:
+
+| Profile | Pre-window | Active window |
+|---|---|---|
+| `hourly` | 3 minutes before the learned minute. | 2 minutes before to 15 minutes after the learned minute. |
+| `burst` | 10 minutes before the learned burst start. | Learned burst start through learned burst end + 30 minutes. |
+| `dailyWeekdays` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 45 minutes. |
+| `weekly` | 20 minutes before the window. | Typical time - 10 minutes through typical time + 120 minutes. |
+| `multiSlot` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 60 minutes. |
+
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence until 12 hours late, then to a 30 minute–2 hour cadence. This prevents one late episode from being missed while still avoiding indefinite high-frequency polling.
+
+**One-item hourly feeds:** Feeds that publish hourly but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, the feed can be profiled as `hourly` and checked around the learned minute instead of every hour all day. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
+
+**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly and burst feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. This matters most for background refresh, where only up to 8 feeds are attempted per cycle.
+
+**HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
+
+**Manual, timed, and background refresh:**
+
+| Trigger | Behaviour |
+|---|---|
+| Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. |
+| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due. No fixed cap. |
+| Background refresh | Uses the same due/prediction/priority pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early, because completing early can let iOS suspend the app mid-request. |
+
+**Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
+
+**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, state counts, and the top candidates. Each selected feed's `feed.refreshAll.itemStart` line includes refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, and recheck interval. These logs are the primary tuning surface for Release Radar.
+
+**Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
 ---
 
@@ -977,6 +1028,18 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | dismissedGettingStarted | false |
 | launchScreen | .player |
 | defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
+
+### `RefreshStats` / `FeedRefreshScheduling` defaults
+| Property | Default |
+|---|---|
+| maxRecentPublishDates | 10 |
+| maxReleaseObservations | 200 |
+| defaultMinRecheckInterval | 5 minutes |
+| minPublishInterval | 15 minutes |
+| maxPublishInterval | 7 days |
+| defaultPublishInterval | 6 hours |
+| maxRecheckInterval | 24 hours |
+| windowOpenFraction | 0.75 |
 
 ### `Subscription.init` defaults
 | Property | Default |
