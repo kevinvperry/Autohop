@@ -90,11 +90,11 @@ struct PodcastsView: View {
                                         ProgressView()
                                     } else {
                                         Image(systemName: "arrow.clockwise")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(.white)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(.purple)
                                     }
                                 }
-                                .frame(width: 36, height: 36)
+                                .frame(width: 30, height: 30)
 
                                 // Circular iOS glass button.
                                 if #available(iOS 26, *) {
@@ -378,51 +378,4 @@ struct PodcastsView: View {
     }
 }
 
-private enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
-
-    var label: String {
-        switch self {
-        case .unplayed:        return "Unplayed"
-        case .queued:          return "Queued"
-        case .partiallyPlayed: return "Paused"
-        case .nowPlaying:      return "Playing"
-        case .played:          return "Played"
-        case .archived:        return "Archived"
-        case .inactive:        return "Inactive"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .unplayed:        return Color.gray
-        case .queued:          return Color.teal
-        case .partiallyPlayed: return Color.yellow
-        case .nowPlaying:      return Color.green
-        case .played:          return Color.blue
-        case .archived:        return Color.purple
-        case .inactive:        return Color.orange
-        }
-    }
-}
-
-private struct EpisodeStatusPill: View {
-    let kind: EpisodeStatusKind
-
-    var body: some View {
-        let label = Text(kind.label)
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-
-        if #available(iOS 26, *) {
-            label
-                .background(kind.color.opacity(0.45), in: Capsule())
-                .glassEffect(in: Capsule())
-        } else {
-            label
-                .background(kind.color.opacity(0.82), in: Capsule())
-        }
-    }
-}
+// `EpisodeStatusKind` and `EpisodeStatusPill` are shared in Views/EpisodeBadges.swift.

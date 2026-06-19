@@ -122,7 +122,7 @@ private struct StatsContentView: View {
         let summary = store.summary(for: range.period)
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 32) {
                 rangeSelector
 
                 heroCard(summary)
@@ -136,8 +136,8 @@ private struct StatsContentView: View {
                 clockSection(summary)
                 topShowsSection(summary)
                 driftingShowsSection(summary)
-                timeSavedSection(summary)
                 dataDownloadedSection(summary)
+                timeSavedSection(summary)
 
                 privacyFooter
             }
@@ -207,7 +207,7 @@ private struct StatsContentView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .glassCard(cornerRadius: 16)
     }
 
     private var heroSubtitle: String {
@@ -255,7 +255,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -310,7 +310,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -348,7 +348,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -399,7 +399,7 @@ private struct StatsContentView: View {
                 emptyCardText("No listening in this period yet")
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
@@ -432,7 +432,7 @@ private struct StatsContentView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }
@@ -488,7 +488,7 @@ private struct StatsContentView: View {
                             }
                         }
                     }
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
 
                     VStack(alignment: .leading, spacing: 6) {
                         completionLegend
@@ -608,38 +608,129 @@ private struct StatsContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
     // MARK: - Data downloaded
 
     private func dataDownloadedSection(_ summary: ListeningStatsSummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let buckets = downloadTotals(summary)
+        let hasData = summary.bytesDownloaded > 0
+        let hasChartData = buckets.contains { $0.bytes > 0 }
+
+        return VStack(alignment: .leading, spacing: 12) {
             sectionHeading("Data Downloaded", icon: "arrow.down.circle")
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(formattedBytes(summary.bytesDownloaded))
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(.cyan)
-                    .contentTransition(.numericText())
-                Text(downloadContextLine(summary))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                // Headline total + episode/average mini-stats.
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(formattedBytes(summary.bytesDownloaded))
+                            .font(.system(size: 36, weight: .bold))
+                            .foregroundStyle(.cyan)
+                            .contentTransition(.numericText())
+                        Text("total downloaded")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if hasData {
+                        HStack(spacing: 18) {
+                            downloadMiniStat(
+                                "\(summary.episodesDownloaded)",
+                                summary.episodesDownloaded == 1 ? "episode" : "episodes"
+                            )
+                            downloadMiniStat(
+                                formattedBytes(summary.bytesDownloaded / Int64(max(summary.episodesDownloaded, 1))),
+                                "avg each"
+                            )
+                        }
+                    }
+                }
+
+                if hasData, hasChartData {
+                    downloadChart(buckets)
+                } else if !hasData {
+                    Text("No episodes downloaded in this period")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
-    /// "12 episodes · avg 45 MB each", or a friendly empty state.
-    private func downloadContextLine(_ summary: ListeningStatsSummary) -> String {
-        let count = summary.episodesDownloaded
-        guard count > 0 else { return "No episodes downloaded in this period" }
-        let episodeWord = count == 1 ? "episode" : "episodes"
-        let average = summary.bytesDownloaded / Int64(count)
-        return "\(count) \(episodeWord) · avg \(formattedBytes(average)) each"
+    private func downloadMiniStat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(value)
+                .font(.title3.weight(.bold).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Download volume over time: per-day bars for short ranges, per-month for
+    /// year/lifetime — mirrors the listening-trend bucketing, but in cyan.
+    @ViewBuilder
+    private func downloadChart(_ buckets: [(date: Date, bytes: Int64)]) -> some View {
+        let unit: Calendar.Component = range.usesHeatmap ? .day : .month
+        Chart(buckets, id: \.date) { item in
+            BarMark(
+                x: .value("Date", item.date, unit: unit),
+                y: .value("Data", Double(item.bytes))
+            )
+            .foregroundStyle(Color.cyan.gradient)
+            .cornerRadius(3)
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 5)) {
+                AxisValueLabel(
+                    format: range.usesHeatmap ? .dateTime.day() : .dateTime.month(.narrow)
+                )
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.08))
+                AxisValueLabel {
+                    if let bytes = value.as(Double.self) {
+                        Text(formattedBytes(Int64(bytes)))
+                    }
+                }
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .frame(height: 150)
+    }
+
+    /// Bytes downloaded per time bucket (day for heatmap ranges, month otherwise).
+    private func downloadTotals(_ summary: ListeningStatsSummary) -> [(date: Date, bytes: Int64)] {
+        let calendar = Calendar.current
+        if range.usesHeatmap {
+            return summary.days.compactMap { day in
+                guard let date = statsDayDate(from: day.dayKey) else { return nil }
+                return (date: date, bytes: day.bytesDownloaded)
+            }
+        } else {
+            var totals: [Date: Int64] = [:]
+            for day in summary.days {
+                guard let date = statsDayDate(from: day.dayKey),
+                      let month = calendar.date(from: calendar.dateComponents([.year, .month], from: date))
+                else { continue }
+                totals[month, default: 0] += day.bytesDownloaded
+            }
+            return totals.sorted { $0.key < $1.key }.map { (date: $0.key, bytes: $0.value) }
+        }
     }
 
     private func timeSavedRow(icon: String, label: String, seconds: TimeInterval) -> some View {
@@ -705,15 +796,25 @@ private struct StatsRangeSelector: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { range = item }
                 } label: {
-                    Text(item.title)
+                    let pill = Text(item.title)
                         .font(.footnote.weight(.semibold))
+                        .foregroundStyle(range == item ? Color.white : Color.secondary)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 7)
-                        .background(
+
+                    // iOS glass; purple-tinted on the selected range.
+                    if #available(iOS 26, *) {
+                        if range == item {
+                            pill.glassEffect(.regular.tint(.purple), in: Capsule())
+                        } else {
+                            pill.glassEffect(in: Capsule())
+                        }
+                    } else {
+                        pill.background(
                             range == item ? Color.purple : Color.white.opacity(0.08),
                             in: Capsule()
                         )
-                        .foregroundStyle(range == item ? Color.white : Color.secondary)
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -1044,7 +1145,7 @@ private struct TopShowsListView: View {
                         .foregroundStyle(.secondary)
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        .glassCard(cornerRadius: 16)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
@@ -1082,7 +1183,7 @@ private struct TopShowsListView: View {
                             }
                         }
                     }
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
 
                     if movements != nil {
                         Text("▲▼ rank change vs. the previous \(range.previousPeriodNoun ?? "period")")

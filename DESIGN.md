@@ -15,10 +15,13 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `NavTitle-Inline` | Page title in the centre of the top bar, not as a large heading |
 | `NavBack-Standard` | Pushed pages: brand back chevron top-left, nothing else in that corner |
 | `SheetClose-Standard` | Informational sheets: ✕ close button top-right, no Done/Cancel |
+| `Sheet-MaterialBackground` | Player sheets use `.presentationBackground(.regularMaterial)` (Liquid Glass on iOS 26) to match the system AirPlay picker — not a solid fill |
 | `MiniPlayer-Bar` | Now-playing bar docked at the bottom of every pushed page; tap to return to Player |
 | `List-Plain` | Lists use `.plain` style; row backgrounds do the visual separating |
 | `Section-Heading` | Bold `title3` section label above each card group |
 | `Section-CardList` | A `List` or `VStack` wrapped in a `white.opacity(0.08)` rounded-rect card |
+| `Glass-Card` | Shared `glassCard(cornerRadius:)` View modifier (`Views/EpisodeBadges.swift`) — iOS 26 glass surface, `.ultraThinMaterial` fallback. Used by Podcast Detail episode list + Episode Detail description card |
+| `Glass-Capsule` | Shared `glassCapsule(highlighted:)` View modifier (`Views/EpisodeBadges.swift`) — iOS 26 glass capsule pill; `highlighted: true` adds purple tint. Used by Discover chips, rank badges, Subscriptions reorder toggle |
 | `Section-CardRows` | Inside a card: `VStack(spacing: 0)` rows separated by `Divider` with `white.opacity(0.08)` tint |
 | `ListRow-Standard` | Queue episode row: position · artwork · text stack · spacer · trailing metadata |
 | `ListRow-SubscriptionRow` | Priority page row: rank number · artwork · subscription+episode text stack · status pill |
@@ -67,9 +70,10 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Artwork-Player` | Dynamically sized artwork behind a purple radial glow; cornerRadius adapts for chapters |
 | `EpisodeCopy-Player` | Centred episode title (16pt bold) + tappable subscription name (12pt gray) |
 | `Scrubber-Player` | Purple `Slider` + elapsed (left) / remaining (right) time labels |
-| `Controls-Player` | Skip-back icon · 76pt purple circle play/pause button · skip-forward icon |
+| `Controls-Player` | Skip-back icon · 76pt purple-tinted-glass play/pause button · skip-forward icon |
 | `AudioRow-Player` | Five-button row: Sound Settings · Sleep Timer · AirPlay route picker (centre) · Share · Archive |
-| `Button-PlayerAction` | Bordered icon button used in `AudioRow-Player`: purple icon, `purple.opacity(0.12)` background, `cornerRadius 9`, `purple.opacity(0.3)` border |
+| `Button-PlayerAction` | Player action pill: purple icon on glass via `Player-GlassPill` (idle neutral glass, active purple-tinted). Used by audio-row buttons + top-bar Queue / Sleep Schedule pills |
+| `Player-GlassPill` | Shared `playerGlassPill(highlighted:cornerRadius:)` modifier (`Views/PlayerView.swift`): iOS 26 glass (neutral / purple-tinted when highlighted), `purple.opacity(0.12)` fill + stroke fallback |
 | `ArchiveConfirmationSheet` | Bottom sheet confirming archive of the currently playing episode — matches dark card style of Sleep Timer and Audio Controls sheets |
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
@@ -83,10 +87,11 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Description-EpisodePage` | HTMLDescriptionText inside a `white.opacity(0.08)` card, with `Section-Heading` label above |
 | `MetaGrid-EpisodePage` | Two-column MetaCard-Details grid: Published · Duration · File Size · Classification · File Status · Priority Rank |
 | `Toolbar-EpisodePage` | Episode page toolbar: Return to Player leading only, empty nav title |
-| `Selector-PeriodPills` | Stats page period selector: capsule pill row, purple selected / `white.opacity(0.08)` unselected |
+| `Selector-PeriodPills` | Stats page period selector: glass capsule pill row, purple-tinted glass selected / plain glass unselected |
 | `Card-StatsHero` | Stats hero card: big purple time-listened number + three stat columns (time saved teal) |
 | `Chart-Heatmap` | GitHub-style listening heatmap (30/90d) or Swift Charts monthly bars (1y/lifetime) |
 | `Chart-ListeningClock` | 24-hour rose chart in Canvas — wedge radius scales with listening per hour |
+| `Chart-DataDownloaded` | Stats Data Downloaded card: cyan total + mini-stats + cyan bar chart of download volume over time |
 | `ListRow-TopShow` | Stats top-shows row: rank · 44pt artwork · title + relative purple bar · duration |
 | `Card-ShowStatsExpanded` | Stats inline per-show detail card: tap a Top Shows / Drifting row to toggle; 2-column stat-tile grid in a nested `white.opacity(0.05)` card |
 
@@ -229,7 +234,7 @@ List { ... }
 
 **Label: `Section-CardRows`**
 
-A `VStack(spacing: 0)` of rows inside a `white.opacity(0.08)` rounded-rect card. Used on the Downloads page. Rows are separated by a `Divider` tinted `white.opacity(0.08)`, indented past the artwork.
+A `VStack(spacing: 0)` of rows inside a rounded-rect card. The card itself is the shared `Glass-Card` (`.glassCard(cornerRadius: 16)`) on the Downloads and Stats pages; rows are separated by a `Divider` tinted `white.opacity(0.08)`, indented past the artwork.
 
 ```swift
 VStack(spacing: 0) {
@@ -242,8 +247,28 @@ VStack(spacing: 0) {
         }
     }
 }
-.background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+.glassCard(cornerRadius: 16)
 ```
+
+---
+
+## Glass Capsule Modifier
+
+**Label: `Glass-Capsule`**
+
+Shared `glassCapsule(highlighted:)` View extension in `Views/EpisodeBadges.swift`. Wraps any view in a glass `Capsule`. `highlighted: true` adds purple tint — used wherever the app uses a purple-accent pill surface.
+
+- **iOS 26+ (neutral):** `.glassEffect(in: Capsule())`
+- **iOS 26+ (highlighted):** `.glassEffect(.regular.tint(.purple), in: Capsule())`
+- **iOS 17–25 (neutral):** `.background(Color.white.opacity(0.08), in: Capsule())`
+- **iOS 17–25 (highlighted):** `purple.opacity(0.22)` background + `purple.opacity(0.35)` stroke
+
+Usage:
+- **Discover search shortcuts** — `.glassCapsule()` (neutral)
+- **Discover category chips** — `.glassCapsule(highlighted: true)` (purple-tinted)
+- **Discover hero rank badge** — `.glassCapsule(highlighted: true)` (purple-tinted)
+- **Discover rail tile rank badge** — `.glassCapsule()` (neutral)
+- **Subscriptions reorder toggle** — uses `.glassEffect(.regular.tint(.purple), in: Capsule())` directly (pre-dates this modifier)
 
 ---
 
@@ -635,6 +660,8 @@ The `Header-SubscriptionPage` placeholder uses a larger icon size (`size: 36`).
 
 A colour-coded capsule pill shown on the Priority page, Individual Subscription page, and any other page listing episodes. Communicates episode state at a glance. Seven states, each a unique colour. White foreground on all.
 
+> **Shared component.** `EpisodeStatusKind` and `EpisodeStatusPill` live once in `Views/EpisodeBadges.swift` (alongside the Video/Explicit badges). Each page keeps its own `statusKind(for:)` resolver but renders the shared pill — do not re-declare these per file.
+
 | State | Label | Colour | Trigger |
 |---|---|---|---|
 | `unplayed` | Unplayed | Gray | Unplayed, no saved position, episode is **not** downloaded |
@@ -656,7 +683,8 @@ Priority order for the pill decision (check top to bottom):
 - **iOS 17–25 fallback:** solid `color.opacity(0.82)` capsule, unchanged
 
 ```swift
-private enum EpisodeStatusKind {
+// Views/EpisodeBadges.swift — shared, not per-page.
+enum EpisodeStatusKind {
     case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
 
     var label: String {
@@ -684,7 +712,7 @@ private enum EpisodeStatusKind {
     }
 }
 
-private struct EpisodeStatusPill: View {
+struct EpisodeStatusPill: View {
     let kind: EpisodeStatusKind
 
     var body: some View {
@@ -1037,7 +1065,7 @@ Only shown when `episode.downloadState == .downloading && appState.downloadProgr
 
 **Label: `SwipeActions-EpisodeRow`**
 
-Four swipe actions used on episode rows. Full-swipe is disabled on both edges. Applied on the **Queue** page and **Individual Subscription** page.
+Four swipe actions used on episode rows. Full-swipe is disabled on both edges. Applied on the **Queue** page, **Podcast Detail** page, and **Listening History** page (the History rows resolve each entry to its `Episode` first and skip the actions when it can't be resolved).
 
 ### Leading (swipe right) — both pages
 | Action | Icon | Colour | Behaviour |
@@ -1401,7 +1429,7 @@ For an unsubscribed preview, a browse subscription is created automatically in t
 5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
 6. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (height `50 pt`, `.borderedProminent`; not subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`; subscribed: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` → confirmation dialog before removing; `ProgressView` while subscribing) laid out beside a **notification bell** button (`bell.fill`/`bell.slash`, purple-tinted iOS-glass capsule) shown **only when actively subscribed**, toggling `Subscription.notificationsEnabled` in place. See FEATURES.md §2.2/§2.3.
 
-**Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary`.
+**Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary`. The heading `HStack` has `.padding(.top, 10)` on top of the VStack's base spacing (12 pt), giving ~22 pt total visual gap between the Subscribe button row and the Episodes heading.
 
 **Episode list** — a `List` in a `RoundedRectangle(cornerRadius: 16)` card with `Color.white.opacity(0.08)` background, using `ListRow-EpisodeRow` (Video/Explicit badges as a top-trailing overlay per DESIGN.md):
 - `NavigationLink` to `EpisodeDetailView` for each row
@@ -1515,16 +1543,16 @@ A custom `HStack` across the top of the screen (not a SwiftUI toolbar). Three zo
 
 | Zone | Content | Action |
 |---|---|---|
-| Leading | `list.bullet` icon circle (15pt semibold, white) | `NavigationLink` to Priority page |
+| Leading | `list.bullet` glass icon circle (15pt semibold, white; neutral `.glassEffect(in: Circle())`, `Color(white: 0.12)` circle fallback) | `NavigationLink` to Priority page |
 | Leading (cont.) | **Sleep Schedule indicator** — `bed.double.fill` pill, only while in the active-hours window | `NavigationLink` to `AppRoute.sleepSchedule` |
 | Centre | Panel tab strip — `Now Playing` / `Details` / `Chapters` | Switches `TabView` panel with `easeInOut(0.22)` animation |
-| Trailing | Queue count pill (purple `playerActionIcon` tint style, icon + count) | Opens `QueueSheetView` as a sheet |
+| Trailing | Queue count pill (`Player-GlassPill`, icon + count) | Opens `QueueSheetView` as a sheet |
 
-**Panel tab strip** — each tab is a plain `Button`. Selected tab: white foreground + `Color(white: 0.15)` rounded-rect background. Unselected: `Color(white: 0.4)` foreground, clear background. `cornerRadius 14`, `font(.system(size: 13, weight: .semibold))`.
+**Panel tab strip** — each tab is a plain `Button`. The selected tab sits on neutral glass (`.glassEffect(in: Capsule())`; `Color(white: 0.15)` capsule fallback below iOS 26) with white foreground and shows its title; unselected tabs stay bare (no glass) with `Color(white: 0.4)` foreground. `font(.system(size: 13, weight: .semibold))`, height 30.
 
-**Sleep Schedule indicator (`Indicator-SleepSchedule`)** — appears immediately right of the leading nav icon, but only while `sleepScheduleService.isActive` (schedule enabled AND current time inside the active-hours window). Matches the `playerActionIcon` purple tint pill (`Color.purple.opacity(0.12)` fill, `0.3` stroke, `cornerRadius 9`, height 32, purple `0.85` icon). Shows `bed.double.fill` plus the whole minutes until the next "still listening?" prompt (`minutesUntilPrompt`, from the `.counting` phase); when not counting (paused, idle, or End-of-Episode mode) the icon shows alone. Wrapped in a `TimelineView(.periodic(by: 30))` so it appears/disappears at the window edges and the digit stays current while paused.
+**Sleep Schedule indicator (`Indicator-SleepSchedule`)** — appears immediately right of the leading nav icon, but only while `sleepScheduleService.isActive` (schedule enabled AND current time inside the active-hours window). Uses the shared `Player-GlassPill` surface (neutral glass, purple `0.85` icon, height 32) — the same pill as the audio-row buttons and Queue pill. Shows `bed.double.fill` plus the whole minutes until the next "still listening?" prompt (`minutesUntilPrompt`, from the `.counting` phase); when not counting (paused, idle, or End-of-Episode mode) the icon shows alone. Wrapped in a `TimelineView(.periodic(by: 30))` so it appears/disappears at the window edges and the digit stays current while paused.
 
-**Queue count pill** — shows `appState.downloadedQueue.count`. Fixed height 30 pt, `Color(white: 0.12)` background, `cornerRadius 15`, subtle `Color(white: 0.18)` stroke. Font: `size: 12, weight: .bold`, colour `Color(white: 0.55)`.
+**Queue count pill** — shows `appState.downloadedQueue.count` (`square.stack` icon + count). Uses the shared `Player-GlassPill` surface (neutral glass, purple `0.85` icon/text, height 32) — matching the audio-row buttons. When an episode is added to the queue it briefly cross-fades to that episode's subscription artwork. Opens `QueueSheetView`.
 
 ```swift
 HStack(spacing: 0) {
@@ -1645,6 +1673,8 @@ VStack(alignment: .center, spacing: 3) {
 
 Purple `Slider` above a two-label time row. The slider value tracks `appState.currentPlayerTime` while not seeking; during seek the value is decoupled and committed on `onEditingChanged(false)`.
 
+> **Glass:** the scrubber is a stock SwiftUI `Slider`, which on iOS 26 automatically renders with the system Liquid Glass thumb/track — there is no custom opacity/material surface to replace, so it carries only `.tint(.purple)`. No manual `.glassEffect` is applied (or needed).
+
 - **Slider** — `tint(.purple)`, range `0...duration`, disabled when no episode
 - **Left label** — elapsed time: `formatTime(displayTime)` in `h:mm:ss` or `m:ss` format
 - **Right label** — remaining time: `"-\(formatTime(remainingTime))"`, `Color(white: 0.55)`
@@ -1676,7 +1706,7 @@ VStack(spacing: 6) {
 Three-button `HStack`. Skip buttons flank the central play/pause button.
 
 - **Skip back / Skip forward** — `SkipIntervalIcon` view: `gobackward` / `goforward` SF Symbol at `size 36, weight .regular` with the skip seconds number overlaid at `size 15 (or 12 for ≥100s), design .rounded`, offset `y: 3`. Foreground `Color(white: 0.9)`. Frame `64×64`.
-- **Play / Pause** — `pause.fill` / `play.fill` at `font size 28`, white, `76×76` purple circle, `shadow(color: purple.opacity(0.35), radius: 14)`. Disabled when queue is empty.
+- **Play / Pause** — `pause.fill` / `play.fill` at `font size 28`, white, `76×76` circle. The primary CTA, so it uses purple-tinted glass (`.glassEffect(.regular.tint(.purple), in: Circle())`; solid `Color.purple` circle fallback below iOS 26), with the purple glow `shadow(color: purple.opacity(0.35), radius: 14)` retained in both. Disabled when queue is empty.
 - Skip seconds values come from `appState.settingsStore.appSettings.skipBackSeconds` / `skipForwardSeconds`.
 - Skip forward overshot: if `currentTime + skip ≥ duration`, advances to the next episode instead of clamping.
 
@@ -1688,13 +1718,18 @@ HStack(alignment: .center) {
     .frame(maxWidth: .infinity)
 
     Button { Task { await appState.togglePlayPause() } } label: {
-        Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
+        let playIcon = Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
             .font(.system(size: 28))
             .foregroundStyle(.white)
             .frame(width: 76, height: 76)
-            .background(Color.purple)
-            .clipShape(Circle())
-            .shadow(color: Color.purple.opacity(0.35), radius: 14)
+
+        if #available(iOS 26, *) {
+            playIcon.glassEffect(.regular.tint(.purple), in: Circle())
+                .shadow(color: Color.purple.opacity(0.35), radius: 14)
+        } else {
+            playIcon.background(Color.purple).clipShape(Circle())
+                .shadow(color: Color.purple.opacity(0.35), radius: 14)
+        }
     }
 
     Button { /* seek forward or advance */ } label: {
@@ -1721,11 +1756,11 @@ A five-button `HStack` below the controls, providing access to audio settings, o
 
 **Sound Settings button** (`slider.horizontal.3`) — `Button-PlayerAction` style. Opens `AudioControlsSheetView`.
 
-**Sleep Timer button** (`moon.zzz` / `moon.zzz.fill`) — `Button-PlayerAction` style. When the sleep timer is **inactive**, icon is `Color.purple.opacity(0.85)` (matches all other player action buttons). When **active**, icon turns `.white` — same purple background and border unchanged. A small badge capsule (purple background, white text) overlays the top-trailing corner showing either a countdown (`"m:ss"` / `"Xh"`) for duration mode or `"Nep"` for episode mode. Opens `SleepTimerSheetView`.
+**Sleep Timer button** (`moon.zzz` / `moon.zzz.fill`) — `Button-PlayerAction` style. When the sleep timer is **inactive**, icon is `Color.purple.opacity(0.85)` on neutral glass. When **active**, the pill becomes purple-tinted glass with a `.white` icon (`highlighted` state). A small badge capsule (purple background, white text) overlays the top-trailing corner showing either a countdown (`"m:ss"` / `"Xh"`) for duration mode or `"Nep"` for episode mode. Opens `SleepTimerSheetView`.
 
 **AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the current audio output name from `AVAudioSession.currentRoute.outputs.first`.
 
-**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens `EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): a bottom sheet that previews the rendered episode share card (`EpisodeShareCardView` — artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL. Disabled when no episode is loaded.
+**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens `EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): a fixed-height bottom sheet (`presentationDetents([.height(580)])`, sized to the 280×360 share card + Share/Cancel buttons so it sits proportionally with the other audio-row sheets — not full-screen) that previews the rendered episode share card (`EpisodeShareCardView` — artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL. Disabled when no episode is loaded.
 
 **Archive button** (`archivebox`) — `Button-PlayerAction` style. Opens `ArchiveConfirmationSheet` (a bottom sheet). On confirm, calls `archiveEpisodeAndPlayNext` to archive the currently playing episode and advance to the next. Icon matches `SwipeActions-EpisodeRow` (`archivebox`).
 
@@ -1737,7 +1772,7 @@ A five-button `HStack` below the controls, providing access to audio settings, o
 
 A bottom sheet presented when the Archive button is tapped in `AudioRow-Player`. Matches the dark card style of `SleepTimerSheetView` and `AudioControlsSheetView`.
 
-- **Background** — `Color(red: 0.10, green: 0.10, blue: 0.13)`, `presentationCornerRadius(20)`, drag indicator hidden
+- **Background** — `Sheet-MaterialBackground` (`.presentationBackground(.regularMaterial)`), `presentationCornerRadius(20)`, drag indicator hidden
 - **Height** — fixed `320 pt` (`presentationDetents([.height(320)])`)
 - **Icon** — `archivebox` at `size 28, weight .semibold`, `Color.purple.opacity(0.85)`
 - **Title** — `"Archive Episode?"`, `size 17, weight .bold`, white
@@ -1751,22 +1786,40 @@ A bottom sheet presented when the Archive button is tapped in `AudioRow-Player`.
 
 **Label: `Button-PlayerAction`**
 
-The shared button style used for all four flanking buttons in `AudioRow-Player`. Extracted as a `playerActionIcon(_:)` helper function.
+The shared **glass** style used by the Player's six action pills — the audio-row buttons (Sound Settings, Sleep Timer, Share, Archive) plus the top-bar Queue pill and Sleep Schedule indicator. The icon style is the `playerActionIcon(_:highlighted:)` helper; the surface is the shared `playerGlassPill(highlighted:cornerRadius:)` modifier (`Player-GlassPill`, `Views/PlayerView.swift`).
 
-- **Icon** — SF Symbol at `size 18, weight .bold`, `Color.purple.opacity(0.85)` foreground (white when Sleep Timer is active)
-- **Frame** — `44×32 pt`
-- **Background** — `Color.purple.opacity(0.12)`, `cornerRadius 9`
-- **Border** — `Color.purple.opacity(0.3)`, `lineWidth 0.5`
+- **Icon** — SF Symbol at `size 18, weight .bold`; `Color.purple.opacity(0.85)` foreground when idle, `.white` when `highlighted` (Sleep Timer running, Shared Listening on)
+- **Frame** — `44×32 pt` (icon buttons); the Queue/Sleep-Schedule pills size to their content at height 32
+- **Surface** — `playerGlassPill`:
+  - **iOS 26+:** idle → neutral `.glassEffect(in: RoundedRectangle(cornerRadius: 9))`; highlighted → purple-tinted `.glassEffect(.regular.tint(.purple), in:)` — same idle/active split as the Priority page reorder toggle
+  - **iOS 17–25 fallback:** the original `Color.purple.opacity(0.12)` fill + `Color.purple.opacity(0.3)` `lineWidth 0.5` stroke at `cornerRadius 9`
+
+The centre AirPlay route picker (`audioSourceButton`) stays borderless — it is not a pill.
 
 ```swift
-private func playerActionIcon(_ systemName: String) -> some View {
+private func playerActionIcon(_ systemName: String, highlighted: Bool = false) -> some View {
     Image(systemName: systemName)
         .font(.system(size: 18, weight: .bold))
-        .foregroundStyle(Color.purple.opacity(0.85))
+        .foregroundStyle(highlighted ? Color.white : Color.purple.opacity(0.85))
         .frame(width: 44, height: 32)
-        .background(Color.purple.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+        .playerGlassPill(highlighted: highlighted)
+}
+
+private extension View {
+    @ViewBuilder
+    func playerGlassPill(highlighted: Bool = false, cornerRadius: CGFloat = 9) -> some View {
+        if #available(iOS 26, *) {
+            if highlighted {
+                glassEffect(.regular.tint(.purple), in: RoundedRectangle(cornerRadius: cornerRadius))
+            } else {
+                glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius))
+            }
+        } else {
+            background(Color.purple.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+        }
+    }
 }
 ```
 
@@ -1780,7 +1833,7 @@ Shows the second episode in the queue (the one after the currently playing episo
 
 **Important:** `.swipeActions` is incompatible with content inside `TabView(.page)` (gesture conflicts). The Up Next row uses a **custom `DragGesture`** instead, with `highPriorityGesture` to beat the `TabView` pan recogniser.
 
-Card appearance: `Color(white: 0.09)` background, `cornerRadius 14`, `white.opacity(0.075)` stroke. Padding `14 pt` horizontal + `10 pt` vertical.
+Card appearance: shared `Glass-Card` (`.glassCard(cornerRadius: 14)` — iOS 26 glass, `.ultraThinMaterial` fallback). Padding `14 pt` horizontal + `10 pt` vertical. The card slides over the green/purple swipe-action reveals; the Video/Explicit badges remain a top-trailing overlay outside the glass clip.
 
 **Position indicator:** `arrow.forward` icon (not a number) — purple, `size 10, weight .bold`, 20 pt frame.
 
@@ -1816,7 +1869,7 @@ When `appState.activeChapters` is non-empty, a compact chapter strip appears bet
 
 - **Prev / Next buttons** — `28×28` circle, `Color(white: 0.12)` fill, `white.opacity(0.18)` stroke, `chevron.left` / `chevron.right` at `size 13, weight .semibold, Color(white: 0.55)`. Disabled at first/last chapter.
 - **Centre area** — tappable; navigates to the full Chapters panel with `easeInOut(0.22)`. Title: `size 12, weight .bold, white`, `lineLimit(1)`. Subtitle: `size 10, Color(white: 0.33)`.
-- **Container** — `Color(white: 0.09)` background, `cornerRadius 12`, `white.opacity(0.075)` stroke. `padding(.horizontal, 11)`, `padding(.vertical, 8)`.
+- **Container** — shared `Glass-Card` (`.glassCard(cornerRadius: 12)` — iOS 26 glass, `.ultraThinMaterial` fallback). `padding(.horizontal, 11)`, `padding(.vertical, 8)`. The prev/next chevron buttons stay as dark `Color(white: 0.12)` circles inside the glass.
 
 ---
 
@@ -1824,7 +1877,7 @@ When `appState.activeChapters` is non-empty, a compact chapter strip appears bet
 
 **Label: `Panel-Chapters`**
 
-The full chapters panel (third tab). Shows all chapters as a scrollable list with a header row showing chapter count and skip count, plus All/None bulk-toggle buttons.
+The full chapters panel (third tab). A header row (chapter count + skip count, plus All/None bulk-toggle buttons) sits above a scrollable chapter list. The list (the `LazyVStack` of rows) is wrapped in a shared `Glass-Card` (`.glassCard(cornerRadius: 16)`, inset `padding(.horizontal, 12)`) — like the Podcast Detail episode list — so the rows sit on one glass surface; the old full-width header divider is dropped. Chapter rows use `padding(.horizontal, 14)` to sit inside the card.
 
 **Chapter row structure:**
 - **Toggle circle** — 24×24, `Color.purple` fill + `checkmark` when included; clear fill + `Color(white: 0.33)` stroke when skipped
@@ -1851,8 +1904,8 @@ A `ScrollView` showing full episode metadata. Sections top to bottom:
 3. **Description image** — either the first `<img>` extracted from the description HTML, or the channel/episode artwork as a fallback. `cornerRadius 14`, full width. Shown before the text.
 4. **Episode subtitle** — `size 13, weight .bold, Color(white: 0.55)` (from RSS `<itunes:subtitle>`)
 5. **Episode author** — `size 12, Color(white: 0.33)` (from RSS `<itunes:author>`)
-6. **`HTMLDescriptionText`** — full HTML description. `fontSize: 14`, `color: Color(white: 0.78)`, `linkColor: .purple`. `showsFirstImage: false` (image already shown above).
-7. **Meta cards grid** (`MetaCard-Details`) — two-column `LazyVGrid`
+6. **`HTMLDescriptionText`** — full HTML description. `fontSize: 14`, `color: Color(white: 0.78)`, `linkColor: .purple`. `showsFirstImage: false` (image already shown above). Wrapped in a `Glass-Card` (`.glassCard(cornerRadius: 16)`, `padding 14`) with an explicit `white.opacity(0.12)` `lineWidth 0.5` border overlay, inset `padding(.horizontal, 20)`.
+7. **Meta cards grid** (`MetaCard-Details`) — two-column `LazyVGrid` of glass cards in a `GlassEffectContainer(spacing: 8)`
 
 ---
 
@@ -1864,6 +1917,7 @@ A SwiftUI `View` that renders a raw HTML string from an episode's RSS descriptio
 
 **How it works:**
 - Strips `<img>` tags and normalises `<br>` / `<p>` for text display
+- Converts `<li>` list items to `<p>• ` paragraphs and strips `<ul>/<ol>` wrappers, so list items get paragraph spacing instead of rendering as cramped lines (applied in `htmlForTextDisplay(_:)` via regex, benefits all `HTMLDescriptionText` uses — Player Details, Episode Detail, Support)
 - Parses with `NSAttributedString(.html)` on a background thread is acceptable here — unlike in `List` row bodies, `ScrollView` doesn't trigger WebKit spin-up in the main render pass
 - Strips `NSForegroundColorAttributeName` so SwiftUI `.foregroundStyle` applies
 - Normalises all fonts to SF system font at `fontSize`, preserving bold and italic traits
@@ -1878,9 +1932,12 @@ HTMLDescriptionText(
     fontSize: 14,
     color: Color(white: 0.78),
     linkColor: .purple,
-    showsFirstImage: false   // true shows the first <img> above the text
+    showsFirstImage: false,  // true shows the first <img> above the text
+    sentenceBreaks: false    // true: blank line after each sentence-ending full stop
 )
 ```
+
+**`sentenceBreaks`** — when `true`, the space(s) after a sentence-ending full stop (`.` followed by whitespace) are replaced with a blank line, so each sentence reads on its own. Applied via a regex pass on the parsed `NSMutableAttributedString` (`(?<=\.)[ \t]+` → `\n\n`), preserving font/link attributes; decimals and URLs have no space after the dot so they're untouched. **Only the Main Player Details panel description sets this `true`** — the Episode Detail description and all other uses keep the default `false`.
 
 **`firstImageURL(from:)`** — static method used by the Details panel to extract the first `<img src=...>` from the HTML so it can be placed above the text block rather than inline.
 
@@ -1892,18 +1949,19 @@ HTMLDescriptionText(
 
 **Label: `MetaCard-Details`**
 
-A two-column `LazyVGrid` of key/value cards shown at the bottom of the Details panel. Each card: uppercase tracking label + bold value.
+A two-column `LazyVGrid` of key/value **glass** cards shown at the bottom of the Details panel — same treatment as the Episode Detail page's `MetaGrid-EpisodePage`. Each card: uppercase tracking label + bold value.
 
-- **Grid** — `[GridItem(.flexible()), GridItem(.flexible())]`, spacing `8`
-- **Card** — `Color(white: 0.09)` background, `cornerRadius 10`, `white.opacity(0.075)` stroke, padding `12 × 10`
+- **Grid** — `[GridItem(.flexible()), GridItem(.flexible())]`, spacing `8`, wrapped in a `GlassEffectContainer(spacing: 8)` (iOS 26) so the tiles read as one cohesive glass surface
+- **Card** — iOS 26: `.glassEffect(in: RoundedRectangle(cornerRadius: 10))`; iOS 17–25 fallback: flat `Color(white: 0.09)` + `white.opacity(0.075)` stroke. Padding `12 × 10`
 - **Key** — `size 10, weight .bold`, `.textCase(.uppercase)`, `.tracking(0.5)`, `Color(white: 0.33)`
 - **Value** — `size 13, weight .bold`, white, `lineLimit(2)`
 
-Fields shown (when available): Published · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count.
+Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. **Published** uses `relativePublishedLabel` ("Today" / "Yesterday" / abbreviated date) and **Released** uses `relativeReleasedLabel` (elapsed-since-publish, e.g. "2 days ago") — both shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
 
 ```swift
+@ViewBuilder
 private func metaCard(_ key: String, _ value: String) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
+    let content = VStack(alignment: .leading, spacing: 3) {
         Text(key)
             .font(.system(size: 10, weight: .bold))
             .textCase(.uppercase)
@@ -1917,11 +1975,40 @@ private func metaCard(_ key: String, _ value: String) -> some View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
-    .background(Color(white: 0.09))
-    .clipShape(RoundedRectangle(cornerRadius: 10))
-    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+
+    if #available(iOS 26, *) {
+        content.glassEffect(in: RoundedRectangle(cornerRadius: 10))
+    } else {
+        content
+            .background(Color(white: 0.09))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+    }
 }
 ```
+
+---
+
+## Player Sheets — Material Background
+
+**Label: `Sheet-MaterialBackground`**
+
+All sheets in the app use a translucent system **material** background instead of a solid fill, so they match the native AirPlay route picker.
+
+Sheets covered:
+- **Player sheets:** Queue (`QueueSheetView`), Sleep Timer (`SleepTimerSheetView`), Audio Controls (`AudioControlsSheetView`), Archive confirmation (`ArchiveConfirmationSheet`), Episode Share (`EpisodeShareSheet`)
+- **Navigation sheets:** Menu (`MenuSheetView`) and Podcast Search (`PodcastSearchView`) — both apply `.presentationBackground(.regularMaterial)` on their outer `NavigationStack`
+
+```swift
+.presentationBackground(.regularMaterial)
+.presentationCornerRadius(20)   // bottom sheets
+```
+
+- `.regularMaterial` renders as the system frosted material (Liquid Glass on iOS 26), blurring the content behind while staying legible.
+- List/scroll content inside must set `.scrollContentBackground(.hidden)` so the material shows through — see Queue list, Menu list, Podcast Search list.
+- Row backgrounds inside these sheets use `Color.white.opacity(0.07)` (Menu rows, Podcast Search result rows) so they read as distinct rows on the material without fighting it.
+- Inner surface cards keep their own glass treatment — the Audio Controls speed stepper uses `.glassCard(cornerRadius: 10)` (iOS 26 glass, `.ultraThinMaterial` fallback), the Recently Viewed block in Podcast Search uses `.glassCard(cornerRadius: 16)`.
+- The full-screen Sleep Schedule prompt (`Overlay-SleepSchedulePrompt`) is **not** a card sheet — it stays a solid `black.opacity(0.72)` dimming scrim.
 
 ---
 
@@ -1931,12 +2018,12 @@ private func metaCard(_ key: String, _ value: String) -> some View {
 
 A bottom sheet (`presentationDetents`) for per-subscription audio settings. Sheet height is dynamic — base `300 pt` + `68 pt` for each active picker row (trim silence or vocal boost when enabled).
 
-Sheet background: `Color(red: 0.10, green: 0.10, blue: 0.13)` (slightly blue-tinted dark). Drag indicator hidden; `presentationCornerRadius(20)`.
+Sheet background: `Sheet-MaterialBackground` (`.presentationBackground(.regularMaterial)`). Drag indicator hidden; `presentationCornerRadius(20)`.
 
 **Three rows, each separated by a `Divider` indented `60 pt` from the leading edge:**
 
 ### Speed Row
-Stepper (`−` · value · `+`) on the right. Steps through `PlaybackPreference.speedOptions` array (e.g. `0.5× … 3.0×`). Value display: `size 15, weight .bold, design .rounded`, `.monospacedDigit()`. Stepper background: `Color(white: 0.20)`, `cornerRadius 10`, buttons `44×38 pt`.
+Stepper (`−` · value · `+`) on the right. Steps through `PlaybackPreference.speedOptions` array (e.g. `0.5× … 3.0×`). Value display: `size 15, weight .bold, design .rounded`, `.monospacedDigit()`. Stepper background: `.glassCard(cornerRadius: 10)` (iOS 26 glass, `.ultraThinMaterial` fallback), buttons `44×38 pt`.
 
 ### Trim Silence Row
 `Toggle` (purple tint) on the right. When on, a segmented `Picker` with Low / Medium / High animates in below (`easeInOut(0.22)`). Picker tint: `.purple`.
@@ -2071,13 +2158,14 @@ A `ProgressBar-Download` appears below the button row when `ep.downloadState == 
 
 **Label: `Description-EpisodePage`**
 
-Full HTML episode description rendered via `HTMLDescriptionText`, inside a `white.opacity(0.08)` rounded card — the same card background used for episode lists on the Priority and Individual Subscription pages (`Section-CardList`).
+Full HTML episode description rendered via `HTMLDescriptionText`, inside a **glass** rounded card matching `PodcastDetailView`'s `episodeListCard`. Both use the shared `glassCard(cornerRadius:)` modifier (`Glass-Card`) — real glass on iOS 26+, `.ultraThinMaterial` fallback below.
 
 ```swift
 VStack(alignment: .leading, spacing: 8) {
     Text("Description")
         .font(.title3.weight(.bold))
         .foregroundStyle(.primary)
+
     HTMLDescriptionText(
         html: description,
         fontSize: 15,
@@ -2086,7 +2174,8 @@ VStack(alignment: .leading, spacing: 8) {
         showsFirstImage: false
     )
     .padding(14)
-    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassCard(cornerRadius: 16)
 }
 ```
 
@@ -2098,13 +2187,21 @@ Hidden when `ep.description` is nil or empty.
 
 **Label: `MetaGrid-EpisodePage`**
 
-A two-column `LazyVGrid` of `MetaCard-Details` cards at the bottom of the scroll content. Identical card style to the Main Player Details panel.
+A two-column `LazyVGrid` of meta cards at the bottom of the scroll content.
+
+**Glass treatment:** the Episode page cards are **glass** and the grid is wrapped in a `GlassEffectContainer(spacing: 8)` so the small cards read as one cohesive glass surface. The Main Player Details panel's `MetaCard-Details` grid now uses the identical treatment.
+
+- **iOS 26+:** each card `.glassEffect(in: RoundedRectangle(cornerRadius: 10))`, grid inside `GlassEffectContainer(spacing: 8)`
+- **iOS 17–25 fallback:** flat `Color(white: 0.09)` card + `white.opacity(0.075)` stroke (the original `MetaCard-Details` style), no container
+
+Key text stays `Color(white: 0.33)` uppercase; value text stays white bold.
 
 Fields shown (when available):
 
 | Field | Source | Always shown |
 |---|---|---|
-| Published | `ep.publishedAt`, `.abbreviated` date, no time | Only when non-nil |
+| Published | `relativePublishedLabel(ep.publishedAt)` — "Today" / "Yesterday" / abbreviated date | Only when non-nil |
+| Released | `relativeReleasedLabel(ep.publishedAt)` — elapsed since publish, e.g. "2 days ago" | Only when non-nil |
 | Duration | `ep.durationSeconds`, formatted `"Xh Ym"` / `"Ym"` | Only when non-nil |
 | File Size | `ep.fileSizeBytes`, formatted `"X MB"` / `"X.X GB"` | Only when non-nil |
 | Classification | `ep.isExplicit == true ? "Explicit" : "Clean"` | Always |
@@ -2140,19 +2237,21 @@ Empty navigation title (`.navigationTitle("")`) — the episode title is shown i
 
 # Stats Page
 
-`Views/StatsView.swift`, reached via Menu → Stats. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`, and `white.opacity(0.08)` cards. All sections respond to the period selector.
+`Views/StatsView.swift`, reached via Menu → Stats. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`. Every section card uses the shared `Glass-Card` modifier (`.glassCard(cornerRadius: 16)` — iOS 26 glass, `.ultraThinMaterial` fallback) rather than a flat `white.opacity(0.08)` fill. Card-internal dividers, axis grid lines, progress-bar tracks, and the nested expanded-show card stay on `white.opacity(…)` insets. All sections respond to the period selector.
+
+Sections stack in a `VStack(spacing: 32)`: period selector · Hero · Heatmap/Trend · Listening Clock · Top Shows · Drifting Shows · **Data Downloaded** · Time Saved By · Privacy Footer.
 
 ## Stats Page — Period Selector
 
 **Label: `Selector-PeriodPills`**
 
-A centred `HStack(spacing: 8)` of capsule buttons (This Week / [current month] / [current year] / Lifetime). The four ranges are calendar-anchored, each resetting at the start of its period: This Week = Monday 00:00 → now (resets Monday); the month pill (dynamically labelled, e.g. "June") = 1st 00:00 → now (resets monthly); the year pill (e.g. "2026") = Jan 1 → now (resets yearly); Lifetime = all history. Selected pill: `Color.purple` background, white `.footnote.weight(.semibold)` label. Unselected: `Color.white.opacity(0.08)` background, `.secondary` label. Switching animates with `.easeInOut(duration: 0.15)`.
+A centred `HStack(spacing: 8)` of capsule buttons (This Week / [current month] / [current year] / Lifetime). The four ranges are calendar-anchored, each resetting at the start of its period: This Week = Monday 00:00 → now (resets Monday); the month pill (dynamically labelled, e.g. "June") = 1st 00:00 → now (resets monthly); the year pill (e.g. "2026") = Jan 1 → now (resets yearly); Lifetime = all history. Pills use the same glass treatment as the Priority page reorder toggle: the selected pill is purple-tinted glass (`.glassEffect(.regular.tint(.purple), in: Capsule())`) with a white `.footnote.weight(.semibold)` label; unselected pills are plain glass (`.glassEffect(in: Capsule())`) with a `.secondary` label. Below iOS 26 the fallback is the original solid `Color.purple` / `Color.white.opacity(0.08)` capsule. Switching animates with `.easeInOut(duration: 0.15)`.
 
 ## Stats Page — Hero Card
 
 **Label: `Card-StatsHero`**
 
-`white.opacity(0.08)` rounded card (`cornerRadius 16`, padding 16). Contents top-to-bottom:
+`Glass-Card` rounded card (`.glassCard(cornerRadius: 16)`, padding 16). Contents top-to-bottom:
 1. Subtitle (`.subheadline`, `.secondary`) — "Time listened" (or "Time listened since [date]" on Lifetime)
 2. Headline number — `size 40, weight .bold`, `.purple`, `contentTransition(.numericText())`
 3. `Divider` overlaid `white.opacity(0.08)`
@@ -2169,6 +2268,15 @@ GitHub-style contribution grid (This Week and the current-month periods only): c
 **Label: `Chart-ListeningClock`**
 
 24-hour rose chart drawn in a `Canvas` (height 230): midnight at top, noon at bottom; each hour is a wedge whose radius scales with `√(hourSeconds/max)`, filled `purple.opacity(0.9)` with 1° gaps between wedges. Two reference circles stroked `white.opacity(0.08)`. Compass labels 12am/6am/12pm/6pm in `.caption2` `.tertiary`. Caption below: "Peak listening: [range]".
+
+## Stats Page — Data Downloaded
+
+**Label: `Chart-DataDownloaded`**
+
+A `Glass-Card` whose contents are, top to bottom:
+1. **Headline row** — big cyan total (`size 36, weight .bold`, `.cyan`, `contentTransition(.numericText())`) + "total downloaded" caption on the left; on the right, two trailing mini-stats (`downloadMiniStat`: `.title3.bold.monospacedDigit` value over `.caption .secondary` label) — episode count and average size per episode. Mini-stats are hidden when nothing was downloaded.
+2. **Download chart** — a Swift Charts `BarMark` of download volume over time, **cyan** (`Color.cyan.gradient`, `cornerRadius 3`, height 150) to distinguish it from the purple listening charts. Bucketing mirrors the trend chart: per-day bars on heatmap ranges (This Week / current month), per-month bars on year/Lifetime. X-axis labels `.day()` or `.month(.narrow)`; y-axis labels formatted via `formattedBytes` (3 marks). Hidden when no bytes were recorded in the period.
+3. **Empty state** — when nothing was downloaded, the chart is replaced by "No episodes downloaded in this period" (`.subheadline`, `.secondary`).
 
 ## Stats Page — Top Show Row
 
@@ -2200,7 +2308,7 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 p
 
 **Label: `Card-ShowStatsExpanded`**
 
-Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `white.opacity(0.08)` card. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
+Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `Glass-Card` — kept as a faint solid inset rather than nested glass. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
 
 ## Main Player — Sleep Schedule Prompt Overlay
 
@@ -2226,9 +2334,22 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 - **Pills** — adaptive `LazyVGrid` of capsule status chips (8pt colour dot + label, `color.opacity(0.18)` fill) reusing the `Episode Status Pill` colour set.
 - **Swipe-action cards** — two `white.opacity(0.06)` cards (Swipe Right / Swipe Left) listing each action as a colour dot + `**Label** — detail`, matching the Queue swipe semantics.
 
+# Listening History Page
+
+`ListeningHistoryView` (`Views/SettingsView.swift`), reached via Menu → Listening History. Forced dark (`ColorScheme-Dark`), `Accent-Purple`, black background. Layout: a header row of two glass stat tiles (`HistoryStatView` — Listening Time, Episodes) above a grouped history `List`. `.searchable` filters by episode/podcast title (60 s minimum playback threshold). Empty/empty-search states use `ContentUnavailableView`.
+
+**Label: `View-ListeningHistory`**
+
+- **Stat tiles** — `HistoryStatView`: uppercase `.caption2.bold` `.secondary` title over a `.title3.bold` primary value, in a `Glass-Card` (`.glassCard(cornerRadius: 12)`).
+- **History list** — a `.plain` `List` with `.scrollContentBackground(.hidden)` wrapped in a single `Glass-Card` (`.glassCard(cornerRadius: 16)`), like `PodcastDetailView`'s episode list. Rows are clear so the one glass surface shows behind them; the currently-playing row gets `Color.purple.opacity(0.08)`. Sections are date groups (Today / Yesterday / abbreviated date) with `.caption.bold` `.secondary` headers.
+- **Row** (`ListeningHistoryRow`) — 54 pt artwork (`cornerRadius 9`, purple-gradient `Artwork-Placeholder` fallback) · podcast title (caption bold secondary, uppercased) · episode title (`.body.semibold`) · metadata line (status label + listened duration + remaining, caption secondary).
+- **Swipe actions** (`SwipeActions-EpisodeRow`) — mirrors `PodcastDetailView`: leading **Play** (green) / **Play Next** (blue); trailing **Archive** (purple, → **Unarchive** when the episode is archived/played) / **Play Last** (orange). Each resolves the entry to its `Episode` via `subscriptionStore.episode(subscriptionID:episodeID:)`, downloads first if not on device, and is hidden when the entry's episode can't be resolved or is the currently-playing episode.
+
 ## Settings Pages — Dark Form Style
 
 **Label: `Form-SettingsDark`**
+
+> **Not slated for glass conversion.** The dark-`Form` pages — `SettingsView` (App Settings), `SubscriptionSettingsView` (Podcast Settings), `AddFeedView`, `DiagnosticLogView`, and `AcknowledgementsView` — intentionally keep this flat `white.opacity(0.08)` card recipe and are **not** to be migrated to glass. (Glass elements embedded in these pages — e.g. the `EpisodeStatusPill` on Podcast Settings, or `EpisodeDetailView` which lives in `SubscriptionSettingsView.swift` — are separate and stay glass.)
 
 Every settings page (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, and the linked sub-screens `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) renders its `Form`/`List` with one shared recipe instead of the stock iOS grouped style:
 
@@ -2265,3 +2386,82 @@ struct SettingsRowLabel: View {
 ```
 
 The icon is forced `.purple` while the title inherits the row's primary colour. Section group headers stay as plain text labels (no icon). Action buttons (Run Auto Archive, Import/Export OPML) keep their own `Label` and read as purple-tinted actions; destructive buttons (Unsubscribe) stay red.
+
+---
+
+# Subscriptions Page
+
+`Views/PodcastsView.swift` — the app's home page. Ranked list of active subscriptions with drag-to-reorder.
+
+## Subscriptions Page — Action Row
+
+The action row sits below the nav title. Left: Reorder toggle capsule (`glassCapsule(highlighted:)` — neutral when idle, purple-tinted when Reorder active). Right: Refresh All button when not in reorder mode.
+
+**Refresh All button:**
+- Frame: `30×30 pt` `Circle`
+- Icon: `arrow.clockwise`, `font(.system(size: 13, weight: .semibold))`
+- Foreground: `.purple`
+- Surface: `glassEffect(in: Circle())` (iOS 26) / `.ultraThinMaterial` fallback
+
+---
+
+# Discover Page
+
+`Views/DiscoverView.swift` — pushed from the Subscriptions `+` button. Browsable charts and categories from Apple's Marketing Tools API.
+
+## Discover Page — Layout
+
+A single `ScrollView` with a `VStack(alignment: .leading, spacing: 48)` separating sections. The increased 48 pt spacing (was 34 pt) gives each section visual breathing room.
+
+**Four hero carousel sections** interspersed with category rails:
+
+| Position | Content | Data Source |
+|---|---|---|
+| Top of page | **Top Episodes hero** — Top 8 episodes | Apple Marketing Tools episode chart |
+| After rail 3 | **Top Podcasts hero** — Top 8 podcasts | Apple Marketing Tools podcast chart |
+| After rail 6 | **Spotlight A** — editorial spotlight | Apple Marketing Tools |
+| End of feed | **Spotlight B** — editorial spotlight | Apple Marketing Tools |
+
+Hero carousels use `TabView(.page)` with the default page dots hidden. Section spacing in `feedSections` is position-based (rail count thresholds), not genre-ID based.
+
+## Discover Page — Episode Hero Carousel
+
+**Top Episodes Today** — `TabView(.page)` of up to 8 `heroEpisodeCard` cards (284 pt height). Data from `DiscoverViewModel.topEpisodes: [ChartEpisode]`.
+
+**`heroEpisodeCard` layout:**
+- **Ghost rank numeral** — oversized semi-transparent rank number (Instrument Serif, `size 140, weight .bold`, `white.opacity(0.06)`) stretched behind the card
+- **Artwork** — 148×148 pt, `cornerRadius 16`
+- **HStack(alignment: .bottom)**: artwork column (with deep purple→indigo gradient overlay on left half) + text column
+- **Text column** (bottom-aligned): rank badge (`glassCapsule(highlighted: true)`) · title (`size 15, weight .bold`, `lineLimit(3)`) · show name (`.caption .secondary`) · relative release time (`relativeReleasedLabel`, `.caption2 .tertiary`)
+- **Background** — `white.opacity(0.05)` rounded-rect card, `cornerRadius 20`
+
+**`ChartEpisode` model** (`Feeds/PodcastCharts.swift`):
+
+```swift
+struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    let rank: Int
+    let title: String
+    let showName: String
+    let artworkURL: URL?
+    var releaseDateString: String?   // var — enriched post-fetch
+    let collectionId: String?
+    var releaseDate: Date? { /* ISO8601 parse of releaseDateString */ }
+}
+```
+
+**API:** `https://rss.marketingtools.apple.com/api/v2/{country}/podcasts/top/{limit}/podcast-episodes.json`
+- Limit: 8 episodes
+- Cache TTL: 2 hours (separate from 12-hour podcast cache)
+- Release dates not in chart response — enriched via per-podcast iTunes Lookup (`lookup?id={collectionId}&entity=podcastEpisode&limit=10`) run concurrently with `withTaskGroup`
+- `collectionId` parsed from Apple Podcasts URL path using `/id(\d+)` regex
+
+## Discover Page — Glass Elements
+
+| Element | Modifier |
+|---|---|
+| Search shortcut chips | `.glassCapsule()` (neutral) |
+| Category chips | `.glassCapsule(highlighted: true)` (purple-tinted) |
+| Episode hero rank badge | `.glassCapsule(highlighted: true)` (purple-tinted) |
+| Rail tile rank badge | `.glassCapsule()` (neutral) |
+| Podcast hero cards | `TabView(.page)` carousel, same card style as before |

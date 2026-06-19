@@ -325,11 +325,22 @@ struct SettingsView: View {
     @ViewBuilder
     private var subscriptionsSection: some View {
         Section("Subscriptions") {
-            NavigationLink {
-                PodcastsView()
+            // Subscriptions is the home page beneath the Menu sheet — close the
+            // sheet to reveal it as a full page rather than pushing a duplicate
+            // PodcastsView inside the sheet (NavRules: one path per page).
+            Button {
+                NotificationCenter.default.post(name: .autohopOpenSubscriptions, object: nil)
             } label: {
-                rowLabel("Manage podcasts", systemImage: "square.stack")
+                HStack {
+                    rowLabel("Manage podcasts", systemImage: "square.stack")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             NavigationLink {
                 AddFeedView()
             } label: {
@@ -700,33 +711,122 @@ struct ListeningHistoryView: View {
     }
 
     var body: some View {
-        List {
-            Section {
-                HStack(spacing: 16) {
-                    HistoryStatView(
-                        title: "Listening Time",
-                        value: formattedDuration(appState.listeningHistoryStore.totalListeningSeconds)
-                    )
-                    HistoryStatView(
-                        title: "Episodes",
-                        value: "\(appState.completedEpisodeCount)"
-                    )
-                }
-                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+        VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                HistoryStatView(
+                    title: "Listening Time",
+                    value: formattedDuration(appState.listeningHistoryStore.totalListeningSeconds)
+                )
+                HistoryStatView(
+                    title: "Episodes",
+                    value: "\(appState.completedEpisodeCount)"
+                )
             }
 
-            ForEach(groupedEntries, id: \.0) { title, entries in
-                Section(title) {
-                    ForEach(entries) { entry in
-                        ListeningHistoryRow(entry: entry)
-                    }
-                }
+            if groupedEntries.isEmpty {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No Listening History" : "No Results",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text(searchText.isEmpty
+                        ? "Episodes you play will appear here."
+                        : "Try a different search.")
+                )
+                .frame(maxHeight: .infinity)
+            } else {
+                historyList
             }
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.black.ignoresSafeArea())
         .navigationTitle("Listening History")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .preferredColorScheme(.dark)
+        .tint(.purple)
         .miniPlayerBar()
+    }
+
+    /// The grouped history list on a single glass card (mirrors PodcastDetailView's
+    /// episode list). Rows are clear so the one glass surface shows behind them.
+    private var historyList: some View {
+        List {
+            ForEach(groupedEntries, id: \.0) { title, entries in
+                Section {
+                    ForEach(entries) { entry in
+                        let episode = appState.subscriptionStore.episode(
+                            subscriptionID: entry.subscriptionID, episodeID: entry.episodeID
+                        )
+                        let isCurrent = appState.currentPlayerEpisode?.id == entry.episodeID
+
+                        ListeningHistoryRow(entry: entry)
+                            .listRowBackground(isCurrent ? Color.purple.opacity(0.08) : Color.clear)
+                            .listRowSeparator(.hidden)
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if let episode, !isCurrent {
+                                    Button {
+                                        Task {
+                                            if episode.downloadState != .downloaded {
+                                                await appState.downloadEpisodeForQueue(episode)
+                                            }
+                                            if let updated = appState.subscriptionStore.episode(
+                                                subscriptionID: episode.subscriptionID, episodeID: episode.id
+                                            ) {
+                                                await appState.playEpisode(updated)
+                                            }
+                                        }
+                                    } label: { Label("Play", systemImage: "play.fill") }
+                                    .tint(.green)
+
+                                    Button {
+                                        Task {
+                                            if episode.downloadState != .downloaded {
+                                                await appState.downloadEpisodeForQueue(episode)
+                                            }
+                                            appState.playEpisodeNext(episode)
+                                        }
+                                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                                    .tint(.blue)
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if let episode, !isCurrent {
+                                    if episode.playedState == .archived || episode.playedState == .played {
+                                        Button {
+                                            appState.unarchiveEpisode(episode)
+                                        } label: { Label("Unarchive", systemImage: "arrow.uturn.backward.circle") }
+                                        .tint(.purple)
+                                    } else {
+                                        Button {
+                                            Task { await appState.archiveEpisode(episode) }
+                                        } label: { Label("Archive", systemImage: "archivebox") }
+                                        .tint(.purple)
+                                    }
+
+                                    Button {
+                                        Task {
+                                            if episode.downloadState != .downloaded {
+                                                await appState.downloadEpisodeForQueue(episode)
+                                            }
+                                            appState.playEpisodeLast(episode)
+                                        }
+                                    } label: { Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") }
+                                    .tint(.orange)
+                                }
+                            }
+                    }
+                } header: {
+                    Text(title)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .glassCard(cornerRadius: 16)
     }
 }
 
@@ -741,10 +841,11 @@ private struct HistoryStatView: View {
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.title3.weight(.bold))
+                .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard(cornerRadius: 12)
     }
 }
 
@@ -754,14 +855,18 @@ private struct ListeningHistoryRow: View {
     var body: some View {
         HStack(spacing: 12) {
             CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 54, height: 54)) {
-                Image(systemName: "waveform")
-                    .font(.title2)
-                    .foregroundStyle(.purple)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.tertiarySystemGroupedBackground))
+                ZStack {
+                    LinearGradient(
+                        colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    Image(systemName: "waveform")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
             }
             .frame(width: 54, height: 54)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.podcastTitle.uppercased())

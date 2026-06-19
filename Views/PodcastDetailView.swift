@@ -244,6 +244,7 @@ struct PodcastDetailView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 20)
+            .padding(.top, 10)
 
             episodeListCard
                 .padding(.horizontal, 20)
@@ -255,20 +256,12 @@ struct PodcastDetailView: View {
     /// toolbar capsule.
     @ViewBuilder
     private var episodeListCard: some View {
-        let list = List {
+        List {
             episodeContent
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-
-        Group {
-            if #available(iOS 26, *) {
-                list.glassEffect(in: RoundedRectangle(cornerRadius: 16))
-            } else {
-                list.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .glassCard(cornerRadius: 16)
     }
 
     // MARK: - Header
@@ -814,56 +807,7 @@ struct PodcastDetailView: View {
     }
 }
 
-// MARK: - Status pill (file-private copy — matches SubscriptionSettingsView / PodcastsView)
-
-private enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
-
-    var label: String {
-        switch self {
-        case .unplayed:        return "Unplayed"
-        case .queued:          return "Queued"
-        case .partiallyPlayed: return "Paused"
-        case .nowPlaying:      return "Playing"
-        case .played:          return "Played"
-        case .archived:        return "Archived"
-        case .inactive:        return "Inactive"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .unplayed:        return Color.gray
-        case .queued:          return Color.teal
-        case .partiallyPlayed: return Color.yellow
-        case .nowPlaying:      return Color.green
-        case .played:          return Color.blue
-        case .archived:        return Color.purple
-        case .inactive:        return Color.orange
-        }
-    }
-}
-
-private struct EpisodeStatusPill: View {
-    let kind: EpisodeStatusKind
-
-    var body: some View {
-        let label = Text(kind.label)
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-
-        if #available(iOS 26, *) {
-            label
-                .background(kind.color.opacity(0.45), in: Capsule())
-                .glassEffect(in: Capsule())
-        } else {
-            label
-                .background(kind.color.opacity(0.82), in: Capsule())
-        }
-    }
-}
+// `EpisodeStatusKind` and `EpisodeStatusPill` are shared in Views/EpisodeBadges.swift.
 
 // MARK: - HTML stripping (file-private copy — matches SubscriptionSettingsView)
 

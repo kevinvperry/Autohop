@@ -33,9 +33,11 @@ struct DiscoverView: View {
     @State private var showSearch = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
-    @State private var heroIndex = 0
+    @State private var episodeHeroIndex = 0   // top hero — Top Episodes
+    @State private var podcastHeroIndex = 0   // mid-feed hero — Top Podcasts
     @State private var spotlightAIndex = 0
     @State private var spotlightBIndex = 0
+    @State private var resolvingEpisodeID: String?
 
     /// Auto-advance cadence for the hero cards.
     private let heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -49,39 +51,46 @@ struct DiscoverView: View {
     /// spotlight heroes. Spotlight A sits before Health & Fitness; B at the end.
     private enum FeedSection: Identifiable {
         case rail(DiscoverViewModel.GenreRail)
-        case spotlightA(DiscoverViewModel.CountrySpotlight)
-        case spotlightB(DiscoverViewModel.CountrySpotlight)
+        case podcastHero                              // Top Podcasts — appears after rail 3
+        case spotlightA(DiscoverViewModel.CountrySpotlight)   // after rail 6
+        case spotlightB(DiscoverViewModel.CountrySpotlight)   // end of feed
 
         var id: String {
             switch self {
-            case .rail(let r): return "rail-\(r.id)"
+            case .rail(let r):      return "rail-\(r.id)"
+            case .podcastHero:      return "podcastHero"
             case .spotlightA(let s): return "spotlightA-\(s.country.code)"
             case .spotlightB(let s): return "spotlightB-\(s.country.code)"
             }
         }
     }
 
-    /// Builds the rail list with the spotlight heroes inserted. Spotlight A goes
-    /// immediately before the Health & Fitness rail (so it lands between Sports
-    /// and Health & Fitness); if that rail is absent it falls in after Sports,
-    /// otherwise at the end of the rails. Spotlight B always closes the feed.
+    /// Builds the rail feed with three heroes woven in at fixed positions:
+    /// podcast hero after rail 3, spotlight A after rail 6, spotlight B at end.
     private var feedSections: [FeedSection] {
         var result: [FeedSection] = []
+        var railCount = 0
+        var addedSpotlightA = false
+
         for rail in viewModel.rails {
-            if rail.genre.id == 1512, let a = viewModel.spotlightA {   // Health & Fitness
-                result.append(.spotlightA(a))
-            }
             result.append(.rail(rail))
-        }
-        let hasSpotlightA = result.contains { if case .spotlightA = $0 { return true }; return false }
-        if let a = viewModel.spotlightA, !hasSpotlightA {
-            if let sportsIdx = result.firstIndex(where: {
-                if case .rail(let r) = $0 { return r.genre.id == 1545 }; return false   // Sports
-            }) {
-                result.insert(.spotlightA(a), at: sportsIdx + 1)
-            } else {
-                result.append(.spotlightA(a))
+            railCount += 1
+
+            if railCount == 3, !viewModel.heroPodcasts.isEmpty {
+                result.append(.podcastHero)
             }
+            if railCount == 6, let a = viewModel.spotlightA {
+                result.append(.spotlightA(a))
+                addedSpotlightA = true
+            }
+        }
+
+        // Fallbacks when fewer rails loaded than the insertion thresholds.
+        if railCount < 3, !viewModel.heroPodcasts.isEmpty {
+            result.append(.podcastHero)
+        }
+        if !addedSpotlightA, let a = viewModel.spotlightA {
+            result.append(.spotlightA(a))
         }
         if let b = viewModel.spotlightB {
             result.append(.spotlightB(b))
@@ -151,14 +160,14 @@ struct DiscoverView: View {
     private var chartsContent: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 34) {
+                VStack(alignment: .leading, spacing: 48) {
                     VStack(alignment: .leading, spacing: 16) {
                         searchShortcut
                             .padding(.horizontal, 20)
                             .padding(.top, 4)
 
-                        if !viewModel.heroPodcasts.isEmpty {
-                            heroSection
+                        if !viewModel.topEpisodes.isEmpty {
+                            episodeHeroSection
                         }
 
                         if !viewModel.rails.isEmpty {
@@ -171,6 +180,11 @@ struct DiscoverView: View {
                         case .rail(let rail):
                             genreRail(rail)
                                 .id("rail-\(rail.id)")
+                        case .podcastHero:
+                            heroCarousel(title: "Top Podcasts · \(country.name)",
+                                         podcasts: viewModel.heroPodcasts,
+                                         index: $podcastHeroIndex,
+                                         resolveCountry: country.code)
                         case .spotlightA(let spotlight):
                             spotlightHero(spotlight, index: $spotlightAIndex)
                         case .spotlightB(let spotlight):
@@ -239,19 +253,134 @@ struct DiscoverView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(Color.white.opacity(0.08), in: Capsule())
+            .glassCapsule()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Search podcasts")
     }
 
-    // MARK: - Hero (Top 8 paging cards)
+    // MARK: - Episode hero (top slot — Top 8 Episodes)
 
-    private var heroSection: some View {
-        heroCarousel(title: "Top Podcasts · \(country.name)",
-                     podcasts: viewModel.heroPodcasts,
-                     index: $heroIndex,
-                     resolveCountry: country.code)
+    private var episodeHeroSection: some View {
+        episodeHeroCarousel(title: "Top Episodes · \(country.name)",
+                            episodes: viewModel.topEpisodes,
+                            index: $episodeHeroIndex)
+    }
+
+    private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.title3.weight(.bold))
+                .padding(.horizontal, 20)
+
+            TabView(selection: index) {
+                ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, episode in
+                    heroEpisodeCard(episode)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 36)
+                        .tag(idx)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .indexViewStyle(.page(backgroundDisplayMode: .never))
+            .frame(height: 320)
+            .onReceive(heroTimer) { _ in
+                let count = episodes.count
+                guard count > 1, resolvingEpisodeID == nil else { return }
+                withAnimation(.easeInOut(duration: 0.45)) {
+                    index.wrappedValue = (index.wrappedValue + 1) % count
+                }
+            }
+        }
+    }
+
+    private func heroEpisodeCard(_ episode: ChartEpisode) -> some View {
+        Button {
+            openEpisode(episode)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                LinearGradient(
+                    colors: [Color(red: 0.20, green: 0.08, blue: 0.42).opacity(0.95),
+                             Color.black.opacity(0.85)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+
+                // Ghosted rank numeral — matches the podcast hero treatment.
+                Text("\(episode.rank)")
+                    .font(.system(size: 230, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.07))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .offset(x: 18, y: -34)
+                    .allowsHitTesting(false)
+
+                HStack(alignment: .bottom, spacing: 14) {
+                    chartArtwork(episode.artworkURL, size: 148, cornerRadius: 18,
+                                 placeholderIconSize: 36)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("#\(episode.rank)")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .glassCapsule(highlighted: true)
+
+                        Text(episode.title)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(3)
+
+                        Text(episode.showName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        if let date = episode.releaseDate {
+                            Text(relativeReleasedLabel(date))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(18)
+
+                if resolvingEpisodeID == episode.id {
+                    resolvingOverlay
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 284)
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .disabled(resolvingEpisodeID != nil)
+    }
+
+    private func openEpisode(_ episode: ChartEpisode) {
+        guard resolvingEpisodeID == nil else { return }
+        guard episode.collectionId != nil else {
+            showUnavailableAlert = true
+            return
+        }
+        resolvingEpisodeID = episode.id
+        Task {
+            defer { resolvingEpisodeID = nil }
+            guard let result = await viewModel.resolveEpisodePodcast(episode, country: country.code) else {
+                showUnavailableAlert = true
+                return
+            }
+            if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+                $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+            }) {
+                pendingRoute = .episodes(activeSub.id)
+            } else {
+                pendingRoute = .preview(result)
+            }
+        }
     }
 
     /// A secondary country spotlight hero (Top 8 for a fixed storefront),
@@ -327,15 +456,7 @@ struct DiscoverView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
-                        .background(
-                            Capsule().fill(
-                                LinearGradient(
-                                    colors: [Color.purple.opacity(0.22), Color.white.opacity(0.06)],
-                                    startPoint: .topLeading, endPoint: .bottomTrailing
-                                )
-                            )
-                        )
-                        .overlay(Capsule().stroke(Color.purple.opacity(0.35), lineWidth: 1))
+                        .glassCapsule(highlighted: true)
                     }
                     .buttonStyle(.plain)
                 }
@@ -371,7 +492,7 @@ struct DiscoverView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.purple.opacity(0.82), in: Capsule())
+                            .glassCapsule(highlighted: true)
 
                         Text(podcast.title)
                             .font(.headline.weight(.bold))
@@ -441,7 +562,7 @@ struct DiscoverView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.55), in: Capsule())
+                        .glassCapsule()
                         .padding(6)
 
                     if resolvingPodcastID == podcast.id {

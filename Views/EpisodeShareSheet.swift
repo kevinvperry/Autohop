@@ -118,9 +118,9 @@ struct EpisodeShareSheet: View {
 
             Spacer(minLength: 20)
         }
-        .background(Color(red: 0.10, green: 0.10, blue: 0.13).ignoresSafeArea())
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
-        .presentationDetents([.large])
+        .presentationDetents([.height(580)])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(20)
         .task { await loadArtwork() }

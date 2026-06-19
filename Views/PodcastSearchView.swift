@@ -79,6 +79,7 @@ struct PodcastSearchView: View {
                 }
             }
         }
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
     }
 
@@ -131,7 +132,7 @@ struct PodcastSearchView: View {
                                 }
                             }
                         }
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+                        .glassCard(cornerRadius: 16)
                         .padding(.horizontal, 12)
                     }
                 }
@@ -178,7 +179,7 @@ struct PodcastSearchView: View {
                 NavigationLink(value: result) {
                     resultRow(result)
                 }
-                .listRowBackground(Color.white.opacity(0.08))
+                .listRowBackground(Color.white.opacity(0.07))
             }
 
             Section {
@@ -187,7 +188,7 @@ struct PodcastSearchView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .listRowBackground(Color.white.opacity(0.05))
+                .listRowBackground(Color.white.opacity(0.04))
             }
         }
         .listStyle(.plain)

@@ -225,13 +225,18 @@ struct PlayerView: View {
             // Quiet icon circle — the player's only navigation exit, the
             // visual twin of the MiniPlayerBar that brings you back.
             NavigationLink(value: AppRoute.podcasts) {
-                Image(systemName: "list.bullet")
+                let icon = Image(systemName: "list.bullet")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
-                    .background(Color(white: 0.12))
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
+
+                if #available(iOS 26, *) {
+                    icon.glassEffect(in: Circle())
+                } else {
+                    icon.background(Color(white: 0.12))
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
+                }
             }
             .accessibilityLabel("Subscriptions")
 
@@ -251,7 +256,7 @@ struct PlayerView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.22)) { selectedPanel = panel.rawValue }
                     } label: {
-                        HStack(spacing: 5) {
+                        let tab = HStack(spacing: 5) {
                             Image(systemName: panel.icon)
                                 .font(.system(size: 13, weight: .semibold))
                             if isSelected {
@@ -263,8 +268,20 @@ struct PlayerView: View {
                         .foregroundStyle(isSelected ? .white : Color(white: 0.4))
                         .padding(.horizontal, isSelected ? 12 : 9)
                         .frame(height: 30)
-                        .background(isSelected ? Color(white: 0.15) : .clear)
-                        .clipShape(Capsule())
+
+                        // Selected tab sits on neutral glass; unselected stays bare
+                        // so the strip reads quiet.
+                        if #available(iOS 26, *) {
+                            if isSelected {
+                                tab.glassEffect(in: Capsule())
+                            } else {
+                                tab
+                            }
+                        } else {
+                            tab
+                                .background(isSelected ? Color(white: 0.15) : .clear)
+                                .clipShape(Capsule())
+                        }
                     }
                     .accessibilityLabel(panel.title)
                 }
@@ -300,9 +317,7 @@ struct PlayerView: View {
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 32)
-                .background(Color.purple.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                .playerGlassPill()
             }
             .accessibilityLabel("Queue, \(appState.downloadedQueue.count) episodes")
         }
@@ -358,9 +373,7 @@ struct PlayerView: View {
                     .foregroundStyle(Color.purple.opacity(0.85))
                     .padding(.horizontal, 12)
                     .frame(height: 32)
-                    .background(Color.purple.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                    .playerGlassPill()
                 }
                 .padding(.leading, 8)
                 .accessibilityLabel(minutes.map { "Sleep Schedule active, \($0) minutes until prompt" } ?? "Sleep Schedule active")
@@ -565,9 +578,7 @@ struct PlayerView: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        .glassCard(cornerRadius: 12)
     }
 
     // MARK: - Episode copy
@@ -665,13 +676,21 @@ struct PlayerView: View {
             Button {
                 Task { await appState.togglePlayPause() }
             } label: {
-                Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
+                let playIcon = Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(.white)
                     .frame(width: 76, height: 76)
-                    .background(Color.purple)
-                    .clipShape(Circle())
-                    .shadow(color: Color.purple.opacity(0.35), radius: 14)
+
+                if #available(iOS 26, *) {
+                    playIcon
+                        .glassEffect(.regular.tint(.purple), in: Circle())
+                        .shadow(color: Color.purple.opacity(0.35), radius: 14)
+                } else {
+                    playIcon
+                        .background(Color.purple)
+                        .clipShape(Circle())
+                        .shadow(color: Color.purple.opacity(0.35), radius: 14)
+                }
             }
             .disabled(appState.currentPlayerEpisode == nil && appState.nextPlayableEpisode == nil)
             .accessibilityLabel(appState.isPlaying ? "Pause" : "Play")
@@ -757,9 +776,7 @@ struct PlayerView: View {
             .font(.system(size: 18, weight: .bold))
             .foregroundStyle(highlighted ? Color.white : Color.purple.opacity(0.85))
             .frame(width: 44, height: 32)
-            .background(Color.purple.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+            .playerGlassPill(highlighted: highlighted)
     }
 
     @ViewBuilder
@@ -770,9 +787,7 @@ struct PlayerView: View {
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(timer.isActive ? Color.white : Color.purple.opacity(0.85))
                 .frame(width: 44, height: 32)
-                .background(Color.purple.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
+                .playerGlassPill(highlighted: timer.isActive)
 
             // Badge: countdown or episode count
             if timer.isDurationMode, let badge = sleepTimerBadge {
@@ -922,30 +937,27 @@ struct PlayerView: View {
                             fontSize: 14,
                             color: Color(white: 0.78),
                             linkColor: .purple,
-                            showsFirstImage: false
+                            showsFirstImage: false,
+                            sentenceBreaks: true
                         )
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .glassCard(cornerRadius: 16)
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                         .padding(.horizontal, 20)
                         .padding(.bottom, 16)
                     }
 
                     let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        if let date = ep.publishedAt {
-                            metaCard("Published", date.formatted(date: .abbreviated, time: .omitted))
-                        }
-                        if let dur = ep.durationSeconds {
-                            metaCard("Duration", formatDurationLong(dur))
-                        }
-                        if let bytes = ep.fileSizeBytes {
-                            metaCard("File size", formatFileSize(bytes))
-                        }
-                        metaCard("Classification", explicitRatingText(for: ep))
-                        metaCard("File Status", fileStatusText(for: ep))
-                        if let rank = sub?.priorityRank {
-                            metaCard("Priority rank", ordinalString(rank))
-                        }
-                        if !ep.chapters.isEmpty {
-                            metaCard("Chapters", "\(ep.chapters.count)")
+                    // Glass cards inside a GlassEffectContainer so the tiles read
+                    // as one cohesive glass surface (matches the Episode Detail grid).
+                    Group {
+                        if #available(iOS 26, *) {
+                            GlassEffectContainer(spacing: 8) {
+                                detailsMetaGrid(ep: ep, sub: sub)
+                            }
+                        } else {
+                            detailsMetaGrid(ep: ep, sub: sub)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -958,8 +970,33 @@ struct PlayerView: View {
         }
     }
 
+    @ViewBuilder
+    private func detailsMetaGrid(ep: Episode, sub: Subscription?) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            if let date = ep.publishedAt {
+                metaCard("Published", relativePublishedLabel(date))
+                metaCard("Released", relativeReleasedLabel(date))
+            }
+            if let dur = ep.durationSeconds {
+                metaCard("Duration", formatDurationLong(dur))
+            }
+            if let bytes = ep.fileSizeBytes {
+                metaCard("File size", formatFileSize(bytes))
+            }
+            metaCard("Classification", explicitRatingText(for: ep))
+            metaCard("File Status", fileStatusText(for: ep))
+            if let rank = sub?.priorityRank {
+                metaCard("Priority rank", ordinalString(rank))
+            }
+            if !ep.chapters.isEmpty {
+                metaCard("Chapters", "\(ep.chapters.count)")
+            }
+        }
+    }
+
+    @ViewBuilder
     private func metaCard(_ key: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let content = VStack(alignment: .leading, spacing: 3) {
             Text(key)
                 .font(.system(size: 10, weight: .bold))
                 .textCase(.uppercase)
@@ -973,9 +1010,15 @@ struct PlayerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+
+        if #available(iOS 26, *) {
+            content.glassEffect(in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            content
+                .background(Color(white: 0.09))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        }
     }
 
     private func detailsArtworkURL(for episode: Episode) -> URL? {
@@ -1037,7 +1080,6 @@ struct PlayerView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            Divider().background(Color.white.opacity(0.075))
 
             if chapters.isEmpty {
                 ContentUnavailableView("No Chapters", systemImage: "list.bullet")
@@ -1049,6 +1091,9 @@ struct PlayerView: View {
                             chapterRow(chapter: chapter, subscription: sub)
                         }
                     }
+                    .glassCard(cornerRadius: 16)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 16)
                 }
             }
         }
@@ -1112,7 +1157,7 @@ struct PlayerView: View {
                         .monospacedDigit()
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(isCurrentlyPlaying ? Color.purple.opacity(0.08) : .clear)
             .contentShape(Rectangle())
@@ -1208,19 +1253,24 @@ struct HTMLDescriptionText: View {
     let color: Color
     let linkColor: Color
     let showsFirstImage: Bool
+    /// When true, the space after each sentence-ending full stop becomes a blank
+    /// line, so each sentence reads on its own. Used by the Player Details panel.
+    let sentenceBreaks: Bool
 
     init(
         html: String,
         fontSize: CGFloat,
         color: Color,
         linkColor: Color = .purple,
-        showsFirstImage: Bool = true
+        showsFirstImage: Bool = true,
+        sentenceBreaks: Bool = false
     ) {
         self.html = html
         self.fontSize = fontSize
         self.color = color
         self.linkColor = linkColor
         self.showsFirstImage = showsFirstImage
+        self.sentenceBreaks = sentenceBreaks
     }
 
     var body: some View {
@@ -1245,7 +1295,7 @@ struct HTMLDescriptionText: View {
                 .clipShape(RoundedRectangle(cornerRadius: 2))
             }
 
-            if let attributedText = Self.attributedText(from: html) {
+            if let attributedText = Self.attributedText(from: html, sentenceBreaks: sentenceBreaks) {
                 Text(attributedText)
                     .font(.system(size: fontSize))
                     .lineSpacing(5)
@@ -1282,6 +1332,23 @@ struct HTMLDescriptionText: View {
                 with: "<p>",
                 options: .regularExpression
             )
+            // Convert list items to paragraphs so each item gets proper inter-paragraph
+            // spacing. NSAttributedString's HTML renderer packs <li> items tightly.
+            .replacingOccurrences(
+                of: #"(?is)<li\b[^>]*>"#,
+                with: "<p>• ",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?is)</li\s*>"#,
+                with: "</p>",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?is)</?[uo]l\b[^>]*>"#,
+                with: "",
+                options: .regularExpression
+            )
     }
 
     private static func imageURLs(from html: String) -> [URL] {
@@ -1300,7 +1367,7 @@ struct HTMLDescriptionText: View {
         return urls
     }
 
-    private static func attributedText(from html: String, fontSize: CGFloat = 15) -> AttributedString? {
+    private static func attributedText(from html: String, fontSize: CGFloat = 15, sentenceBreaks: Bool = false) -> AttributedString? {
         let html = htmlForTextDisplay(html)
         guard let data = html.data(using: .utf8),
               let nsAttributed = try? NSMutableAttributedString(
@@ -1348,6 +1415,19 @@ struct HTMLDescriptionText: View {
             guard value != nil else { return }
             nsAttributed.addAttribute(.foregroundColor, value: UIColor.systemPurple, range: range)
             nsAttributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+        }
+
+        // 4. Sentence breaks: replace the space(s) after a full stop with a blank
+        //    line so each sentence reads on its own. Editing the mutableString keeps
+        //    the font/link attributes intact. Decimals/URLs have no space after the
+        //    dot, so they're left untouched.
+        if sentenceBreaks,
+           let breaker = try? NSRegularExpression(pattern: #"(?<=\.)[ \t]+"#) {
+            breaker.replaceMatches(
+                in: nsAttributed.mutableString,
+                range: NSRange(location: 0, length: nsAttributed.length),
+                withTemplate: "\n\n"
+            )
         }
 
         let string = nsAttributed.string.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1571,9 +1651,7 @@ private struct UpNextRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        .glassCard(cornerRadius: cornerRadius)
         .overlay(alignment: .topTrailing) {
             if episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {
@@ -1708,7 +1786,7 @@ private struct ArchiveConfirmationSheet: View {
 
             Spacer(minLength: 16)
         }
-        .background(Color(red: 0.10, green: 0.10, blue: 0.13).ignoresSafeArea())
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
         .presentationDetents([.height(320)])
         .presentationDragIndicator(.hidden)
@@ -1765,7 +1843,7 @@ struct AudioControlsSheetView: View {
 
             Spacer(minLength: 24)
         }
-        .background(Color(red: 0.10, green: 0.10, blue: 0.13).ignoresSafeArea())
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
         .presentationDetents([.height(sheetHeight)])
         .presentationDragIndicator(.hidden)
@@ -1882,8 +1960,7 @@ struct AudioControlsSheetView: View {
                         .frame(width: 44, height: 38)
                 }
             }
-            .background(Color(white: 0.20))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .glassCard(cornerRadius: 10)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -2003,7 +2080,6 @@ struct AudioControlsSheetView: View {
 
     private var rowDivider: some View {
         Divider()
-            .background(Color(white: 0.20))
             .padding(.leading, 60)
     }
 }
@@ -2028,6 +2104,31 @@ private enum PlayerPanel: Int, CaseIterable, Identifiable {
         case .nowPlaying: return "waveform"
         case .details: return "info.circle"
         case .chapters: return "list.number"
+        }
+    }
+}
+
+// MARK: - Player glass pill
+
+private extension View {
+    /// Shared glass pill for the Player's top-bar + audio-row action buttons
+    /// (Sleep Schedule indicator, Queue, Sound Settings, Sleep Timer, Share,
+    /// Archive). Idle = neutral frosted glass with a purple icon; `highlighted`
+    /// (Sleep Timer running, Shared Listening on) = purple-tinted glass with a
+    /// white icon — mirrors the Priority page reorder toggle. iOS 17–25 falls
+    /// back to the original `purple.opacity(0.12)` fill + `purple.opacity(0.3)` stroke.
+    @ViewBuilder
+    func playerGlassPill(highlighted: Bool = false, cornerRadius: CGFloat = 9) -> some View {
+        if #available(iOS 26, *) {
+            if highlighted {
+                glassEffect(.regular.tint(.purple), in: RoundedRectangle(cornerRadius: cornerRadius))
+            } else {
+                glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius))
+            }
+        } else {
+            background(Color.purple.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.purple.opacity(0.3), lineWidth: 0.5))
         }
     }
 }

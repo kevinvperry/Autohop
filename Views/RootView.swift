@@ -23,6 +23,10 @@ extension Notification.Name {
     /// Posted by the Menu to push Discover as a full page on the main stack
     /// (rather than inside the Menu sheet).
     static let autohopOpenDiscover = Notification.Name("autohopOpenDiscover")
+    /// Posted by Settings → Manage podcasts. Subscriptions (PodcastsView) is the
+    /// app home page sitting beneath the Menu sheet, so this just dismisses the
+    /// Menu to reveal it as a full page — never a duplicate pushed inside the sheet.
+    static let autohopOpenSubscriptions = Notification.Name("autohopOpenSubscriptions")
 }
 
 /// Standard close control for informational sheets (NavRules-SheetClose).

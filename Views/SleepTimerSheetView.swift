@@ -31,7 +31,7 @@ struct SleepTimerSheetView: View {
 
             Spacer(minLength: 20)
         }
-        .background(Color(red: 0.10, green: 0.10, blue: 0.13).ignoresSafeArea())
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
         .presentationDetents([.height(sheetHeight)])
         .presentationDragIndicator(.hidden)

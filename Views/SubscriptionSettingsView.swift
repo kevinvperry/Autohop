@@ -491,55 +491,6 @@ struct SubscriptionSettingsView: View {
     }
 }
 
-private enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
-
-    var label: String {
-        switch self {
-        case .unplayed:        return "Unplayed"
-        case .queued:          return "Queued"
-        case .partiallyPlayed: return "Paused"
-        case .nowPlaying:      return "Playing"
-        case .played:          return "Played"
-        case .archived:        return "Archived"
-        case .inactive:        return "Inactive"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .unplayed:        return Color.gray
-        case .queued:          return Color.teal
-        case .partiallyPlayed: return Color.yellow
-        case .nowPlaying:      return Color.green
-        case .played:          return Color.blue
-        case .archived:        return Color.purple
-        case .inactive:        return Color.orange
-        }
-    }
-}
-
-private struct EpisodeStatusPill: View {
-    let kind: EpisodeStatusKind
-
-    var body: some View {
-        let label = Text(kind.label)
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-
-        if #available(iOS 26, *) {
-            label
-                .background(kind.color.opacity(0.45), in: Capsule())
-                .glassEffect(in: Capsule())
-        } else {
-            label
-                .background(kind.color.opacity(0.82), in: Capsule())
-        }
-    }
-}
-
 private struct EditTitleSheet: View {
     @Binding var title: String
     @Environment(\.dismiss) private var dismiss
@@ -713,15 +664,7 @@ struct EpisodeDetailView: View {
                         Text("Description")
                             .font(.title3.weight(.bold))
                             .foregroundStyle(.primary)
-                        HTMLDescriptionText(
-                            html: description,
-                            fontSize: 15,
-                            color: Color(white: 0.78),
-                            linkColor: .purple,
-                            showsFirstImage: false
-                        )
-                        .padding(14)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        descriptionCard(description)
                     }
                 }
 
@@ -824,6 +767,21 @@ struct EpisodeDetailView: View {
         .disabled(disabled)
     }
 
+    /// Episode description rendered in a card that matches `PodcastDetailView`'s
+    /// glass `episodeListCard` via the shared `glassCard(cornerRadius:)` modifier.
+    private func descriptionCard(_ description: String) -> some View {
+        HTMLDescriptionText(
+            html: description,
+            fontSize: 15,
+            color: Color(white: 0.78),
+            linkColor: .purple,
+            showsFirstImage: false
+        )
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 16)
+    }
+
     @ViewBuilder
     private func metaGrid(sub: Subscription, ep: Episode) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -831,25 +789,40 @@ struct EpisodeDetailView: View {
                 .font(.title3.weight(.bold))
                 .foregroundStyle(.primary)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                if let date = ep.publishedAt {
-                    metaCard("Published", date.formatted(date: .abbreviated, time: .omitted))
+            // Wrap the small glass cards in a GlassEffectContainer so they read
+            // as one cohesive glass surface (iOS 26+); plain grid on the fallback.
+            if #available(iOS 26, *) {
+                GlassEffectContainer(spacing: 8) {
+                    metaGridContent(sub: sub, ep: ep)
                 }
-                if let duration = ep.durationSeconds {
-                    metaCard("Duration", formatDuration(duration))
-                }
-                if let size = ep.fileSizeBytes {
-                    metaCard("File Size", formatFileSize(size))
-                }
-                metaCard("Classification", ep.isExplicit == true ? "Explicit" : "Clean")
-                metaCard("File Status", fileStatusText(for: ep))
-                metaCard("Priority Rank", ordinalString(sub.priorityRank))
+            } else {
+                metaGridContent(sub: sub, ep: ep)
             }
         }
     }
 
+    @ViewBuilder
+    private func metaGridContent(sub: Subscription, ep: Episode) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            if let date = ep.publishedAt {
+                metaCard("Published", relativePublishedLabel(date))
+                metaCard("Released", relativeReleasedLabel(date))
+            }
+            if let duration = ep.durationSeconds {
+                metaCard("Duration", formatDuration(duration))
+            }
+            if let size = ep.fileSizeBytes {
+                metaCard("File Size", formatFileSize(size))
+            }
+            metaCard("Classification", ep.isExplicit == true ? "Explicit" : "Clean")
+            metaCard("File Status", fileStatusText(for: ep))
+            metaCard("Priority Rank", ordinalString(sub.priorityRank))
+        }
+    }
+
+    @ViewBuilder
     private func metaCard(_ key: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let content = VStack(alignment: .leading, spacing: 3) {
             Text(key)
                 .font(.system(size: 10, weight: .bold))
                 .textCase(.uppercase)
@@ -863,9 +836,15 @@ struct EpisodeDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+
+        if #available(iOS 26, *) {
+            content.glassEffect(in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            content
+                .background(Color(white: 0.09))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        }
     }
 
     private var placeholderArtwork: some View {

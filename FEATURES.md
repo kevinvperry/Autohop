@@ -719,7 +719,7 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 
 | Setting | Type | Description |
 |---|---|---|
-| Manage podcasts | Navigation link | Opens the Priority Stack (PodcastsView) to reorder, add, or remove subscriptions. |
+| Manage podcasts | Button | Closes the Menu sheet to reveal the Priority Stack (PodcastsView) — the home page that always sits beneath the Menu — as a full page, never inside the sheet. Used to reorder, add, or remove subscriptions. |
 | Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
 | Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
 | Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |

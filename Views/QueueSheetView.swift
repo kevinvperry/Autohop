@@ -177,6 +177,7 @@ struct QueueSheetView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
             .navigationTitle("Queue")
@@ -191,6 +192,7 @@ struct QueueSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .presentationBackground(.regularMaterial)
         .onAppear {
             let t = Date()
             appearTime = t

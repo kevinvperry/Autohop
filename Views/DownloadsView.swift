@@ -63,7 +63,7 @@ struct DownloadsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(recentlyArchivedEntries) { entry in
@@ -77,7 +77,7 @@ struct DownloadsView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }
@@ -101,7 +101,7 @@ struct DownloadsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(activities) { activity in
@@ -115,7 +115,7 @@ struct DownloadsView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }

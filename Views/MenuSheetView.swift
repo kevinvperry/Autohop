@@ -28,43 +28,51 @@ struct MenuSheetView: View {
                     Label("Discover", systemImage: "safari")
                         .foregroundStyle(.primary)
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     DownloadsView()
                 } label: {
                     Label("Downloads", systemImage: "arrow.down.circle")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     ListeningHistoryView()
                 } label: {
                     Label("Listening History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     StatsView()
                 } label: {
                     Label("Stats", systemImage: "chart.bar")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     SleepScheduleView()
                 } label: {
                     Label("Sleep Schedule", systemImage: "moon.zzz")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     SettingsView()
                 } label: {
                     Label("Settings", systemImage: "gear")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
                     SupportView()
                 } label: {
                     Label("Support", systemImage: "questionmark.circle")
                 }
+                .listRowBackground(Color.white.opacity(0.07))
             }
+            .scrollContentBackground(.hidden)
             .tint(.primary)
             .navigationTitle("Menu")
             .navigationBarTitleDisplayMode(.inline)
@@ -74,6 +82,7 @@ struct MenuSheetView: View {
                 }
             }
         }
+        .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
         .onAppear {
             let t = Date()
@@ -90,6 +99,11 @@ struct MenuSheetView: View {
             ])
         }
         .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
+            dismiss()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenSubscriptions)) { _ in
+            // Settings → Manage podcasts: close the Menu (Settings is pushed
+            // inside it) to reveal the Subscriptions page beneath.
             dismiss()
         }
     }
