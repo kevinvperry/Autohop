@@ -30,6 +30,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Current Feature Set
 
+- First-run onboarding: a Welcome carousel, chart-derived one-tap Starter Packs, guiding empty states, a "You're all set" first-subscribe moment that auto-downloads and cues your first episode, contextual coach marks, and a getting-started checklist — designed to teach the Priority Stack model without forcing playback or asking for permissions up front
+- "Open at launch" setting — choose whether the app opens to the Player, your Subscriptions, or Discover each time
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
 - Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker, plus two fixed "Top Podcasts · Country" spotlight heroes (US/UK/AU) woven into the feed
@@ -69,7 +71,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
 | [`ASSESSMENT.md`](ASSESSMENT.md) | Machine-oriented code/feature/security assessment: performance, bugs, stale code, and security findings with `file:line` anchors and severities. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
-| [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the two covered files. |
+| [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the four covered files and acknowledging Pocket Casts as a broader source of design ideas and inspiration. |
 
 Source files carry structured `AI CONTEXT` header comments (purpose,
 responsibilities, collaborators, invariants) written for machine consumption —
@@ -89,4 +91,4 @@ The app remains focused on podcast queue automation, downloaded media playback, 
 
 ## License
 
-Autohop is open source under the [MIT License](LICENSE), with two exceptions: [`Playback/SilenceDetector.swift`](Playback/SilenceDetector.swift) and [`Playback/PlaybackEngine.swift`](Playback/PlaybackEngine.swift) contain code derived from [Pocket Casts for iOS](https://github.com/Automattic/pocket-casts-ios) (© Automattic, Inc.) and are licensed under the [Mozilla Public License 2.0](LICENSE-MPL-2.0.md). See [NOTICE](NOTICE) for full derivation details.
+Autohop is open source under the [MIT License](LICENSE), with four exceptions licensed under the [Mozilla Public License 2.0](LICENSE-MPL-2.0.md) because they contain code derived from [Pocket Casts for iOS](https://github.com/Automattic/pocket-casts-ios) (© Automattic, Inc.): [`Playback/SilenceDetector.swift`](Playback/SilenceDetector.swift) and [`Models/SilenceGapAccounting.swift`](Models/SilenceGapAccounting.swift) (silence-trim algorithm/constants), [`Playback/PlaybackEngine.swift`](Playback/PlaybackEngine.swift) (Vocal Boost signal chain), and [`Models/Synced.swift`](Models/Synced.swift) (the `Synced`/`ModifiedDate` property wrapper). Autohop also acknowledges Pocket Casts as a broader source of design ideas and inspiration (per-podcast audio effects, the audio-controls sheet, up-next queue, auto-archive, on-device stats, and field-level sync discipline). See [NOTICE](NOTICE) and [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) for full derivation and acknowledgement details.

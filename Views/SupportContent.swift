@@ -476,6 +476,10 @@ enum SupportGuide {
         summary: "Release Radar, downloading, controls, and more",
         blocks: [
             .paragraph("Access global settings via the hamburger menu (☰) on the Priority page → **Settings**."),
+            .heading("Startup"),
+            .table(headers: nil, rows: [
+                ["Open at launch", "Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. Default: Player. (New users see a quick welcome first.)"],
+            ]),
             .heading("Release Radar"),
             .paragraph("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Checks are tiny — the feed is only downloaded when it has actually changed — so new episodes appear within minutes of release without draining battery or data."),
             .table(headers: nil, rows: [

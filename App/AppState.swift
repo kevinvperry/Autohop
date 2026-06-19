@@ -53,6 +53,14 @@ import UIKit
 //    Listening history + stats recorded on playback ticks (recordProgress only
 //    accrues time; played/archived status transitions go through mark()).
 //  - OPML import/export with progress reporting.
+//  - First-run onboarding state + helpers (ONBOARDING_PLAN.md): realSubscriptionCount
+//    (filters browseDate==nil), isFirstRunNoSubscriptions, checkFirstSubscriptionMilestone
+//    (posts .autohopFirstSubscription on the first deliberate single subscribe; silent
+//    on bulk import/starter-pack), subscribeToFeedURLs (starter packs), the coach-mark
+//    TipCenter (activeTip / requestTip / dismissActiveTip — one-at-a-time, ≤3/session,
+//    UserDefaults seen-flags), and onboardingToast. Bootstrap reconciles existing users
+//    (real subs ⇒ mark onboarded). NOTE: tip animation is applied by CoachMarkOverlay's
+//    .animation(value:) — AppState has no `import SwiftUI`, so never call withAnimation here.
 //
 // KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
 // FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
@@ -104,6 +112,11 @@ final class AppState: ObservableObject {
 
     // Per-episode download progress (0.0 – 1.0)
     @Published var downloadProgress: [UUID: Double] = [:]
+    // Onboarding coach mark currently on screen (nil = none). See OnboardingTip.
+    @Published var activeTip: OnboardingTip?
+    // Transient onboarding confirmation toast (e.g. after an import). Auto-cleared
+    // by the RootView toast overlay.
+    @Published var onboardingToast: String?
     // Cached list of episodes currently on device — updated at state transitions only, not on progress ticks.
     @Published private(set) var downloadedActivities: [DownloadActivity] = []
     // Cached listening history groups — updated only when entries change, not on every playback tick.
@@ -222,6 +235,60 @@ final class AppState: ObservableObject {
 
     var nextPlayableEpisode: Episode? {
         downloadedQueue.first
+    }
+
+    // MARK: - Onboarding / first-run
+
+    /// Count of real (non-browse) subscriptions. Browse/preview subs created by
+    /// opening a Podcast Detail page (browseDate != nil) are invisible and must
+    /// not count as "the user has subscribed". See ONBOARDING_PLAN.md.
+    var realSubscriptionCount: Int {
+        subscriptionStore.subscriptions.filter { $0.browseDate == nil }.count
+    }
+
+    /// True for a brand-new user who hasn't passed Welcome and has no real
+    /// subscriptions — the signal RootView uses to route into the first-run flow.
+    var isFirstRunNoSubscriptions: Bool {
+        !settingsStore.appSettings.hasCompletedWelcome && realSubscriptionCount == 0
+    }
+
+    /// Fires the first-subscription milestone exactly once. A single deliberate
+    /// subscribe (count == 1) posts `.autohopFirstSubscription` for the "You're
+    /// all set" moment; a bulk OPML import (count > 1) flips the flag silently.
+    private func checkFirstSubscriptionMilestone() {
+        guard !settingsStore.appSettings.hasSubscribedFirstShow else { return }
+        let realSubs = subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+        guard !realSubs.isEmpty else { return }
+        settingsStore.appSettings.hasSubscribedFirstShow = true
+        if realSubs.count == 1 {
+            NotificationCenter.default.post(name: .autohopFirstSubscription, object: realSubs[0].id)
+        }
+    }
+
+    // MARK: - Onboarding tips (coach marks)
+
+    private var tipsShownThisSession = 0
+    private let maxTipsPerSession = 3
+
+    /// Surfaces a coach mark the first time a view asks for it. Enforces the
+    /// policy: one visible at a time, never re-shown once seen, and at most
+    /// `maxTipsPerSession` per launch (the rest surface in later sessions).
+    /// Safe to call from `onAppear` repeatedly — unmet conditions are no-ops.
+    func requestTip(_ tip: OnboardingTip) {
+        guard activeTip == nil else { return }
+        guard !tip.isSeen else { return }
+        guard tipsShownThisSession < maxTipsPerSession else { return }
+        // Animation is applied by CoachMarkOverlay (.animation(value:)); AppState
+        // stays free of SwiftUI so it doesn't need `withAnimation` here.
+        activeTip = tip
+    }
+
+    /// Dismisses the active tip via "Got it" — marks it seen so it never returns.
+    func dismissActiveTip() {
+        guard let tip = activeTip else { return }
+        tip.markSeen()
+        tipsShownThisSession += 1
+        activeTip = nil
     }
 
     var currentVideoPlayer: AVPlayer? {
@@ -360,6 +427,7 @@ final class AppState: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     self.scheduleUpNextRefresh(reason: "state.changed")
+                    self.checkFirstSubscriptionMilestone()
                     self.objectWillChange.send()
                     let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
                     NotificationService.shared.updateBadge(count: badgeCount)
@@ -763,6 +831,18 @@ final class AppState: ObservableObject {
             state.subscriptionStore.migrateExistingSubscriptionsToPlaybackSpeed(1.6)
             state.settingsStore.appSettings.playbackSpeed160Migrated = true
             state.logger.info("speed.migration", "Existing subscriptions set to 1.6x playback speed")
+        }
+        // Onboarding reconciliation (ONBOARDING_PLAN.md): an existing user who
+        // already has real (non-browse) subscriptions has effectively completed
+        // onboarding — never show them the first-run experience. Idempotent and
+        // only ever flips false→true, so a user who later unsubscribes from
+        // everything still won't see Welcome again. A brand-new install has zero
+        // subscriptions at bootstrap, so its flags correctly stay false.
+        if state.realSubscriptionCount > 0 && !state.settingsStore.appSettings.hasCompletedWelcome {
+            state.settingsStore.appSettings.hasCompletedWelcome = true
+            state.settingsStore.appSettings.hasSubscribedFirstShow = true
+            state.settingsStore.appSettings.hasPlayedFirstEpisode = true
+            state.logger.info("onboarding.reconcile", "Existing user with subscriptions marked onboarded")
         }
         state.syncDiagnosticLogging()
         state.logger.info("app.bootstrap", "App state bootstrapped")
@@ -1865,6 +1945,12 @@ final class AppState: ObservableObject {
             }
             currentPlayerEpisode = playableEpisode
             isPlaying = true
+            // First-run: the user has now actually played something. Clears the
+            // re-entry routing rule that opens new users on Subscriptions until
+            // they've listened (ONBOARDING_PLAN.md Phase 2/4b).
+            if !settingsStore.appSettings.hasPlayedFirstEpisode {
+                settingsStore.appSettings.hasPlayedFirstEpisode = true
+            }
             positionSaveCounter = 0
             historyTrackingEpisodeID = playableEpisode.id
             historyTrackingLastTime = currentPlayerTime
@@ -2562,6 +2648,46 @@ final class AppState: ObservableObject {
 
     func exportOPML() -> Data? {
         try? OPMLService().exportSubscriptions(subscriptionStore.subscriptions)
+    }
+
+    /// Subscribes to a list of feed URLs in one go (used by starter packs —
+    /// ONBOARDING_PLAN.md Phase 7). Mirrors the OPML import per-URL refresh+add
+    /// loop, skipping any feed already subscribed. Returns the number newly
+    /// subscribed. Because several real subscriptions can appear at once, the
+    /// first-subscription milestone resolves silently (no "You're all set" card),
+    /// exactly like a bulk OPML import.
+    @discardableResult
+    func subscribeToFeedURLs(_ urls: [URL]) async -> Int {
+        let existing = Set(subscriptionStore.subscriptions.map(\.feedURL))
+        var imported = 0
+        for url in urls where !existing.contains(url) {
+            let subscriptionID = UUID()
+            do {
+                let result = try await feedService.refresh(
+                    feedURL: url,
+                    subscriptionID: subscriptionID,
+                    episodeLimit: defaultFeedEpisodeLimit
+                )
+                _ = try subscriptionStore.addSubscription(
+                    id: subscriptionID, feedURL: url,
+                    title: result.subscriptionTitle, description: result.description,
+                    author: result.author,
+                    artworkURL: result.artworkURL,
+                    categories: result.categories,
+                    isExplicit: result.isExplicit,
+                    latestEpisode: result.latestEpisode,
+                    insertAtBottom: true
+                )
+                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, episodes: result.episodes)
+                imported += 1
+            } catch {
+                logger.error("starterPack.subscribeFailed", "Could not subscribe to feed", metadata: [
+                    "url": url.absoluteString,
+                    "error": String(describing: error)
+                ])
+            }
+        }
+        return imported
     }
 
     // MARK: - Playback position persistence

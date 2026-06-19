@@ -2,7 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
-// settings Form, sections in order: Release Radar (sensitivity stepper +
+// settings Form, sections in order: Startup (Open-at-launch menu picker →
+// AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
+// cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (sensitivity stepper +
 // Notification Settings link — the global notifications toggle now lives on
 // NotificationSettingsView as the master switch), Auto Archive (run-now button), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
@@ -44,6 +46,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            startupSection
             pollingSection
             autoArchiveSection
             downloadingSection
@@ -119,6 +122,25 @@ struct SettingsView: View {
     }
 
     // MARK: - Sections
+
+    @ViewBuilder
+    private var startupSection: some View {
+        Section {
+            Picker(selection: launchScreenBinding) {
+                ForEach(LaunchScreen.allCases) { screen in
+                    Text(screen.displayName).tag(screen)
+                }
+            } label: {
+                rowLabel("Open at launch", systemImage: "house")
+            }
+            .pickerStyle(.menu)
+        } header: {
+            Text("Startup")
+        } footer: {
+            Text("Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. New users still see a quick welcome first.")
+        }
+        .listRowBackground(cardBackground)
+    }
 
     @ViewBuilder
     private var pollingSection: some View {
@@ -513,6 +535,13 @@ struct SettingsView: View {
         )
     }
 
+    private var launchScreenBinding: Binding<LaunchScreen> {
+        Binding(
+            get: { appState.settingsStore.appSettings.launchScreen },
+            set: { appState.settingsStore.appSettings.launchScreen = $0 }
+        )
+    }
+
     private var keepScreenAwakeBinding: Binding<Bool> {
         Binding(
             get: { appState.settingsStore.appSettings.keepScreenAwakeDuringPlayback },
@@ -728,7 +757,7 @@ struct ListeningHistoryView: View {
                     searchText.isEmpty ? "No Listening History" : "No Results",
                     systemImage: "clock.arrow.circlepath",
                     description: Text(searchText.isEmpty
-                        ? "Episodes you play will appear here."
+                        ? "Episodes you've listened to will show up here, newest first."
                         : "Try a different search.")
                 )
                 .frame(maxHeight: .infinity)

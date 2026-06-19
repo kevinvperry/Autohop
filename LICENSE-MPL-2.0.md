@@ -40,7 +40,7 @@ was *informed by studying* Pocket Casts but contains no ported code,
 constants, or algorithms — it is original Autohop code under the MIT
 License, as recorded in the `NOTICE` file.
 
-Beyond the two covered files, Autohop gratefully acknowledges Pocket Casts
+Beyond the four covered files, Autohop gratefully acknowledges Pocket Casts
 for iOS as a broader source of **design ideas and inspiration**. Several
 Autohop features follow conventions that Pocket Casts established or
 popularised — including the concepts of silence trimming and a volume/vocal

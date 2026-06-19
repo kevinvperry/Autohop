@@ -56,6 +56,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 13. [OPML Import & Export](#13-opml-import--export)
 14. [Notifications](#14-notifications)
 15. [App Settings](#15-app-settings)
+    - [Startup](#150-startup)
     - [Release Radar](#151-release-radar)
     - [Auto Archive](#152-auto-archive)
     - [Downloading](#153-downloading)
@@ -67,6 +68,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
     - [About](#159-about)
 16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
 17. [Artwork Cache & Lazy Image Loading](#17-artwork-cache--lazy-image-loading)
+18. [First-Run Experience (New User Onboarding)](#18-first-run-experience-new-user-onboarding)
 
 ---
 
@@ -658,6 +660,14 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 ---
 
+### 15.0 Startup
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| Open at launch | Menu picker | **Player** | Which screen Autohop opens to on a normal cold launch: **Player**, **Subscriptions** (your Priority Stack), or **Discover**. Discover/Subscriptions are pushed above the always-alive Player, so the back chevron unwinds to the Player. Stored in `AppSettings.launchScreen`. The first-run Welcome flow always takes precedence for brand-new users; this preference applies once onboarding is complete (see §18). |
+
+---
+
 ### 15.1 Release Radar
 
 Autohop learns each podcast's release schedule (median publish interval anchored to its last episode) and starts watching the feed just before a new episode is expected. Feeds that expose only a single item at a time (hourly news bulletins) carry no cadence in the feed itself, so Autohop persists the publish dates it has seen (`RefreshStats.recentPublishDates`) and derives the schedule from those; until enough history exists, such feeds are checked at the Radar sensitivity cadence, backing off automatically while nothing new appears. Checks use HTTP conditional requests (ETag/If-Modified-Since), so the feed body is only downloaded when it has actually changed. Background refresh uses the same due dates (BGAppRefreshTask, due-date priority queue, up to 8 feeds per cycle); if a refresh cycle is already in flight when a background task fires, the task waits for that cycle to finish instead of completing early (completing early lets iOS suspend the app mid-request and strand it). Manual pull-to-refresh always refreshes every feed.
@@ -867,6 +877,51 @@ Successful feed refreshes update stored subscription artwork URLs and authors wh
 
 ---
 
+## 18. First-Run Experience (New User Onboarding)
+
+**What it is:** The experience a brand-new user gets on first install, designed to teach Autohop's core model — *subscribe → Autohop builds a download-first queue from your Priority Stack → it just plays* — and get them from install to first audio without forcing playback or any launch-time permission prompts. Strategy and the full phased plan live in `ONBOARDING.md` and `ONBOARDING_PLAN.md`.
+
+**First-run state (`AppSettings`):** five flags, all default `false`, persisted like the other settings: `hasCompletedWelcome`, `hasSubscribedFirstShow`, `hasPlayedFirstEpisode`, `hasSeenDownloadFirstNote`, `dismissedGettingStarted`. On launch, `AppState.bootstrap` **reconciles existing users**: anyone who already has a real (non-browse) subscription is marked onboarded so upgraders never see the first-run flow (idempotent, only flips false→true). A brand-new install has zero subscriptions at bootstrap, so its flags stay false.
+
+**"Real" vs browse subscriptions:** onboarding counts only real subscriptions (`browseDate == nil`) via `AppState.realSubscriptionCount`. Opening a Podcast Detail preview creates an invisible browse subscription (§2.4) and does **not** count as "subscribed".
+
+### Launch routing (`RootView`)
+Decided while the launch splash is still visible:
+- **Brand-new user** (`isFirstRunNoSubscriptions`: `!hasCompletedWelcome && realSubscriptionCount == 0`) → the **Welcome** screen is presented as a full-screen cover over the splash (shared purple background, so the hand-off is seamless).
+- **Otherwise** → the user's **Open at launch** preference (§15.0, `AppSettings.launchScreen`): Player (root), Subscriptions, or Discover (the latter two pushed above the Player root).
+
+(`hasPlayedFirstEpisode` still flips to true the first time `startPlayback` begins audio; it now drives the getting-started checklist rather than launch routing.)
+
+### Welcome screen (`WelcomeView`)
+Shown once. A 3-panel paged carousel — the core model, then "Listen your way" (speed / trim silence / vocal boost), then "Made for real life" (Sleep Schedule / Shared Listening) — over three always-visible CTAs, recording `hasCompletedWelcome = true` on any exit:
+- **Find shows** → Discover (with Subscriptions behind it).
+- **Import from another app** → in-place OPML import (`fileImporter` → `AppState.importOPML`), then Subscriptions showing the populated library; a confirmation toast reports the count.
+- **I'll explore on my own** → Subscriptions (its guiding empty state).
+
+### Starter packs (`StarterPacksView`)
+A first-run "not sure where to start?" helper. Each pack is a genre's current Top-6 from Apple's public charts (`PodcastCharts`), scoped to the user's storefront — **chart-derived, zero-maintenance, always fresh, regionally correct**. "Add these shows" resolves each entry's RSS feed and subscribes to all at once via `AppState.subscribeToFeedURLs` (which resolves the first-subscription milestone silently, like a bulk import). Reached from the empty Subscriptions state ("Not sure where to start?") and a first-run banner at the top of Discover (shown only while `realSubscriptionCount == 0`).
+
+### Getting-started checklist (`GettingStartedChecklist`)
+A dismissible momentum card at the top of the Priority Stack tracking three steps — subscribe (`hasSubscribedFirstShow`), play (`hasPlayedFirstEpisode`), reorder (a `UserDefaults` signal set in `PodcastsView.onMove`). Auto-hides when all three are done or the user dismisses it (`dismissedGettingStarted`). Its footer carries the one-time lean-defaults expectation note ("Autohop keeps the latest episode and tidies older ones…").
+
+### First-subscription milestone + "You're all set" card
+`AppState.checkFirstSubscriptionMilestone()` (wired into the `subscriptionStore.objectWillChange` sink) fires once when the first real subscription appears: it sets `hasSubscribedFirstShow` and, for a **single deliberate subscribe** (exactly one real sub), posts `.autohopFirstSubscription` with the new subscription's id. A **bulk OPML import** (more than one real sub at once) flips the flag **silently** — no celebration.
+
+`RootView` presents `FirstSubscribeCard` (a bottom sheet) in response. The card fires a success haptic, ensures the show's latest episode is downloading (`AppState.downloadLatestEpisode`, idempotent), and shows live download progress. **Play latest** plays immediately if the file is ready, or *arms a wait* and auto-starts the instant the download completes — a cued first listen with no autoplay ambush. On play it dismisses and returns to the full Player. **Add more shows** just dismisses (the user is already in the browse flow).
+
+### Download-first education
+The first time the first-subscribe card runs a download (`hasSeenDownloadFirstNote == false`), it shows a one-time note — "Autohop downloads episodes before playing, so they start instantly and work offline" — then sets the flag so it never repeats.
+
+### Coach marks (tips)
+A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`). AppState enforces the policy: **one visible at a time**, **never re-shown** once dismissed (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session** (the rest surface later). Views call `appState.requestTip(_:)` on first arrival; `CoachMarkOverlay` (mounted once in RootView, behind sheets) renders the active tip as a dismissible bottom card with a "Got it" button. Triggers: **priorityStack** (Subscriptions with ≥1 show), **swipeActions** (Podcast Detail, once the user has a real subscription), **playerPanels** + **speed** (Player, when an episode is loaded), **sleepSchedule** (the Sleep Schedule page). Everything a tip teaches also lives in Menu → Support, so dismissing loses nothing.
+
+### Empty states (every new-user-reachable screen points forward)
+- **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.
+- **Subscriptions** (`PodcastsView`): "Your Priority Stack is empty" with **Find shows** and a working **Import subscriptions** (OPML).
+- **Queue / Listening History**: reassuring "builds itself" / "will show up here" copy.
+
+---
+
 ## Appendix: Model Defaults Quick Reference
 
 ### `PlaybackPreference.default`
@@ -915,6 +970,12 @@ Successful feed refreshes update stored subscription artwork URLs and authors wh
 | sleepScheduleDurationMinutes | 20 (0 = end of episode) |
 | diagnosticLoggingEnabled | false |
 | iCloudSyncEnabled | false |
+| hasCompletedWelcome | false |
+| hasSubscribedFirstShow | false |
+| hasPlayedFirstEpisode | false |
+| hasSeenDownloadFirstNote | false |
+| dismissedGettingStarted | false |
+| launchScreen | .player |
 | defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
 
 ### `Subscription.init` defaults

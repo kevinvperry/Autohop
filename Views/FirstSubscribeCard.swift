@@ -1,0 +1,185 @@
+import SwiftUI
+
+// AI CONTEXT — Views/FirstSubscribeCard.swift ("You're all set" card).
+// The first-run "aha" moment (ONBOARDING_PLAN.md Phase 3). Presented as a sheet
+// by RootView when `.autohopFirstSubscription` fires — i.e. the user's first
+// ever deliberate single subscribe (bulk OPML import is excluded). It ensures
+// the show's latest episode is downloading and turns Play into one irresistible
+// tap: if the file isn't ready yet, tapping Play arms a wait and playback starts
+// the instant the download lands — no autoplay ambush, just a cued first listen.
+// Looks the subscription/episode up live from the store each render so download
+// progress and the downloaded transition drive the UI reactively.
+struct FirstSubscribeCard: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    let subscriptionID: UUID
+
+    @State private var waitingToPlay = false
+    @State private var didStartDownload = false
+    @State private var showDownloadNote = false
+
+    private var subscription: Subscription? {
+        appState.subscriptionStore.subscription(id: subscriptionID)
+    }
+    private var latestEpisode: Episode? { subscription?.latestEpisode }
+    private var isDownloaded: Bool { latestEpisode?.downloadState == .downloaded }
+    private var progress: Double? {
+        guard let id = latestEpisode?.id else { return nil }
+        return appState.downloadProgress[id]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color(white: 0.35))
+                .frame(width: 38, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 96, height: 96)) {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(white: 0.12))
+                    .overlay(
+                        Image(systemName: "waveform")
+                            .font(.system(size: 30, weight: .semibold))
+                            .foregroundStyle(.purple.opacity(0.7))
+                    )
+            }
+            .frame(width: 96, height: 96)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.bottom, 18)
+
+            Text("You're all set 🎧")
+                .font(.system(size: 23, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.bottom, 8)
+
+            Text("Autohop is downloading the latest episode of \(subscription?.title ?? "your show"). When it's ready it'll kick off your queue — no tapping play, episode after episode.")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color(white: 0.64))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 20)
+
+            downloadStatusRow
+                .padding(.horizontal, 24)
+                .padding(.bottom, showDownloadNote && !isDownloaded ? 10 : 22)
+
+            if showDownloadNote && !isDownloaded {
+                Text("Autohop downloads episodes before playing, so they start instantly and work offline — even with no signal.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color(white: 0.5))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 18)
+            }
+
+            VStack(spacing: 10) {
+                Button(action: playTapped) {
+                    Text(playButtonTitle)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(Capsule().fill(Color.purple))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    // Just dismiss — the user subscribed from within the browse
+                    // flow (Discover / Podcast Detail), so closing the card returns
+                    // them there to keep adding shows. Avoids pushing a duplicate
+                    // Discover onto the stack.
+                    dismiss()
+                } label: {
+                    Text("Add more shows")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.purple)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 12)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.10).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(showDownloadNote ? 540 : 470)])
+        .presentationDragIndicator(.hidden)
+        .onAppear(perform: handleAppear)
+        .onChange(of: isDownloaded) { _, downloaded in
+            if downloaded && waitingToPlay { playLatest() }
+        }
+    }
+
+    // MARK: - Status row
+
+    @ViewBuilder
+    private var downloadStatusRow: some View {
+        HStack(spacing: 10) {
+            if isDownloaded {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Ready to play")
+                    .foregroundStyle(Color(white: 0.8))
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.purple)
+                Text(progress.map { "Downloading… \(Int($0 * 100))%" } ?? "Starting download…")
+                    .foregroundStyle(Color(white: 0.8))
+            }
+            Spacer()
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+    }
+
+    private var playButtonTitle: String {
+        if isDownloaded { return "Play latest" }
+        if waitingToPlay { return "Downloading… we'll start the moment it's ready" }
+        return "Play latest"
+    }
+
+    // MARK: - Actions
+
+    private func handleAppear() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        // One-time download-first education note (Phase 4a). Capture-then-flip so
+        // it shows on this first download only.
+        if !appState.settingsStore.appSettings.hasSeenDownloadFirstNote {
+            showDownloadNote = true
+            appState.settingsStore.appSettings.hasSeenDownloadFirstNote = true
+        }
+        // Ensure the latest episode is actually downloading (idempotent — the
+        // download path guards against re-downloading an in-flight/finished file).
+        guard !didStartDownload, !isDownloaded, let subscription else { return }
+        didStartDownload = true
+        Task { await appState.downloadLatestEpisode(for: subscription) }
+    }
+
+    private func playTapped() {
+        if isDownloaded {
+            playLatest()
+        } else {
+            // Arm: auto-start the instant the download completes.
+            waitingToPlay = true
+        }
+    }
+
+    private func playLatest() {
+        guard let episode = latestEpisode else { return }
+        Task {
+            await appState.playEpisode(episode)
+            dismiss()
+            NotificationCenter.default.post(name: .autohopReturnToPlayer, object: nil)
+        }
+    }
+}

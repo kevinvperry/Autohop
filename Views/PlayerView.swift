@@ -26,6 +26,11 @@ import UIKit
 // art, and queue rows goes through CachedArtworkImage with explicit target sizes;
 // HTML description images intentionally remain AsyncImage because they are feed
 // content, not canonical podcast/episode artwork.
+// FIRST-RUN: when there's nothing to play (isPlayerEmpty) the panels are replaced
+// by emptyPlayerView — a "Find shows"→Discover state for a user with no real
+// subscriptions, or a reassuring "downloading your first episode" state otherwise.
+// onAppear requests the playerPanels + speed coach marks (CoachMark.swift) once an
+// episode is loaded.
 
 // MARK: - Root player
 
@@ -49,6 +54,13 @@ struct PlayerView: View {
 
     private var episode: Episode? { appState.currentPlayerEpisode }
     private var isVideoEpisode: Bool { episode?.mediaKind == .video && appState.currentVideoPlayer != nil }
+
+    /// True when there is genuinely nothing to play — no loaded episode and an
+    /// empty downloaded queue. Matches the transport controls' own disabled
+    /// condition so the first-run empty state and the controls agree.
+    private var isPlayerEmpty: Bool {
+        appState.currentPlayerEpisode == nil && appState.nextPlayableEpisode == nil
+    }
     private var visiblePanels: [PlayerPanel] {
         appState.currentEpisodeSupportsChapters ? PlayerPanel.allCases : [.nowPlaying, .details]
     }
@@ -67,20 +79,24 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topBar
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 6)
+            if isPlayerEmpty {
+                emptyPlayerView
+            } else {
+                VStack(spacing: 0) {
+                    topBar
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 6)
 
-                TabView(selection: $selectedPanel) {
-                    nowPlayingPanel.tag(PlayerPanel.nowPlaying.rawValue)
-                    detailsPanel.tag(PlayerPanel.details.rawValue)
-                    if appState.currentEpisodeSupportsChapters {
-                        chaptersPanel.tag(PlayerPanel.chapters.rawValue)
+                    TabView(selection: $selectedPanel) {
+                        nowPlayingPanel.tag(PlayerPanel.nowPlaying.rawValue)
+                        detailsPanel.tag(PlayerPanel.details.rawValue)
+                        if appState.currentEpisodeSupportsChapters {
+                            chaptersPanel.tag(PlayerPanel.chapters.rawValue)
+                        }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
             }
 
             // Sleep Schedule "still listening?" prompt — mostly answered from
@@ -96,6 +112,12 @@ struct PlayerView: View {
         .onAppear {
             isPlayerVisible = true
             appState.updateIdleTimer(playerVisible: true)
+            // Coach marks: introduce the player's panels, then (later session)
+            // the speed controls. Only when there's actually an episode loaded.
+            if appState.currentPlayerEpisode != nil {
+                appState.requestTip(.playerPanels)
+                appState.requestTip(.speed)
+            }
         }
         .onDisappear {
             isPlayerVisible = false
@@ -394,6 +416,98 @@ struct PlayerView: View {
         h += 56                       // audio row (~48pt) + bottom padding 8
         if hasUpNext { h += 94 }     // up next row (~64pt) + bottom padding 30
         return h
+    }
+
+    // MARK: - Empty / first-run state
+
+    /// Shown in place of the player when there is nothing to play. Two variants:
+    /// a brand-new user with no subscriptions is pointed at Discover; a user who
+    /// has subscribed but whose first episode hasn't downloaded yet sees a
+    /// reassuring "downloading" state. See ONBOARDING_PLAN.md Phase 1a.
+    private var emptyPlayerView: some View {
+        let hasSubscriptions = appState.realSubscriptionCount > 0
+
+        return VStack(spacing: 0) {
+            // Keep a quiet exit so the player is never a dead end.
+            HStack {
+                NavigationLink(value: AppRoute.podcasts) {
+                    let icon = Image(systemName: "list.bullet")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                    if #available(iOS 26, *) {
+                        icon.glassEffect(in: Circle())
+                    } else {
+                        icon.background(Color(white: 0.12))
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
+                    }
+                }
+                .accessibilityLabel("Subscriptions")
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+
+            Spacer()
+
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(Color.purple.opacity(0.16))
+                        .frame(width: 104, height: 104)
+                    if hasSubscriptions {
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(.purple)
+                    } else {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 42, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    }
+                }
+
+                VStack(spacing: 8) {
+                    Text(hasSubscriptions ? "Getting your first episode" : "Nothing playing yet")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+
+                    Text(hasSubscriptions
+                         ? "Autohop is downloading the latest episode so it plays instantly and works offline. This only takes a moment."
+                         : "Subscribe to a show and Autohop fills your queue automatically. Your latest episodes land here, ready to play.")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color(white: 0.62))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 36)
+
+                if hasSubscriptions {
+                    NavigationLink(value: AppRoute.podcasts) {
+                        emptyStateButtonLabel("View subscriptions", filled: true)
+                    }
+                } else {
+                    NavigationLink(value: AppRoute.discover) {
+                        emptyStateButtonLabel("Find shows", filled: true)
+                    }
+                }
+            }
+
+            Spacer()
+            Spacer()
+        }
+    }
+
+    private func emptyStateButtonLabel(_ title: String, filled: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(filled ? .white : .purple)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 13)
+            .background(
+                Capsule().fill(filled ? Color.purple : Color.purple.opacity(0.14))
+            )
     }
 
     private var nowPlayingPanel: some View {

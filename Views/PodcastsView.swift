@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
 // home page, see PAGES.md). Ranked list of active subscriptions (browse
@@ -14,12 +15,20 @@ import SwiftUI
 // at the bottom except during reorder. Rows navigate to PodcastDetailView.
 // Priority-list artwork uses 44 pt CachedArtworkImage thumbnails; feed refresh
 // updates Subscription.artworkURL so changed podcast art can flow into this cache.
+// FIRST-RUN: when there are no real subscriptions, emptySubscriptionsView teaches
+// the Priority Stack model and offers Find shows (Discover), Import subscriptions
+// (in-place OPML fileImporter → AppState.importOPML), and Starter Packs
+// (StarterPacksView). The non-empty list shows the dismissible
+// GettingStartedChecklist at the top; onMove records the "reorder" onboarding step
+// (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editMode: EditMode = .inactive
     @State private var isRefreshingAll = false
     @State private var showMenu = false
     @State private var showDiscover = false
+    @State private var showOPMLImporter = false
+    @State private var showStarterPacks = false
 
     /// Subscriptions visible in the Priority Sort list.
     /// Browse-only subscriptions (browseDate != nil) are invisible here —
@@ -31,13 +40,13 @@ struct PodcastsView: View {
     var body: some View {
         Group {
             if visibleSubscriptions.isEmpty {
-                ContentUnavailableView(
-                    "No Podcasts",
-                    systemImage: "dot.radiowaves.left.and.right",
-                    description: Text("Tap + to search for a podcast or add an RSS feed.")
-                )
+                emptySubscriptionsView
             } else {
                 VStack(alignment: .leading, spacing: 12) {
+                    GettingStartedChecklist()
+                        .padding(.horizontal, 20)
+                        .padding(.top, 14)
+
                     // Action row — page actions live here, below the heading,
                     // so the title bar stays pure navigation (NavRules).
                     HStack {
@@ -144,8 +153,93 @@ struct PodcastsView: View {
                 MiniPlayerBar()
             }
         }
+        .onAppear {
+            if !visibleSubscriptions.isEmpty { appState.requestTip(.priorityStack) }
+        }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
         .navigationDestination(isPresented: $showDiscover) { DiscoverView() }
+        .fileImporter(
+            isPresented: $showOPMLImporter,
+            allowedContentTypes: [.xml, .plainText, UTType(filenameExtension: "opml") ?? .xml],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else { return }
+            Task {
+                let summary = await appState.importOPML(from: url)
+                if summary.imported > 0 {
+                    appState.onboardingToast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
+                }
+            }
+        }
+        .sheet(isPresented: $showStarterPacks) { StarterPacksView() }
+    }
+
+    /// First-run empty state for a brand-new user (ONBOARDING_PLAN.md Phase 1b).
+    /// Teaches the Priority Stack model and offers the two ways to fill it:
+    /// find shows in Discover, or import an existing subscription list.
+    private var emptySubscriptionsView: some View {
+        VStack(spacing: 18) {
+            Spacer()
+
+            ZStack {
+                Circle()
+                    .fill(Color.purple.opacity(0.16))
+                    .frame(width: 104, height: 104)
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(.purple)
+            }
+
+            VStack(spacing: 8) {
+                Text("Your Priority Stack is empty")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                Text("Add the shows you love. Autohop plays the newest episode from each, top to bottom — drag to set the order once you've subscribed.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color(white: 0.62))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 36)
+
+            VStack(spacing: 10) {
+                Button { showDiscover = true } label: {
+                    emptyStateButtonLabel("Find shows", filled: true)
+                }
+                .buttonStyle(.plain)
+
+                Button { showOPMLImporter = true } label: {
+                    emptyStateButtonLabel("Import subscriptions", filled: false)
+                }
+                .buttonStyle(.plain)
+
+                Button { showStarterPacks = true } label: {
+                    Text("Not sure where to start?")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.purple)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func emptyStateButtonLabel(_ title: String, filled: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(filled ? .white : .purple)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 13)
+            .background(
+                Capsule().fill(filled ? Color.purple : Color.purple.opacity(0.14))
+            )
     }
 
     private func refreshAll() {
@@ -176,6 +270,8 @@ struct PodcastsView: View {
             .onMove { from, to in
                 guard editMode == .active else { return }
                 appState.subscriptionStore.reorder(from: from, to: to)
+                // Onboarding: mark the "reorder your Priority Stack" step done.
+                UserDefaults.standard.set(true, forKey: GettingStartedChecklist.reorderedKey)
             }
         }
         .listStyle(.plain)

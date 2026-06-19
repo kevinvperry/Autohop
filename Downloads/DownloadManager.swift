@@ -17,7 +17,11 @@ import Foundation
 // background relaunch completion (onBackgroundDownloadCompleted, when the app
 // was killed and iOS relaunched it to deliver a finished download — there is
 // no live continuation in that case); file storage under the app's Downloads
-// directory with deterministic names (expectedLocalFileURL).
+// directory with deterministic names (expectedLocalFileURL). The Downloads
+// directory is marked isExcludedFromBackup (ASSESSMENT N1) so re-downloadable
+// media is NOT swept into iCloud/device backups; it deliberately stays in
+// Application Support (NOT Caches) so iOS never purges it out from under the
+// download-first queue.
 // CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
 // ENFORCED HERE — AppState gates calls to download().
 public protocol DownloadManaging: AnyObject {
@@ -361,7 +365,24 @@ public final class DownloadManager: NSObject, DownloadManaging {
         )
         let dir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        // N1: keep re-downloadable media out of iCloud/device backups. Idempotent
+        // and cheap (skips the write once the flag is already set), so it's safe to
+        // re-apply on every resolve — and it self-heals if a restore ever clears it.
+        excludeFromBackupIfNeeded(dir)
         return dir
+    }
+
+    /// Sets `isExcludedFromBackup` on a directory if it isn't already excluded, so
+    /// large, trivially re-downloadable podcast media never bloats the user's iCloud
+    /// Backup or device-to-device transfer (ASSESSMENT N1). Best-effort: a failure
+    /// here only means the flag isn't set, never that a download fails.
+    private func excludeFromBackupIfNeeded(_ url: URL) {
+        let current = try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+        guard current != true else { return }
+        var mutableURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutableURL.setResourceValues(values)
     }
 
     private func fileExtension(for url: URL) -> String {

@@ -25,9 +25,9 @@ struct QueueSheetView: View {
             Group {
                 if appState.downloadedQueue.isEmpty {
                     ContentUnavailableView(
-                        "Queue is Empty",
-                        systemImage: "tray",
-                        description: Text("Download an episode to start listening.")
+                        "Your queue builds itself",
+                        systemImage: "square.stack",
+                        description: Text("As you subscribe and episodes download, they line up here in priority order — newest first, ready to play.")
                     )
                 } else {
                     List {

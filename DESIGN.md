@@ -1365,11 +1365,57 @@ Empty lists use `ContentUnavailableView` with a system image, title, and descrip
 
 ```swift
 ContentUnavailableView(
-    "Queue is Empty",
-    systemImage: "tray",
-    description: Text("Download an episode to start listening.")
+    "Your queue builds itself",
+    systemImage: "square.stack",
+    description: Text("As you subscribe and episodes download, they line up here in priority order — newest first, ready to play.")
 )
 ```
+
+The primary new-user funnel screens (Player, Subscriptions) use a richer **custom**
+empty state instead of `ContentUnavailableView`: a 104 pt purple-tint circle holding a
+glyph (or a `ProgressView` while a first episode downloads), a `.rounded`-bold title, a
+`Color(white: 0.62)` body, and one or more capsule CTAs (`EmptyState-CTAButton`).
+
+---
+
+## Onboarding — First-Run Components
+
+The first-run experience (ONBOARDING_PLAN.md; FEATURES.md §18) introduces a small family
+of purple-accented dark-card components. They all sit on the standard black page / sheet
+background and reuse the app's purple accent.
+
+**Label: `EmptyState-CTAButton`** — capsule action used in the Player / Subscriptions
+empty states and Welcome. Filled = `Color.purple` fill, white 16 pt semibold text,
+~28×13 pt padding; outline = `Color.purple.opacity(0.14)` fill with purple text.
+
+**Label: `Onboarding-Welcome`** (`WelcomeView`) — full-screen cover on the launch
+splash's purple background (`Color(red: 0.176, green: 0.149, blue: 0.502)`). A paged
+`TabView` (`.page(indexDisplayMode: .always)`) of 3 panels (waveform/glyph hero,
+30 pt `.rounded` bold title, translucent-white body) over three stacked CTAs:
+white-filled primary, `white.opacity(0.16)` secondary, plain-text tertiary.
+
+**Label: `Onboarding-FirstSubscribeCard`** (`FirstSubscribeCard`) — bottom sheet
+(`.height(470/540)`), 96 pt artwork, "You're all set 🎧" title, body, a
+`white.opacity(0.06)` rounded **download-status row** (spinner + "Downloading… N%" or a
+green check + "Ready to play"), and a purple-capsule **Play latest** primary.
+
+**Label: `Onboarding-CoachMark`** (`CoachMarkOverlay`) — a dismissible bottom card
+(`Color(red:0.12,0.12,0.15)` fill, `purple.opacity(0.35)` 1 pt stroke, soft shadow): a
+34 pt purple-circle glyph, bold 15 pt title, 13 pt grey body, and a purple "Got it"
+button. One visible at a time; floats above pages, below sheets.
+
+**Label: `Onboarding-Checklist`** (`GettingStartedChecklist`) — top-of-Priority-Stack
+card (`white.opacity(0.06)` fill, `purple.opacity(0.25)` stroke) with a title + dismiss
+`xmark`, three check rows (`checkmark.circle.fill` green / `circle` grey, strikethrough
+when done), and a small grey footer note.
+
+**Label: `Onboarding-StarterPackCard`** (`StarterPacksView`) — `white.opacity(0.06)`
+rounded card per genre: genre title, a row of six 48 pt artwork thumbnails, and a full-width
+capsule "Add these shows" (purple → `green.opacity(0.4)` + check once added).
+
+**Label: `Onboarding-Banner`** — the Discover first-run starter-packs banner and the
+import toast share the rounded `purple.opacity(0.12)` fill + `purple.opacity(0.3)` stroke
+treatment; the toast is a centred capsule pinned above the mini-player, auto-dismissed.
 
 ---
 

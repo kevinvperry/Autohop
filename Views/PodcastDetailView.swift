@@ -149,6 +149,12 @@ struct PodcastDetailView: View {
                 }
             }
         }
+        .onAppear {
+            // Teach episode swipe actions — but only once the user has a real
+            // subscription, so it never competes with the Subscribe button on a
+            // brand-new user's first preview.
+            if appState.realSubscriptionCount > 0 { appState.requestTip(.swipeActions) }
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

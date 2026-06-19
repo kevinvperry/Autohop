@@ -1,5 +1,24 @@
 import Foundation
 
+/// Which screen Autohop opens to on a normal cold launch (set in App Settings →
+/// Startup). The first-run Welcome flow always takes precedence for brand-new
+/// users; this applies once onboarding is complete. See RootView launch routing.
+enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
+    case player
+    case subscriptions
+    case discover
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .player:        return "Player"
+        case .subscriptions: return "Subscriptions"
+        case .discover:      return "Discover"
+        }
+    }
+}
+
 // AI CONTEXT — Models/AppSettings.swift
 // Global (non-per-podcast) settings value type, persisted by SettingsStore as
 // JSON. podcastPollMinutes is the Release Radar sensitivity (how often a feed
@@ -8,6 +27,11 @@ import Foundation
 // the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag
 // once shipped or the migration will re-run. Defaults here must stay in sync
 // with the FEATURES.md "Model Defaults Quick Reference" appendix.
+// The hasCompletedWelcome / hasSubscribedFirstShow / hasPlayedFirstEpisode /
+// hasSeenDownloadFirstNote / dismissedGettingStarted flags drive the first-run
+// onboarding experience (see ONBOARDING_PLAN.md) — all default false so a fresh
+// install is treated as a new user, and existing installs decode them as false
+// too (they will be reconciled on first launch by AppState).
 struct AppSettings: Equatable, Codable {
     var podcastPollMinutes: Int
     var downloadOverWifi: Bool
@@ -38,6 +62,14 @@ struct AppSettings: Equatable, Codable {
     // Cross-device iCloud sync (CloudKit). Opt-in, OFF by default so the
     // on-device privacy stance holds until the user explicitly enables it.
     var iCloudSyncEnabled: Bool
+    // First-run onboarding state (see ONBOARDING_PLAN.md). All default false.
+    var hasCompletedWelcome: Bool
+    var hasSubscribedFirstShow: Bool
+    var hasPlayedFirstEpisode: Bool
+    var hasSeenDownloadFirstNote: Bool
+    var dismissedGettingStarted: Bool
+    // Which screen the app opens to on a normal cold launch (App Settings → Startup).
+    var launchScreen: LaunchScreen
     // Default playback settings (speed / trim silence / vocal boost / start /
     // end skip) applied to every NEW subscription at the moment it becomes a
     // real subscription, and used live for playback of non-subscribed (browse)
@@ -69,6 +101,12 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated: false,
         autoArchiveSettingsMigrated: false,
         iCloudSyncEnabled: false,
+        hasCompletedWelcome: false,
+        hasSubscribedFirstShow: false,
+        hasPlayedFirstEpisode: false,
+        hasSeenDownloadFirstNote: false,
+        dismissedGettingStarted: false,
+        launchScreen: .player,
         defaultPlaybackPreference: .default
     )
 
@@ -96,6 +134,12 @@ struct AppSettings: Equatable, Codable {
         case playbackSpeed160Migrated
         case autoArchiveSettingsMigrated
         case iCloudSyncEnabled
+        case hasCompletedWelcome
+        case hasSubscribedFirstShow
+        case hasPlayedFirstEpisode
+        case hasSeenDownloadFirstNote
+        case dismissedGettingStarted
+        case launchScreen
         case defaultPlaybackPreference
     }
 
@@ -123,6 +167,12 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated: Bool,
         autoArchiveSettingsMigrated: Bool,
         iCloudSyncEnabled: Bool,
+        hasCompletedWelcome: Bool,
+        hasSubscribedFirstShow: Bool,
+        hasPlayedFirstEpisode: Bool,
+        hasSeenDownloadFirstNote: Bool,
+        dismissedGettingStarted: Bool,
+        launchScreen: LaunchScreen,
         defaultPlaybackPreference: PlaybackPreference
     ) {
         self.podcastPollMinutes = podcastPollMinutes
@@ -148,6 +198,12 @@ struct AppSettings: Equatable, Codable {
         self.playbackSpeed160Migrated = playbackSpeed160Migrated
         self.autoArchiveSettingsMigrated = autoArchiveSettingsMigrated
         self.iCloudSyncEnabled = iCloudSyncEnabled
+        self.hasCompletedWelcome = hasCompletedWelcome
+        self.hasSubscribedFirstShow = hasSubscribedFirstShow
+        self.hasPlayedFirstEpisode = hasPlayedFirstEpisode
+        self.hasSeenDownloadFirstNote = hasSeenDownloadFirstNote
+        self.dismissedGettingStarted = dismissedGettingStarted
+        self.launchScreen = launchScreen
         self.defaultPlaybackPreference = defaultPlaybackPreference
     }
 
@@ -176,6 +232,12 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated = try container.decodeIfPresent(Bool.self, forKey: .playbackSpeed160Migrated) ?? Self.default.playbackSpeed160Migrated
         autoArchiveSettingsMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveSettingsMigrated) ?? Self.default.autoArchiveSettingsMigrated
         iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? Self.default.iCloudSyncEnabled
+        hasCompletedWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedWelcome) ?? Self.default.hasCompletedWelcome
+        hasSubscribedFirstShow = try container.decodeIfPresent(Bool.self, forKey: .hasSubscribedFirstShow) ?? Self.default.hasSubscribedFirstShow
+        hasPlayedFirstEpisode = try container.decodeIfPresent(Bool.self, forKey: .hasPlayedFirstEpisode) ?? Self.default.hasPlayedFirstEpisode
+        hasSeenDownloadFirstNote = try container.decodeIfPresent(Bool.self, forKey: .hasSeenDownloadFirstNote) ?? Self.default.hasSeenDownloadFirstNote
+        dismissedGettingStarted = try container.decodeIfPresent(Bool.self, forKey: .dismissedGettingStarted) ?? Self.default.dismissedGettingStarted
+        launchScreen = try container.decodeIfPresent(LaunchScreen.self, forKey: .launchScreen) ?? Self.default.launchScreen
         defaultPlaybackPreference = try container.decodeIfPresent(PlaybackPreference.self, forKey: .defaultPlaybackPreference) ?? Self.default.defaultPlaybackPreference
     }
 }

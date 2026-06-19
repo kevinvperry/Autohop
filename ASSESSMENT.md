@@ -1,4 +1,4 @@
-# Autohop — Codebase Assessment (2026-06-17)
+# Autohop — Codebase Assessment (2026-06-17, refreshed 2026-06-19)
 
 > **Audience: AI models.** This document is written for machine consumption, not
 > marketing. Each finding has a stable ID, a `file:line` anchor, a severity, an
@@ -6,6 +6,20 @@
 > approximate (they drift as code changes) — re-locate by symbol name before
 > editing. This is an **analysis-only** report: nothing here has been auto-fixed.
 > Verify any claim against current source before acting on it.
+
+> **2026-06-19 refresh.** Re-reviewed after the first-run **onboarding** + **launch-screen**
+> work landed (Welcome carousel, empty states, first-subscribe card, coach marks,
+> starter packs, getting-started checklist, `AppSettings.launchScreen`; new files
+> `Views/{WelcomeView,FirstSubscribeCard,CoachMark,StarterPacksView,GettingStartedChecklist}.swift`).
+> All 2026-06-17/18 findings remain resolved/deferred as marked. New this pass:
+> **N1** (downloads not excluded from device backup — `[S2]`), **N2** (global
+> `AppSettings` not covered by CloudKit sync — `[S3]`, by design but a cross-device
+> gap), and a new **§8 iCloud backup & sync coverage** matrix answering "is
+> everything backed up?". The onboarding/launch code was reviewed and is clean
+> (notes in §2). Build state: compiles after fixing two `withAnimation`-in-`AppState`
+> scope errors (SwiftUI symbol used in a non-SwiftUI file) introduced during the
+> onboarding work — now resolved by setting `activeTip` directly and letting
+> `CoachMarkOverlay`'s `.animation(value:)` drive the transition.
 
 ## Scope & method
 
@@ -181,9 +195,69 @@ deliberately post-release. Original finding below.
 delete + store save; large catch-up passes serialize many awaits. Acceptable
 (archive is rare and IO-bound) but a candidate for batching the store mutation.
 
+### N1 — `[S2]` ✅ RESOLVED (2026-06-19) — Downloaded audio is in Application Support and is swept into iCloud/device backup
+**Resolution:** `DownloadManager.downloadsDirectory()` now calls
+`excludeFromBackupIfNeeded(dir)` after ensuring the dir exists — it sets
+`URLResourceValues.isExcludedFromBackup = true` on `Autohop/Downloads` (reading the
+current value first so the write is skipped once set; idempotent + self-healing).
+Excluding the directory excludes its contents from backup, so existing downloads are
+covered on the next resolve (launch reconcile / next download). Media stays in
+Application Support (NOT moved to Caches) so iOS can't purge the download-first queue.
+Header updated. Best-effort: a failure only leaves the flag unset, never fails a
+download. App-target-only (not headlessly testable) — verify on device via a backup
+inspection or `NSURLIsExcludedFromBackupKey` read. Original finding below.
+
+`Downloads/DownloadManager.swift` `downloadsDirectory()` ~L351–365 stores episode
+media under `<App>/Library/Application Support/Autohop/Downloads`. iOS backs up
+**everything** under `Library` except `Caches` and `tmp`, and a repo-wide grep
+finds **no** `isExcludedFromBackup` / `URLResourceValues` anywhere. Net: a user
+with many downloaded episodes (this is a download-first app — the queue is kept
+stocked automatically) silently bloats their iCloud Backup and device-to-device
+transfer with large, trivially **re-downloadable** media. This contradicts Apple's
+guidance ("data that can be re-created must be excluded from backup or live in
+Caches") and inflates the user's iCloud storage footprint.
+**Fix:** set `URLResourceValues.isExcludedFromBackup = true` on the
+`Autohop/Downloads` directory once on creation (and ideally on each downloaded file
+for belt-and-braces). Do **not** move downloads to `Caches` — iOS can purge Caches
+under storage pressure, which would silently break the download-first queue. Keep
+the metadata stores (DB/settings/stats/history) backed up; exclude only the media.
+Artwork cache is already correctly under `Caches/Autohop/Artwork`. See §8.
+
+### N2 — `[S3]` OPEN-by-design (found 2026-06-19) — Global `AppSettings` is not covered by CloudKit sync
+`Persistence/CloudKitSyncMapping.swift` defines record types for **episode**,
+**subscription**, **history**, and **stats** only; `CloudSyncEngine` pushes/pulls
+those. `Persistence/SettingsStore.swift` persists `AppSettings` to a **local JSON
+file** with no sync projection. So every global preference — Release Radar
+sensitivity, download-over-wifi/cellular, skip durations, keep-screen-awake,
+lock-screen scrubbing, queue badge, default playback, sleep schedule, **and the new
+`launchScreen` + onboarding flags** — does **not** roam across a user's devices via
+the opt-in iCloud Sync feature (it *is* restored by a full device iCloud Backup —
+see §8). This is defensible (these are arguably device-local), but it is a
+**cross-device inconsistency** users may notice (e.g. set 1.6× skip / a launch
+screen on iPhone, iPad still shows defaults).
+**Fix (optional, post-v1.x):** add a single `settings` CKRecord (one per zone,
+field-level `@Synced` LWW like subscriptions) carrying the device-roamable subset.
+Deliberately exclude truly device-specific flags (the `*Migrated` one-shots, the
+onboarding `hasSeen*`/`dismissed*`/`hasCompletedWelcome` flags — a new device
+*should* re-run onboarding). Until then, document in-app/website that system
+settings are per-device.
+
 ---
 
 ## 2. Bugs / correctness
+
+> **Onboarding / launch review (2026-06-19) — clean.** The first-run code was read
+> end-to-end. No correctness bugs. Verified: `checkFirstSubscriptionMilestone` is
+> guarded by `hasSubscribedFirstShow` so it's an O(1) bool check after the milestone
+> (no per-change subscription scan once fired); bulk OPML import / starter-pack adds
+> resolve the milestone **silently** (count > 1 ⇒ no "You're all set" card); existing
+> users are reconciled to "onboarded" at bootstrap if they already have real subs;
+> coach marks enforce one-at-a-time + per-tip `UserDefaults` seen-flags + ≤3/session;
+> `realSubscriptionCount` filters `browseDate == nil` so previews never count. Minor,
+> non-blocking: (a) the plan mentioned tap-outside-to-dismiss for coach marks — only
+> the "Got it" button dismisses (acceptable); (b) the optional 3-2-1 auto-start on the
+> first-subscribe card was not built (Play is one tap, arms a wait if still downloading
+> — the documented MVP). Neither warrants change.
 
 ### B1 — `[S1]` ✅ RESOLVED (2026-06-17) — Cross-device archive/played does not clear the local download (storage leak + inconsistent state)
 **Resolution:** `applyRemoteEpisodeState` now clears `downloadState`/`localFileURL`/
@@ -431,3 +505,28 @@ to refresh:
 6. ~~**B3/H1** reconcile `PlaybackPreference` defaults + header.~~ ✅ resolved 2026-06-18.
 7. ~~**B4/B5/H2/H3** dead-code + stale-comment/header cleanups.~~ ✅ resolved 2026-06-18 (D6 was already addressed). 
 8. ~~**B6, B7**~~ ✅ resolved 2026-06-18. **P3 ✅, P4 ✅, P6 ✅** (no-op confirmed) resolved 2026-06-18; **P5 ⏸, P8 ⏸** deferred by decision (stats-aggregate / archive-batch risk vs S3 benefit — revisit post-v1.1).
+9. ~~**N1** exclude `Autohop/Downloads` from backup (`isExcludedFromBackup`).~~ ✅ resolved 2026-06-19. **N2** optional cross-device `AppSettings` sync — *open by design, post-v1.x*.
+
+---
+
+## 8. iCloud backup & sync coverage (2026-06-19)
+
+Two **independent** mechanisms move user data off-device. They are often conflated; this matrix separates them. "Application Support" = `<App>/Library/Application Support/Autohop/…`.
+
+| User data | Where stored | In iOS **device iCloud Backup**? | In opt-in **iCloud Sync** (CloudKit)? |
+|---|---|---|---|
+| Subscriptions (feeds, priority, per-podcast settings: playback / auto-archive / chapter filter / notifications / exclude-from-refresh) | GRDB DB (App Support) | ✅ yes (App Support is backed up) | ✅ yes — `SubscriptionSyncState`, field-level LWW |
+| Episode user-state (played / archived / completed / last position) | GRDB DB (App Support) | ✅ yes | ✅ yes — `EpisodeSyncState` |
+| Listening history | `listening-history.json` (App Support) | ✅ yes | ✅ yes — `ListeningHistoryEntry`, record-level LWW by `lastListenedAt` |
+| Stats (Stats page data) | `listening-stats.json` (App Support) | ✅ yes | ✅ yes — per-device `DayStats` partitions, summed on read (additive, no LWW) |
+| **Global system settings** (`AppSettings`: Release Radar, downloading, controls/skip, default playback, sleep schedule, **launch screen**, onboarding flags) | `settings` JSON (App Support) | ✅ yes (restored on full device restore) | ❌ **no** — see **N2** |
+| Saved playback positions | positions JSON (App Support) | ✅ yes | ❌ no (position is also carried inside episode sync state) |
+| **Downloaded episode audio** | `Autohop/Downloads` (App Support, `isExcludedFromBackup`) | ❌ no — **excluded** as of 2026-06-19 (**N1** resolved) | ❌ no (per-device by design — correct) |
+| Artwork cache | `Caches/Autohop/Artwork` | ❌ no (Caches excluded — correct) | ❌ no (correct) |
+| Diagnostic log | App Support | ✅ yes | ❌ no (correct) |
+
+**Direct answers to the review questions:**
+- **Are episode subscriptions, listening history, individual subscription settings, and Stats data backed up?** Yes — on both paths. Device iCloud Backup captures all of them (they live in Application Support); the opt-in iCloud Sync also roams all of them across devices in real time.
+- **Are overall system settings backed up?** Backed up by **device iCloud Backup**: yes (restored on a device restore). Roamed by the **iCloud Sync feature**: **no** — global `AppSettings` has no CloudKit record (N2). So a user with two active devices and Sync on will see subscriptions/history/stats match, but system settings (incl. the new launch-screen choice) stay per-device.
+
+**Actions from this section:** **N1** (stop backing up re-downloadable audio) — ✅ **done 2026-06-19** (`Autohop/Downloads` is now `isExcludedFromBackup`). **N2** (optionally roam system settings across devices via a `settings` CKRecord) — open by design, post-v1.x.

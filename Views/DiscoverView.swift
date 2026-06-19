@@ -20,6 +20,8 @@ import SwiftUI
 // PAGES.md "Browse Subscription Lifecycle"). Chart cards use CachedArtworkImage
 // with an explicit square target size so the shared artwork cache decodes covers
 // at card scale instead of retaining full-resolution storefront art in memory.
+// FIRST-RUN: while the user has no real subscriptions (appState.realSubscriptionCount
+// == 0) a starterPacksBanner sits above the rails and presents StarterPacksView.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -31,6 +33,7 @@ struct DiscoverView: View {
     /// it no longer owns a NavigationStack/path of its own).
     @State private var pendingRoute: Route?
     @State private var showSearch = false
+    @State private var showStarterPacks = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
     @State private var episodeHeroIndex = 0   // top hero — Top Episodes
@@ -148,6 +151,7 @@ struct DiscoverView: View {
             await viewModel.load(country: country.code)
         }
         .sheet(isPresented: $showSearch) { PodcastSearchView() }
+        .sheet(isPresented: $showStarterPacks) { StarterPacksView() }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -165,6 +169,11 @@ struct DiscoverView: View {
                         searchShortcut
                             .padding(.horizontal, 20)
                             .padding(.top, 4)
+
+                        if appState.realSubscriptionCount == 0 {
+                            starterPacksBanner
+                                .padding(.horizontal, 20)
+                        }
 
                         if !viewModel.topEpisodes.isEmpty {
                             episodeHeroSection
@@ -239,6 +248,39 @@ struct DiscoverView: View {
     }
 
     // MARK: - Search shortcut
+
+    /// First-run nudge (shown only while the user has no real subscriptions):
+    /// a one-tap route into chart-derived starter packs. ONBOARDING_PLAN.md Phase 6/7.
+    private var starterPacksBanner: some View {
+        Button { showStarterPacks = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color.purple))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New here? Try a starter pack")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("Subscribe to a curated set in one tap.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color(white: 0.62))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.5))
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.purple.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.3), lineWidth: 1))
+            )
+        }
+        .buttonStyle(.plain)
+    }
 
     private var searchShortcut: some View {
         Button {
