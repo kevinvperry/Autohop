@@ -31,6 +31,7 @@ struct AutohopApp: App {
                     await appState.startPlaybackOnLaunchIfNeeded()
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    appState.setSceneActive(phase == .active)
                     if phase == .active {
                         Task { await appState.runAutoArchiveIfNeeded(reason: "app.foreground") }
                     } else {

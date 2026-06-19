@@ -101,8 +101,18 @@ final class PodcastSearchViewModel: ObservableObject {
         phase = .loading
         do {
             let results = try await service.search(query: term)
+            // A newer query may have cancelled this task while the request was in
+            // flight. Don't clobber the newer phase (.loading / .idle) with stale
+            // results.
+            guard !Task.isCancelled else { return }
             phase = results.isEmpty ? .empty : .results(results)
+        } catch is CancellationError {
+            // Intentional cancellation (query changed/cleared) — not an error.
+            return
         } catch {
+            // URLSession surfaces cancellation as URLError.cancelled, not
+            // CancellationError, so check explicitly before showing a failure.
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             phase = .failed("Search failed. Check your connection and try again.")
         }
     }

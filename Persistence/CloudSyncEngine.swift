@@ -146,10 +146,25 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
 
     private func queuePendingLocalChanges() async {
         guard let engine, let database else { return }
-        let episodes = (try? database.pendingEpisodeSyncStates()) ?? []
-        let subscriptions = (try? database.pendingSubscriptionSyncStates()) ?? []
-        let history = (try? database.pendingHistoryEntries()) ?? []
-        let stats = (try? database.pendingStatsDays()) ?? []
+        // A read failure here is not "nothing pending" — treating it as such would
+        // silently drop a sync push with no trace. Log each failure (the next store
+        // change re-runs this and can recover) instead of swallowing with `try?`.
+        // ERROR events use alwaysPersist so a "my data didn't sync" report leaves a
+        // trail even with the Diagnostics toggle off.
+        func read<T>(_ label: String, _ body: () throws -> [T]) -> [T] {
+            do {
+                return try body()
+            } catch {
+                logger.error("sync.readFailed", "Failed to read pending \(label)", metadata: [
+                    "error": String(describing: error)
+                ], alwaysPersist: true)
+                return []
+            }
+        }
+        let episodes = read("episode sync states", database.pendingEpisodeSyncStates)
+        let subscriptions = read("subscription sync states", database.pendingSubscriptionSyncStates)
+        let history = read("history entries", database.pendingHistoryEntries)
+        let stats = read("stats days", database.pendingStatsDays)
         let deviceID = DeviceIdentity.current
 
         var changes = episodes.map {

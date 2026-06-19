@@ -367,23 +367,25 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         return ["gif", "jpeg", "jpg", "png", "webp"].contains(ext)
     }
 
-    private static func parseDate(_ value: String) -> Date? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    // DateFormatter / ISO8601DateFormatter allocation is expensive, and parseDate
+    // runs once per episode — negligible for a 50-item refresh but costly on a
+    // full-history load (hundreds of episodes). Cache them as statics. We use one
+    // fixed formatter per format string (never mutating dateFormat) so the cache
+    // is safe to share across concurrent feed parses.
 
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = isoFormatter.date(from: trimmed) {
-            return date
-        }
+    private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        if let date = isoFormatter.date(from: trimmed) {
-            return date
-        }
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
+    private static let rfc822DateFormatters: [DateFormatter] = {
         let formats = [
             "E, d MMM yyyy HH:mm:ss Z",
             "E, d MMM yyyy HH:mm:ss zzz",
@@ -394,17 +396,33 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             "yyyy-MM-dd HH:mm:ss Z",
             "yyyy-MM-dd'T'HH:mm:ssZ"
         ]
-
-        for format in formats {
+        return formats.map { format in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = format
+            return formatter
+        }
+    }()
+
+    private static func parseDate(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let date = isoFormatterWithFractionalSeconds.date(from: trimmed) {
+            return date
+        }
+        if let date = isoFormatter.date(from: trimmed) {
+            return date
+        }
+
+        for formatter in rfc822DateFormatters {
             if let date = formatter.date(from: trimmed) {
                 return date
             }
         }
 
         if let normalized = dateByReplacingTimezoneAbbreviation(in: trimmed) {
-            for format in formats {
-                formatter.dateFormat = format
+            for formatter in rfc822DateFormatters {
                 if let date = formatter.date(from: normalized) {
                     return date
                 }

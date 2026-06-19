@@ -485,6 +485,25 @@ extension DownloadManager: URLSessionDownloadDelegate {
             return
         }
 
+        // Reject obvious non-media content types — a 200 can still deliver a (possibly large) HTML
+        // captive-portal/error page that passes the size check but must never be stored as media.
+        if let mimeType = Self.rejectableMIMEType(of: downloadTask.response) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.nonMedia", "Download rejected: non-media content type", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "mimeType": mimeType
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.nonMediaContentType(mimeType))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
+
         // Reject implausibly small bodies — a 200 response can still deliver a tiny error/placeholder
         // body (e.g. 17 bytes where the feed declared ~30 MB) that must not be stored as media.
         let actualBytes = ((try? fileManager.attributesOfItem(atPath: location.path))?[.size] as? NSNumber)?.int64Value ?? 0
@@ -621,6 +640,10 @@ public enum DownloadError: Error, Equatable {
     /// (e.g. a 17-byte error/placeholder body where the feed declared ~30 MB). Treated as a
     /// retryable failure rather than a successful download.
     case incompleteDownload(actualBytes: Int64, expectedBytes: Int64?)
+    /// The host returned a 200 with an obvious non-media content type (e.g. `text/html` —
+    /// a captive-portal or error page large enough to slip past the size check). Must not be
+    /// stored as episode media.
+    case nonMediaContentType(String)
 }
 
 extension DownloadManager {
@@ -651,6 +674,18 @@ extension DownloadManager {
     static func rejectableHTTPStatus(of response: URLResponse?) -> Int? {
         guard let http = response as? HTTPURLResponse else { return nil }
         return (200...299).contains(http.statusCode) ? nil : http.statusCode
+    }
+
+    /// Returns the offending MIME type when `response` reports an obvious non-media content type
+    /// (an HTML/JSON/plain-text error or captive-portal page that a 200 + size check can't catch),
+    /// or `nil` when the type is acceptable. We only reject a small set of clearly-textual types:
+    /// `mimeType` is absent on `file://` and some hosts mislabel valid audio, so anything unknown
+    /// or already `audio/`/`video/`/`application/octet-stream` is left to downstream playability.
+    /// Internal so it can be exercised by unit/smoke tests without a live network.
+    static func rejectableMIMEType(of response: URLResponse?) -> String? {
+        guard let mime = response?.mimeType?.lowercased() else { return nil }
+        let rejected = ["text/html", "text/plain", "application/json", "application/xml", "text/xml"]
+        return rejected.contains(mime) ? mime : nil
     }
 
     /// True when a completed (HTTP-200) transfer is too small to be real audio media, so it must not

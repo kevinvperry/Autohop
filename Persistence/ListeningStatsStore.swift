@@ -153,7 +153,21 @@ public struct DayStats: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         dayKey = try c.decode(String.self, forKey: .dayKey)
         wallClockSeconds = try c.decode(TimeInterval.self, forKey: .wallClockSeconds)
-        hourSeconds = try c.decode([TimeInterval].self, forKey: .hourSeconds)
+        // Normalize to exactly 24 buckets. Persisted data is normally 24, but a
+        // record decoded from CloudKit (another device, older or corrupt data)
+        // can be any length; merged(with:) and the period aggregation index
+        // 0..<24 unconditionally, so a short array here would crash. Pad with
+        // zeros and truncate any excess.
+        let decodedHours = try c.decode([TimeInterval].self, forKey: .hourSeconds)
+        if decodedHours.count == 24 {
+            hourSeconds = decodedHours
+        } else {
+            var normalized = Array(decodedHours.prefix(24))
+            if normalized.count < 24 {
+                normalized.append(contentsOf: Array(repeating: 0, count: 24 - normalized.count))
+            }
+            hourSeconds = normalized
+        }
         perShowSeconds = try c.decode([String: TimeInterval].self, forKey: .perShowSeconds)
         // Absent in JSON written before per-show time-saved tracking (2026-06).
         perShowTimeSaved = try c.decodeIfPresent([String: TimeInterval].self, forKey: .perShowTimeSaved) ?? [:]

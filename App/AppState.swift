@@ -3270,15 +3270,33 @@ final class AppState: ObservableObject {
 
     // MARK: - Foreground polling
 
+    /// Whether the app's scene is currently active (foreground). Updated from the
+    /// SwiftUI scenePhase observer. Gates the foreground poller so it stands down
+    /// when the app is only kept alive in the background by audio playback — see
+    /// `startForegroundPolling()`. Background feed refresh is BGAppRefreshTask's job.
+    var isSceneActive: Bool = true
+
+    /// Called by the scenePhase observer so foreground polling can pause/resume
+    /// in step with the app being foregrounded.
+    func setSceneActive(_ active: Bool) {
+        isSceneActive = active
+    }
+
     /// Foreground scheduler: ticks every 30 seconds and refreshes only the feeds
     /// whose adaptive due date has arrived. Conditional requests (304s) make each
     /// check nearly free, so an hourly news feed is picked up within a minute or
     /// two of publish while a weekly show is fetched roughly once a day.
+    ///
+    /// Despite the "foreground" name this Task is never cancelled, so without a
+    /// guard it would keep polling whenever background audio keeps the process
+    /// alive. The `isSceneActive` check makes it stand down in the background;
+    /// background refresh is handled separately by BGAppRefreshTask.
     func startForegroundPolling() {
         Task { @MainActor [weak self] in
             while true {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
+                guard self.isSceneActive else { continue }
                 let now = Date()
                 let anyDue = self.subscriptionStore.subscriptions.contains { subscription in
                     !subscription.excludeFromAutoFeedRefresh
