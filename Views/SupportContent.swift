@@ -282,7 +282,7 @@ enum SupportGuide {
             .heading("Pausing and cancelling"),
             .paragraph("Open the **Downloads** page to see all active downloads. Tap a download row to pause it. Tap again to resume. Swipe left to cancel."),
             .heading("Cellular downloads"),
-            .paragraph("By default, Autohop downloads over both Wi-Fi and cellular. To restrict downloads to Wi-Fi only, go to **Settings → Downloading** and turn off **Download over cellular**. You can also turn off **Download over WiFi** if you want full manual control."),
+            .paragraph("By default, Autohop downloads over Wi-Fi only. To also download over mobile data, go to **Settings → Downloading** and turn on **Download over cellular**. You can also turn off **Download over WiFi** if you want full manual control."),
             .heading("Storage"),
             .paragraph("Downloaded episode files are stored in the app's private storage. Go to **Settings → Storage** to see how many episodes are currently downloaded. Episodes are automatically removed when archived (manually or by auto-archive policy)."),
         ]
@@ -448,14 +448,15 @@ enum SupportGuide {
         summary: "On-device listening insights and time saved",
         blocks: [
             .paragraph("Access your listening stats from the **Menu (☰) → Stats**."),
-            .paragraph("Pick a time period at the top of the page — **7 Days, 30 Days, 90 Days, 1 Year, or All Time** — and every chart below responds to it. All stats are computed and stored entirely on your device."),
+            .paragraph("Pick a time period at the top of the page — **This Week, the current month (e.g. June), the current year (e.g. 2026), or Lifetime** — and every chart below responds to it. The first three are calendar periods that start fresh and fill in as they go: This Week runs Monday to Sunday (resets every Monday), the month resets on the 1st, and the year resets on January 1st. All stats are computed and stored entirely on your device."),
             .heading("What the page shows"),
             .table(headers: nil, rows: [
                 ["Hero card", "Total time listened in the period, time saved by Autohop, episodes finished, and your current listening streak (a day counts once you listen for at least a minute)."],
-                ["Listening Heatmap", "A calendar-style grid (7/30/90-day views) where each square is a day — the deeper the purple, the more you listened. The caption calls out your busiest day. On 1 Year and All Time this becomes a month-by-month bar chart."],
+                ["Listening Heatmap", "A calendar-style grid (This Week and current-month views) where each square is a day, with weeks starting on Monday — the deeper the purple, the more you listened. The caption calls out your busiest day. On the year and Lifetime views this becomes a month-by-month bar chart."],
                 ["Listening Clock", "A 24-hour dial showing when you listen — midnight at the top, noon at the bottom. The caption shows your peak listening hour."],
-                ["Top Shows", "Your most-listened podcasts for the period, ranked with artwork and relative listening bars. Shows you've unsubscribed from still appear. Tap any show to expand a detail card — episodes finished, time saved on that show, its share of your listening, average completion, and how soon after release you typically listen. Tap Show All to see your top 50, including how each show's rank moved against the previous period."],
-                ["Shows You're Drifting From", "On 7, 30, and 90-day views, Autohop highlights up to five subscribed shows you keep abandoning or archiving unplayed — each with a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. The section only appears when a show genuinely qualifies."],
+                ["Top Shows", "Your most-listened podcasts for the period, ranked with artwork and relative listening bars. Shows you've unsubscribed from still appear. Tap any show to expand a detail card — episodes finished, time saved on that show, its share of your listening, average completion, and how soon after release you typically listen. Tap Show All to see your top 50, including how each show's rank moved against the previous comparable period (the previous week, month, or year)."],
+                ["Shows You're Drifting From", "On This Week and current-month views, Autohop highlights up to five subscribed shows you appear to be losing interest in — either ones you keep abandoning part-way or archiving unplayed, or “ghost” subscriptions whose episodes keep downloading and aging out without you ever finishing one (a sign you might want to unsubscribe). Each row has a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. A show you genuinely keep up with — finishing some episodes and letting the rest cycle — is never flagged, and the section only appears when a show qualifies."],
+                ["Data Downloaded", "How much data Autohop downloaded in the selected period, with the number of episodes and the average size each. Only successful downloads count (a re-download counts again). This is measured on your device and counts from the update that introduced it — it won't include downloads from before then, so the Lifetime figure builds up over time."],
             ]),
             .heading("Time Saved breakdown"),
             .table(headers: nil, rows: [
@@ -464,7 +465,7 @@ enum SupportGuide {
                 ["Trim Silence", "Time saved by silence removal. Counts only the frames actually dropped from the audio stream."],
                 ["Auto Skipping", "Time saved by per-podcast start skip and end skip settings firing automatically at episode boundaries."],
             ]),
-            .paragraph("The **Total** row sums all four categories. Time saved totals you accumulated in earlier versions of Autohop are preserved and included in the All Time view."),
+            .paragraph("The **Total** row sums all four categories. Time saved totals you accumulated in earlier versions of Autohop are preserved and included in the Lifetime view."),
         ]
     )
 
@@ -475,11 +476,15 @@ enum SupportGuide {
         summary: "Release Radar, downloading, controls, and more",
         blocks: [
             .paragraph("Access global settings via the hamburger menu (☰) on the Priority page → **Settings**."),
+            .heading("Startup"),
+            .table(headers: nil, rows: [
+                ["Open at launch", "Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. Default: Player. (New users see a quick welcome first.)"],
+            ]),
             .heading("Release Radar"),
             .paragraph("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Checks are tiny — the feed is only downloaded when it has actually changed — so new episodes appear within minutes of release without draining battery or data."),
             .table(headers: nil, rows: [
                 ["Radar sensitivity", "How often a feed is re-checked while a new episode drop is imminent. Range: 1–60 minutes. Default: 5 minutes. Lower means new episodes appear faster."],
-                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (on by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
+                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (off by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
             ]),
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [
@@ -489,7 +494,7 @@ enum SupportGuide {
             .table(headers: nil, rows: [
                 ["Downloads", "Navigate to the Downloads page showing active, completed, and recently archived episodes."],
                 ["Download over WiFi", "Allow downloads on Wi-Fi networks. On by default."],
-                ["Download over cellular", "Allow downloads over mobile data. On by default. Turn off to restrict downloads to Wi-Fi only."],
+                ["Download over cellular", "Allow downloads over mobile data. Off by default — turn on to download over cellular as well as Wi-Fi."],
             ]),
             .heading("Controls"),
             .table(headers: nil, rows: [

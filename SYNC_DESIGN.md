@@ -26,7 +26,9 @@ the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
-dirty-tracking; nil stamp = clean. Projections (Models/SyncState.swift):
+dirty-tracking; nil stamp = clean. (`Synced` is a port of Pocket Casts'
+`ModifiedDate` wrapper and is **MPL-2.0-covered** — see NOTICE / LICENSE-MPL-2.0.md.)
+Projections (Models/SyncState.swift):
 - `EpisodeSyncState` (key `guid`): playedState, wasCompleted, lastPlayedAt.
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
   notificationsEnabled, excludeFromAutoFeedRefresh, playbackPreference,
@@ -61,12 +63,32 @@ struct level (deliberate v1 simplification).
    creates the podcast, then applies settings. Migration v4 caches subscription
    system fields. Unit-tested; real-device cross-device verification pending.
 
-### Remaining
-5. **Listening history + stats** — history LWW by `lastListenedAt`; **stats are
-   additive: partition by `(deviceID, dayKey)` and sum on read** (never LWW).
-6. **Active-player-wins + self-heal guards** — ignore remote position/state while
-   actively playing that episode; apply stashed remote state when the feed later
-   yields a missing episode.
+5. ✅ **Listening history + stats**
+   - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
+     migration v5). ListeningHistoryStore records pending on mutation + merges via
+     applyRemote; denormalized title/artwork kept.
+   - 5b Stats: **additive — partition by `(deviceID, dayKey)` and sum on read**
+     (never LWW). `DeviceIdentity.current` (UserDefaults UUID); DayStats record
+     per device-day; `stats_sync_state` (this device's pending) + `remote_stats`
+     (other devices) tables (migration v6). `DayStats.merged` sums; ListeningStats
+     `combinedDay` folds remote partitions into every read path (summary/streaks/
+     per-show/lifetime). Engine skips its own echoed records by deviceID.
+     legacyBaseline sync deferred (kept per-device for v1). Unit-tested incl.
+     cross-device summing; real-device verification pending.
+
+6. ✅ **Active-player-wins + self-heal guards**
+   - Active-player-wins: `SubscriptionStore.nowPlayingGuidProvider` (set by AppState
+     from `PlaybackEngine.currentEpisode`) — in `applyRemoteEpisodeState`, if the
+     remote record is for the episode loaded in the player, the local playedState
+     is kept and re-stamped so it pushes back, instead of a remote played/archived
+     interrupting playback.
+   - Self-heal: a remote episode-state stashed before the episode existed locally
+     is applied in `updateEpisodes` when the feed later brings that episode in.
+   3 unit tests.
+
+**All six steps complete.** Opt-in iCloud sync covers episode user-state,
+per-podcast settings + subscribe/unsubscribe, listening history, and additive
+per-device stats — with field-level LWW, active-player-wins, and self-heal.
 
 ## CloudKit setup notes
 - Container `iCloud.com.kevinperry.autohop`; CloudKit + Push + Background Modes
@@ -82,3 +104,19 @@ struct level (deliberate v1 simplification).
 `RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift` (35 total). The
 `CloudSyncEngine` itself is build/on-device-verified (CKSyncEngine can't run in
 `swift test`).
+
+## Diagnostics / observability
+`CloudSyncEngine` is instrumented through `AppLogger` with `sync.*` event keys —
+the primary way to debug sync on-device, since it can't be unit-tested. Grep the
+Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
+
+- **Lifecycle:** `sync.toggle`, `sync.engineActivated` (restoredState), `sync.stopped`, `sync.startAborted`/`sync.accountStatusFailed`, `sync.account*` (signIn/signOut/switch).
+- **Push:** `sync.queued` (per-type counts), `sync.pushed` (saved count), `sync.pushFailed` (CK error code — ERROR), `sync.zoneRecreate`, `sync.recordGone`.
+- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`.
+- **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
+
+Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
+events (`sync.pushFailed`, `sync.dbWriteFailed`, `sync.accountStatusFailed`) use
+`AppLogger.error(..., alwaysPersist: true)`, so they are recorded even when the
+Diagnostics toggle is off; INFO/WARN remain gated. The log file stays capped at
+~1 MB with rotation.

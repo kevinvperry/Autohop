@@ -6,7 +6,7 @@ import Foundation
 // of a podcast. `source` records where the chapter came from (embedded ID3/
 // MP4 metadata vs. external PodcastIndex JSON). Skipping logic lives in
 // ChapterService + PlaybackEngine, not here.
-public struct Chapter: Identifiable, Equatable, Codable {
+public struct Chapter: Identifiable, Equatable, Codable, Sendable {
     public var id: UUID
     public var episodeID: UUID?
     public var position: Int
@@ -37,14 +37,14 @@ public struct Chapter: Identifiable, Equatable, Codable {
     }
 }
 
-public enum ChapterSource: String, Codable {
+public enum ChapterSource: String, Codable, Sendable {
     case pscChapters
     case podcastChaptersJSON
     case appleEmbedded
     case plainTextFallback
 }
 
-public struct ChapterFilter: Equatable, Codable {
+public struct ChapterFilter: Equatable, Codable, Sendable {
     public var skippedPositions: Set<Int>
 
     public init(skippedPositions: Set<Int> = []) {

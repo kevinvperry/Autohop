@@ -40,7 +40,11 @@ import Foundation
 // pausedByRouteChange / wasPlayingBeforeInterruption guards), start/end skip
 // (real file time, fires onAutoSkip), disabled-chapter skipping per
 // ChapterFilter, and a render watchdog that detects a running-but-silent
-// engine and recovers it.
+// engine and recovers it. Chapters present at play() time drive skip filtering
+// immediately; chapters that arrive LATER (external podcast:chapters fetched
+// after playback starts, P7) are applied to the live session via
+// updateChapters(_:filter:for:), which updates currentEpisode.chapters +
+// currentFilter only while the same episode is still playing.
 //
 // INVARIANTS:
 //  - Plays local files only (download-first); never streams.
@@ -75,6 +79,11 @@ protocol PlaybackControlling {
     func updatePlaybackSpeed(_ speed: Double)
     func updateVocalBoost(_ level: VocalBoostLevel)
     func updateTrimSilence(_ amount: TrimSilenceAmount)
+    /// Applies chapters that were fetched after playback already started (e.g. an
+    /// external `podcast:chapters` JSON feed) to the live session, so chapter
+    /// display and chapter-skip filtering work without the fetch having blocked
+    /// the first audio frame. No-op if `episodeID` is no longer the one playing.
+    func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID)
     func stop()
     /// Set the output volume on the active playback path. 0 = silent, 1 = full.
     func setVolume(_ volume: Float)
@@ -177,6 +186,19 @@ final class PlaybackEngine: PlaybackControlling {
     // MARK: - Play
 
     func play(_ episode: Episode, preference: PlaybackPreference, filter: ChapterFilter) async throws {
+        try await startPlayback(episode: episode, preference: preference, filter: filter, resumeAt: nil)
+    }
+
+    /// Starts (or rebuilds) playback. `resumeAt` overrides the start position: it is `nil` for a
+    /// fresh play() — in which case the start-skip preference applies and `onAutoSkip` fires — and
+    /// set to the current position when a live trim/boost change forces a path rebuild, so the
+    /// listener stays exactly where they were and start-skip is not re-applied.
+    private func startPlayback(
+        episode: Episode,
+        preference: PlaybackPreference,
+        filter: ChapterFilter,
+        resumeAt: TimeInterval?
+    ) async throws {
         guard let localFileURL = episode.localFileURL else {
             logger.error("playback.missingFile", "Episode has no local file URL", metadata: [
                 "episode": episode.title
@@ -194,6 +216,8 @@ final class PlaybackEngine: PlaybackControlling {
         configureAudioSession(vocalBoostLevel: preference.vocalBoostLevel)
         stop(resetEpisode: false)
 
+        let startPosition = resumeAt ?? preference.startSkipSeconds
+
         // Audio episodes use the AVAudioEngine path whenever vocal boost (any level) or
         // trim silence is active — the dynamics chain requires engine-level processing.
         // Video always stays on AVPlayer (VideoPlayer view requires it).
@@ -209,7 +233,9 @@ final class PlaybackEngine: PlaybackControlling {
                 episode: episode,
                 preference: preference,
                 filter: filter,
-                localFileURL: localFileURL
+                localFileURL: localFileURL,
+                startPosition: startPosition,
+                isStartSkip: resumeAt == nil
             )
         } else {
             let asset = AVURLAsset(url: localFileURL)
@@ -225,10 +251,11 @@ final class PlaybackEngine: PlaybackControlling {
             currentFilter = episode.chapters.isEmpty ? nil : filter
             currentPreference = preference
             durationSeconds = loadedDuration.isFinite && loadedDuration > 0 ? loadedDuration : episode.durationSeconds ?? 0
-            pausedAtSeconds = preference.startSkipSeconds
+            pausedAtSeconds = startPosition
             didFinishCurrentEpisode = false
 
-            if preference.startSkipSeconds > 0 {
+            // Only treat this as an auto start-skip on a fresh play, not a mid-play path rebuild.
+            if resumeAt == nil && preference.startSkipSeconds > 0 {
                 onAutoSkip?(preference.startSkipSeconds)
             }
 
@@ -248,9 +275,51 @@ final class PlaybackEngine: PlaybackControlling {
                 "mediaKind": episode.mediaKind.rawValue,
                 "speed": PlaybackPreference.speedLabel(preference.speed),
                 "vocalBoost": preference.vocalBoostLevel.title,
-                "trimSilence": preference.trimSilence.title
+                "trimSilence": preference.trimSilence.title,
+                "resumeAt": resumeAt.map { "\(Int($0))" } ?? "startSkip"
             ])
         }
+    }
+
+    /// Rebuilds the active playback path from the current position when a live vocal-boost / trim-silence
+    /// change flips an AUDIO episode between the AVPlayer and AVAudioEngine paths (the engine path is
+    /// required for trim silence and the full vocal-boost chain). Video always stays on AVPlayer, so it
+    /// returns `false` for video and the caller applies the in-path adjustment instead.
+    /// Returns `true` when a rebuild was started (the new path is built with the updated preference, so
+    /// the caller must not also apply an in-path update).
+    @discardableResult
+    private func reconcileAudioPathForLiveChange() -> Bool {
+        guard let episode = currentEpisode,
+              let preference = currentPreference,
+              episode.mediaKind == .audio else { return false }
+
+        let shouldUseEngine = preference.vocalBoostLevel != .off || preference.trimSilence != .off
+        guard shouldUseEngine != engineUsesEngine else { return false }
+
+        let resumeTime = currentPlaybackTime()
+        let wasPlaying = isPlaying
+        let filter = currentFilter ?? ChapterFilter()
+
+        logger.info("playback.pathReconcile", "Rebuilding playback path for live setting change", metadata: [
+            "episode": episode.title,
+            "from": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
+            "to": shouldUseEngine ? "AVAudioEngine" : "AVPlayer",
+            "resumeAt": "\(Int(resumeTime))"
+        ])
+
+        Task { @MainActor in
+            do {
+                try await self.startPlayback(episode: episode, preference: preference, filter: filter, resumeAt: resumeTime)
+                // startPlayback always begins playing; honour the prior pause state.
+                if !wasPlaying { self.pause() }
+            } catch {
+                self.logger.error("playback.pathReconcileFailed", "Failed to rebuild playback path", metadata: [
+                    "episode": episode.title,
+                    "error": String(describing: error)
+                ])
+            }
+        }
+        return true
     }
 
     // MARK: - Pause / Resume
@@ -384,10 +453,14 @@ final class PlaybackEngine: PlaybackControlling {
     func updateVocalBoost(_ level: VocalBoostLevel) {
         currentPreference?.vocalBoostLevel = level
         configureAudioSession(vocalBoostLevel: level)
+        // For audio, enabling/disabling boost may flip the AVPlayer↔AVAudioEngine path; if so the
+        // rebuild applies the new level itself and we must not also adjust the current path.
+        if reconcileAudioPathForLiveChange() { return }
         if engineUsesEngine {
             configureVocalBoostChain(level: level)
         } else if let item = player?.currentItem,
                   let asset = item.asset as? AVURLAsset {
+            // Video stays on AVPlayer: apply boost as an audioMix gain (no engine chain available).
             applyVocalBoostMix(to: item, asset: asset, level: level)
         }
         logger.info("playback.vocalBoost", "Vocal Boost preference updated", metadata: [
@@ -401,6 +474,11 @@ final class PlaybackEngine: PlaybackControlling {
         guard currentPreference?.trimSilence != amount else { return }
         currentPreference?.trimSilence = amount
 
+        // Toggling trim silence on/off flips an audio episode between the AVPlayer and engine paths;
+        // the rebuild starts the correct path from the current position. If no switch is needed we
+        // fall through to the in-place buffer-loop restart below.
+        if reconcileAudioPathForLiveChange() { return }
+
         guard engineUsesEngine else { return }
         // Restart the buffer loop so the new silence setting takes effect immediately.
         let time = currentPlaybackTime()
@@ -411,6 +489,17 @@ final class PlaybackEngine: PlaybackControlling {
         logger.info("playback.trimSilence", "Trim Silence updated mid-playback", metadata: [
             "episode": currentEpisode?.title ?? "none",
             "amount": amount.title
+        ])
+    }
+
+    func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {
+        guard var episode = currentEpisode, episode.id == episodeID else { return }
+        episode.chapters = chapters
+        currentEpisode = episode
+        currentFilter = chapters.isEmpty ? nil : filter
+        logger.info("playback.chaptersUpdated", "External chapters applied mid-playback", metadata: [
+            "episode": episode.title,
+            "count": "\(chapters.count)"
         ])
     }
 
@@ -481,7 +570,9 @@ final class PlaybackEngine: PlaybackControlling {
         episode: Episode,
         preference: PlaybackPreference,
         filter: ChapterFilter,
-        localFileURL: URL
+        localFileURL: URL,
+        startPosition: TimeInterval,
+        isStartSkip: Bool
     ) throws {
         let file = try AVAudioFile(forReading: localFileURL)
         let fileDuration = Double(file.length) / file.processingFormat.sampleRate
@@ -537,10 +628,11 @@ final class PlaybackEngine: PlaybackControlling {
         durationSeconds = fileDuration.isFinite && fileDuration > 0
             ? fileDuration
             : episode.durationSeconds ?? 0
-        pausedAtSeconds = preference.startSkipSeconds
+        pausedAtSeconds = startPosition
         didFinishCurrentEpisode = false
 
-        if preference.startSkipSeconds > 0 {
+        // Only treat this as an auto start-skip on a fresh play, not a mid-play path rebuild.
+        if isStartSkip && preference.startSkipSeconds > 0 {
             onAutoSkip?(preference.startSkipSeconds)
         }
 
@@ -613,26 +705,36 @@ final class PlaybackEngine: PlaybackControlling {
                 do {
                     try file.read(into: buffer)
                 } catch {
-                    // AVAudioFile.read(into:) throws at EOF by bridging a nil NSError*,
-                    // which produces an NSError with empty domain and code 0. That is
-                    // normal end-of-file signalling, not a real failure.
+                    // AVAudioFile.read(into:) throws at EOF by bridging a nil NSError*. Depending on
+                    // the toolchain this surfaces either as an empty-domain NSError or as
+                    // `Foundation._GenericObjCError`, both with code 0. Treat it as EOF only when we
+                    // are actually at the end of the file — a generic error mid-file is a real failure
+                    // and must still be logged as such.
                     let nsError = error as NSError
-                    if nsError.domain.isEmpty && nsError.code == 0 {
+                    let isGenericNilError = nsError.code == 0 &&
+                        (nsError.domain.isEmpty || nsError.domain == "Foundation._GenericObjCError")
+                    let atEndOfFile = file.framePosition >= file.length
+                    if isGenericNilError && atEndOfFile {
                         self.logger.info("engine.readEOF", "AVAudioFile reached end of file")
                     } else {
                         self.logger.error("engine.readFailed", "AVAudioFile read failed", metadata: [
                             "error": error.localizedDescription,
                             "domain": nsError.domain,
-                            "code": String(nsError.code)
+                            "code": String(nsError.code),
+                            "framePosition": String(file.framePosition),
+                            "fileLength": String(file.length)
                         ])
                     }
                     break
                 }
 
                 guard buffer.frameLength > 0 else {
-                    // EOF — flush any gap buffers still in the detector.
-                    let flushBuffers = detector.flush()
-                    for buf in flushBuffers {
+                    // EOF — flush any gap buffers still in the detector. The trailing gap
+                    // is re-emitted verbatim so framesRemoved is 0, but route it through the
+                    // same accounting for completeness.
+                    let flushed = detector.flush()
+                    self.reportTrimSilenceSaved(frames: flushed.framesRemoved, sampleRate: sampleRate)
+                    for buf in flushed.buffers {
                         if self.engineReadCancelled { break }
                         sem.wait()
                         if self.engineReadCancelled { sem.signal(); break }
@@ -664,21 +766,21 @@ final class PlaybackEngine: PlaybackControlling {
                 // rendered position rather than a wall-clock estimate.
                 let chunkEndSeconds = Double(file.framePosition) / sampleRate
 
-                let outputBuffers = detector.process(
+                let processed = detector.process(
                     buffer: buffer,
                     currentFrame: file.framePosition,
                     totalFrames: totalFrames,
                     sampleRate: sampleRate
                 )
+                let outputBuffers = processed.buffers
 
-                // Accumulate silence savings: frames read minus frames scheduled for playback.
-                let inputFrames = AVAudioFrameCount(buffer.frameLength)
-                let outputFrames = outputBuffers.reduce(AVAudioFrameCount(0)) { $0 + $1.frameLength }
-                if outputFrames < inputFrames && sampleRate > 0 {
-                    let savedSeconds = Double(inputFrames - outputFrames) / sampleRate
-                    let cb = self.onTrimSilenceSaved
-                    DispatchQueue.main.async { cb?(savedSeconds) }
-                }
+                // Accumulate the silence actually saved. SilenceDetector reports the NET
+                // frames removed by this call (0 while a gap is still being accumulated, 0
+                // when a gap is too short and re-inserted, and the dropped frames net of the
+                // kept join buffers for a real gap). Summing that — instead of inferring from
+                // the per-buffer input/output delta — is the fix for the over-count in
+                // ASSESSMENT.md B2.
+                self.reportTrimSilenceSaved(frames: processed.framesRemoved, sampleRate: sampleRate)
 
                 for (i, buf) in outputBuffers.enumerated() {
                     if self.engineReadCancelled { break }
@@ -734,6 +836,17 @@ final class PlaybackEngine: PlaybackControlling {
 
             DispatchQueue.main.async { [weak self] in self?.engineReadFinished = true }
         }
+    }
+
+    /// Convert net trimmed frames (as reported by SilenceDetector) to seconds and add
+    /// them to the Stats "Trim Silence" time-saved category on the main actor. Called
+    /// from the background read loop; reading `onTrimSilenceSaved` here matches the
+    /// existing pattern (the closure is set once at setup).
+    private func reportTrimSilenceSaved(frames: AVAudioFrameCount, sampleRate: Double) {
+        guard frames > 0, sampleRate > 0 else { return }
+        let savedSeconds = Double(frames) / sampleRate
+        let cb = onTrimSilenceSaved
+        DispatchQueue.main.async { cb?(savedSeconds) }
     }
 
     private func stopEngineBufferLoop() {

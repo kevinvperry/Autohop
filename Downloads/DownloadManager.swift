@@ -3,14 +3,25 @@ import Foundation
 // AI CONTEXT — Downloads/DownloadManager.swift
 // Background URLSession download layer ("com.autohop.downloads" identifier),
 // continuation-based: download() suspends until the URLSession delegate fires.
-// All mutable maps are accessed on the main queue only (no locks).
+// All mutable maps are accessed on the main queue only (no locks). The
+// duplicate/zombie guard keys live tasks by episodeID (primary) and by media URL
+// (secondary, for the same episode re-fetched with a new UUID). taskIDByMediaURL
+// is [URL: Set<Int>] (B6) so two episodes that share one enclosure URL can't
+// clobber each other's entry on insert or over-remove on completion —
+// removeMediaURLTask(_:for:) drops only the finishing task; download() blocks if
+// ANY suspected task for the URL/episode is still alive, else clears stale entries
+// and starts fresh.
 // HANDLES: resume-data save/restore on pause/cancel/failure; a stall watchdog
 // (no progress bytes for 10 min → cancel with resume data, notify AppState via
 // onWatchdogCancelled to schedule a retry); progress throttling (≤1/s/task);
 // background relaunch completion (onBackgroundDownloadCompleted, when the app
 // was killed and iOS relaunched it to deliver a finished download — there is
 // no live continuation in that case); file storage under the app's Downloads
-// directory with deterministic names (expectedLocalFileURL).
+// directory with deterministic names (expectedLocalFileURL). The Downloads
+// directory is marked isExcludedFromBackup (ASSESSMENT N1) so re-downloadable
+// media is NOT swept into iCloud/device backups; it deliberately stays in
+// Application Support (NOT Caches) so iOS never purges it out from under the
+// download-first queue.
 // CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
 // ENFORCED HERE — AppState gates calls to download().
 public protocol DownloadManaging: AnyObject {
@@ -48,7 +59,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // Map task → episode ID so progress callbacks know which episode to report.
     private var episodeIDByTask: [Int: UUID] = [:]
     private var taskIDByEpisodeID: [UUID: Int] = [:]
-    private var taskIDByMediaURL: [URL: Int] = [:]
+    // Keyed by media URL → the set of in-flight task IDs targeting that URL. A set
+    // (not a single Int) so two episodes that happen to share one enclosure URL
+    // (re-publishes, shared trailers) don't clobber each other's entry on insert
+    // or over-remove on completion (B6). Almost always holds exactly one ID.
+    private var taskIDByMediaURL: [URL: Set<Int>] = [:]
     private var resumeDataByEpisodeID: [UUID: Data] = [:]
     private var mediaURLByEpisodeID: [UUID: URL] = [:]
     private var lastLoggedProgressBucketByEpisodeID: [UUID: Int] = [:]
@@ -100,7 +115,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                     guard let meta = self.decodeTaskMeta(task.taskDescription) else { continue }
                     self.episodeIDByTask[task.taskIdentifier] = meta.episodeID
                     self.taskIDByEpisodeID[meta.episodeID] = task.taskIdentifier
-                    self.taskIDByMediaURL[meta.audioURL] = task.taskIdentifier
+                    self.taskIDByMediaURL[meta.audioURL, default: []].insert(task.taskIdentifier)
                     self.mediaURLByEpisodeID[meta.episodeID] = meta.audioURL
                     self.logger.info("download.taskReconnected", "Reconnected live task from previous session", metadata: [
                         "episodeID": meta.episodeID.uuidString,
@@ -118,35 +133,41 @@ public final class DownloadManager: NSObject, DownloadManaging {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
-                let suspectedTaskID = self.taskIDByEpisodeID[episode.id]
-                    ?? self.taskIDByMediaURL[episode.audioURL]
+                var suspectedTaskIDs = self.taskIDByMediaURL[episode.audioURL] ?? []
+                if let byEpisode = self.taskIDByEpisodeID[episode.id] {
+                    suspectedTaskIDs.insert(byEpisode)
+                }
 
-                guard let suspectedTaskID else {
+                guard !suspectedTaskIDs.isEmpty else {
                     // No in-memory map entry — safe to start immediately.
                     self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                     return
                 }
 
-                // Map entry exists — verify the URLSession task is still alive before blocking.
+                // Map entry exists — verify a URLSession task is still alive before blocking.
                 self.session.getAllTasks { [weak self] tasks in
                     DispatchQueue.main.async {
                         guard let self else { return }
-                        if tasks.contains(where: { $0.taskIdentifier == suspectedTaskID }) {
+                        let liveTaskIDs = Set(tasks.map(\.taskIdentifier))
+                        if let aliveTaskID = suspectedTaskIDs.first(where: { liveTaskIDs.contains($0) }) {
                             self.logger.warning("download.duplicateBlocked", "Duplicate download request blocked", metadata: [
                                 "episode": episode.title,
                                 "episodeID": episode.id.uuidString,
-                                "mediaURL": episode.audioURL.absoluteString
+                                "mediaURL": episode.audioURL.absoluteString,
+                                "taskID": "\(aliveTaskID)"
                             ])
                             continuation.resume(throwing: DownloadError.duplicateDownload)
                         } else {
-                            // Zombie: map entry exists but the URLSession task is gone. Clear stale
-                            // state and start a fresh download.
+                            // Zombie: map entries exist but no live URLSession task remains. Clear
+                            // stale state and start a fresh download.
                             self.logger.warning("download.zombieCleared", "Cleared zombie task entry; starting fresh download", metadata: [
                                 "episode": episode.title,
                                 "episodeID": episode.id.uuidString,
-                                "staleTaskID": "\(suspectedTaskID)"
+                                "staleTaskIDs": suspectedTaskIDs.map(String.init).joined(separator: ",")
                             ])
-                            self.clearZombieMapEntries(taskID: suspectedTaskID, episodeID: episode.id, audioURL: episode.audioURL)
+                            for staleTaskID in suspectedTaskIDs {
+                                self.clearZombieMapEntries(taskID: staleTaskID, episodeID: episode.id, audioURL: episode.audioURL)
+                            }
                             self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
                         }
                     }
@@ -171,12 +192,13 @@ public final class DownloadManager: NSObject, DownloadManaging {
         task.taskDescription = encodeTaskMeta(
             episodeID: episode.id,
             subscriptionID: episode.subscriptionID,
-            audioURL: episode.audioURL
+            audioURL: episode.audioURL,
+            expectedBytes: episode.fileSizeBytes
         )
         continuations[task.taskIdentifier] = continuation
         episodeIDByTask[task.taskIdentifier] = episode.id
         taskIDByEpisodeID[episode.id] = task.taskIdentifier
-        taskIDByMediaURL[episode.audioURL] = task.taskIdentifier
+        taskIDByMediaURL[episode.audioURL, default: []].insert(task.taskIdentifier)
         mediaURLByEpisodeID[episode.id] = episode.audioURL
         lastLoggedProgressBucketByEpisodeID[episode.id] = 0
         progressLastReceivedAt[episode.id] = Date()
@@ -194,11 +216,21 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private func clearZombieMapEntries(taskID: Int, episodeID: UUID, audioURL: URL) {
         episodeIDByTask.removeValue(forKey: taskID)
         taskIDByEpisodeID.removeValue(forKey: episodeID)
-        taskIDByMediaURL.removeValue(forKey: audioURL)
+        removeMediaURLTask(taskID, for: audioURL)
         mediaURLByEpisodeID.removeValue(forKey: episodeID)
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
+    }
+
+    /// Removes a single task ID from the media-URL → task-IDs map, dropping the
+    /// URL key entirely once no tasks remain for it. Keeps a shared-URL sibling's
+    /// entry intact (B6).
+    private func removeMediaURLTask(_ taskID: Int, for url: URL) {
+        taskIDByMediaURL[url]?.remove(taskID)
+        if taskIDByMediaURL[url]?.isEmpty == true {
+            taskIDByMediaURL.removeValue(forKey: url)
+        }
     }
 
     public func pauseDownload(episodeID: UUID) {
@@ -228,17 +260,19 @@ public final class DownloadManager: NSObject, DownloadManaging {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             // Always purge stale map entries so the episode can be re-downloaded regardless of
-            // whether a live URLSession task exists (e.g. after a force-kill).
-            if let taskID = self.taskIDByEpisodeID.removeValue(forKey: episodeID) {
-                self.episodeIDByTask.removeValue(forKey: taskID)
+            // whether a live URLSession task exists (e.g. after a force-kill). Capture the task ID
+            // first — we still need it to cancel the live task below.
+            let removedTaskID = self.taskIDByEpisodeID.removeValue(forKey: episodeID)
+            if let removedTaskID {
+                self.episodeIDByTask.removeValue(forKey: removedTaskID)
             }
-            if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID) {
-                self.taskIDByMediaURL.removeValue(forKey: url)
+            if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID), let removedTaskID {
+                self.removeMediaURLTask(removedTaskID, for: url)
             }
             self.resumeDataByEpisodeID.removeValue(forKey: episodeID)
             self.lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
 
-            guard let taskID = self.taskIDByEpisodeID[episodeID] else {
+            guard let taskID = removedTaskID else {
                 // No live task — map entries already cleared above; nothing more to cancel.
                 self.logger.info("download.cancelNoTask", "Cancel requested but no live task found — maps cleared", metadata: [
                     "episodeID": episodeID.uuidString
@@ -331,7 +365,24 @@ public final class DownloadManager: NSObject, DownloadManaging {
         )
         let dir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        // N1: keep re-downloadable media out of iCloud/device backups. Idempotent
+        // and cheap (skips the write once the flag is already set), so it's safe to
+        // re-apply on every resolve — and it self-heals if a restore ever clears it.
+        excludeFromBackupIfNeeded(dir)
         return dir
+    }
+
+    /// Sets `isExcludedFromBackup` on a directory if it isn't already excluded, so
+    /// large, trivially re-downloadable podcast media never bloats the user's iCloud
+    /// Backup or device-to-device transfer (ASSESSMENT N1). Best-effort: a failure
+    /// here only means the flag isn't set, never that a download fails.
+    private func excludeFromBackupIfNeeded(_ url: URL) {
+        let current = try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+        guard current != true else { return }
+        var mutableURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutableURL.setResourceValues(values)
     }
 
     private func fileExtension(for url: URL) -> String {
@@ -345,11 +396,14 @@ public final class DownloadManager: NSObject, DownloadManaging {
         var episodeID: UUID
         var subscriptionID: UUID
         var audioURL: URL
+        // Feed-declared enclosure length, used to sanity-check the completed transfer size.
+        // Optional + decoded with `try?` so descriptions written by older builds still decode.
+        var expectedBytes: Int64?
     }
 
-    private func encodeTaskMeta(episodeID: UUID, subscriptionID: UUID, audioURL: URL) -> String? {
+    private func encodeTaskMeta(episodeID: UUID, subscriptionID: UUID, audioURL: URL, expectedBytes: Int64?) -> String? {
         guard let data = try? JSONEncoder().encode(
-            TaskMeta(episodeID: episodeID, subscriptionID: subscriptionID, audioURL: audioURL)
+            TaskMeta(episodeID: episodeID, subscriptionID: subscriptionID, audioURL: audioURL, expectedBytes: expectedBytes)
         ) else { return nil }
         return String(data: data, encoding: .utf8)
     }
@@ -410,6 +464,67 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let audioURL  = meta?.audioURL
             ?? downloadTask.currentRequest?.url
             ?? URL(string: "https://placeholder.invalid")!
+
+        // Validate the HTTP response before storing anything. A background download task still
+        // delivers a body to didFinishDownloadingTo on 4xx/5xx (an HTML error/login/captive-portal
+        // page), which must never be stored as episode media and marked downloaded.
+        if let status = Self.rejectableHTTPStatus(of: downloadTask.response) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.httpError", "Download rejected: non-success HTTP status", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "status": "\(status)"
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.httpStatus(status))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
+
+        // Reject obvious non-media content types — a 200 can still deliver a (possibly large) HTML
+        // captive-portal/error page that passes the size check but must never be stored as media.
+        if let mimeType = Self.rejectableMIMEType(of: downloadTask.response) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.nonMedia", "Download rejected: non-media content type", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "mimeType": mimeType
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.nonMediaContentType(mimeType))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
+
+        // Reject implausibly small bodies — a 200 response can still deliver a tiny error/placeholder
+        // body (e.g. 17 bytes where the feed declared ~30 MB) that must not be stored as media.
+        let actualBytes = ((try? fileManager.attributesOfItem(atPath: location.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        if Self.isImplausiblySmallDownload(actualBytes: actualBytes, expectedBytes: meta?.expectedBytes) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            let expected = meta?.expectedBytes
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.logger.error("download.tooSmall", "Download rejected: body too small to be valid media", metadata: [
+                    "taskID": "\(taskID)",
+                    "episodeID": episodeID.uuidString,
+                    "actualBytes": "\(actualBytes)",
+                    "expectedBytes": expected.map(String.init) ?? "unknown"
+                ])
+                self.continuations[taskID]?.resume(throwing: DownloadError.incompleteDownload(actualBytes: actualBytes, expectedBytes: expected))
+                self.continuations.removeValue(forKey: taskID)
+            }
+            return
+        }
 
         let placeholder = Episode(
             id: episodeID,
@@ -518,26 +633,85 @@ public enum DownloadError: Error, Equatable {
     case duplicateDownload
     case paused
     case cancelled
+    /// The host returned a non-success HTTP status (e.g. 404/500). The delivered body
+    /// (often an HTML error/login page) must not be stored as episode media.
+    case httpStatus(Int)
+    /// The transfer completed with a status 200 but the body is implausibly small for audio media
+    /// (e.g. a 17-byte error/placeholder body where the feed declared ~30 MB). Treated as a
+    /// retryable failure rather than a successful download.
+    case incompleteDownload(actualBytes: Int64, expectedBytes: Int64?)
+    /// The host returned a 200 with an obvious non-media content type (e.g. `text/html` —
+    /// a captive-portal or error page large enough to slip past the size check). Must not be
+    /// stored as episode media.
+    case nonMediaContentType(String)
 }
 
-private extension DownloadManager {
+extension DownloadManager {
+    // Public because it satisfies a DownloadManaging protocol requirement.
     public func activeDownloadEpisodeIDs() async -> Set<UUID> {
         await withCheckedContinuation { continuation in
             session.getAllTasks { tasks in
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { continuation.resume(returning: []); return }
-                    let ids = Set(tasks.compactMap { self.episodeIDByTask[$0.taskIdentifier] })
+                    // Decode the episode ID straight from each task's taskDescription rather than the
+                    // in-memory episodeIDByTask map: that map is rebuilt asynchronously after init
+                    // (rebuildTaskMapsFromLiveSession), so at startup it may still be empty when
+                    // AppState reconciles. taskDescription is set on the task itself and is always
+                    // authoritative, avoiding a race that would mark live downloads as failed.
+                    let ids = Set(tasks.compactMap { self.decodeTaskMeta($0.taskDescription)?.episodeID })
                     continuation.resume(returning: ids)
                 }
             }
         }
     }
+}
 
+extension DownloadManager {
+    /// Returns the offending HTTP status code if `response` is a non-success HTTP response,
+    /// or `nil` when it is acceptable (a 2xx HTTP response, or a non-HTTP response we cannot
+    /// classify — e.g. `file://`, which is left to downstream playability checks).
+    /// Internal so it can be exercised by unit/smoke tests without a live network.
+    static func rejectableHTTPStatus(of response: URLResponse?) -> Int? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        return (200...299).contains(http.statusCode) ? nil : http.statusCode
+    }
+
+    /// Returns the offending MIME type when `response` reports an obvious non-media content type
+    /// (an HTML/JSON/plain-text error or captive-portal page that a 200 + size check can't catch),
+    /// or `nil` when the type is acceptable. We only reject a small set of clearly-textual types:
+    /// `mimeType` is absent on `file://` and some hosts mislabel valid audio, so anything unknown
+    /// or already `audio/`/`video/`/`application/octet-stream` is left to downstream playability.
+    /// Internal so it can be exercised by unit/smoke tests without a live network.
+    static func rejectableMIMEType(of response: URLResponse?) -> String? {
+        guard let mime = response?.mimeType?.lowercased() else { return nil }
+        let rejected = ["text/html", "text/plain", "application/json", "application/xml", "text/xml"]
+        return rejected.contains(mime) ? mime : nil
+    }
+
+    /// True when a completed (HTTP-200) transfer is too small to be real audio media, so it must not
+    /// be stored as a downloaded episode. Catches error/placeholder bodies a host returns with a 200
+    /// (e.g. 17 bytes where the feed declared ~30 MB), which the status check alone cannot detect.
+    /// Internal so it is unit-testable without a live download.
+    static func isImplausiblySmallDownload(actualBytes: Int64, expectedBytes: Int64?) -> Bool {
+        if actualBytes <= 0 { return true }
+        if let expected = expectedBytes, expected > 0 {
+            // Reject when we received far less than the feed declared: below 5% of expected, capped
+            // at a 64 KB floor so genuinely small clips with a large declared size still pass.
+            let floor = min(Int64(65536), expected / 20)
+            return actualBytes < floor
+        }
+        // Expected size unknown — keep the bar very low so legitimate short clips are never rejected;
+        // only obviously-tiny bodies (error pages) are caught.
+        return actualBytes < 1024
+    }
+}
+
+private extension DownloadManager {
     func clearTaskTracking(taskID: Int) {
         guard let episodeID = episodeIDByTask.removeValue(forKey: taskID) else { return }
         taskIDByEpisodeID.removeValue(forKey: episodeID)
         if let mediaURL = mediaURLByEpisodeID.removeValue(forKey: episodeID) {
-            taskIDByMediaURL.removeValue(forKey: mediaURL)
+            removeMediaURLTask(taskID, for: mediaURL)
         }
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)

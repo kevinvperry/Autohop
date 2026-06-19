@@ -16,7 +16,7 @@ struct AcknowledgementsView: View {
                     licence: "Mozilla Public License, v. 2.0",
                     licenceURL: URL(string: "https://mozilla.org/MPL/2.0/"),
                     repoURL: URL(string: "https://github.com/Automattic/pocket-casts-ios"),
-                    description: "The silence-trimming algorithm used in Autohop's audio engine (including RMS thresholds, gap detection, and fade logic) is ported from AudioReadTask.swift in the Pocket Casts iOS project. The vocal boost signal chain architecture is also based on Pocket Casts' EffectsPlayer.swift."
+                    description: "The silence-trimming algorithm used in Autohop's audio engine (including RMS thresholds, gap detection, and fade logic) is ported from AudioReadTask.swift in the Pocket Casts iOS project. The vocal boost signal chain architecture is also based on Pocket Casts' EffectsPlayer.swift. The @Synced field-level dirty-tracking wrapper used by Autohop's cross-device sync is ported from Pocket Casts' ModifiedDate property wrapper."
                 )
             } header: {
                 Text("Open Source Components")
@@ -24,7 +24,7 @@ struct AcknowledgementsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Autohop uses portions of the above open-source projects. Full licence texts are included with Autohop.")
                     if let autohopRepo = URL(string: "https://github.com/kevinvperry/Autohop") {
-                        Text("As required by the MPL-2.0, the source code of Autohop's modified versions of the covered files (SilenceDetector.swift and PlaybackEngine.swift) is published here:")
+                        Text("As required by the MPL-2.0, the source code of Autohop's modified versions of the covered files (SilenceDetector.swift, SilenceGapAccounting.swift, PlaybackEngine.swift, and Synced.swift) is published here:")
                         Link(destination: autohopRepo) {
                             Label("github.com/kevinvperry/Autohop", systemImage: "arrow.up.right.square")
                                 .font(.footnote.weight(.medium))
@@ -34,7 +34,12 @@ struct AcknowledgementsView: View {
                 }
                 .font(.footnote)
             }
+            .listRowBackground(Color.white.opacity(0.08))
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

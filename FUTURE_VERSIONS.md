@@ -11,6 +11,20 @@ Group by theme as the list grows.
 
 ---
 
+## Onboarding
+
+*(The first-run experience — Welcome carousel, launch routing, empty states,
+first-subscribe card, coach marks, starter packs, getting-started checklist — shipped;
+see ONBOARDING_PLAN.md. This is the one deferred piece.)*
+
+- 💡 **Bundled "Welcome to Autohop" demo episode** — a tiny pre-loaded audio clip so a
+  brand-new user can try the player (speed, skip, scrubber, chapters) *before* anything
+  downloads, since playback is download-first. Deferred from Phase 7: needs a real audio
+  asset plus special playback-engine handling for a non-downloaded local bundle file
+  (and care not to pollute the Priority Stack / stats with a synthetic subscription).
+
+---
+
 ## Polish
 
 - 💡 **iOS 18 Dark + Tinted icon variants** — a nice-to-have polish (the icon shows

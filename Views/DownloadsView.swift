@@ -4,6 +4,8 @@ import SwiftUI
 // by DownloadActivityStore: active downloads (progress, pause/resume/cancel),
 // failed (retry), and downloaded/recently archived episodes with file sizes
 // and delete actions routed through AppState (which owns file + model state).
+// Rows use CachedArtworkImage with a 44 pt target so this activity-heavy page
+// shares the app-wide downsampled artwork cache rather than decoding full covers.
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -61,7 +63,7 @@ struct DownloadsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(recentlyArchivedEntries) { entry in
@@ -75,7 +77,7 @@ struct DownloadsView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }
@@ -99,7 +101,7 @@ struct DownloadsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(activities) { activity in
@@ -113,7 +115,7 @@ struct DownloadsView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }
@@ -131,7 +133,7 @@ private struct ArchivedEpisodeRow: View {
         HStack(alignment: .top, spacing: 12) {
             // Artwork column — 44×44 image + badges centred below
             VStack(alignment: .center, spacing: 4) {
-                CachedArtworkImage(url: entry.artworkURL) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     placeholderArtwork
                 }
                 .frame(width: 44, height: 44)
@@ -184,7 +186,7 @@ private struct ArchivedEpisodeRow: View {
         .overlay(alignment: .topTrailing) {
             if archivedEpisode?.mediaKind == .video || archivedEpisode?.isExplicit == true {
                 HStack(spacing: 3) {
-                    if archivedEpisode?.mediaKind == .video { VideoBadge() }
+                    if archivedEpisode?.mediaKind == .video { VideoPillSmall() }
                     if archivedEpisode?.isExplicit == true { ExplicitPillSmall() }
                 }
             }
@@ -236,7 +238,7 @@ private struct DownloadActivityRow: View {
             HStack(alignment: .top, spacing: 12) {
                 // Artwork column — 44×44 image + badges centred below
                 VStack(alignment: .center, spacing: 4) {
-                    CachedArtworkImage(url: artworkURL) {
+                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                         placeholderArtwork
                     }
                     .frame(width: 44, height: 44)
@@ -310,7 +312,7 @@ private struct DownloadActivityRow: View {
         .overlay(alignment: .topTrailing) {
             if activity.mediaKind == .video || episode?.isExplicit == true {
                 HStack(spacing: 3) {
-                    if activity.mediaKind == .video { VideoBadge() }
+                    if activity.mediaKind == .video { VideoPillSmall() }
                     if episode?.isExplicit == true { ExplicitPillSmall() }
                 }
             }

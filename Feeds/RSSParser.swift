@@ -27,31 +27,66 @@ public final class RSSParser: NSObject {
         return try delegate.buildFeed()
     }
 
-    private static func dataByEscapingBareAmpersands(in data: Data) -> Data {
-        guard var xml = String(data: data, encoding: .utf8) else { return data }
-        let knownEntities = ["amp", "lt", "gt", "quot", "apos"]
-        var output = ""
-        output.reserveCapacity(xml.count)
+    // Internal (not private) so the linear-time guarantee can be unit-tested directly without
+    // routing a pathologically large single text node through XMLParser.
+    static func dataByEscapingBareAmpersands(in data: Data) -> Data {
+        let ampersand = UInt8(ascii: "&")
+        // Fast path: nothing to repair.
+        guard data.contains(ampersand) else { return data }
 
-        while let ampersandRange = xml.range(of: "&") {
-            output += xml[..<ampersandRange.lowerBound]
-            xml.removeSubrange(..<ampersandRange.upperBound)
+        let semicolon = UInt8(ascii: ";")
+        let hash = UInt8(ascii: "#")
+        let knownEntities: Set<[UInt8]> = [
+            Array("amp".utf8), Array("lt".utf8), Array("gt".utf8),
+            Array("quot".utf8), Array("apos".utf8)
+        ]
+        // Longest thing we treat as an entity name: a numeric ref like "#x10FFFF" (8) or the named
+        // entities (≤4). A bounded look-ahead keeps the whole pass O(n).
+        //
+        // This works on UTF-8 BYTES, not Swift `Character`s, deliberately: the previous version
+        // mutated the source String with removeSubrange on every ampersand (O(n²)); iterating it as
+        // a `Character` collection instead is also pathologically slow on large feeds (grapheme
+        // breaking + index arithmetic per scalar). Byte indexing is O(1) with tiny constants, and
+        // ASCII `&`/`;`/`#` can't appear inside a multi-byte UTF-8 sequence, so byte scanning is safe.
+        let maxEntityNameLength = 9
 
-            if let semicolonIndex = xml.firstIndex(of: ";") {
-                let entity = String(xml[..<semicolonIndex])
-                let isNumericEntity = entity.hasPrefix("#")
-                let isKnownEntity = knownEntities.contains(entity)
-                if isNumericEntity || isKnownEntity {
-                    output += "&"
+        let bytes = [UInt8](data)
+        let count = bytes.count
+        let ampReplacement = Array("&amp;".utf8)
+        var output = [UInt8]()
+        output.reserveCapacity(count + 16)
+
+        var i = 0
+        while i < count {
+            let byte = bytes[i]
+            guard byte == ampersand else {
+                output.append(byte)
+                i += 1
+                continue
+            }
+
+            // Look ahead a bounded distance for the terminating ';'.
+            let limit = min(count, i + 1 + maxEntityNameLength)
+            var semicolonIndex = -1
+            var j = i + 1
+            while j < limit {
+                if bytes[j] == semicolon { semicolonIndex = j; break }
+                j += 1
+            }
+            if semicolonIndex >= 0 {
+                let entity = Array(bytes[(i + 1)..<semicolonIndex])
+                if entity.first == hash || knownEntities.contains(entity) {
+                    output.append(ampersand) // already a valid entity — leave it intact
+                    i += 1
                     continue
                 }
             }
 
-            output += "&amp;"
+            output.append(contentsOf: ampReplacement)
+            i += 1
         }
 
-        output += xml
-        return Data(output.utf8)
+        return Data(output)
     }
 }
 
@@ -149,7 +184,7 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             let durationSeconds = attributeDict["duration"].flatMap(Self.parseTimecode)
             let chapter = ParsedChapter(
                 position: chapterPosition,
-                title: title,
+                title: Self.decodingEntities(title),
                 startSeconds: startSeconds,
                 durationSeconds: durationSeconds,
                 source: .pscChapters
@@ -332,23 +367,25 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         return ["gif", "jpeg", "jpg", "png", "webp"].contains(ext)
     }
 
-    private static func parseDate(_ value: String) -> Date? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    // DateFormatter / ISO8601DateFormatter allocation is expensive, and parseDate
+    // runs once per episode — negligible for a 50-item refresh but costly on a
+    // full-history load (hundreds of episodes). Cache them as statics. We use one
+    // fixed formatter per format string (never mutating dateFormat) so the cache
+    // is safe to share across concurrent feed parses.
 
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = isoFormatter.date(from: trimmed) {
-            return date
-        }
+    private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        if let date = isoFormatter.date(from: trimmed) {
-            return date
-        }
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
+    private static let rfc822DateFormatters: [DateFormatter] = {
         let formats = [
             "E, d MMM yyyy HH:mm:ss Z",
             "E, d MMM yyyy HH:mm:ss zzz",
@@ -359,17 +396,33 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             "yyyy-MM-dd HH:mm:ss Z",
             "yyyy-MM-dd'T'HH:mm:ssZ"
         ]
-
-        for format in formats {
+        return formats.map { format in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = format
+            return formatter
+        }
+    }()
+
+    private static func parseDate(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let date = isoFormatterWithFractionalSeconds.date(from: trimmed) {
+            return date
+        }
+        if let date = isoFormatter.date(from: trimmed) {
+            return date
+        }
+
+        for formatter in rfc822DateFormatters {
             if let date = formatter.date(from: trimmed) {
                 return date
             }
         }
 
         if let normalized = dateByReplacingTimezoneAbbreviation(in: trimmed) {
-            for format in formats {
-                formatter.dateFormat = format
+            for formatter in rfc822DateFormatters {
                 if let date = formatter.date(from: normalized) {
                     return date
                 }

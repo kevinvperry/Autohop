@@ -10,6 +10,13 @@ import Foundation
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted — the merge also reconstructs wasCompleted from
 // playedEpisodeKeys when a finished episode was archived between refreshes),
+// feed metadata maintenance (updateAuthor / updateArtworkURL are used by
+// AppState.refreshSubscription so show art and author changes from RSS refreshes
+// reach every cached-artwork call site),
+// Release Radar history seeding for newly added subscriptions
+// (seedReleaseObservations records initial ParsedFeed episodes into
+// RefreshStats.releaseObservations so the learned scheduler starts with the
+// feed's current RSS publish-date evidence),
 // priorityRank normalization (contiguous 1..n after any insert/move/delete),
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
@@ -32,6 +39,31 @@ public final class SubscriptionStore: ObservableObject {
     /// Snapshot of what last reached disk, keyed by id, so save() writes only
     /// the rows that actually changed.
     private var persistedSnapshot: [UUID: Subscription] = [:]
+    /// Returns the guid of the episode loaded in the player on this device, so a
+    /// remote played/archived change can't interrupt it (active-player-wins).
+    /// Set by AppState; nil when nothing is loaded.
+    public var nowPlayingGuidProvider: (() -> String?)?
+
+    /// Supplies the global default PlaybackPreference (from AppSettings). Used to
+    /// seed a subscription's own playbackPreference at the moment it becomes a
+    /// real subscription. Set by AppState; falls back to `.default` when nil.
+    /// Browse-only (preview) subscriptions resolve their preference live through
+    /// AppState.effectivePreference(for:), so seeding only matters once a feed is
+    /// actually subscribed to — after which the snapshot is independent.
+    public var defaultPlaybackPreferenceProvider: (() -> PlaybackPreference)?
+
+    /// Requests deletion of an episode's downloaded media file. Set by AppState to
+    /// call DownloadManager.deleteLocalFile(for:) — the store can't reach the
+    /// DownloadManager directly. Invoked when a remote played/archived state merges
+    /// in (applyRemoteEpisodeState) and this device still holds the download, so a
+    /// cross-device archive doesn't leave an orphaned file (ASSESSMENT.md B1). The
+    /// episode handed in still has its localFileURL/localFileName populated so the
+    /// file can be located before those fields are cleared.
+    public var onEpisodeFileShouldDelete: ((Episode) -> Void)?
+
+    private var seededDefaultPlaybackPreference: PlaybackPreference {
+        defaultPlaybackPreferenceProvider?() ?? .default
+    }
 
     /// - Parameter fileURL: legacy JSON location (defaults to the historical
     ///   subscriptions.json path). Kept as a parameter so existing callers are
@@ -81,6 +113,8 @@ public final class SubscriptionStore: ObservableObject {
             isExplicit: parsedFeed.isExplicit
         )
         subscription.description = parsedFeed.description
+        subscription.subscribedAt = Date()
+        subscription.playbackPreference = seededDefaultPlaybackPreference
 
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
@@ -89,6 +123,7 @@ public final class SubscriptionStore: ObservableObject {
         if !episodes.isEmpty {
             subscription.latestEpisode = episodes.first
             subscription.episodes = episodes
+            seedReleaseObservations(for: &subscription, episodes: episodes)
         }
 
         subscriptions.insert(subscription, at: 0)
@@ -126,8 +161,11 @@ public final class SubscriptionStore: ObservableObject {
             isExplicit: isExplicit
         )
         subscription.description = description
+        subscription.subscribedAt = Date()
+        subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
+        seedReleaseObservations(for: &subscription, episodes: [latestEpisode])
         if insertAtBottom {
             subscriptions.append(subscription)
         } else {
@@ -163,6 +201,18 @@ public final class SubscriptionStore: ObservableObject {
     public func updateDescription(subscriptionID: UUID, description: String?) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         subscriptions[index].description = description
+        save()
+    }
+
+    public func updateAuthor(subscriptionID: UUID, author: String?) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].author = author
+        save()
+    }
+
+    public func updateArtworkURL(subscriptionID: UUID, artworkURL: URL) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].artworkURL = artworkURL
         save()
     }
 
@@ -239,11 +289,15 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Removes browse-only subscriptions whose `browseDate` is older than 30 days,
-    /// provided no episode has been played or downloaded (i.e. truly unacted-on).
-    public func cleanupExpiredPreviewSubscriptions() {
+    /// provided no episode has been played or downloaded and the show has no
+    /// listening history (i.e. truly unacted-on). `subscriptionIDsWithHistory`
+    /// is the set of subscription IDs that have at least one listening-history
+    /// entry — those are spared so their history stays navigable.
+    public func cleanupExpiredPreviewSubscriptions(subscriptionIDsWithHistory: Set<UUID> = []) {
         let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
         let toRemove = subscriptions.filter { sub in
             guard let date = sub.browseDate, date < cutoff else { return false }
+            guard !subscriptionIDsWithHistory.contains(sub.id) else { return false }
             let hasPlayedEpisode = sub.episodes.contains { $0.playedState != .unplayed }
             let hasDownloadedEpisode = sub.episodes.contains { $0.downloadState == .downloaded }
             return !hasPlayedEpisode && !hasDownloadedEpisode
@@ -274,6 +328,15 @@ public final class SubscriptionStore: ObservableObject {
         var subscription = subscriptions.remove(at: index)
         subscription.excludeFromAutoFeedRefresh = false
         subscription.browseDate = nil
+        // Browse preview becoming a real subscription — start the backlog clock now
+        // so the existing catalogue isn't archived out from under the new subscriber.
+        if subscription.subscribedAt == nil {
+            subscription.subscribedAt = Date()
+        }
+        // Snapshot the current global default now that this is a real subscription.
+        // While it was browse-only its preference was resolved live; from here it
+        // owns an independent copy that later default changes won't touch.
+        subscription.playbackPreference = seededDefaultPlaybackPreference
         subscriptions.insert(subscription, at: 0)
         reindexPriority()
         save()
@@ -298,8 +361,9 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Migrates all subscriptions to the new AutoArchiveSettings defaults.
-    /// The decoder handles legacy `autoArchivePolicy` → `autoArchiveSettings` conversion on load,
-    /// so this migration only needs to force-save to write the new key and drop the old one.
+    /// `Subscription.init(from:)` simply defaults a missing `autoArchiveSettings`
+    /// to `.default` (there is no legacy `autoArchivePolicy` key mapping); this
+    /// migration force-sets every subscription to `.default` and re-saves.
     public func migrateExistingSubscriptionsToAutoArchiveSettings() {
         for index in subscriptions.indices {
             // Ensure every subscription ends up with the new default values regardless
@@ -521,6 +585,21 @@ public final class SubscriptionStore: ObservableObject {
                     merged.wasCompleted = true
                 }
             }
+
+            // Self-heal: a remote episode-state may have arrived before this
+            // episode existed locally (stashed as a sync projection). Now that
+            // the feed brings it in, apply that synced state.
+            if existingByGUID[newEpisode.guid] == nil,
+               let projection = try? database?.episodeSyncState(guid: newEpisode.guid) {
+                merged.playedState = projection.playedState
+                merged.wasCompleted = projection.wasCompleted
+                merged.lastPlayedAt = projection.lastPlayedAt
+                if projection.playedState == .archived || projection.playedState == .played {
+                    merged.downloadState = .notDownloaded
+                    merged.localFileURL = nil
+                    merged.localFileName = nil
+                }
+            }
             return merged
         }
         subscriptions[index].episodes = mergedEpisodes
@@ -588,7 +667,18 @@ public final class SubscriptionStore: ObservableObject {
             return false
         }
 
-        let merged = baseline.merged(withRemote: remote)
+        var merged = baseline.merged(withRemote: remote)
+
+        // Active-player-wins: if this episode is loaded in the player on THIS
+        // device, don't let a remote played/archived state interrupt it — keep
+        // the local playedState and re-stamp it so it pushes back as authoritative.
+        if let location, remote.guid == nowPlayingGuidProvider?() {
+            let localPlayed = subscriptions[location.sub].episodes[location.ep].playedState
+            if merged.playedState != localPlayed {
+                merged.$playedState = Synced(wrappedValue: localPlayed, modifiedAt: Date())
+            }
+        }
+
         try? database.saveEpisodeSyncState(merged)
 
         guard let location else { return false }
@@ -597,6 +687,29 @@ public final class SubscriptionStore: ObservableObject {
         episode.playedState = merged.playedState
         episode.wasCompleted = merged.wasCompleted
         episode.lastPlayedAt = merged.lastPlayedAt
+
+        // A remote played/archived merge means the episode finished on another
+        // device; discard this device's local download to match the local
+        // markEpisodePlayed/markEpisodeArchived paths and the self-heal branch in
+        // updateEpisodes(). Without this, a cross-device archive leaves an orphaned
+        // media file (storage leak) and a "downloaded + archived" episode
+        // (ASSESSMENT.md B1). The actual file delete is surfaced through
+        // onEpisodeFileShouldDelete (set by AppState) since the store can't reach
+        // DownloadManager directly — mirroring nowPlayingGuidProvider.
+        if merged.playedState == .played || merged.playedState == .archived {
+            let hadLocalDownload = episode.downloadState == .downloaded
+                || episode.localFileURL != nil
+                || episode.localFileName != nil
+            if hadLocalDownload {
+                // Hand off the still-populated episode so the callback can locate
+                // the file before we null the fields below.
+                onEpisodeFileShouldDelete?(episode)
+            }
+            episode.downloadState = .notDownloaded
+            episode.localFileURL = nil
+            episode.localFileName = nil
+        }
+
         subscriptions[location.sub].episodes[location.ep] = episode
         if subscriptions[location.sub].latestEpisode?.id == episode.id {
             subscriptions[location.sub].latestEpisode = episode
@@ -739,6 +852,16 @@ public final class SubscriptionStore: ObservableObject {
         return keys
     }
 
+    private func seedReleaseObservations(for subscription: inout Subscription, episodes: [Episode]) {
+        var stats = subscription.refreshStats
+        stats.recordEpisodeObservations(
+            episodes,
+            previouslyKnownEpisodeKeys: [],
+            at: Date()
+        )
+        subscription.refreshStats = stats
+    }
+
     private func episode(from parsedEpisode: ParsedEpisode, subscriptionID: UUID, feedArtworkURL: URL?) -> Episode? {
         guard let audioURL = parsedEpisode.audioURL else { return nil }
         let episodeID = UUID()
@@ -782,11 +905,23 @@ public final class SubscriptionStore: ObservableObject {
         // One-time migration: if the GRDB store is empty but a legacy
         // subscriptions.json exists, import it, then rename the file so the
         // import never runs again (kept, not deleted, so it's recoverable).
-        if database.isEmpty, let imported = importLegacyFileIfPresent() {
+        if database.isEmpty, let imported = decodeLegacyFileIfPresent() {
             subscriptions = imported.sorted { $0.priorityRank < $1.priorityRank }
             normalizePriorityOrder()
-            try? database.replaceAll(with: subscriptions)
-            persistedSnapshot = snapshotByID(subscriptions)
+            do {
+                try database.replaceAll(with: subscriptions)
+                persistedSnapshot = snapshotByID(subscriptions)
+                // Import decoded AND reached disk — only now retire the legacy file so the
+                // migration never re-runs. If we renamed earlier and the write had failed,
+                // the source would be gone with the data unsaved.
+                retireLegacyFile()
+            } catch {
+                // Persist failed — keep the legacy file so the migration retries next launch.
+                AppLogger.shared.error("subscriptions.legacyImportPersistFailed", "Legacy import decoded but failed to persist; keeping source file", metadata: [
+                    "error": String(describing: error)
+                ])
+                persistedSnapshot = [:]
+            }
             return
         }
 
@@ -795,6 +930,9 @@ public final class SubscriptionStore: ObservableObject {
                 .sorted { $0.priorityRank < $1.priorityRank }
             normalizePriorityOrder()
             persistedSnapshot = snapshotByID(subscriptions)
+            // Heal any sync-state rows left by an older projection shape so they
+            // re-seed and push on this launch, not only when next edited.
+            try? database.reseedUndecodableSyncState(for: subscriptions)
         } catch {
             subscriptions = []
             persistedSnapshot = [:]
@@ -802,25 +940,36 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Decodes the legacy JSON file (reusing the same decoder so Subscription's
-    /// legacy-key migration still runs) and renames it to `*.migrated`.
-    /// Returns nil when there is no legacy file to import.
-    private func importLegacyFileIfPresent() -> [Subscription]? {
+    /// legacy-key migration still runs). Returns nil when there is no legacy file
+    /// or it cannot be decoded — in which case the source file is left untouched so
+    /// the caller can retry the migration on a future launch. The file is only
+    /// retired (via `retireLegacyFile()`) once the import has reached the database.
+    private func decodeLegacyFileIfPresent() -> [Subscription]? {
         guard let legacyFileURL,
               FileManager.default.fileExists(atPath: legacyFileURL.path)
         else { return nil }
-
-        defer {
-            let migratedURL = legacyFileURL.appendingPathExtension("migrated")
-            try? FileManager.default.removeItem(at: migratedURL) // clear any prior leftover
-            try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
-        }
 
         do {
             let data = try Data(contentsOf: legacyFileURL)
             return try JSONDecoder().decode([Subscription].self, from: data)
         } catch {
+            AppLogger.shared.error("subscriptions.legacyDecodeFailed", "Legacy subscriptions file present but could not be decoded; keeping it for retry", metadata: [
+                "error": String(describing: error)
+            ])
             return nil
         }
+    }
+
+    /// Renames the legacy file to `*.migrated` so the one-time import never re-runs.
+    /// Called only after a successful decode + persist; the file is kept (not deleted)
+    /// so the migration remains recoverable.
+    private func retireLegacyFile() {
+        guard let legacyFileURL,
+              FileManager.default.fileExists(atPath: legacyFileURL.path)
+        else { return }
+        let migratedURL = legacyFileURL.appendingPathExtension("migrated")
+        try? FileManager.default.removeItem(at: migratedURL) // clear any prior leftover
+        try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
     }
 
     private func snapshotByID(_ subs: [Subscription]) -> [UUID: Subscription] {
@@ -842,10 +991,25 @@ public final class SubscriptionStore: ObservableObject {
         let snapshot = subscriptions
         let previous = persistedSnapshot
         Self.saveQueue.async { [weak self, weak database] in
-            try? database?.persist(current: snapshot, previous: previous)
+            let didPersist: Bool
+            do {
+                try database?.persist(current: snapshot, previous: previous)
+                didPersist = true
+            } catch {
+                didPersist = false
+                AppLogger.shared.error("subscriptions.persistFailed", "Failed to persist subscriptions snapshot", metadata: [
+                    "error": String(describing: error)
+                ])
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.persistedSnapshot = self.snapshotByID(snapshot)
+                // Only advance the persisted snapshot when the write actually reached disk.
+                // Otherwise later saves would diff against a snapshot that was never written and
+                // silently drop the failed mutation. Leaving it unchanged means the next edit's
+                // diff still includes those changes and retries them.
+                if didPersist {
+                    self.persistedSnapshot = self.snapshotByID(snapshot)
+                }
                 self.pendingSave = false
                 if self.saveCoalesced {
                     self.saveCoalesced = false

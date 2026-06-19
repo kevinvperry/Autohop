@@ -30,6 +30,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Current Feature Set
 
+- First-run onboarding: a Welcome carousel, chart-derived one-tap Starter Packs, guiding empty states, a "You're all set" first-subscribe moment that auto-downloads and cues your first episode, contextual coach marks, and a getting-started checklist — designed to teach the Priority Stack model without forcing playback or asking for permissions up front
+- "Open at launch" setting — choose whether the app opens to the Player, your Subscriptions, or Discover each time
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
 - Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker, plus two fixed "Top Podcasts · Country" spotlight heroes (US/UK/AU) woven into the feed
@@ -45,12 +47,14 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
-- Stats page: time listened, time saved, episodes finished, and streaks over 7/30/90-day, 1-year, and lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
+- Stats page: time listened, time saved, episodes finished, and streaks over calendar-anchored This Week / this month / this year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
+- Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned
+- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history, and stats in step across your devices over your private CloudKit database; downloads stay per-device
 - OPML import and export for subscription portability
-- New episode push notifications (global and per-podcast)
+- New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
@@ -64,8 +68,10 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
 | [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference). |
 | [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
+| [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
+| [`ASSESSMENT.md`](ASSESSMENT.md) | Machine-oriented code/feature/security assessment: performance, bugs, stale code, and security findings with `file:line` anchors and severities. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
-| [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the two covered files. |
+| [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the four covered files and acknowledging Pocket Casts as a broader source of design ideas and inspiration. |
 
 Source files carry structured `AI CONTEXT` header comments (purpose,
 responsibilities, collaborators, invariants) written for machine consumption —
@@ -85,4 +91,4 @@ The app remains focused on podcast queue automation, downloaded media playback, 
 
 ## License
 
-Autohop is open source under the [MIT License](LICENSE), with two exceptions: [`Playback/SilenceDetector.swift`](Playback/SilenceDetector.swift) and [`Playback/PlaybackEngine.swift`](Playback/PlaybackEngine.swift) contain code derived from [Pocket Casts for iOS](https://github.com/Automattic/pocket-casts-ios) (© Automattic, Inc.) and are licensed under the [Mozilla Public License 2.0](LICENSE-MPL-2.0.md). See [NOTICE](NOTICE) for full derivation details.
+Autohop is open source under the [MIT License](LICENSE), with four exceptions licensed under the [Mozilla Public License 2.0](LICENSE-MPL-2.0.md) because they contain code derived from [Pocket Casts for iOS](https://github.com/Automattic/pocket-casts-ios) (© Automattic, Inc.): [`Playback/SilenceDetector.swift`](Playback/SilenceDetector.swift) and [`Models/SilenceGapAccounting.swift`](Models/SilenceGapAccounting.swift) (silence-trim algorithm/constants), [`Playback/PlaybackEngine.swift`](Playback/PlaybackEngine.swift) (Vocal Boost signal chain), and [`Models/Synced.swift`](Models/Synced.swift) (the `Synced`/`ModifiedDate` property wrapper). Autohop also acknowledges Pocket Casts as a broader source of design ideas and inspiration (per-podcast audio effects, the audio-controls sheet, up-next queue, auto-archive, on-device stats, and field-level sync discipline). See [NOTICE](NOTICE) and [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) for full derivation and acknowledgement details.

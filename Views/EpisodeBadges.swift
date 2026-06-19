@@ -1,15 +1,18 @@
 import SwiftUI
 
-// AI CONTEXT — Views/EpisodeBadges.swift. Small reusable badge components for
-// episode rows/detail (VIDEO pill, explicit marker, etc.), with iOS 26 glass
-// effect variants. Pure presentation; shared across episode lists, preview,
-// queue, and detail pages.
+// AI CONTEXT — Views/EpisodeBadges.swift. Shared presentation components for
+// episode rows/detail, all with iOS 26 glass + iOS 17–25 fallbacks:
+//   • Video/Explicit pills (small + large)
+//   • EpisodeStatusKind + EpisodeStatusPill (colour-coded state capsule; each
+//     page supplies its own statusKind(for:) resolver)
+//   • glassCard(cornerRadius:) View modifier (glass content-card surface)
+// Pure presentation; shared across episode lists, preview, queue, and detail pages.
 
-// MARK: - Video Badge (small)
+// MARK: - Video Pill (small)
 //
-// TV-icon pill shown centred below episode artwork for video episodes.
+// TV-icon pill shown in the top-trailing overlay of episode rows for video episodes.
 
-struct VideoBadge: View {
+struct VideoPillSmall: View {
     var body: some View {
         let icon = Image(systemName: "tv.fill")
             .font(.caption.bold())
@@ -25,17 +28,20 @@ struct VideoBadge: View {
     }
 }
 
-// MARK: - Video Badge Large
+// MARK: - Video Pill (large)
 //
-// "Video" text pill — large counterpart to VideoBadge.
+// "Video" text pill — large counterpart to VideoPillSmall, used in detail headers.
 
-struct VideoBadgeLarge: View {
+struct VideoPillLarge: View {
     var body: some View {
-        let label = Text("Video")
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+        let label = HStack(spacing: 4) {
+            Image(systemName: "tv.fill")
+            Text("Video")
+        }
+        .font(.caption.bold())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())
@@ -47,15 +53,25 @@ struct VideoBadgeLarge: View {
 
 // MARK: - Explicit Pill (large)
 //
-// "Explicit" text pill shown centred below episode artwork for explicit episodes.
+// "Explicit" text pill used in detail headers for explicit shows/episodes.
 
-struct ExplicitPill: View {
+struct ExplicitPillLarge: View {
     var body: some View {
-        let label = Text("Explicit")
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+        let label = HStack(spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.white)
+                    .frame(width: 11, height: 11)
+                Text("E")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.black)
+            }
+            Text("Explicit")
+        }
+        .font(.caption.bold())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())
@@ -67,7 +83,7 @@ struct ExplicitPill: View {
 
 // MARK: - Explicit Pill Small
 //
-// "E in a square" icon pill — small counterpart to ExplicitPill, styled like the iTunes explicit badge.
+// "E in a square" icon pill — small counterpart to ExplicitPillLarge, styled like the iTunes explicit badge.
 
 struct ExplicitPillSmall: View {
     private var badge: some View {
@@ -90,4 +106,120 @@ struct ExplicitPillSmall: View {
             badge.background(.ultraThinMaterial, in: Capsule())
         }
     }
+}
+
+// MARK: - Episode Status Pill
+//
+// Colour-coded capsule communicating episode state at a glance. Shared across the
+// Priority (PodcastsView), Podcast Detail, and Individual Subscription pages — each
+// view computes its own `EpisodeStatusKind` via a local `statusKind(for:)` helper.
+// `.inactive` is used on the Priority page only.
+
+enum EpisodeStatusKind {
+    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
+
+    var label: String {
+        switch self {
+        case .unplayed:        return "Unplayed"
+        case .queued:          return "Queued"
+        case .partiallyPlayed: return "Paused"
+        case .nowPlaying:      return "Playing"
+        case .played:          return "Played"
+        case .archived:        return "Archived"
+        case .inactive:        return "Inactive"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unplayed:        return Color.gray
+        case .queued:          return Color.teal
+        case .partiallyPlayed: return Color.yellow
+        case .nowPlaying:      return Color.green
+        case .played:          return Color.blue
+        case .archived:        return Color.purple
+        case .inactive:        return Color.orange
+        }
+    }
+}
+
+struct EpisodeStatusPill: View {
+    let kind: EpisodeStatusKind
+
+    var body: some View {
+        let label = Text(kind.label)
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+
+        if #available(iOS 26, *) {
+            label
+                .background(kind.color.opacity(0.45), in: Capsule())
+                .glassEffect(in: Capsule())
+        } else {
+            label
+                .background(kind.color.opacity(0.82), in: Capsule())
+        }
+    }
+}
+
+// MARK: - Glass Card
+//
+// Shared rounded-rect card surface used by content cards (episode list on the
+// Podcast Detail page, episode description on the Individual Episode page).
+// iOS 26+ uses real glass; iOS 17–25 falls back to `.ultraThinMaterial`.
+
+extension View {
+    @ViewBuilder
+    func glassCard(cornerRadius: CGFloat) -> some View {
+        if #available(iOS 26, *) {
+            self.glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        } else {
+            self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        }
+    }
+
+    /// Glass capsule pill. `highlighted: true` adds a purple tint — used for
+    /// category chips, rank badges, and any purple-accent pill surface.
+    @ViewBuilder
+    func glassCapsule(highlighted: Bool = false) -> some View {
+        if #available(iOS 26, *) {
+            if highlighted {
+                self.glassEffect(.regular.tint(.purple), in: Capsule())
+            } else {
+                self.glassEffect(in: Capsule())
+            }
+        } else {
+            if highlighted {
+                self
+                    .background(Color.purple.opacity(0.22), in: Capsule())
+                    .overlay(Capsule().stroke(Color.purple.opacity(0.35), lineWidth: 1))
+            } else {
+                self.background(Color.white.opacity(0.08), in: Capsule())
+            }
+        }
+    }
+}
+
+// MARK: - Meta card date formatting
+//
+// Shared by the "Published" and "Released Time" meta cards on the Player Details
+// panel and the Episode Detail page, so both grids stay in sync.
+
+/// Named day for recent episodes, abbreviated date otherwise: "Today" / "Yesterday" / "12 Jun".
+func relativePublishedLabel(_ date: Date) -> String {
+    let calendar = Calendar.current
+    if calendar.isDateInToday(date) { return "Today" }
+    if calendar.isDateInYesterday(date) { return "Yesterday" }
+    return date.formatted(date: .abbreviated, time: .omitted)
+}
+
+/// Elapsed time since publish: "10 minutes ago", "1 hour ago", "2 days ago", "8 months ago".
+func relativeReleasedLabel(_ date: Date) -> String {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .full
+    return formatter.localizedString(for: date, relativeTo: Date())
 }

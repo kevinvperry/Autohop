@@ -80,6 +80,7 @@ let package = Package(
                 "Models/SyncState.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
+                "Models/SilenceGapAccounting.swift",
                 "Feeds/ParsedFeed.swift",
                 "Feeds/RSSParser.swift",
                 "Feeds/OPMLService.swift",

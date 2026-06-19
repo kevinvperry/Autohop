@@ -15,22 +15,32 @@ import SwiftUI
 // persisted in @AppStorage), and a search-field-shaped shortcut that presents
 // the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
-// results: active subscriptions go to SubscriptionEpisodesView, everything
-// else to PodcastPreviewView (invisible 30-day browse subscription — see
-// PAGES.md "Browse Subscription Lifecycle").
+// results: every entry routes to PodcastDetailView, which renders both the
+// preview (invisible 30-day browse subscription) and subscribed states — see
+// PAGES.md "Browse Subscription Lifecycle"). Chart cards use CachedArtworkImage
+// with an explicit square target size so the shared artwork cache decodes covers
+// at card scale instead of retaining full-resolution storefront art in memory.
+// FIRST-RUN: while the user has no real subscriptions (appState.realSubscriptionCount
+// == 0) a starterPacksBanner sits above the rails and presents StarterPacksView.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var viewModel = DiscoverViewModel()
     @AppStorage("discoverCountryCode") private var storedCountryCode = ""
-    @State private var path = NavigationPath()
+    /// Drives the push to Podcast Detail on the ambient stack. Set after the
+    /// async feed resolve completes (Discover is a pushed page, not a sheet, so
+    /// it no longer owns a NavigationStack/path of its own).
+    @State private var pendingRoute: Route?
     @State private var showSearch = false
+    @State private var showStarterPacks = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
-    @State private var heroIndex = 0
+    @State private var episodeHeroIndex = 0   // top hero — Top Episodes
+    @State private var podcastHeroIndex = 0   // mid-feed hero — Top Podcasts
     @State private var spotlightAIndex = 0
     @State private var spotlightBIndex = 0
+    @State private var resolvingEpisodeID: String?
 
     /// Auto-advance cadence for the hero cards.
     private let heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -44,39 +54,46 @@ struct DiscoverView: View {
     /// spotlight heroes. Spotlight A sits before Health & Fitness; B at the end.
     private enum FeedSection: Identifiable {
         case rail(DiscoverViewModel.GenreRail)
-        case spotlightA(DiscoverViewModel.CountrySpotlight)
-        case spotlightB(DiscoverViewModel.CountrySpotlight)
+        case podcastHero                              // Top Podcasts — appears after rail 3
+        case spotlightA(DiscoverViewModel.CountrySpotlight)   // after rail 6
+        case spotlightB(DiscoverViewModel.CountrySpotlight)   // end of feed
 
         var id: String {
             switch self {
-            case .rail(let r): return "rail-\(r.id)"
+            case .rail(let r):      return "rail-\(r.id)"
+            case .podcastHero:      return "podcastHero"
             case .spotlightA(let s): return "spotlightA-\(s.country.code)"
             case .spotlightB(let s): return "spotlightB-\(s.country.code)"
             }
         }
     }
 
-    /// Builds the rail list with the spotlight heroes inserted. Spotlight A goes
-    /// immediately before the Health & Fitness rail (so it lands between Sports
-    /// and Health & Fitness); if that rail is absent it falls in after Sports,
-    /// otherwise at the end of the rails. Spotlight B always closes the feed.
+    /// Builds the rail feed with three heroes woven in at fixed positions:
+    /// podcast hero after rail 3, spotlight A after rail 6, spotlight B at end.
     private var feedSections: [FeedSection] {
         var result: [FeedSection] = []
+        var railCount = 0
+        var addedSpotlightA = false
+
         for rail in viewModel.rails {
-            if rail.genre.id == 1512, let a = viewModel.spotlightA {   // Health & Fitness
-                result.append(.spotlightA(a))
-            }
             result.append(.rail(rail))
-        }
-        let hasSpotlightA = result.contains { if case .spotlightA = $0 { return true }; return false }
-        if let a = viewModel.spotlightA, !hasSpotlightA {
-            if let sportsIdx = result.firstIndex(where: {
-                if case .rail(let r) = $0 { return r.genre.id == 1545 }; return false   // Sports
-            }) {
-                result.insert(.spotlightA(a), at: sportsIdx + 1)
-            } else {
-                result.append(.spotlightA(a))
+            railCount += 1
+
+            if railCount == 3, !viewModel.heroPodcasts.isEmpty {
+                result.append(.podcastHero)
             }
+            if railCount == 6, let a = viewModel.spotlightA {
+                result.append(.spotlightA(a))
+                addedSpotlightA = true
+            }
+        }
+
+        // Fallbacks when fewer rails loaded than the insertion thresholds.
+        if railCount < 3, !viewModel.heroPodcasts.isEmpty {
+            result.append(.podcastHero)
+        }
+        if !addedSpotlightA, let a = viewModel.spotlightA {
+            result.append(.spotlightA(a))
         }
         if let b = viewModel.spotlightB {
             result.append(.spotlightB(b))
@@ -89,58 +106,56 @@ struct DiscoverView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Group {
-                switch viewModel.phase {
-                case .loading:
-                    ProgressView("Loading charts…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .failed(let message):
-                    ContentUnavailableView {
-                        Label("Charts Unavailable", systemImage: "antenna.radiowaves.left.and.right.slash")
-                    } description: {
-                        Text(message)
-                    } actions: {
-                        Button("Retry") {
-                            Task { await viewModel.reload(country: country.code) }
-                        }
-                        .buttonStyle(.bordered)
+        Group {
+            switch viewModel.phase {
+            case .loading:
+                ProgressView("Loading charts…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed(let message):
+                ContentUnavailableView {
+                    Label("Charts Unavailable", systemImage: "antenna.radiowaves.left.and.right.slash")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Retry") {
+                        Task { await viewModel.reload(country: country.code) }
                     }
-                case .loaded:
-                    chartsContent
+                    .buttonStyle(.bordered)
                 }
-            }
-            .navigationTitle("Discover")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    countryMenu
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    SheetCloseButton { dismiss() }
-                }
-            }
-            .navigationDestination(for: Route.self) { route in
-                switch route {
-                case .preview(let result):
-                    PodcastPreviewView(result: result)
-                case .episodes(let subscriptionID):
-                    SubscriptionEpisodesView(subscriptionID: subscriptionID)
-                }
+            case .loaded:
+                chartsContent
             }
         }
+        .navigationTitle("Discover")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                countryMenu
+            }
+        }
+        .navigationDestination(item: $pendingRoute) { route in
+            switch route {
+            case .preview(let result):
+                PodcastDetailView(result: result)
+            case .episodes(let subscriptionID):
+                PodcastDetailView(subscriptionID: subscriptionID)
+            }
+        }
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
         .task(id: country.code) {
             await viewModel.load(country: country.code)
         }
         .sheet(isPresented: $showSearch) { PodcastSearchView() }
+        .sheet(isPresented: $showStarterPacks) { StarterPacksView() }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("This show doesn't have a public RSS feed, so it can't be played in Autohop.")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
-            dismiss()
         }
     }
 
@@ -149,14 +164,19 @@ struct DiscoverView: View {
     private var chartsContent: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 34) {
+                VStack(alignment: .leading, spacing: 48) {
                     VStack(alignment: .leading, spacing: 16) {
                         searchShortcut
                             .padding(.horizontal, 20)
                             .padding(.top, 4)
 
-                        if !viewModel.heroPodcasts.isEmpty {
-                            heroSection
+                        if appState.realSubscriptionCount == 0 {
+                            starterPacksBanner
+                                .padding(.horizontal, 20)
+                        }
+
+                        if !viewModel.topEpisodes.isEmpty {
+                            episodeHeroSection
                         }
 
                         if !viewModel.rails.isEmpty {
@@ -169,6 +189,11 @@ struct DiscoverView: View {
                         case .rail(let rail):
                             genreRail(rail)
                                 .id("rail-\(rail.id)")
+                        case .podcastHero:
+                            heroCarousel(title: "Top Podcasts · \(country.name)",
+                                         podcasts: viewModel.heroPodcasts,
+                                         index: $podcastHeroIndex,
+                                         resolveCountry: country.code)
                         case .spotlightA(let spotlight):
                             spotlightHero(spotlight, index: $spotlightAIndex)
                         case .spotlightB(let spotlight):
@@ -224,6 +249,39 @@ struct DiscoverView: View {
 
     // MARK: - Search shortcut
 
+    /// First-run nudge (shown only while the user has no real subscriptions):
+    /// a one-tap route into chart-derived starter packs. ONBOARDING_PLAN.md Phase 6/7.
+    private var starterPacksBanner: some View {
+        Button { showStarterPacks = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color.purple))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New here? Try a starter pack")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("Subscribe to a curated set in one tap.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color(white: 0.62))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.5))
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.purple.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.3), lineWidth: 1))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     private var searchShortcut: some View {
         Button {
             showSearch = true
@@ -237,19 +295,134 @@ struct DiscoverView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(Color.white.opacity(0.08), in: Capsule())
+            .glassCapsule()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Search podcasts")
     }
 
-    // MARK: - Hero (Top 8 paging cards)
+    // MARK: - Episode hero (top slot — Top 8 Episodes)
 
-    private var heroSection: some View {
-        heroCarousel(title: "Top Podcasts · \(country.name)",
-                     podcasts: viewModel.heroPodcasts,
-                     index: $heroIndex,
-                     resolveCountry: country.code)
+    private var episodeHeroSection: some View {
+        episodeHeroCarousel(title: "Top Episodes · \(country.name)",
+                            episodes: viewModel.topEpisodes,
+                            index: $episodeHeroIndex)
+    }
+
+    private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.title3.weight(.bold))
+                .padding(.horizontal, 20)
+
+            TabView(selection: index) {
+                ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, episode in
+                    heroEpisodeCard(episode)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 36)
+                        .tag(idx)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .indexViewStyle(.page(backgroundDisplayMode: .never))
+            .frame(height: 320)
+            .onReceive(heroTimer) { _ in
+                let count = episodes.count
+                guard count > 1, resolvingEpisodeID == nil else { return }
+                withAnimation(.easeInOut(duration: 0.45)) {
+                    index.wrappedValue = (index.wrappedValue + 1) % count
+                }
+            }
+        }
+    }
+
+    private func heroEpisodeCard(_ episode: ChartEpisode) -> some View {
+        Button {
+            openEpisode(episode)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                LinearGradient(
+                    colors: [Color(red: 0.20, green: 0.08, blue: 0.42).opacity(0.95),
+                             Color.black.opacity(0.85)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+
+                // Ghosted rank numeral — matches the podcast hero treatment.
+                Text("\(episode.rank)")
+                    .font(.system(size: 230, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.07))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .offset(x: 18, y: -34)
+                    .allowsHitTesting(false)
+
+                HStack(alignment: .bottom, spacing: 14) {
+                    chartArtwork(episode.artworkURL, size: 148, cornerRadius: 18,
+                                 placeholderIconSize: 36)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("#\(episode.rank)")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .glassCapsule(highlighted: true)
+
+                        Text(episode.title)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(3)
+
+                        Text(episode.showName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        if let date = episode.releaseDate {
+                            Text(relativeReleasedLabel(date))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(18)
+
+                if resolvingEpisodeID == episode.id {
+                    resolvingOverlay
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 284)
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .disabled(resolvingEpisodeID != nil)
+    }
+
+    private func openEpisode(_ episode: ChartEpisode) {
+        guard resolvingEpisodeID == nil else { return }
+        guard episode.collectionId != nil else {
+            showUnavailableAlert = true
+            return
+        }
+        resolvingEpisodeID = episode.id
+        Task {
+            defer { resolvingEpisodeID = nil }
+            guard let result = await viewModel.resolveEpisodePodcast(episode, country: country.code) else {
+                showUnavailableAlert = true
+                return
+            }
+            if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+                $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+            }) {
+                pendingRoute = .episodes(activeSub.id)
+            } else {
+                pendingRoute = .preview(result)
+            }
+        }
     }
 
     /// A secondary country spotlight hero (Top 8 for a fixed storefront),
@@ -325,15 +498,7 @@ struct DiscoverView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
-                        .background(
-                            Capsule().fill(
-                                LinearGradient(
-                                    colors: [Color.purple.opacity(0.22), Color.white.opacity(0.06)],
-                                    startPoint: .topLeading, endPoint: .bottomTrailing
-                                )
-                            )
-                        )
-                        .overlay(Capsule().stroke(Color.purple.opacity(0.35), lineWidth: 1))
+                        .glassCapsule(highlighted: true)
                     }
                     .buttonStyle(.plain)
                 }
@@ -369,7 +534,7 @@ struct DiscoverView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.purple.opacity(0.82), in: Capsule())
+                            .glassCapsule(highlighted: true)
 
                         Text(podcast.title)
                             .font(.headline.weight(.bold))
@@ -439,7 +604,7 @@ struct DiscoverView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.55), in: Capsule())
+                        .glassCapsule()
                         .padding(6)
 
                     if resolvingPodcastID == podcast.id {
@@ -468,7 +633,7 @@ struct DiscoverView: View {
     // MARK: - Shared pieces
 
     private func chartArtwork(_ url: URL?, size: CGFloat, cornerRadius: CGFloat, placeholderIconSize: CGFloat) -> some View {
-        CachedArtworkImage(url: url) {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: size, height: size)) {
             ZStack {
                 LinearGradient(
                     colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -507,9 +672,9 @@ struct DiscoverView: View {
             if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
                 $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
             }) {
-                path.append(Route.episodes(activeSub.id))
+                pendingRoute = .episodes(activeSub.id)
             } else {
-                path.append(Route.preview(result))
+                pendingRoute = .preview(result)
             }
         }
     }

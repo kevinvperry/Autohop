@@ -5,14 +5,23 @@ import SwiftUI
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
 // (editable title, numeric priority rank, read-only author), Playback (speed
 // 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
-// AppState if this podcast is playing), Automation (per-podcast notifications,
+// AppState if this podcast is playing; the dark Speed/Trim/Vocal card is the
+// shared Views/PlaybackControlsCard, also used by SettingsView's global
+// Default Playback panel), Automation (per-podcast notifications,
 // exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
 // (only when latest episode has chapters; position-based), Feed (read-only
 // URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
-// with FEATURES.md §10. stripHTML/decodeHTMLEntities below clean feed-supplied
-// description text for display. Also hosts SubscriptionEpisodesView (the
-// podcast's episode list), whose status pills treat archived episodes with
-// Episode.wasCompleted as Played.
+// with FEATURES.md §10. Visual style matches App Settings: dark page
+// (scrollContentBackground hidden over black), white.opacity(0.08) section
+// cards, .tint(.purple), and purple SettingsRowLabel glyphs on control rows; the
+// Playback card is passed fill: white.opacity(0.08) to match.
+// stripHTML/decodeHTMLEntities below clean feed-supplied
+// description text for display. The podcast's episode list lives in
+// PodcastDetailView (reached by tapping a row); this file also hosts
+// EpisodeDetailView, whose status pills treat archived episodes with
+// Episode.wasCompleted as Played. Settings/detail artwork uses explicit
+// CachedArtworkImage targets (120 pt header/detail variants), sharing validated
+// source bytes with episode lists while avoiding full-size cover decodes.
 private func stripHTML(_ html: String) -> String {
     // Strip tags, then decode entities.
     let withoutTags = html.replacingOccurrences(
@@ -109,6 +118,11 @@ struct SubscriptionSettingsView: View {
                 )
             }
         }
+        .listSectionSpacing(28)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle(subscription?.title ?? "Subscription")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -191,10 +205,12 @@ struct SubscriptionSettingsView: View {
                 draftTitle = sub.title
                 showTitleEditor = true
             } label: {
-                LabeledContent("Title") {
+                LabeledContent {
                     Text(sub.title)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                } label: {
+                    SettingsRowLabel(title: "Title", systemImage: "textformat")
                 }
             }
             .buttonStyle(.plain)
@@ -203,17 +219,25 @@ struct SubscriptionSettingsView: View {
                 draftPriorityRank = sub.priorityRank
                 showPriorityEditor = true
             } label: {
-                LabeledContent("Priority rank") {
+                LabeledContent {
                     Text("#\(sub.priorityRank)")
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Priority rank", systemImage: "number")
                 }
             }
             .buttonStyle(.plain)
 
             if let author = sub.author {
-                LabeledContent("Author", value: author)
+                LabeledContent {
+                    Text(author)
+                        .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Author", systemImage: "person")
+                }
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -231,16 +255,20 @@ struct SubscriptionSettingsView: View {
 
         Section {
             Stepper(value: startSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent("Start skip") {
+                LabeledContent {
                     Text(skipLabel(sub.playbackPreference.startSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "Start skip", systemImage: "forward.end")
                 }
             }
 
             Stepper(value: endSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent("End skip") {
+                LabeledContent {
                     Text(skipLabel(sub.playbackPreference.endSkipSeconds))
                         .foregroundStyle(.secondary)
+                } label: {
+                    SettingsRowLabel(title: "End skip", systemImage: "backward.end")
                 }
             }
         } header: {
@@ -248,200 +276,66 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Sound Controls Card
 
     @ViewBuilder
     private func soundControlsCard(_ sub: Subscription) -> some View {
-        let darkBG = Color(red: 0.10, green: 0.10, blue: 0.13)
-        let dividerColor = Color(white: 0.20)
-
-        VStack(spacing: 0) {
-            soundSpeedRow(sub)
-            Divider().background(dividerColor).padding(.leading, 60)
-            soundTrimSilenceRow(sub)
-            Divider().background(dividerColor).padding(.leading, 60)
-            soundVocalBoostRow(sub)
-        }
-        .background(darkBG)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .preferredColorScheme(.dark)
-    }
-
-    private func soundRowIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.purple)
-            .frame(width: 26)
-    }
-
-    private func soundSpeedRow(_ sub: Subscription) -> some View {
-        let speed = sub.playbackPreference.speed
-        let options = PlaybackPreference.speedOptions
-
-        return HStack(spacing: 14) {
-            soundRowIcon("speedometer")
-
-            Text("Speed")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-
-            Spacer()
-
-            HStack(spacing: 0) {
-                Button {
-                    guard let idx = options.firstIndex(where: { abs($0 - speed) < 0.01 }), idx > 0
-                    else { return }
-                    appState.updatePlaybackSpeed(for: sub.id, speed: options[idx - 1])
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 38)
-                }
-
-                Text(PlaybackPreference.speedLabel(speed))
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 46)
-
-                Button {
-                    guard let idx = options.firstIndex(where: { abs($0 - speed) < 0.01 }), idx < options.count - 1
-                    else { return }
-                    appState.updatePlaybackSpeed(for: sub.id, speed: options[idx + 1])
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 38)
-                }
-            }
-            .background(Color(white: 0.20))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
-    private func soundTrimSilenceRow(_ sub: Subscription) -> some View {
-        let trimSilence = sub.playbackPreference.trimSilence
-        let isOn = trimSilence != .off
-        let levels: [TrimSilenceAmount] = [.low, .medium, .high]
-
-        return VStack(spacing: 14) {
-            HStack(spacing: 14) {
-                soundRowIcon("scissors")
-
-                Text("Trim Silence")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                Spacer()
-
-                Toggle("", isOn: Binding(
-                    get: { isOn },
-                    set: { on in appState.updateTrimSilence(for: sub.id, amount: on ? .low : .off) }
-                ))
-                .labelsHidden()
-                .tint(.purple)
-            }
-
-            if isOn {
-                Picker("", selection: Binding(
-                    get: { trimSilence },
-                    set: { appState.updateTrimSilence(for: sub.id, amount: $0) }
-                )) {
-                    ForEach(levels, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .tint(.purple)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .animation(.easeInOut(duration: 0.22), value: isOn)
-    }
-
-    private func soundVocalBoostRow(_ sub: Subscription) -> some View {
-        let level = sub.playbackPreference.vocalBoostLevel
-        let isOn = level != .off
-        let levels: [VocalBoostLevel] = [.light, .standard, .strong]
-
-        return VStack(spacing: 14) {
-            HStack(spacing: 14) {
-                soundRowIcon("speaker.wave.2.fill")
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Vocal Boost")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("Voices sound clearer")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color(white: 0.50))
-                }
-
-                Spacer()
-
-                Toggle("", isOn: Binding(
-                    get: { isOn },
-                    set: { on in appState.updateVocalBoost(for: sub.id, level: on ? .strong : .off) }
-                ))
-                .labelsHidden()
-                .tint(.purple)
-            }
-
-            if isOn {
-                Picker("", selection: Binding(
-                    get: { level },
-                    set: { appState.updateVocalBoost(for: sub.id, level: $0) }
-                )) {
-                    ForEach(levels, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .tint(.purple)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .animation(.easeInOut(duration: 0.22), value: isOn)
+        PlaybackControlsCard(
+            preference: sub.playbackPreference,
+            onSpeedChange: { appState.updatePlaybackSpeed(for: sub.id, speed: $0) },
+            onTrimChange: { appState.updateTrimSilence(for: sub.id, amount: $0) },
+            onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) },
+            fill: Color.white.opacity(0.08)
+        )
     }
 
     @ViewBuilder
     private func automationSection(_ sub: Subscription) -> some View {
         Section {
-            Toggle("New episode notifications", isOn: notificationsBinding(sub))
-            Toggle("Exclude from Auto Feed Refresh", isOn: autoFeedRefreshExclusionBinding(sub))
+            Toggle(isOn: notificationsBinding(sub)) {
+                SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+            }
+            Toggle(isOn: autoFeedRefreshExclusionBinding(sub)) {
+                SettingsRowLabel(title: "Exclude from Auto Feed Refresh", systemImage: "arrow.triangle.2.circlepath")
+            }
         } header: {
             Text("Automation")
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
 
         Section {
-            Picker("Played Episodes", selection: afterPlayedBinding(sub)) {
+            Picker(selection: afterPlayedBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterPlayed.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Played Episodes", systemImage: "checkmark.circle")
             }
-            Picker("Inactive Episodes", selection: afterInactiveBinding(sub)) {
+            Picker(selection: afterInactiveBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterInactive.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Inactive Episodes", systemImage: "clock")
             }
-            Picker("Episode Limit", selection: episodeLimitBinding(sub)) {
+            Picker(selection: episodeLimitBinding(sub)) {
                 ForEach(AutoArchiveSettings.EpisodeLimit.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
+            } label: {
+                SettingsRowLabel(title: "Episode Limit", systemImage: "archivebox")
             }
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -484,14 +378,21 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Skips are position-based and apply to all future episodes of this podcast.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
     private func feedSection(_ sub: Subscription) -> some View {
         Section("Feed") {
-            LabeledContent("URL", value: sub.feedURL.absoluteString)
-                .lineLimit(2)
+            LabeledContent {
+                Text(sub.feedURL.absoluteString)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } label: {
+                SettingsRowLabel(title: "URL", systemImage: "link")
+            }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -501,6 +402,7 @@ struct SubscriptionSettingsView: View {
                 showDeleteConfirm = true
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Bindings
@@ -589,55 +491,6 @@ struct SubscriptionSettingsView: View {
     }
 }
 
-private enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
-
-    var label: String {
-        switch self {
-        case .unplayed:        return "Unplayed"
-        case .queued:          return "Queued"
-        case .partiallyPlayed: return "Paused"
-        case .nowPlaying:      return "Playing"
-        case .played:          return "Played"
-        case .archived:        return "Archived"
-        case .inactive:        return "Inactive"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .unplayed:        return Color.gray
-        case .queued:          return Color.teal
-        case .partiallyPlayed: return Color.yellow
-        case .nowPlaying:      return Color.green
-        case .played:          return Color.blue
-        case .archived:        return Color.purple
-        case .inactive:        return Color.orange
-        }
-    }
-}
-
-private struct EpisodeStatusPill: View {
-    let kind: EpisodeStatusKind
-
-    var body: some View {
-        let label = Text(kind.label)
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-
-        if #available(iOS 26, *) {
-            label
-                .background(kind.color.opacity(0.45), in: Capsule())
-                .glassEffect(in: Capsule())
-        } else {
-            label
-                .background(kind.color.opacity(0.82), in: Capsule())
-        }
-    }
-}
-
 private struct EditTitleSheet: View {
     @Binding var title: String
     @Environment(\.dismiss) private var dismiss
@@ -667,6 +520,8 @@ private struct EditTitleSheet: View {
                 }
             }
         }
+        .tint(.purple)
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -698,401 +553,11 @@ private struct EditPrioritySheet: View {
                 }
             }
         }
-    }
-}
-
-// AI CONTEXT — SubscriptionEpisodesView ("Podcast Episodes" page, tap a row on
-// the Priority List). Header (artwork/title/description) + full episode list
-// with status pills, download progress, and the standard swipe actions
-// (leading Play / Play Next, trailing Archive / Play Last). Gear toolbar icon
-// pushes SubscriptionSettingsView; rows push EpisodeDetailView.
-struct SubscriptionEpisodesView: View {
-    let subscriptionID: UUID
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-    @State private var isRefreshing = false
-    @State private var isLoadingOlderEpisodes = false
-    @State private var episodeToShare: Episode?
-    @State private var showExpandedArtwork = false
-
-    private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
-    }
-
-    private var episodes: [Episode] {
-        guard let subscription else { return [] }
-        return subscription.episodes.isEmpty
-            ? subscription.latestEpisode.map { [$0] } ?? []
-            : subscription.episodes
-    }
-
-    var body: some View {
-        Group {
-            if let sub = subscription {
-                VStack(alignment: .leading, spacing: 12) {
-                    showHeader(sub)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 8)
-
-                    HStack(spacing: 6) {
-                        Text("Episodes")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                        Image(systemName: "waveform")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 20)
-
-                    List {
-                        if episodes.isEmpty {
-                            ContentUnavailableView(
-                                "No Episodes",
-                                systemImage: "waveform",
-                                description: Text("No episodes were found in this feed.")
-                            )
-                            .listRowBackground(Color.clear)
-                        } else {
-                            ForEach(episodes) { episode in
-                                NavigationLink {
-                                    EpisodeDetailView(subscriptionID: sub.id, episodeID: episode.id)
-                                } label: {
-                                    episodeRow(episode, sub: sub)
-                                }
-                                .listRowBackground(
-                                    appState.currentPlayerEpisode?.id == episode.id
-                                        ? Color.purple.opacity(0.08)
-                                        : Color.white.opacity(0.08)
-                                )
-                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    let isCurrentlyPlaying = appState.currentPlayerEpisode?.id == episode.id
-                                    if !isCurrentlyPlaying {
-                                        Button {
-                                            Task {
-                                                if episode.downloadState != .downloaded {
-                                                    await appState.downloadEpisodeForQueue(episode)
-                                                }
-                                                if let updated = appState.subscriptionStore.episode(subscriptionID: sub.id, episodeID: episode.id) {
-                                                    await appState.playEpisode(updated)
-                                                }
-                                            }
-                                        } label: {
-                                            Label("Play", systemImage: "play.fill")
-                                        }
-                                        .tint(.green)
-
-                                        Button {
-                                            Task {
-                                                if episode.downloadState != .downloaded {
-                                                    await appState.downloadEpisodeForQueue(episode)
-                                                }
-                                                appState.playEpisodeNext(episode)
-                                            }
-                                        } label: {
-                                            Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                                        }
-                                        .tint(.blue)
-                                    }
-                                }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    let isCurrentlyPlaying = appState.currentPlayerEpisode?.id == episode.id
-                                    if !isCurrentlyPlaying {
-                                        if episode.playedState == .archived || episode.playedState == .played {
-                                            Button {
-                                                appState.unarchiveEpisode(episode)
-                                            } label: {
-                                                Label("Unarchive", systemImage: "arrow.uturn.backward.circle")
-                                            }
-                                            .tint(.purple)
-                                        } else {
-                                            Button {
-                                                Task { await appState.archiveEpisode(episode) }
-                                            } label: {
-                                                Label("Archive", systemImage: "archivebox")
-                                            }
-                                            .tint(.purple)
-                                        }
-
-                                        Button {
-                                            Task {
-                                                if episode.downloadState != .downloaded {
-                                                    await appState.downloadEpisodeForQueue(episode)
-                                                }
-                                                appState.playEpisodeLast(episode)
-                                            }
-                                        } label: {
-                                            Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
-                                        }
-                                        .tint(.orange)
-
-                                        Button {
-                                            episodeToShare = episode
-                                        } label: {
-                                            Label("Share", systemImage: "square.and.arrow.up")
-                                        }
-                                        .tint(.indigo)
-                                    }
-                                }
-                            }
-
-                            if episodes.count >= 50 {
-                                Button {
-                                    guard !isLoadingOlderEpisodes else { return }
-                                    isLoadingOlderEpisodes = true
-                                    Task {
-                                        await appState.loadFullEpisodeHistory(for: sub)
-                                        isLoadingOlderEpisodes = false
-                                    }
-                                } label: {
-                                    HStack {
-                                        Spacer()
-                                        if isLoadingOlderEpisodes {
-                                            ProgressView()
-                                        } else {
-                                            Label("Load Older Episodes", systemImage: "clock.arrow.circlepath")
-                                        }
-                                        Spacer()
-                                    }
-                                }
-                                .listRowBackground(Color.white.opacity(0.08))
-                                .disabled(isLoadingOlderEpisodes)
-                            }
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 18)
-                }
-            } else {
-                ContentUnavailableView(
-                    "Subscription Not Found",
-                    systemImage: "dot.radiowaves.left.and.right"
-                )
-            }
-        }
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .tint(.purple)
         .preferredColorScheme(.dark)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-            }
-
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    guard let subscription, !isRefreshing else { return }
-                    isRefreshing = true
-                    Task {
-                        await appState.refreshSubscription(subscription)
-                        isRefreshing = false
-                    }
-                } label: {
-                    if isRefreshing {
-                        ProgressView()
-                    } else {
-                        Label("Refresh Feed", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(subscription == nil || isRefreshing)
-
-                Button {
-                    episodeToShare = subscription?.latestEpisode
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .disabled(subscription?.latestEpisode == nil)
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    SubscriptionSettingsView(subscriptionID: subscriptionID)
-                } label: {
-                    Label("Show Settings", systemImage: "gearshape")
-                }
-                .disabled(subscription == nil)
-            }
-        }
-        .miniPlayerBar()
-        .sheet(item: $episodeToShare) { ep in
-            EpisodeShareSheet(episode: ep, subscription: subscription)
-        }
-    }
-
-    private func showHeader(_ sub: Subscription) -> some View {
-        VStack(spacing: 12) {
-            CachedArtworkImage(url: sub.artworkURL) {
-                ZStack {
-                    LinearGradient(
-                        colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "waveform")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-            .frame(width: 120, height: 120)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-            .onTapGesture { showExpandedArtwork = true }
-            .sheet(isPresented: $showExpandedArtwork) {
-                ExpandedArtworkSheet(url: sub.artworkURL)
-            }
-
-            VStack(spacing: 4) {
-                Text(sub.title)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-
-                // Video / Explicit pills centred below the title
-                let showVideo = sub.latestEpisode?.mediaKind == .video
-                let showExplicit = sub.isExplicit == true
-                if showVideo || showExplicit {
-                    HStack(spacing: 6) {
-                        if showVideo { VideoBadgeLarge() }
-                        if showExplicit { ExplicitPill() }
-                    }
-                }
-
-                if let description = sub.description.map(stripHTML), !description.isEmpty {
-                    Text(description)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 6) {
-                    if let author = sub.author {
-                        Text(author)
-                            .fontWeight(.bold)
-                            .lineLimit(1)
-                    }
-                    if sub.author != nil, !sub.categories.isEmpty {
-                        Text("·")
-                    }
-                    if !sub.categories.isEmpty {
-                        Text(sub.categories.joined(separator: ", "))
-                            .fontWeight(.bold)
-                            .lineLimit(1)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func episodeRow(_ episode: Episode, sub: Subscription) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .center, spacing: 4) {
-                    CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL) {
-                        ZStack {
-                            LinearGradient(
-                                colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                            Image(systemName: "waveform")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.65))
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(episode.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    if let desc = episode.description.map(stripHTML), !desc.isEmpty {
-                        Text(desc)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                    }
-
-                    HStack(spacing: 4) {
-                        if let date = episode.publishedAt {
-                            Text(formatPublishedDate(date))
-                                .lineLimit(1)
-                        }
-                        if let duration = episode.durationSeconds {
-                            let elapsed = appState.effectivePlaybackTime(for: episode)
-                            let remaining = elapsed > 0 ? max(0, duration - elapsed) : duration
-                            let isPartial = elapsed > 0
-                            Text("•")
-                            Text(isPartial ? "\(formatDuration(remaining)) left remaining" : formatDuration(duration))
-                                .monospacedDigit()
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        EpisodeStatusPill(kind: statusKind(for: episode))
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if episode.downloadState == .downloading,
-               let progress = appState.downloadProgress[episode.id] {
-                ProgressView(value: progress, total: 1.0)
-                    .tint(.purple)
-                    .animation(.linear(duration: 0.3), value: progress)
-                    .padding(.leading, 56)
-                    .padding(.top, 6)
-            }
-        }
-        .padding(.vertical, 6)
-        .overlay(alignment: .topTrailing) {
-            if episode.mediaKind == .video || episode.isExplicit == true {
-                HStack(spacing: 3) {
-                    if episode.mediaKind == .video { VideoBadge() }
-                    if episode.isExplicit == true { ExplicitPillSmall() }
-                }
-            }
-        }
-    }
-
-    private func statusKind(for episode: Episode) -> EpisodeStatusKind {
-        switch episode.playedState {
-        case .playing:
-            return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
-        case .played:   return .played
-        case .archived: return episode.wasCompleted ? .played : .archived
-        case .unplayed:
-            let position = appState.effectivePlaybackTime(for: episode)
-            if position > 0 { return .partiallyPlayed }
-            return episode.downloadState == .downloaded ? .queued : .unplayed
-        }
-    }
-
-    private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds)
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
-    }
-
-    private func formatPublishedDate(_ date: Date) -> String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return date.formatted(date: .abbreviated, time: .omitted)
     }
 }
+
 
 // AI CONTEXT — EpisodeDetailView ("Episode Detail" page). Full single-episode
 // view: description, chapter list with artwork, play/download/share/archive
@@ -1153,7 +618,7 @@ struct EpisodeDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 // Centred header — artwork · title · pills · show name
                 VStack(spacing: 12) {
-                    CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL) { placeholderArtwork }
+                    CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: 120, height: 120)) { placeholderArtwork }
                         .frame(width: 120, height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
@@ -1172,8 +637,8 @@ struct EpisodeDetailView: View {
                         let showExplicit = ep.isExplicit == true
                         if showVideo || showExplicit {
                             HStack(spacing: 6) {
-                                if showVideo { VideoBadgeLarge() }
-                                if showExplicit { ExplicitPill() }
+                                if showVideo { VideoPillLarge() }
+                                if showExplicit { ExplicitPillLarge() }
                             }
                         }
 
@@ -1199,15 +664,7 @@ struct EpisodeDetailView: View {
                         Text("Description")
                             .font(.title3.weight(.bold))
                             .foregroundStyle(.primary)
-                        HTMLDescriptionText(
-                            html: description,
-                            fontSize: 15,
-                            color: Color(white: 0.78),
-                            linkColor: .purple,
-                            showsFirstImage: false
-                        )
-                        .padding(14)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        descriptionCard(description)
                     }
                 }
 
@@ -1310,6 +767,21 @@ struct EpisodeDetailView: View {
         .disabled(disabled)
     }
 
+    /// Episode description rendered in a card that matches `PodcastDetailView`'s
+    /// glass `episodeListCard` via the shared `glassCard(cornerRadius:)` modifier.
+    private func descriptionCard(_ description: String) -> some View {
+        HTMLDescriptionText(
+            html: description,
+            fontSize: 15,
+            color: Color(white: 0.78),
+            linkColor: .purple,
+            showsFirstImage: false
+        )
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 16)
+    }
+
     @ViewBuilder
     private func metaGrid(sub: Subscription, ep: Episode) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1317,25 +789,40 @@ struct EpisodeDetailView: View {
                 .font(.title3.weight(.bold))
                 .foregroundStyle(.primary)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                if let date = ep.publishedAt {
-                    metaCard("Published", date.formatted(date: .abbreviated, time: .omitted))
+            // Wrap the small glass cards in a GlassEffectContainer so they read
+            // as one cohesive glass surface (iOS 26+); plain grid on the fallback.
+            if #available(iOS 26, *) {
+                GlassEffectContainer(spacing: 8) {
+                    metaGridContent(sub: sub, ep: ep)
                 }
-                if let duration = ep.durationSeconds {
-                    metaCard("Duration", formatDuration(duration))
-                }
-                if let size = ep.fileSizeBytes {
-                    metaCard("File Size", formatFileSize(size))
-                }
-                metaCard("Classification", ep.isExplicit == true ? "Explicit" : "Clean")
-                metaCard("File Status", fileStatusText(for: ep))
-                metaCard("Priority Rank", ordinalString(sub.priorityRank))
+            } else {
+                metaGridContent(sub: sub, ep: ep)
             }
         }
     }
 
+    @ViewBuilder
+    private func metaGridContent(sub: Subscription, ep: Episode) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            if let date = ep.publishedAt {
+                metaCard("Published", relativePublishedLabel(date))
+                metaCard("Released", relativeReleasedLabel(date))
+            }
+            if let duration = ep.durationSeconds {
+                metaCard("Duration", formatDuration(duration))
+            }
+            if let size = ep.fileSizeBytes {
+                metaCard("File Size", formatFileSize(size))
+            }
+            metaCard("Classification", ep.isExplicit == true ? "Explicit" : "Clean")
+            metaCard("File Status", fileStatusText(for: ep))
+            metaCard("Priority Rank", ordinalString(sub.priorityRank))
+        }
+    }
+
+    @ViewBuilder
     private func metaCard(_ key: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let content = VStack(alignment: .leading, spacing: 3) {
             Text(key)
                 .font(.system(size: 10, weight: .bold))
                 .textCase(.uppercase)
@@ -1349,9 +836,15 @@ struct EpisodeDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+
+        if #available(iOS 26, *) {
+            content.glassEffect(in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            content
+                .background(Color(white: 0.09))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.075), lineWidth: 0.5))
+        }
     }
 
     private var placeholderArtwork: some View {

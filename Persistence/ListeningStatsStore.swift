@@ -5,7 +5,8 @@ import Foundation
 // calendar day in DayStats records (wall-clock seconds, 24-hour histogram,
 // per-show seconds and per-show time saved keyed by subscription UUID with a
 // title map that survives unsubscribes, four time-saved categories, episodes
-// started/completed, manual skip count). Persisted to listening-stats.json; saves throttled to
+// started/completed, manual skip count, and bytes/episodes downloaded
+// (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause/background (AutohopApp).
 // Legacy lifetime totals from playback-stats.json are imported once as
 // `legacyBaseline` so pre-daily-bucketing history isn't lost.
@@ -74,6 +75,13 @@ public struct DayStats: Codable, Equatable {
     public var episodesStarted: Int
     public var episodesCompleted: Int
     public var manualSkipForwardCount: Int
+    /// Bytes downloaded on this day (sum of completed episode download sizes).
+    /// Forward-only: tracking began June 2026, so days before then are 0 and
+    /// any period sum reflects traffic since this build, not all-time history.
+    public var bytesDownloaded: Int64
+    /// Number of episodes whose download completed on this day — pairs with
+    /// `bytesDownloaded` for the "N episodes · avg size" stat line.
+    public var episodesDownloaded: Int
 
     public init(
         dayKey: String,
@@ -87,7 +95,9 @@ public struct DayStats: Codable, Equatable {
         timeSavedAutoSkip: TimeInterval = 0,
         episodesStarted: Int = 0,
         episodesCompleted: Int = 0,
-        manualSkipForwardCount: Int = 0
+        manualSkipForwardCount: Int = 0,
+        bytesDownloaded: Int64 = 0,
+        episodesDownloaded: Int = 0
     ) {
         self.dayKey = dayKey
         self.wallClockSeconds = wallClockSeconds
@@ -101,10 +111,33 @@ public struct DayStats: Codable, Equatable {
         self.episodesStarted = episodesStarted
         self.episodesCompleted = episodesCompleted
         self.manualSkipForwardCount = manualSkipForwardCount
+        self.bytesDownloaded = bytesDownloaded
+        self.episodesDownloaded = episodesDownloaded
     }
 
     public var totalTimeSaved: TimeInterval {
         timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
+    }
+
+    /// Sums this day's buckets with another device's same-day partition — the
+    /// core of additive cross-device stats (SYNC_DESIGN.md step 5b). NEVER
+    /// last-write-wins: each device contributes its own listening for the day.
+    public func merged(with other: DayStats) -> DayStats {
+        var r = self
+        r.wallClockSeconds += other.wallClockSeconds
+        for h in 0..<24 { r.hourSeconds[h] += other.hourSeconds[h] }
+        for (k, v) in other.perShowSeconds { r.perShowSeconds[k, default: 0] += v }
+        for (k, v) in other.perShowTimeSaved { r.perShowTimeSaved[k, default: 0] += v }
+        r.timeSavedVariableSpeed += other.timeSavedVariableSpeed
+        r.timeSavedTrimSilence += other.timeSavedTrimSilence
+        r.timeSavedManualSkip += other.timeSavedManualSkip
+        r.timeSavedAutoSkip += other.timeSavedAutoSkip
+        r.episodesStarted += other.episodesStarted
+        r.episodesCompleted += other.episodesCompleted
+        r.manualSkipForwardCount += other.manualSkipForwardCount
+        r.bytesDownloaded += other.bytesDownloaded
+        r.episodesDownloaded += other.episodesDownloaded
+        return r
     }
 
     // MARK: Codable — graceful decoding of day buckets saved before perShowTimeSaved existed
@@ -113,13 +146,28 @@ public struct DayStats: Codable, Equatable {
         case dayKey, wallClockSeconds, hourSeconds, perShowSeconds, perShowTimeSaved
         case timeSavedVariableSpeed, timeSavedTrimSilence, timeSavedManualSkip, timeSavedAutoSkip
         case episodesStarted, episodesCompleted, manualSkipForwardCount
+        case bytesDownloaded, episodesDownloaded
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         dayKey = try c.decode(String.self, forKey: .dayKey)
         wallClockSeconds = try c.decode(TimeInterval.self, forKey: .wallClockSeconds)
-        hourSeconds = try c.decode([TimeInterval].self, forKey: .hourSeconds)
+        // Normalize to exactly 24 buckets. Persisted data is normally 24, but a
+        // record decoded from CloudKit (another device, older or corrupt data)
+        // can be any length; merged(with:) and the period aggregation index
+        // 0..<24 unconditionally, so a short array here would crash. Pad with
+        // zeros and truncate any excess.
+        let decodedHours = try c.decode([TimeInterval].self, forKey: .hourSeconds)
+        if decodedHours.count == 24 {
+            hourSeconds = decodedHours
+        } else {
+            var normalized = Array(decodedHours.prefix(24))
+            if normalized.count < 24 {
+                normalized.append(contentsOf: Array(repeating: 0, count: 24 - normalized.count))
+            }
+            hourSeconds = normalized
+        }
         perShowSeconds = try c.decode([String: TimeInterval].self, forKey: .perShowSeconds)
         // Absent in JSON written before per-show time-saved tracking (2026-06).
         perShowTimeSaved = try c.decodeIfPresent([String: TimeInterval].self, forKey: .perShowTimeSaved) ?? [:]
@@ -130,6 +178,9 @@ public struct DayStats: Codable, Equatable {
         episodesStarted = try c.decode(Int.self, forKey: .episodesStarted)
         episodesCompleted = try c.decode(Int.self, forKey: .episodesCompleted)
         manualSkipForwardCount = try c.decode(Int.self, forKey: .manualSkipForwardCount)
+        // Absent in JSON written before download-data tracking (2026-06).
+        bytesDownloaded = try c.decodeIfPresent(Int64.self, forKey: .bytesDownloaded) ?? 0
+        episodesDownloaded = try c.decodeIfPresent(Int.self, forKey: .episodesDownloaded) ?? 0
     }
 }
 
@@ -146,6 +197,10 @@ public struct ListeningStatsSummary {
     public var episodesStarted: Int = 0
     public var episodesCompleted: Int = 0
     public var manualSkipForwardCount: Int = 0
+    /// Bytes downloaded over the period (forward-only, since June 2026).
+    public var bytesDownloaded: Int64 = 0
+    /// Episodes downloaded over the period — pairs with `bytesDownloaded`.
+    public var episodesDownloaded: Int = 0
     /// Wall-clock seconds per subscription UUID string, summed over the period.
     public var perShowSeconds: [String: TimeInterval] = [:]
     /// Time saved per subscription UUID string, summed over the period. Empty
@@ -171,6 +226,14 @@ public struct ListeningStatsSummary {
 
 public enum StatsPeriod: Equatable {
     case last(days: Int)
+    /// The current calendar week so far — Monday 00:00 up to now. Resets each
+    /// Monday. Variable length (1 day on Monday … up to 7 by Sunday).
+    case currentWeek
+    /// The current calendar month so far — the 1st 00:00 up to now. Resets on
+    /// the 1st of each month.
+    case currentMonth
+    /// The current calendar year so far — Jan 1 00:00 up to now. Resets on Jan 1.
+    case currentYear
     case lifetime
 }
 
@@ -196,6 +259,63 @@ public final class ListeningStatsStore: ObservableObject {
     private let calendar = Calendar.current
     private let fileURL: URL?
     private let legacyFileURL: URL?
+
+    /// Record store for cross-device stats sync; set by AppState. nil = no sync.
+    var syncDatabase: AutohopDatabase? {
+        didSet { reloadRemoteStats() }
+    }
+    /// Other devices' day partitions (dayKey → list), summed with local buckets
+    /// on every read. Never merged into `data.days` (that would double-count).
+    private var remoteByDayKey: [String: [DayStats]] = [:]
+
+    /// Reloads remote partitions from the database and refreshes the Stats view.
+    /// Also the handler the sync engine calls when a remote partition arrives.
+    public func reloadRemoteStats() {
+        remoteByDayKey = (try? syncDatabase?.remoteStatsByDayKey()) ?? [:]
+        bumpRevision()
+    }
+
+    /// This device's bucket for `key`, summed with every other device's partition.
+    private func combinedDay(_ key: String) -> DayStats {
+        var day = data.days[key] ?? DayStats(dayKey: key)
+        for remote in remoteByDayKey[key] ?? [] { day = day.merged(with: remote) }
+        return day
+    }
+
+    private func allDayKeys() -> [String] {
+        Array(Set(data.days.keys).union(remoteByDayKey.keys))
+    }
+
+    // The sync database row stores the FULL day bucket, not a delta, so these writes can be
+    // coalesced freely: until flushed the in-memory `data.days` is authoritative, and the next
+    // flush re-writes the complete, current bucket. This avoids ~2 SQLite write transactions per
+    // second during playback (addListeningTime fires every 0.5 s).
+    private var pendingStatsDayKeys = Set<String>()
+    private var lastStatsDayWriteAt: Date?
+    private let statsDayWriteThrottle: TimeInterval = 10
+
+    private func recordDayPending(_ day: DayStats) {
+        guard syncDatabase != nil else { return }
+        pendingStatsDayKeys.insert(day.dayKey)
+        if let last = lastStatsDayWriteAt, Date().timeIntervalSince(last) < statsDayWriteThrottle {
+            return // coalesce — flushed on the throttle window or at a lifecycle checkpoint
+        }
+        flushPendingStatsDays()
+    }
+
+    /// Writes every coalesced day bucket to the sync database. Called on the write throttle and at
+    /// lifecycle checkpoints (pause / background / explicit save) so the sync projection is current
+    /// without a write on every playback tick.
+    public func flushPendingStatsDays() {
+        guard let syncDatabase, !pendingStatsDayKeys.isEmpty else { return }
+        for key in pendingStatsDayKeys {
+            if let day = data.days[key] {
+                try? syncDatabase.recordStatsDay(day)
+            }
+        }
+        pendingStatsDayKeys.removeAll()
+        lastStatsDayWriteAt = Date()
+    }
 
     /// A day counts toward streaks once it has at least this much listening.
     public static let streakMinimumSeconds: TimeInterval = 60
@@ -246,6 +366,7 @@ public final class ListeningStatsStore: ObservableObject {
 
         data.days[day.dayKey] = day
         data.showTitles[showKey] = showTitle
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -290,10 +411,22 @@ public final class ListeningStatsStore: ObservableObject {
         mutateToday { $0.episodesCompleted += 1 }
     }
 
+    /// Records one completed episode download of `bytes` against today's bucket.
+    /// Called from AppState's download-success path. Forward-only — there is no
+    /// historical byte data to backfill, so totals accrue from this build onward.
+    public func recordDownload(bytes: Int64) {
+        guard bytes > 0 else { return }
+        mutateToday {
+            $0.bytesDownloaded += bytes
+            $0.episodesDownloaded += 1
+        }
+    }
+
     /// Replaces the bucket for the day's `dayKey`. For backfill/migration tooling
     /// and smoke tests — normal recording goes through the add/record methods.
     public func importDay(_ day: DayStats) {
         data.days[day.dayKey] = day
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -309,7 +442,8 @@ public final class ListeningStatsStore: ObservableObject {
     /// Lifetime totals in the legacy shape consumed by `StatsView`.
     public var lifetime: PlaybackStats {
         var stats = data.legacyBaseline ?? PlaybackStats(startedAt: data.startedAt)
-        for day in data.days.values {
+        for key in allDayKeys() {
+            let day = combinedDay(key)
             stats.totalListeningSeconds += day.wallClockSeconds
             stats.timeSavedVariableSpeed += day.timeSavedVariableSpeed
             stats.timeSavedTrimSilence += day.timeSavedTrimSilence
@@ -324,8 +458,14 @@ public final class ListeningStatsStore: ObservableObject {
         switch period {
         case .last(let count):
             buckets = recentDays(count)
+        case .currentWeek:
+            buckets = days(from: startOfCurrentWeek())
+        case .currentMonth:
+            buckets = days(from: startOfCurrentMonth())
+        case .currentYear:
+            buckets = days(from: startOfCurrentYear())
         case .lifetime:
-            buckets = data.days.values.sorted { $0.dayKey < $1.dayKey }
+            buckets = allDayKeys().sorted().map { combinedDay($0) }
         }
 
         var result = ListeningStatsSummary(days: buckets)
@@ -338,6 +478,8 @@ public final class ListeningStatsStore: ObservableObject {
             result.episodesStarted += day.episodesStarted
             result.episodesCompleted += day.episodesCompleted
             result.manualSkipForwardCount += day.manualSkipForwardCount
+            result.bytesDownloaded += day.bytesDownloaded
+            result.episodesDownloaded += day.episodesDownloaded
             for (show, seconds) in day.perShowSeconds {
                 result.perShowSeconds[show, default: 0] += seconds
             }
@@ -355,17 +497,47 @@ public final class ListeningStatsStore: ObservableObject {
     /// `period` — feeds rank-movement badges in the Top Shows list. Returns nil
     /// for `.lifetime`, which has no previous period to compare against.
     public func previousPeriodShowSeconds(for period: StatsPeriod) -> [String: TimeInterval]? {
-        guard case .last(let count) = period else { return nil }
-        let today = calendar.startOfDay(for: Date())
         var totals: [String: TimeInterval] = [:]
-        for offset in count..<(count * 2) {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: today),
-                  let day = data.days[dayKey(for: date)] else { continue }
-            for (show, seconds) in day.perShowSeconds {
-                totals[show, default: 0] += seconds
+        switch period {
+        case .lifetime:
+            return nil
+        case .last(let count):
+            let today = calendar.startOfDay(for: Date())
+            for offset in count..<(count * 2) {
+                guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+                for (show, seconds) in combinedDay(dayKey(for: date)).perShowSeconds {
+                    totals[show, default: 0] += seconds
+                }
             }
+        case .currentWeek:
+            // Compare against the previous full Monday–Sunday week.
+            guard let lastMonday = calendar.date(byAdding: .day, value: -7, to: startOfCurrentWeek()) else { return nil }
+            accumulate(&totals, from: lastMonday, upTo: startOfCurrentWeek())
+        case .currentMonth:
+            // Compare against the previous full calendar month.
+            let thisMonth = startOfCurrentMonth()
+            guard let prevMonth = calendar.date(byAdding: .month, value: -1, to: thisMonth) else { return nil }
+            accumulate(&totals, from: prevMonth, upTo: thisMonth)
+        case .currentYear:
+            // Compare against the previous full calendar year.
+            let thisYear = startOfCurrentYear()
+            guard let prevYear = calendar.date(byAdding: .year, value: -1, to: thisYear) else { return nil }
+            accumulate(&totals, from: prevYear, upTo: thisYear)
         }
         return totals
+    }
+
+    /// Adds every day's per-show seconds in the half-open range [start, end).
+    private func accumulate(_ totals: inout [String: TimeInterval], from start: Date, upTo end: Date) {
+        var cursor = calendar.startOfDay(for: start)
+        let stop = calendar.startOfDay(for: end)
+        while cursor < stop {
+            for (show, seconds) in combinedDay(dayKey(for: cursor)).perShowSeconds {
+                totals[show, default: 0] += seconds
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
     }
 
     /// Consecutive days with listening ending today (or yesterday, if today is
@@ -387,9 +559,7 @@ public final class ListeningStatsStore: ObservableObject {
 
     public var longestStreakDays: Int {
         let qualifyingKeys = Set(
-            data.days.values
-                .filter { $0.wallClockSeconds >= Self.streakMinimumSeconds }
-                .map(\.dayKey)
+            allDayKeys().filter { combinedDay($0).wallClockSeconds >= Self.streakMinimumSeconds }
         )
         guard !qualifyingKeys.isEmpty else { return 0 }
 
@@ -416,6 +586,9 @@ public final class ListeningStatsStore: ObservableObject {
     // MARK: - Persistence
 
     public func save() {
+        // A full save is a real persistence checkpoint (pause / background / shutdown) — make sure
+        // any coalesced stats-day writes reach the sync database too.
+        flushPendingStatsDays()
         guard let url = fileURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -435,6 +608,7 @@ public final class ListeningStatsStore: ObservableObject {
         var day = bucket(for: Date())
         change(&day)
         data.days[day.dayKey] = day
+        recordDayPending(day)
         bumpRevision()
         saveThrottled()
     }
@@ -449,13 +623,48 @@ public final class ListeningStatsStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         return (0..<count).reversed().compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
-            let key = dayKey(for: date)
-            return data.days[key] ?? DayStats(dayKey: key)
+            return combinedDay(dayKey(for: date))
+        }
+    }
+
+    /// Monday 00:00 of the week containing `date`, independent of locale
+    /// (the app treats Monday as the first day of the week for Stats).
+    func startOfWeek(for date: Date) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        // Gregorian weekday: Sun=1 … Sat=7, so Monday=2.
+        let weekday = calendar.component(.weekday, from: startOfDay)
+        let daysSinceMonday = (weekday - 2 + 7) % 7
+        return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay) ?? startOfDay
+    }
+
+    /// Monday 00:00 of the current week.
+    func startOfCurrentWeek() -> Date { startOfWeek(for: Date()) }
+
+    /// The 1st 00:00 of the current month.
+    func startOfCurrentMonth() -> Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+            ?? calendar.startOfDay(for: Date())
+    }
+
+    /// Jan 1 00:00 of the current year.
+    func startOfCurrentYear() -> Date {
+        calendar.date(from: calendar.dateComponents([.year], from: Date()))
+            ?? calendar.startOfDay(for: Date())
+    }
+
+    /// Day buckets from `start` (start-of-day) through today, oldest first.
+    private func days(from start: Date) -> [DayStats] {
+        let first = calendar.startOfDay(for: start)
+        let today = calendar.startOfDay(for: Date())
+        let span = (calendar.dateComponents([.day], from: first, to: today).day ?? 0) + 1
+        return (0..<max(span, 1)).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: first) else { return nil }
+            return combinedDay(dayKey(for: date))
         }
     }
 
     private func qualifies(_ date: Date) -> Bool {
-        (data.days[dayKey(for: date)]?.wallClockSeconds ?? 0) >= Self.streakMinimumSeconds
+        combinedDay(dayKey(for: date)).wallClockSeconds >= Self.streakMinimumSeconds
     }
 
     private func dayKey(for date: Date) -> String {

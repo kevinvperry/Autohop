@@ -16,25 +16,59 @@ import UIKit
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
 //    playNextEpisode), seek, chapter navigation, per-podcast audio settings
 //    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
-//  - Queue: downloadedQueue = QueueService priority order + manual overrides.
+//    External `podcast:chapters` are fetched AFTER play() begins (P7):
+//    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
+//    ephemeral session) so a slow endpoint never delays the first audio frame,
+//    then applies chapters live to the store, currentPlayerEpisode, and the
+//    engine (PlaybackControlling.updateChapters) iff that episode still plays.
+//  - Queue: downloadedQueue = QueueService priority order + manual overrides,
+//    MEMOIZED in cachedDownloadedQueue (P3) and invalidated synchronously in the
+//    subscriptionStore.objectWillChange sink + the pin didSets.
 //    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
 //    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
 //    Application Support/Autohop/queue-pins.json and clear on play/archive.
 //  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
 //    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles;
 //    reconcileOrphanedDownloads() repairs DB-vs-filesystem mismatches at launch.
-//  - Feed refresh: refreshSubscription merges new episodes (auto-downloading
-//    them), refreshDueSubscriptions implements Release Radar due-date polling,
-//    refreshSubscriptionsForBackground serves BGAppRefreshTask (max 8 feeds,
-//    waits on an in-flight cycle instead of completing early). Per-feed failure
-//    backoff lives in feedFailureBackoffUntil.
+//  - Feed refresh: refreshSubscription fetches feeds conditionally, records
+//    per-episode release observations, merges new episodes (auto-downloading
+//    them), and applies per-feed failure backoff in feedFailureBackoffUntil.
+//    Refresh also updates mutable feed metadata on the Subscription (author +
+//    artworkURL) so changed podcast art is picked up by the shared artwork cache
+//    after the next successful refresh instead of being frozen at subscribe time.
+//    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
+//    Release Radar due-feed polling. They ask Models/Subscription.swift for a
+//    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
+//    only due feeds are considered, then limited background slots (max 8) go to
+//    the highest-scoring feeds rather than simply the oldest due feeds. Manual
+//    refresh still ignores due dates and refreshes every eligible feed.
+//  - Refresh diagnostics: timed/background cycles log a feed.refreshAll.plan
+//    summary plus per-feed score/profile/prediction metadata on
+//    feed.refreshAll.itemStart when the diagnostic log is enabled. These logs
+//    are the intended tuning surface for the learned refresh system.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
-//  - Persistence side: playback positions saved (throttled ~10 s) to
-//    playback-position.json keyed by episode GUID/URL so re-fetched episodes
-//    resume correctly; listening history + stats recorded on playback ticks.
+//    The inactive/limit passes skip a subscription's pre-existing back-catalogue
+//    (episodes published on/before Subscription.subscribedAt) so subscribing to a
+//    show never archives its whole backlog on day one.
+//  - Persistence side: playback positions held in an authoritative in-memory
+//    cache (savedPositionsCache, P2) loaded once and mutated through the
+//    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
+//    restorePlaybackPosition) never re-read/re-decode the file; writes stay
+//    immediate (savePlaybackPosition throttled ~10 s) to playback-position.json,
+//    keyed by episode GUID/URL so re-fetched episodes resume correctly.
+//    Listening history + stats recorded on playback ticks (recordProgress only
+//    accrues time; played/archived status transitions go through mark()).
 //  - OPML import/export with progress reporting.
+//  - First-run onboarding state + helpers (ONBOARDING_PLAN.md): realSubscriptionCount
+//    (filters browseDate==nil), isFirstRunNoSubscriptions, checkFirstSubscriptionMilestone
+//    (posts .autohopFirstSubscription on the first deliberate single subscribe; silent
+//    on bulk import/starter-pack), subscribeToFeedURLs (starter packs), the coach-mark
+//    TipCenter (activeTip / requestTip / dismissActiveTip — one-at-a-time, ≤3/session,
+//    UserDefaults seen-flags), and onboardingToast. Bootstrap reconciles existing users
+//    (real subs ⇒ mark onboarded). NOTE: tip animation is applied by CoachMarkOverlay's
+//    .animation(value:) — AppState has no `import SwiftUI`, so never call withAnimation here.
 //
 // KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
 // FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
@@ -77,11 +111,20 @@ final class AppState: ObservableObject {
     @Published var currentPlayerTime: TimeInterval = 0
     @Published var isPlaying: Bool = false
     @Published private(set) var upNextEpisode: Episode?
-    @Published private var queueOverrideEpisodeIDs: [UUID] = []
-    @Published private var queueDemotedEpisodeIDs: [UUID] = []
+    @Published private var queueOverrideEpisodeIDs: [UUID] = [] {
+        didSet { invalidateDownloadedQueueCache() }
+    }
+    @Published private var queueDemotedEpisodeIDs: [UUID] = [] {
+        didSet { invalidateDownloadedQueueCache() }
+    }
 
     // Per-episode download progress (0.0 – 1.0)
     @Published var downloadProgress: [UUID: Double] = [:]
+    // Onboarding coach mark currently on screen (nil = none). See OnboardingTip.
+    @Published var activeTip: OnboardingTip?
+    // Transient onboarding confirmation toast (e.g. after an import). Auto-cleared
+    // by the RootView toast overlay.
+    @Published var onboardingToast: String?
     // Cached list of episodes currently on device — updated at state transitions only, not on progress ticks.
     @Published private(set) var downloadedActivities: [DownloadActivity] = []
     // Cached listening history groups — updated only when entries change, not on every playback tick.
@@ -156,6 +199,15 @@ final class AppState: ObservableObject {
 
     private typealias SavedPositions = [String: SavedPosition]
 
+    /// Authoritative in-memory copy of the saved playback positions (P2). Loaded
+    /// from disk once on first access and kept the source of truth thereafter, so
+    /// repeated reads (e.g. `savedPlaybackTime` called in a loop over the queue
+    /// during `playNextEpisode`/`restorePlaybackPosition`) never re-read+re-decode
+    /// the whole positions file. Mutators update this and write through to disk.
+    /// `nil` = not yet loaded. AppState is `@MainActor` and the sole owner of the
+    /// positions file, so this never goes stale behind our back.
+    private var savedPositionsCache: SavedPositions?
+
     // Throttle disk writes: save at most once every 10 s.
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
@@ -169,14 +221,82 @@ final class AppState: ObservableObject {
 
     // MARK: - Computed queue
 
+    /// Memoized result of `downloadedQueue` (P3). The underlying filter+sort over
+    /// every subscription is O(n log n) and the property is read many times per UI
+    /// update (badge, resourceContext, up-next refresh, …). Invalidated whenever
+    /// the subscriptions change (subscriptionStore.objectWillChange) or a queue pin
+    /// mutates (the @Published pin didSets). nil = needs recompute.
+    private var cachedDownloadedQueue: [Episode]?
+
     var downloadedQueue: [Episode] {
-        orderedQueueWithOverrides(
+        if let cachedDownloadedQueue { return cachedDownloadedQueue }
+        let computed = orderedQueueWithOverrides(
             queueService.downloadedQueue(from: subscriptionStore.subscriptions)
         )
+        cachedDownloadedQueue = computed
+        return computed
+    }
+
+    private func invalidateDownloadedQueueCache() {
+        cachedDownloadedQueue = nil
     }
 
     var nextPlayableEpisode: Episode? {
         downloadedQueue.first
+    }
+
+    // MARK: - Onboarding / first-run
+
+    /// Count of real (non-browse) subscriptions. Browse/preview subs created by
+    /// opening a Podcast Detail page (browseDate != nil) are invisible and must
+    /// not count as "the user has subscribed". See ONBOARDING_PLAN.md.
+    var realSubscriptionCount: Int {
+        subscriptionStore.subscriptions.filter { $0.browseDate == nil }.count
+    }
+
+    /// True for a brand-new user who hasn't passed Welcome and has no real
+    /// subscriptions — the signal RootView uses to route into the first-run flow.
+    var isFirstRunNoSubscriptions: Bool {
+        !settingsStore.appSettings.hasCompletedWelcome && realSubscriptionCount == 0
+    }
+
+    /// Fires the first-subscription milestone exactly once. A single deliberate
+    /// subscribe (count == 1) posts `.autohopFirstSubscription` for the "You're
+    /// all set" moment; a bulk OPML import (count > 1) flips the flag silently.
+    private func checkFirstSubscriptionMilestone() {
+        guard !settingsStore.appSettings.hasSubscribedFirstShow else { return }
+        let realSubs = subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+        guard !realSubs.isEmpty else { return }
+        settingsStore.appSettings.hasSubscribedFirstShow = true
+        if realSubs.count == 1 {
+            NotificationCenter.default.post(name: .autohopFirstSubscription, object: realSubs[0].id)
+        }
+    }
+
+    // MARK: - Onboarding tips (coach marks)
+
+    private var tipsShownThisSession = 0
+    private let maxTipsPerSession = 3
+
+    /// Surfaces a coach mark the first time a view asks for it. Enforces the
+    /// policy: one visible at a time, never re-shown once seen, and at most
+    /// `maxTipsPerSession` per launch (the rest surface in later sessions).
+    /// Safe to call from `onAppear` repeatedly — unmet conditions are no-ops.
+    func requestTip(_ tip: OnboardingTip) {
+        guard activeTip == nil else { return }
+        guard !tip.isSeen else { return }
+        guard tipsShownThisSession < maxTipsPerSession else { return }
+        // Animation is applied by CoachMarkOverlay (.animation(value:)); AppState
+        // stays free of SwiftUI so it doesn't need `withAnimation` here.
+        activeTip = tip
+    }
+
+    /// Dismisses the active tip via "Got it" — marks it seen so it never returns.
+    func dismissActiveTip() {
+        guard let tip = activeTip else { return }
+        tip.markSeen()
+        tipsShownThisSession += 1
+        activeTip = nil
     }
 
     var currentVideoPlayer: AVPlayer? {
@@ -278,15 +398,44 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
+        listeningHistoryStore.syncDatabase = subscriptionStore.database
+        cloudSyncEngine.onRemoteHistoryEntry = { [weak self] entry in
+            await MainActor.run { self?.listeningHistoryStore.applyRemote(entry) }
+        }
+        listeningStatsStore.syncDatabase = subscriptionStore.database
+        cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
+            await MainActor.run { self?.listeningStatsStore.reloadRemoteStats() }
+        }
+        // Active-player-wins: tell the store which episode is loaded in the
+        // player so a remote played/archived change can't interrupt it.
+        subscriptionStore.nowPlayingGuidProvider = { [weak self] in
+            self?.playbackEngine.currentEpisode?.guid
+        }
+        // New/activated subscriptions seed their playback settings from the
+        // global default panel; browse feeds resolve it live (effectivePreference).
+        subscriptionStore.defaultPlaybackPreferenceProvider = { [weak self] in
+            self?.settingsStore.appSettings.defaultPlaybackPreference ?? .default
+        }
+        // When a remote played/archived state arrives for an episode this device
+        // still has downloaded, drop the local media file (ASSESSMENT.md B1). The
+        // store clears the download fields itself; this just deletes the file.
+        subscriptionStore.onEpisodeFileShouldDelete = { [weak self] episode in
+            Task { try? await self?.downloadManager.deleteLocalFile(for: episode) }
+        }
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }
 
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
+                // Drop the memoized queue synchronously (P3): objectWillChange fires
+                // before the new value lands, and the main actor is single-threaded,
+                // so the next read recomputes from the updated subscriptions.
+                self?.invalidateDownloadedQueueCache()
                 Task { @MainActor in
                     guard let self else { return }
                     self.scheduleUpNextRefresh(reason: "state.changed")
+                    self.checkFirstSubscriptionMilestone()
                     self.objectWillChange.send()
                     let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
                     NotificationService.shared.updateBadge(count: badgeCount)
@@ -321,7 +470,9 @@ final class AppState: ObservableObject {
 
         refreshUpNextEpisode()
         startNetworkMonitor()
-        subscriptionStore.cleanupExpiredPreviewSubscriptions()
+        subscriptionStore.cleanupExpiredPreviewSubscriptions(
+            subscriptionIDsWithHistory: Set(listeningHistoryStore.entries.map(\.subscriptionID))
+        )
     }
 
     /// Creates a podcast that another device subscribed to, by fetching its feed,
@@ -517,6 +668,10 @@ final class AppState: ObservableObject {
                     )
                 }
                 state.downloadProgress.removeValue(forKey: episodeID)
+                // Background downloads are the bulk of auto-downloads — record
+                // their actual on-disk size against today's download-data stat too.
+                let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
+                state.listeningStatsStore.recordDownload(bytes: downloadedBytes)
                 if let sub = state.subscriptionStore.subscription(id: subscriptionID),
                    let ep = state.subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID) {
                     state.downloadActivityStore.complete(
@@ -684,6 +839,18 @@ final class AppState: ObservableObject {
             state.subscriptionStore.migrateExistingSubscriptionsToPlaybackSpeed(1.6)
             state.settingsStore.appSettings.playbackSpeed160Migrated = true
             state.logger.info("speed.migration", "Existing subscriptions set to 1.6x playback speed")
+        }
+        // Onboarding reconciliation (ONBOARDING_PLAN.md): an existing user who
+        // already has real (non-browse) subscriptions has effectively completed
+        // onboarding — never show them the first-run experience. Idempotent and
+        // only ever flips false→true, so a user who later unsubscribes from
+        // everything still won't see Welcome again. A brand-new install has zero
+        // subscriptions at bootstrap, so its flags correctly stay false.
+        if state.realSubscriptionCount > 0 && !state.settingsStore.appSettings.hasCompletedWelcome {
+            state.settingsStore.appSettings.hasCompletedWelcome = true
+            state.settingsStore.appSettings.hasSubscribedFirstShow = true
+            state.settingsStore.appSettings.hasPlayedFirstEpisode = true
+            state.logger.info("onboarding.reconcile", "Existing user with subscriptions marked onboarded")
         }
         state.syncDiagnosticLogging()
         state.logger.info("app.bootstrap", "App state bootstrapped")
@@ -1275,6 +1442,11 @@ final class AppState: ObservableObject {
                 )
             }
             downloadProgress.removeValue(forKey: episode.id)
+            // Record actual on-disk size against today's download-data stat. Falls
+            // back to the feed-declared size if the file can't be stat'd.
+            let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value
+                ?? episode.fileSizeBytes ?? 0
+            listeningStatsStore.recordDownload(bytes: downloadedBytes)
             if showCompletionMessage {
                 downloadMessage = "Downloaded \(episode.title)."
             }
@@ -1581,6 +1753,53 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Default Playback Preference (global, for new + non-subscribed feeds)
+
+    // These edit AppSettings.defaultPlaybackPreference only. They never touch an
+    // existing subscription's own playbackPreference — that snapshot was taken
+    // when the feed was subscribed to. When the episode currently playing belongs
+    // to a non-subscribed (browse) feed, the change is applied live, since browse
+    // playback resolves through effectivePreference(for:).
+
+    private func mutateDefaultPlaybackPreference(_ mutate: (inout PlaybackPreference) -> Void) {
+        var preference = settingsStore.appSettings.defaultPlaybackPreference
+        mutate(&preference)
+        settingsStore.appSettings.defaultPlaybackPreference = preference
+        if let episode = currentPlayerEpisode,
+           let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
+           subscription.browseDate != nil {
+            applyEffectivePreferenceToCurrentEpisode()
+            if !sharedListeningActive {
+                playbackEngine.updateVocalBoost(effectivePreference(for: subscription).vocalBoostLevel)
+            }
+        }
+    }
+
+    func updateDefaultPlaybackSpeed(_ speed: Double) {
+        logger.info("settings.defaultSpeed", "Default playback speed changed", metadata: [
+            "speed": PlaybackPreference.speedLabel(speed)
+        ])
+        mutateDefaultPlaybackPreference { $0.speed = speed }
+    }
+
+    func updateDefaultVocalBoost(_ level: VocalBoostLevel) {
+        logger.info("settings.defaultVocalBoost", "Default Vocal Boost changed", metadata: ["level": level.title])
+        mutateDefaultPlaybackPreference { $0.vocalBoostLevel = level }
+    }
+
+    func updateDefaultTrimSilence(_ amount: TrimSilenceAmount) {
+        logger.info("settings.defaultTrimSilence", "Default Trim Silence changed", metadata: ["amount": amount.title])
+        mutateDefaultPlaybackPreference { $0.trimSilence = amount }
+    }
+
+    func updateDefaultStartSkip(_ seconds: TimeInterval) {
+        mutateDefaultPlaybackPreference { $0.startSkipSeconds = seconds }
+    }
+
+    func updateDefaultEndSkip(_ seconds: TimeInterval) {
+        mutateDefaultPlaybackPreference { $0.endSkipSeconds = seconds }
+    }
+
     // MARK: - Shared Listening (global temporary override)
 
     // While active, every podcast plays at sharedListeningSpeed (1.0–1.3x) with
@@ -1617,7 +1836,11 @@ final class AppState: ObservableObject {
     /// The subscription's preference with the Shared Listening override applied.
     /// All playback paths must read speed/trim through this, never directly.
     func effectivePreference(for subscription: Subscription) -> PlaybackPreference {
-        var preference = subscription.playbackPreference
+        // Non-subscribed (browse-only) feeds always follow the live global
+        // default — they never carry user-customised settings of their own.
+        var preference = subscription.browseDate != nil
+            ? settingsStore.appSettings.defaultPlaybackPreference
+            : subscription.playbackPreference
         if settingsStore.appSettings.sharedListeningActive {
             preference.speed = settingsStore.appSettings.sharedListeningSpeed
             preference.trimSilence = .off
@@ -1702,46 +1925,57 @@ final class AppState: ObservableObject {
         }
         playableEpisode.localFileURL = localFileURL
 
-        if playableEpisode.chapters.isEmpty, let chaptersURL = playableEpisode.externalChaptersURL {
-            if let fetched = await fetchExternalChapters(url: chaptersURL, episodeID: playableEpisode.id) {
-                playableEpisode.chapters = fetched
-                subscriptionStore.updateEpisodeChapters(
-                    subscriptionID: subscription.id,
-                    episodeID: playableEpisode.id,
-                    chapters: fetched
-                )
-            }
-        }
-
         do {
             // Reset volume to full before starting — clears any residual sleep-timer fade.
             playbackEngine.setVolume(1.0)
 
+            let preference = effectivePreference(for: subscription)
             try await playbackEngine.play(
                 playableEpisode,
-                preference: effectivePreference(for: subscription),
+                preference: preference,
                 filter: subscription.chapterFilter
             )
 
             // Restore mid-episode position (overrides start-skip when > 0).
-            if safeResumeTime > subscription.playbackPreference.startSkipSeconds {
+            if safeResumeTime > preference.startSkipSeconds {
                 playbackEngine.seek(to: safeResumeTime)
                 currentPlayerTime = safeResumeTime
             } else {
-                currentPlayerTime = 0
+                // No resume — playback begins at the start-skip offset, so report that rather than 0
+                // (otherwise Now Playing and history tracking briefly show 0 until the first tick).
+                currentPlayerTime = preference.startSkipSeconds
             }
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
             // Fresh start only — resuming a partially played episode is not a new "start".
-            if safeResumeTime <= subscription.playbackPreference.startSkipSeconds {
+            if safeResumeTime <= preference.startSkipSeconds {
                 listeningStatsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
             }
             currentPlayerEpisode = playableEpisode
             isPlaying = true
+            // First-run: the user has now actually played something. Clears the
+            // re-entry routing rule that opens new users on Subscriptions until
+            // they've listened (ONBOARDING_PLAN.md Phase 2/4b).
+            if !settingsStore.appSettings.hasPlayedFirstEpisode {
+                settingsStore.appSettings.hasPlayedFirstEpisode = true
+            }
             positionSaveCounter = 0
             historyTrackingEpisodeID = playableEpisode.id
             historyTrackingLastTime = currentPlayerTime
             playbackMessage = nil
+
+            // Chapters from an external `podcast:chapters` feed are fetched AFTER
+            // playback has started (P7) so a slow/hung endpoint never delays the
+            // first audio frame; they are applied live to the store, the now-
+            // playing episode, and the engine (chapter-skip) once they arrive.
+            if playableEpisode.chapters.isEmpty, let chaptersURL = playableEpisode.externalChaptersURL {
+                fetchExternalChaptersInBackground(
+                    url: chaptersURL,
+                    episodeID: playableEpisode.id,
+                    subscriptionID: subscription.id,
+                    filter: subscription.chapterFilter
+                )
+            }
 
             // Auto-restart the sleep timer if it fired recently and the user has resumed.
             if sleepTimerService.checkAutoRestart() {
@@ -1757,7 +1991,7 @@ final class AppState: ObservableObject {
                 "podcast": subscription.title,
                 "duration": playableEpisode.durationSeconds.map { "\(Int($0))" } ?? "unknown",
                 "speed": PlaybackPreference.speedLabel(effectiveSpeed(for: subscription)),
-                "vocalBoost": subscription.playbackPreference.vocalBoostLevel.title,
+                "vocalBoost": preference.vocalBoostLevel.title,
                 "sharedListening": "\(sharedListeningActive)"
             ])
 
@@ -1857,6 +2091,7 @@ final class AppState: ObservableObject {
             "podcast": subscription.title,
             "url": subscription.feedURL.absoluteString
         ])
+        let previouslyKnownEpisodeKeys = Set(subscription.episodes.map(RefreshStats.releaseObservationKey(for:)))
         do {
             let outcome = try await feedService.refreshIfModified(
                 feedURL: subscription.feedURL,
@@ -1883,6 +2118,10 @@ final class AppState: ObservableObject {
             var stats = subscription.refreshStats
             stats.etag = newValidators.etag
             stats.lastModified = newValidators.lastModified
+            let newlyObservedEpisodes = stats.recordEpisodeObservations(
+                result.episodes,
+                previouslyKnownEpisodeKeys: previouslyKnownEpisodeKeys
+            )
             stats.recordFetch(
                 foundNewEpisode: result.latestEpisode.guid != oldLatestGUID,
                 publishedAt: result.latestEpisode.publishedAt
@@ -1906,12 +2145,17 @@ final class AppState: ObservableObject {
                 "podcast": subscription.title,
                 "oldLatest": oldLatestGUID ?? "none",
                 "newLatest": result.latestEpisode.guid,
-                "episodeCount": "\(result.episodes.count)"
+                "episodeCount": "\(result.episodes.count)",
+                "newlyObservedEpisodes": "\(newlyObservedEpisodes)"
             ])
             subscriptionStore.updateEpisodes(
                 subscriptionID: subscription.id,
                 episodes: result.episodes
             )
+            if let artworkURL = result.artworkURL {
+                subscriptionStore.updateArtworkURL(subscriptionID: subscription.id, artworkURL: artworkURL)
+            }
+            subscriptionStore.updateAuthor(subscriptionID: subscription.id, author: result.author)
             subscriptionStore.updateDescription(subscriptionID: subscription.id, description: result.description)
             subscriptionStore.updateCategories(subscriptionID: subscription.id, categories: result.categories)
             subscriptionStore.updateIsExplicit(subscriptionID: subscription.id, isExplicit: result.isExplicit)
@@ -2080,12 +2324,33 @@ final class AppState: ObservableObject {
                 guard let until = feedFailureBackoffUntil[subscription.id] else { return true }
                 return until <= now
             }
+        let dueCandidates = onlyDueFeeds
+            ? refreshCandidatesForCycle(eligibleSubscriptions, now: now)
+            : []
+        let selectedCandidates: [RefreshCycleCandidate]
+        if let maxSubscriptions, maxSubscriptions > 0 {
+            selectedCandidates = Array(dueCandidates.prefix(maxSubscriptions))
+        } else {
+            selectedCandidates = dueCandidates
+        }
         let subscriptions = onlyDueFeeds
-            ? subscriptionsForRefreshCycle(eligibleSubscriptions, maxSubscriptions: maxSubscriptions)
+            ? selectedCandidates.map(\.subscription)
             : eligibleSubscriptions
-        if onlyDueFeeds, subscriptions.isEmpty {
+        if onlyDueFeeds {
+            logRefreshCycleDecisionSummary(
+                candidates: dueCandidates,
+                selectedCount: selectedCandidates.count,
+                eligibleCount: eligibleSubscriptions.count,
+                skippedBackoffCount: backoffSubscriptions.count,
+                skippedInactiveCount: skippedSubscriptions.count,
+                maxSubscriptions: maxSubscriptions,
+                reason: reason
+            )
+        }
+        if onlyDueFeeds, selectedCandidates.isEmpty {
             return false
         }
+        let selectedCandidatesByID = Dictionary(uniqueKeysWithValues: selectedCandidates.map { ($0.subscription.id, $0) })
         if !skippedSubscriptions.isEmpty {
             logger.info("feed.refreshAll.skippedInactive", "Skipped subscriptions excluded from auto feed refresh", metadata: [
                 "count": "\(skippedSubscriptions.count)",
@@ -2099,13 +2364,17 @@ final class AppState: ObservableObject {
             ])
         }
         for (index, subscription) in subscriptions.enumerated() {
-            logger.info("feed.refreshAll.itemStart", "Refreshing subscription in timed cycle", metadata: [
+            var itemStartMetadata = [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
                 "podcast": subscription.title,
                 "url": subscription.feedURL.absoluteString,
                 "reason": reason
-            ])
+            ]
+            if let candidate = selectedCandidatesByID[subscription.id] {
+                itemStartMetadata.merge(refreshDecisionMetadata(for: candidate)) { _, new in new }
+            }
+            logger.info("feed.refreshAll.itemStart", "Refreshing subscription in timed cycle", metadata: itemStartMetadata)
             await refreshSubscription(
                 subscription,
                 episodeLimit: defaultFeedEpisodeLimit,
@@ -2136,35 +2405,150 @@ final class AppState: ObservableObject {
         return true
     }
 
-    /// The next moment a subscription deserves a fetch, derived from its episode
-    /// publish cadence (anchored to `publishedAt`, so fixed release schedules phase-lock).
+    /// The next moment a subscription deserves a fetch, preferring learned release
+    /// windows and falling back to the legacy cadence model while a feed is still
+    /// learning or has unusable date data.
     func nextRefreshDue(for subscription: Subscription) -> Date {
+        refreshPrediction(for: subscription).nextDueAt
+    }
+
+    private func refreshPrediction(for subscription: Subscription, now: Date = Date()) -> FeedRefreshPrediction {
+        refreshPrediction(
+            for: subscription,
+            profile: subscription.refreshStats.scheduleProfile(),
+            now: now
+        )
+    }
+
+    private func refreshPrediction(
+        for subscription: Subscription,
+        profile: FeedScheduleProfile,
+        now: Date
+    ) -> FeedRefreshPrediction {
         // Single-item feeds (hourly news bulletins) carry too few dates to derive a
         // cadence from the feed alone — fold in the persisted publish-date history.
         let publishDates = Set(subscription.episodes.compactMap(\.publishedAt))
             .union(subscription.refreshStats.recentPublishDates)
-        return FeedRefreshScheduling.nextDueAt(
+        return FeedRefreshScheduling.prediction(
+            profile: profile,
             latestPublishedAt: subscription.latestEpisode?.publishedAt,
             publishDates: Array(publishDates),
             stats: subscription.refreshStats,
-            minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60
+            minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60,
+            now: now
         )
     }
 
-    /// Due-date priority queue: overdue feeds first; feeds not yet due are skipped entirely.
-    /// `maxSubscriptions` remains only as a safety bound for the background window.
-    private func subscriptionsForRefreshCycle(
+    private struct RefreshCycleCandidate {
+        var subscription: Subscription
+        var profile: FeedScheduleProfile
+        var prediction: FeedRefreshPrediction
+        var priority: FeedRefreshPriority
+    }
+
+    /// Priority queue for feeds already due. Learned active windows and missed
+    /// releases win the limited background slots before ordinary overdue feeds.
+    private func refreshCandidatesForCycle(
         _ subscriptions: [Subscription],
-        maxSubscriptions: Int?
-    ) -> [Subscription] {
-        let now = Date()
-        let due = subscriptions
-            .map { (subscription: $0, dueAt: nextRefreshDue(for: $0)) }
-            .filter { $0.dueAt <= now }
-            .sorted { $0.dueAt < $1.dueAt }
-            .map(\.subscription)
-        guard let maxSubscriptions, maxSubscriptions > 0 else { return due }
-        return Array(due.prefix(maxSubscriptions))
+        now: Date
+    ) -> [RefreshCycleCandidate] {
+        subscriptions
+            .compactMap { subscription -> RefreshCycleCandidate? in
+                let profile = subscription.refreshStats.scheduleProfile()
+                let prediction = refreshPrediction(for: subscription, profile: profile, now: now)
+                guard prediction.nextDueAt <= now else { return nil }
+                let priority = FeedRefreshPrioritizer.priority(
+                    prediction: prediction,
+                    profile: profile,
+                    priorityRank: subscription.priorityRank,
+                    lastFetchedAt: subscription.refreshStats.lastFetchedAt,
+                    now: now
+                )
+                return RefreshCycleCandidate(
+                    subscription: subscription,
+                    profile: profile,
+                    prediction: prediction,
+                    priority: priority
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.priority.score != rhs.priority.score {
+                    return lhs.priority.score > rhs.priority.score
+                }
+                if lhs.prediction.nextDueAt != rhs.prediction.nextDueAt {
+                    return lhs.prediction.nextDueAt < rhs.prediction.nextDueAt
+                }
+                if lhs.subscription.priorityRank != rhs.subscription.priorityRank {
+                    return lhs.subscription.priorityRank < rhs.subscription.priorityRank
+                }
+                return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
+            }
+    }
+
+    private func logRefreshCycleDecisionSummary(
+        candidates: [RefreshCycleCandidate],
+        selectedCount: Int,
+        eligibleCount: Int,
+        skippedBackoffCount: Int,
+        skippedInactiveCount: Int,
+        maxSubscriptions: Int?,
+        reason: String
+    ) {
+        logger.info("feed.refreshAll.plan", "Planned due-feed refresh cycle", metadata: [
+            "reason": reason,
+            "eligible": "\(eligibleCount)",
+            "due": "\(candidates.count)",
+            "selected": "\(selectedCount)",
+            "cappedOut": "\(max(0, candidates.count - selectedCount))",
+            "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all",
+            "skippedBackoff": "\(skippedBackoffCount)",
+            "skippedInactive": "\(skippedInactiveCount)",
+            "stateCounts": refreshStateCounts(for: candidates),
+            "topCandidates": refreshTopCandidateSummary(for: candidates)
+        ])
+    }
+
+    private func refreshDecisionMetadata(for candidate: RefreshCycleCandidate) -> [String: String] {
+        [
+            "refreshScore": String(format: "%.1f", candidate.priority.score),
+            "refreshFactors": candidate.priority.reason,
+            "profileKind": candidate.profile.kind.rawValue,
+            "profileConfidence": String(format: "%.2f", candidate.profile.confidence),
+            "profileObservations": "\(candidate.profile.observationCount)",
+            "profileReliableDates": "\(candidate.profile.reliableDateCount)",
+            "predictionState": candidate.prediction.state.rawValue,
+            "predictionReason": candidate.prediction.reason,
+            "nextDueAt": refreshLogDate(candidate.prediction.nextDueAt),
+            "expectedWindowStart": refreshLogDate(candidate.prediction.expectedWindowStart),
+            "expectedWindowEnd": refreshLogDate(candidate.prediction.expectedWindowEnd),
+            "recheckIntervalSeconds": candidate.prediction.recheckInterval.map { "\(Int($0.rounded()))" } ?? "none"
+        ]
+    }
+
+    private func refreshStateCounts(for candidates: [RefreshCycleCandidate]) -> String {
+        let counts = candidates.reduce(into: [FeedRefreshWindowState: Int]()) { counts, candidate in
+            counts[candidate.prediction.state, default: 0] += 1
+        }
+        return FeedRefreshWindowState.allCases
+            .compactMap { state -> String? in
+                guard let count = counts[state], count > 0 else { return nil }
+                return "\(state.rawValue)=\(count)"
+            }
+            .joined(separator: ",")
+    }
+
+    private func refreshTopCandidateSummary(for candidates: [RefreshCycleCandidate]) -> String {
+        candidates.prefix(5)
+            .map { candidate in
+                let score = String(format: "%.1f", candidate.priority.score)
+                return "\(score)|\(candidate.prediction.state.rawValue)|\(candidate.profile.kind.rawValue)|\(candidate.subscription.title)"
+            }
+            .joined(separator: "; ")
+    }
+
+    private func refreshLogDate(_ date: Date?) -> String {
+        guard let date else { return "none" }
+        return ISO8601DateFormatter().string(from: date)
     }
 
     /// Archives the oldest excess episodes so the newest can always download —
@@ -2175,8 +2559,17 @@ final class AppState: ObservableObject {
         let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
         guard limit > 0 else { return }
 
+        // Pre-subscription backlog stays browsable — only count episodes published
+        // after subscribing toward the keep-N limit (mirrors runAutoArchive).
+        let backlogCutoff = subscription.subscribedAt
         let active = subscription.episodes
-            .filter { $0.playedState != .archived }
+            .filter { episode in
+                guard episode.playedState != .archived else { return false }
+                if let backlogCutoff, let published = episode.publishedAt, published <= backlogCutoff {
+                    return false
+                }
+                return true
+            }
             .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
         guard active.count > limit else { return }
 
@@ -2240,6 +2633,16 @@ final class AppState: ObservableObject {
             let settings = subscription.autoArchiveSettings
             let allEpisodes = subscription.episodes.filter { $0.playedState != .archived }
 
+            // Episodes that already existed when the user subscribed are the
+            // pre-existing back-catalogue — leave them browsable (unplayed) rather
+            // than archiving the whole feed the moment you subscribe. Only episodes
+            // published after subscribing flow through the inactive/limit passes.
+            let backlogCutoff = subscription.subscribedAt
+            func isPreSubscriptionBacklog(_ episode: Episode) -> Bool {
+                guard let backlogCutoff, let published = episode.publishedAt else { return false }
+                return published <= backlogCutoff
+            }
+
             // ── Pass 1: After Played ──────────────────────────────────────────
             if let interval = settings.afterPlayed.interval {
                 for episode in allEpisodes {
@@ -2265,7 +2668,8 @@ final class AppState: ObservableObject {
                 for episode in allEpisodes {
                     guard episode.playedState == .unplayed,
                           episode.id != playingID,
-                          !archivedIDs.contains(episode.id)
+                          !archivedIDs.contains(episode.id),
+                          !isPreSubscriptionBacklog(episode)
                     else { continue }
 
                     // An episode is inactive if nothing has touched it recently.
@@ -2290,7 +2694,7 @@ final class AppState: ObservableObject {
             if limit > 0 {
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading }
+                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading && !isPreSubscriptionBacklog($0) }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }
@@ -2400,12 +2804,52 @@ final class AppState: ObservableObject {
         try? OPMLService().exportSubscriptions(subscriptionStore.subscriptions)
     }
 
+    /// Subscribes to a list of feed URLs in one go (used by starter packs —
+    /// ONBOARDING_PLAN.md Phase 7). Mirrors the OPML import per-URL refresh+add
+    /// loop, skipping any feed already subscribed. Returns the number newly
+    /// subscribed. Because several real subscriptions can appear at once, the
+    /// first-subscription milestone resolves silently (no "You're all set" card),
+    /// exactly like a bulk OPML import.
+    @discardableResult
+    func subscribeToFeedURLs(_ urls: [URL]) async -> Int {
+        let existing = Set(subscriptionStore.subscriptions.map(\.feedURL))
+        var imported = 0
+        for url in urls where !existing.contains(url) {
+            let subscriptionID = UUID()
+            do {
+                let result = try await feedService.refresh(
+                    feedURL: url,
+                    subscriptionID: subscriptionID,
+                    episodeLimit: defaultFeedEpisodeLimit
+                )
+                _ = try subscriptionStore.addSubscription(
+                    id: subscriptionID, feedURL: url,
+                    title: result.subscriptionTitle, description: result.description,
+                    author: result.author,
+                    artworkURL: result.artworkURL,
+                    categories: result.categories,
+                    isExplicit: result.isExplicit,
+                    latestEpisode: result.latestEpisode,
+                    insertAtBottom: true
+                )
+                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, episodes: result.episodes)
+                imported += 1
+            } catch {
+                logger.error("starterPack.subscribeFailed", "Could not subscribe to feed", metadata: [
+                    "url": url.absoluteString,
+                    "error": String(describing: error)
+                ])
+            }
+        }
+        return imported
+    }
+
     // MARK: - Playback position persistence
 
     private func savePlaybackPosition() {
         guard let episode = currentPlayerEpisode,
               currentPlayerTime > 0,
-              let url = Self.positionFileURL
+              Self.positionFileURL != nil
         else { return }
         guard normalizedResumeTime(currentPlayerTime, duration: episode.durationSeconds) > 0 else {
             clearPlaybackPosition(for: episode)
@@ -2420,12 +2864,10 @@ final class AppState: ObservableObject {
             timeSeconds: currentPlayerTime,
             updatedAt: Date()
         )
-        var positions = loadSavedPositions()
+        var positions = savedPositions()
         positions[episodeKey] = position
         positions.removeValue(forKey: episode.id.uuidString)
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(positions) else { return }
-        try? data.write(to: url, options: [.atomic])
+        writeSavedPositions(positions)
     }
 
     func persistCurrentPlaybackPosition() {
@@ -2455,7 +2897,7 @@ final class AppState: ObservableObject {
     }
 
     private func restorePlaybackPosition() {
-        let positions = loadSavedPositions()
+        let positions = savedPositions()
         guard let restored = downloadedQueue
             .compactMap({ episode -> (Episode, SavedPosition)? in
                 let saved = positions[playbackPositionKey(for: episode)]
@@ -2504,14 +2946,22 @@ final class AppState: ObservableObject {
     }
 
     private func savedPlaybackTime(for episode: Episode) -> TimeInterval {
-        let positions = loadSavedPositions()
+        let positions = savedPositions()
         guard let position = positions[playbackPositionKey(for: episode)] ?? positions[episode.id.uuidString],
               position.subscriptionID == episode.subscriptionID
         else { return 0 }
         return normalizedResumeTime(position.timeSeconds, duration: episode.durationSeconds)
     }
 
-    private func loadSavedPositions() -> SavedPositions {
+    /// Returns the saved positions, loading from disk once and caching the result.
+    private func savedPositions() -> SavedPositions {
+        if let cached = savedPositionsCache { return cached }
+        let loaded = loadSavedPositionsFromDisk()
+        savedPositionsCache = loaded
+        return loaded
+    }
+
+    private func loadSavedPositionsFromDisk() -> SavedPositions {
         guard let url = Self.positionFileURL,
               FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url)
@@ -2532,32 +2982,35 @@ final class AppState: ObservableObject {
         return [:]
     }
 
-    private func clearPlaybackPosition(for episodeID: UUID) {
+    /// Updates the in-memory cache and writes it through to disk atomically;
+    /// removes the file when empty. Single source of truth for position writes.
+    private func writeSavedPositions(_ positions: SavedPositions) {
+        savedPositionsCache = positions
         guard let url = Self.positionFileURL else { return }
-        var positions = loadSavedPositions()
-        positions.removeValue(forKey: episodeID.uuidString)
         if positions.isEmpty {
             try? FileManager.default.removeItem(at: url)
-        } else if let data = try? JSONEncoder().encode(positions) {
-            try? data.write(to: url, options: [.atomic])
+            return
         }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(positions) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    private func clearPlaybackPosition(for episodeID: UUID) {
+        var positions = savedPositions()
+        positions.removeValue(forKey: episodeID.uuidString)
+        writeSavedPositions(positions)
     }
 
     private func clearPlaybackPosition(for episode: Episode) {
-        guard let url = Self.positionFileURL else { return }
-        var positions = loadSavedPositions()
+        var positions = savedPositions()
         positions.removeValue(forKey: playbackPositionKey(for: episode))
         positions.removeValue(forKey: episode.id.uuidString)
-        if positions.isEmpty {
-            try? FileManager.default.removeItem(at: url)
-        } else if let data = try? JSONEncoder().encode(positions) {
-            try? data.write(to: url, options: [.atomic])
-        }
+        writeSavedPositions(positions)
     }
 
     private func clearPlaybackPosition() {
-        guard let url = Self.positionFileURL else { return }
-        try? FileManager.default.removeItem(at: url)
+        writeSavedPositions([:])
     }
 
     private func normalizedResumeTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
@@ -2761,8 +3214,37 @@ final class AppState: ObservableObject {
         return duration
     }
 
+    /// Fetches external chapters off the playback-start path and applies them live
+    /// when (and only if) the same episode is still the one playing. (P7)
+    private func fetchExternalChaptersInBackground(url: URL, episodeID: UUID, subscriptionID: UUID, filter: ChapterFilter) {
+        Task { [weak self] in
+            guard let self,
+                  let fetched = await self.fetchExternalChapters(url: url, episodeID: episodeID),
+                  self.currentPlayerEpisode?.id == episodeID
+            else { return }
+
+            self.subscriptionStore.updateEpisodeChapters(
+                subscriptionID: subscriptionID,
+                episodeID: episodeID,
+                chapters: fetched
+            )
+            self.currentPlayerEpisode?.chapters = fetched
+            self.playbackEngine.updateChapters(fetched, filter: filter, for: episodeID)
+        }
+    }
+
+    /// Bounded chapter fetch: an ephemeral session with a short request timeout so
+    /// a slow/hung `podcast:chapters` endpoint can't linger on the default 60 s.
+    private static let chapterFetchSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 20
+        return URLSession(configuration: config)
+    }()
+
     private func fetchExternalChapters(url: URL, episodeID: UUID) async -> [Chapter]? {
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        guard let (data, response) = try? await Self.chapterFetchSession.data(from: url),
+              HTTPResponseValidation.isAcceptable(response) else { return nil }
         struct JSONChapters: Decodable {
             struct JSONChapter: Decodable {
                 var startTime: TimeInterval
@@ -2788,15 +3270,33 @@ final class AppState: ObservableObject {
 
     // MARK: - Foreground polling
 
+    /// Whether the app's scene is currently active (foreground). Updated from the
+    /// SwiftUI scenePhase observer. Gates the foreground poller so it stands down
+    /// when the app is only kept alive in the background by audio playback — see
+    /// `startForegroundPolling()`. Background feed refresh is BGAppRefreshTask's job.
+    var isSceneActive: Bool = true
+
+    /// Called by the scenePhase observer so foreground polling can pause/resume
+    /// in step with the app being foregrounded.
+    func setSceneActive(_ active: Bool) {
+        isSceneActive = active
+    }
+
     /// Foreground scheduler: ticks every 30 seconds and refreshes only the feeds
     /// whose adaptive due date has arrived. Conditional requests (304s) make each
     /// check nearly free, so an hourly news feed is picked up within a minute or
     /// two of publish while a weekly show is fetched roughly once a day.
+    ///
+    /// Despite the "foreground" name this Task is never cancelled, so without a
+    /// guard it would keep polling whenever background audio keeps the process
+    /// alive. The `isSceneActive` check makes it stand down in the background;
+    /// background refresh is handled separately by BGAppRefreshTask.
     func startForegroundPolling() {
         Task { @MainActor [weak self] in
             while true {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
+                guard self.isSceneActive else { continue }
                 let now = Date()
                 let anyDue = self.subscriptionStore.subscriptions.contains { subscription in
                     !subscription.excludeFromAutoFeedRefresh
@@ -2906,6 +3406,8 @@ final class ListeningHistoryStore: ObservableObject {
 
     private var lastSavedAt: Date?
     private let maxEntries = 500
+    /// Record store for cross-device history sync; set by AppState. nil = no sync.
+    var syncDatabase: AutohopDatabase?
 
     private static let fileURL: URL? = {
         guard let appSupport = try? FileManager.default.url(
@@ -2946,9 +3448,8 @@ final class ListeningHistoryStore: ObservableObject {
             entries[index].listenedSeconds += listenedSeconds
             entries[index].lastPositionSeconds = positionSeconds
             entries[index].lastListenedAt = now
-            if entries[index].status == .listened {
-                entries[index].status = .listened
-            }
+            // Status is intentionally left unchanged here: recordProgress only
+            // accrues listening time; played/archived transitions go through mark().
         } else {
             entries.append(ListeningHistoryEntry(
                 id: key,
@@ -2970,6 +3471,7 @@ final class ListeningHistoryStore: ObservableObject {
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
+        recordPending(id: key)
         saveThrottled()
     }
 
@@ -3025,6 +3527,31 @@ final class ListeningHistoryStore: ObservableObject {
             ))
         }
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        recordPending(id: key)
+        save()
+    }
+
+    /// Records a changed entry as pending for cross-device sync.
+    private func recordPending(id: String) {
+        guard let syncDatabase, let entry = entries.first(where: { $0.id == id }) else { return }
+        try? syncDatabase.recordHistoryEntry(entry)
+    }
+
+    /// Merges a remote history entry with record-level last-write-wins
+    /// (the entry with the newer `lastListenedAt` wins the whole record).
+    @MainActor
+    func applyRemote(_ remote: ListeningHistoryEntry) {
+        if let index = entries.firstIndex(where: { $0.id == remote.id }) {
+            guard remote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
+            entries[index] = remote
+        } else {
+            entries.append(remote)
+        }
+        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        if entries.count > maxEntries {
+            entries.removeLast(entries.count - maxEntries)
+        }
+        try? syncDatabase?.saveSyncedHistoryEntry(remote) // clean — don't re-push
         save()
     }
 
@@ -3070,4 +3597,3 @@ final class ListeningHistoryStore: ObservableObject {
         return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
     }
 }
-

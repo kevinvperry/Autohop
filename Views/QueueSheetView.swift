@@ -7,7 +7,8 @@ import SwiftUI
 // refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
 // leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
 // Play Next (blue) / Play Last (orange) overrides. Row offset/opacity state
-// animates removals.
+// animates removals. Rows use 44 pt CachedArtworkImage thumbnails, matching the
+// Priority/Downloads/Stats cache variant for reuse during repeated queue opens.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -24,9 +25,9 @@ struct QueueSheetView: View {
             Group {
                 if appState.downloadedQueue.isEmpty {
                     ContentUnavailableView(
-                        "Queue is Empty",
-                        systemImage: "tray",
-                        description: Text("Download an episode to start listening.")
+                        "Your queue builds itself",
+                        systemImage: "square.stack",
+                        description: Text("As you subscribe and episodes download, they line up here in priority order — newest first, ready to play.")
                     )
                 } else {
                     List {
@@ -63,7 +64,7 @@ struct QueueSheetView: View {
                                         Text(episode.title)
                                             .font(.subheadline.bold())
                                             .foregroundStyle(.primary)
-                                            .lineLimit(2)
+                                            .lineLimit(isExpanded ? nil : 2)
                                             .onTapGesture {
                                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                                                     expandedEpisodeID = isExpanded ? nil : episode.id
@@ -119,7 +120,7 @@ struct QueueSheetView: View {
                             .overlay(alignment: .topTrailing) {
                                 if episode.mediaKind == .video || episode.isExplicit == true {
                                     HStack(spacing: 3) {
-                                        if episode.mediaKind == .video { VideoBadge() }
+                                        if episode.mediaKind == .video { VideoPillSmall() }
                                         if episode.isExplicit == true { ExplicitPillSmall() }
                                     }
                                 }
@@ -176,6 +177,7 @@ struct QueueSheetView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
             .navigationTitle("Queue")
@@ -190,6 +192,7 @@ struct QueueSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .presentationBackground(.regularMaterial)
         .onAppear {
             let t = Date()
             appearTime = t
@@ -277,7 +280,7 @@ struct QueueSheetView: View {
     }
 
     private func artwork(url: URL?, pinnedNext: Bool, pinnedLast: Bool) -> some View {
-        CachedArtworkImage(url: url) {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {
             placeholderArtwork
         }
         .frame(width: 44, height: 44)
@@ -297,4 +300,3 @@ struct QueueSheetView: View {
         }
     }
 }
-

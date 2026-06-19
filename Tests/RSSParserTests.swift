@@ -115,6 +115,16 @@ final class RSSParserTests: XCTestCase {
 
         XCTAssertEqual(feed.title, "3AW Breakfast with Ross and Russel")
         XCTAssertEqual(episode.chapters.count, 5)
+        // Single-encoded `&amp;` in a chapter title must decode to `&`.
+        XCTAssertEqual(
+            episode.chapters[0].title,
+            "3AW Breakfast with Ross Stevenson & Russel Howcroft - Fri 22nd May, 2026 - Highlights"
+        )
+        // The episode title carrying the same entity decodes too.
+        XCTAssertEqual(
+            episode.title,
+            "3AW Breakfast with Ross Stevenson & Russel Howcroft - Fri 22nd May, 2026 - Highlights"
+        )
         XCTAssertEqual(episode.chapters[1].title, "Marker 01")
         XCTAssertEqual(episode.chapters[1].startSeconds, 1_008)
         XCTAssertEqual(episode.chapters[4].title, "Marker 04")
@@ -194,12 +204,67 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(episode.guid, "abc-123")
     }
 
+    func testDecodesDoubleEncodedEntitiesInChapterTitle() throws {
+        // Chapter titles are XML attributes, so they follow the same single-layer
+        // XMLParser decode + double-encode repair path as element text. A source
+        // `&amp;amp;` arrives as a literal `&amp;` and must be repaired to `&`.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss
+          xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+          xmlns:psc="http://podlove.org/simple-chapters"
+          version="2.0">
+          <channel>
+            <title>Show</title>
+            <item>
+              <title>Ep</title>
+              <guid isPermaLink="false">abc-123</guid>
+              <enclosure url="https://e.com/a.mp3" length="1" type="audio/mpeg"/>
+              <psc:chapters>
+                <psc:chapter start="00:00:00" title="Ross &amp;amp; Russel"/>
+                <psc:chapter start="00:01:00" title="Tom &amp; Jerry"/>
+              </psc:chapters>
+            </item>
+          </channel>
+        </rss>
+        """
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+
+        XCTAssertEqual(episode.chapters.count, 2)
+        XCTAssertEqual(episode.chapters[0].title, "Ross & Russel")
+        XCTAssertEqual(episode.chapters[1].title, "Tom & Jerry")
+    }
+
     func testLeavesCorrectlyEncodedTitleUntouched() throws {
         // Single-encoded `&amp;` is fully decoded by XMLParser to `&`; the repair
         // pass must be a no-op (no entities remain) and not corrupt anything.
         let xml = "<rss version=\"2.0\"><channel><title>S</title><item><title>Tom &amp; Jerry</title><enclosure url=\"https://e.com/a.mp3\" length=\"1\" type=\"audio/mpeg\"/></item></channel></rss>"
         let feed = try RSSParser().parse(data: Data(xml.utf8))
         XCTAssertEqual(try XCTUnwrap(feed.latestEpisode).title, "Tom & Jerry")
+    }
+
+    func testMixedAmpersandRepairAndNoQuadraticBlowup() throws {
+        // A bare `&` in a URL query, a valid named entity, and a valid numeric entity must all be
+        // handled: bare ones escaped (then decoded by XMLParser to `&`), valid ones preserved.
+        let title = "A & B &amp; C &#8212; D"
+        let xml = "<rss version=\"2.0\"><channel><title>S</title><item><title>\(title)</title>"
+            + "<enclosure url=\"https://e.com/a.mp3?x=1&y=2\" length=\"1\" type=\"audio/mpeg\"/></item></channel></rss>"
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+        let episode = try XCTUnwrap(feed.latestEpisode)
+        XCTAssertEqual(episode.title, "A & B & C — D")
+        XCTAssertEqual(episode.audioURL?.absoluteString, "https://e.com/a.mp3?x=1&y=2")
+
+        // Performance: the ampersand-repair prepass must be linear. The old removeSubrange-per-
+        // ampersand pass was O(n²) and took ~25 min on this input. Test the prepass directly (not
+        // via full parse) so we measure only the repair, not XMLParser's own large-node handling.
+        let many = String(repeating: "Tom & Jerry & friends ", count: 60_000) // ~120k bare ampersands
+        let bigData = Data(many.utf8)
+        let start = Date()
+        let repaired = RSSParser.dataByEscapingBareAmpersands(in: bigData)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0, "Ampersand repair should be linear, not O(n²)")
+        // Sanity: every bare ampersand was escaped.
+        XCTAssertFalse(String(data: repaired, encoding: .utf8)!.contains(" & "))
     }
 
     private func fixtureData(named name: String, extension fileExtension: String) throws -> Data {

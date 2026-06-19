@@ -2,15 +2,23 @@ import SwiftUI
 import Charts
 
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
-// FEATURES.md §12). Period selector (7/30/90 days, 1 year, all time) drives
-// every section, all data from ListeningStatsStore.summary(): hero card (time
-// listened, time saved, episodes finished, streak), listening heatmap (7/30/90)
-// or monthly Swift Charts trend (1y/all), 24-hour listening clock (Canvas
-// rose chart), Top Shows (+ Show All page with rank-movement badges), "Shows
-// You're Drifting From" (ShowEngagementAnalyzer, 7/30/90 only, omitted when
-// empty), time-saved breakdown, privacy footer. Tapping a Top Shows or
+// FEATURES.md §12). Period selector — This Week / current month / current year /
+// Lifetime — drives every section, all data from ListeningStatsStore.summary().
+// All but Lifetime are calendar-anchored and reset at the start of each period:
+// This Week = Monday 00:00 → now (Monday-first, locale-independent); the month
+// pill (dynamic label, e.g. "June") = 1st → now; the year pill ("2026") = Jan 1
+// → now. Sections: hero card (time listened, time saved, episodes finished,
+// streak), listening heatmap (This Week + current month, Monday-aligned columns)
+// or monthly Swift Charts trend (year/Lifetime), 24-hour listening clock (Canvas
+// rose chart), Top Shows (+ Show All page with rank-movement badges vs. the
+// previous comparable period — prior week / calendar month / calendar year),
+// "Shows You're Drifting From" (ShowEngagementAnalyzer, heatmap ranges only,
+// omitted when empty), time-saved breakdown, data-downloaded card (total bytes
+// + episode count / average size, forward-only from June 2026), privacy footer.
+// Tapping a Top Shows or
 // drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
-// All on-device data only.
+// All on-device data only. Show rows use 44 pt CachedArtworkImage thumbnails so
+// stats-heavy lists share the same artwork cache variant as queues and settings.
 // MARK: - StatsView
 
 struct StatsView: View {
@@ -24,42 +32,75 @@ struct StatsView: View {
     }
 }
 
-private enum StatsRange: String, CaseIterable, Identifiable {
-    case days7 = "7 Days"
-    case days30 = "30 Days"
-    case days90 = "90 Days"
-    case year = "1 Year"
-    case allTime = "All Time"
+private enum StatsRange: CaseIterable, Identifiable {
+    case thisWeek
+    case thisMonth
+    case thisYear
+    case lifetime
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .thisWeek:  return "thisWeek"
+        case .thisMonth: return "thisMonth"
+        case .thisYear:  return "thisYear"
+        case .lifetime:  return "lifetime"
+        }
+    }
+
+    /// Pill label. Month and year are dynamic (e.g. "June", "2026").
+    var title: String {
+        switch self {
+        case .thisWeek:  return "This Week"
+        case .thisMonth: return Date().formatted(.dateTime.month(.wide))
+        case .thisYear:  return Date().formatted(.dateTime.year())
+        case .lifetime:  return "Lifetime"
+        }
+    }
+
+    /// Noun for the "rank change vs. the previous …" caption. Nil for Lifetime.
+    var previousPeriodNoun: String? {
+        switch self {
+        case .thisWeek:  return "week"
+        case .thisMonth: return "month"
+        case .thisYear:  return "year"
+        case .lifetime:  return nil
+        }
+    }
 
     var period: StatsPeriod {
         switch self {
-        case .days7: return .last(days: 7)
-        case .days30: return .last(days: 30)
-        case .days90: return .last(days: 90)
-        case .year: return .last(days: 365)
-        case .allTime: return .lifetime
+        case .thisWeek:  return .currentWeek
+        case .thisMonth: return .currentMonth
+        case .thisYear:  return .currentYear
+        case .lifetime:  return .lifetime
         }
     }
 
-    /// Short ranges use the day heatmap; long ones the monthly trend chart.
+    /// Day-cell heatmap ranges (week/month); year and lifetime use the trend chart.
     var usesHeatmap: Bool {
         switch self {
-        case .days7, .days30, .days90: return true
-        case .year, .allTime: return false
+        case .thisWeek, .thisMonth: return true
+        case .thisYear, .lifetime:  return false
         }
     }
 
-    /// Start-of-day cutoff for history-based per-show stats. Nil for All Time.
+    /// Start-of-day cutoff for history-based per-show stats. Nil for Lifetime.
     var sinceDate: Date? {
-        guard case .last(let days) = period else { return nil }
         let calendar = Calendar.current
-        return calendar.date(
-            byAdding: .day,
-            value: -(days - 1),
-            to: calendar.startOfDay(for: Date())
-        )
+        switch self {
+        case .lifetime:
+            return nil
+        case .thisWeek:
+            // Monday 00:00 of the current week (Monday treated as first day).
+            let startOfDay = calendar.startOfDay(for: Date())
+            let weekday = calendar.component(.weekday, from: startOfDay)
+            let daysSinceMonday = (weekday - 2 + 7) % 7
+            return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay)
+        case .thisMonth:
+            return calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+        case .thisYear:
+            return calendar.date(from: calendar.dateComponents([.year], from: Date()))
+        }
     }
 }
 
@@ -67,7 +108,7 @@ private struct StatsContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
-    @State private var range: StatsRange = .days30
+    @State private var range: StatsRange = .thisMonth
     @State private var driftShowToUnsubscribe: ShowEngagement?
     @State private var showDriftUnsubscribeConfirm = false
     /// Subscription UUID string of the Top Shows row expanded into a detail card.
@@ -81,7 +122,7 @@ private struct StatsContentView: View {
         let summary = store.summary(for: range.period)
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 32) {
                 rangeSelector
 
                 heroCard(summary)
@@ -95,6 +136,7 @@ private struct StatsContentView: View {
                 clockSection(summary)
                 topShowsSection(summary)
                 driftingShowsSection(summary)
+                dataDownloadedSection(summary)
                 timeSavedSection(summary)
 
                 privacyFooter
@@ -165,12 +207,12 @@ private struct StatsContentView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .glassCard(cornerRadius: 16)
     }
 
     private var heroSubtitle: String {
         switch range {
-        case .allTime:
+        case .lifetime:
             return "Time listened since \(store.startedAt.formatted(date: .abbreviated, time: .omitted))"
         default:
             return "Time listened"
@@ -195,7 +237,7 @@ private struct StatsContentView: View {
         days == 1 ? "1 day" : "\(days) days"
     }
 
-    // MARK: - Heatmap (30/90 days)
+    // MARK: - Heatmap (This Week / current month)
 
     private func heatmapSection(_ summary: ListeningStatsSummary) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -213,7 +255,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -268,7 +310,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -306,7 +348,7 @@ private struct StatsContentView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
         }
     }
 
@@ -357,7 +399,7 @@ private struct StatsContentView: View {
                 emptyCardText("No listening in this period yet")
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
@@ -390,7 +432,7 @@ private struct StatsContentView: View {
                         }
                     }
                 }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .glassCard(cornerRadius: 16)
             }
         }
     }
@@ -406,12 +448,18 @@ private struct StatsContentView: View {
     @ViewBuilder
     private func driftingShowsSection(_ summary: ListeningStatsSummary) -> some View {
         if range.usesHeatmap, let since = range.sinceDate {
-            // Unsubscribed shows are excluded — drift from a show you already left is resolved.
+            // Only real, active subscriptions qualify. Unsubscribed shows are
+            // excluded (drift from a show you already left is resolved), and so are
+            // invisible browse/preview subscriptions (browseDate != nil) auto-created
+            // when previewing a podcast in search — the user never subscribed to those.
             let shows = ShowEngagementAnalyzer.strugglingShows(
                 entries: historyStore.entries,
                 since: since,
                 excluding: hiddenDriftShowIDs
-            ).filter { appState.subscriptionStore.subscription(id: $0.subscriptionID) != nil }
+            ).filter {
+                guard let sub = appState.subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
+                return sub.browseDate == nil
+            }
 
             if !shows.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
@@ -440,7 +488,7 @@ private struct StatsContentView: View {
                             }
                         }
                     }
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
 
                     VStack(alignment: .leading, spacing: 6) {
                         completionLegend
@@ -560,7 +608,128 @@ private struct StatsContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .glassCard(cornerRadius: 16)
+        }
+    }
+
+    // MARK: - Data downloaded
+
+    private func dataDownloadedSection(_ summary: ListeningStatsSummary) -> some View {
+        let buckets = downloadTotals(summary)
+        let hasData = summary.bytesDownloaded > 0
+        let hasChartData = buckets.contains { $0.bytes > 0 }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionHeading("Data Downloaded", icon: "arrow.down.circle")
+
+            VStack(alignment: .leading, spacing: 16) {
+                // Headline total + episode/average mini-stats.
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(formattedBytes(summary.bytesDownloaded))
+                            .font(.system(size: 36, weight: .bold))
+                            .foregroundStyle(.cyan)
+                            .contentTransition(.numericText())
+                        Text("total downloaded")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if hasData {
+                        HStack(spacing: 18) {
+                            downloadMiniStat(
+                                "\(summary.episodesDownloaded)",
+                                summary.episodesDownloaded == 1 ? "episode" : "episodes"
+                            )
+                            downloadMiniStat(
+                                formattedBytes(summary.bytesDownloaded / Int64(max(summary.episodesDownloaded, 1))),
+                                "avg each"
+                            )
+                        }
+                    }
+                }
+
+                if hasData, hasChartData {
+                    downloadChart(buckets)
+                } else if !hasData {
+                    Text("No episodes downloaded in this period")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassCard(cornerRadius: 16)
+        }
+    }
+
+    private func downloadMiniStat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(value)
+                .font(.title3.weight(.bold).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Download volume over time: per-day bars for short ranges, per-month for
+    /// year/lifetime — mirrors the listening-trend bucketing, but in cyan.
+    @ViewBuilder
+    private func downloadChart(_ buckets: [(date: Date, bytes: Int64)]) -> some View {
+        let unit: Calendar.Component = range.usesHeatmap ? .day : .month
+        Chart(buckets, id: \.date) { item in
+            BarMark(
+                x: .value("Date", item.date, unit: unit),
+                y: .value("Data", Double(item.bytes))
+            )
+            .foregroundStyle(Color.cyan.gradient)
+            .cornerRadius(3)
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 5)) {
+                AxisValueLabel(
+                    format: range.usesHeatmap ? .dateTime.day() : .dateTime.month(.narrow)
+                )
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.08))
+                AxisValueLabel {
+                    if let bytes = value.as(Double.self) {
+                        Text(formattedBytes(Int64(bytes)))
+                    }
+                }
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .frame(height: 150)
+    }
+
+    /// Bytes downloaded per time bucket (day for heatmap ranges, month otherwise).
+    private func downloadTotals(_ summary: ListeningStatsSummary) -> [(date: Date, bytes: Int64)] {
+        let calendar = Calendar.current
+        if range.usesHeatmap {
+            return summary.days.compactMap { day in
+                guard let date = statsDayDate(from: day.dayKey) else { return nil }
+                return (date: date, bytes: day.bytesDownloaded)
+            }
+        } else {
+            var totals: [Date: Int64] = [:]
+            for day in summary.days {
+                guard let date = statsDayDate(from: day.dayKey),
+                      let month = calendar.date(from: calendar.dateComponents([.year, .month], from: date))
+                else { continue }
+                totals[month, default: 0] += day.bytesDownloaded
+            }
+            return totals.sorted { $0.key < $1.key }.map { (date: $0.key, bytes: $0.value) }
         }
     }
 
@@ -627,15 +796,25 @@ private struct StatsRangeSelector: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { range = item }
                 } label: {
-                    Text(item.rawValue)
+                    let pill = Text(item.title)
                         .font(.footnote.weight(.semibold))
+                        .foregroundStyle(range == item ? Color.white : Color.secondary)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 7)
-                        .background(
+
+                    // iOS glass; purple-tinted on the selected range.
+                    if #available(iOS 26, *) {
+                        if range == item {
+                            pill.glassEffect(.regular.tint(.purple), in: Capsule())
+                        } else {
+                            pill.glassEffect(in: Capsule())
+                        }
+                    } else {
+                        pill.background(
                             range == item ? Color.purple : Color.white.opacity(0.08),
                             in: Capsule()
                         )
-                        .foregroundStyle(range == item ? Color.white : Color.secondary)
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -892,7 +1071,7 @@ private struct StatsShowArtwork: View {
         let subscription = UUID(uuidString: subscriptionID)
             .flatMap { appState.subscriptionStore.subscription(id: $0) }
 
-        CachedArtworkImage(url: subscription?.artworkURL) {
+        CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
             ZStack {
                 LinearGradient(
                     colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -966,7 +1145,7 @@ private struct TopShowsListView: View {
                         .foregroundStyle(.secondary)
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        .glassCard(cornerRadius: 16)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(shows.enumerated()), id: \.element.id) { index, show in
@@ -1004,10 +1183,10 @@ private struct TopShowsListView: View {
                             }
                         }
                     }
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .glassCard(cornerRadius: 16)
 
                     if movements != nil {
-                        Text("▲▼ rank change vs. the previous \(range.rawValue.lowercased())")
+                        Text("▲▼ rank change vs. the previous \(range.previousPeriodNoun ?? "period")")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity)
@@ -1023,8 +1202,8 @@ private struct TopShowsListView: View {
         .preferredColorScheme(.dark)
     }
 
-    /// Movement per show ID against the previous period of the same length.
-    /// nil when there is no previous period to compare (All Time).
+    /// Movement per show ID against the previous comparable period.
+    /// nil when there is no previous period to compare (Lifetime).
     private func rankMovements(
         currentShows: [(id: String, title: String, seconds: TimeInterval)]
     ) -> [String: RankMovement]? {
@@ -1102,8 +1281,10 @@ private struct HeatmapGrid: View {
         var cells: [TimeInterval?] = []
 
         if let firstKey = days.first?.dayKey, let firstDate = statsDayDate(from: firstKey) {
+            // Columns are Monday-aligned (Monday = first day of the week),
+            // independent of locale. Gregorian weekday: Sun=1 … Sat=7 → Monday=2.
             let weekday = calendar.component(.weekday, from: firstDate)
-            let leadingPad = (weekday - calendar.firstWeekday + 7) % 7
+            let leadingPad = (weekday - 2 + 7) % 7
             cells.append(contentsOf: Array(repeating: nil, count: leadingPad))
         }
         cells.append(contentsOf: days.map { $0.wallClockSeconds })
@@ -1209,4 +1390,10 @@ private func formattedLongDuration(_ seconds: TimeInterval) -> String {
     }
     if minutes > 0 { return "\(minutes)m" }
     return "\(totalSeconds % 60)s"
+}
+
+/// Human-readable data size using the file/decimal convention (e.g. "1.2 GB",
+/// "45 MB") — matches how iOS reports cellular and storage usage.
+private func formattedBytes(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
 }

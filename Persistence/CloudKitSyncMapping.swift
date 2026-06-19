@@ -2,9 +2,29 @@ import Foundation
 import CloudKit
 
 // AI CONTEXT — Persistence/CloudKitSyncMapping.swift
-// Pure mapping between the sync-state projections and CloudKit CKRecords (see
-// SYNC_DESIGN.md, steps 3a/4). No networking, no CKSyncEngine — just the record
-// schema and value translation, so it is fully unit-testable on macOS.
+// Two things live here: (1) `DeviceIdentity` — the stable per-device UUID used to
+// partition stats records by (deviceID, dayKey); (2) `CloudKitSync` — the PURE
+// mapping between sync-state projections / history / stats and CloudKit CKRecords
+// (no networking, no CKSyncEngine), so it is fully unit-testable on macOS. The
+// detailed schema/merge contract is documented on the `CloudKitSync` enum below.
+
+// Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
+// Generated once and persisted in UserDefaults — stats records are keyed by
+// (deviceID, dayKey) so each device owns its own partition and they sum on read.
+public enum DeviceIdentity {
+    private static let key = "com.autohop.sync.deviceID"
+    public static var current: String {
+        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        let new = UUID().uuidString
+        UserDefaults.standard.set(new, forKey: key)
+        return new
+    }
+}
+
+// CloudKitSync — pure mapping between the sync-state projections and CloudKit
+// CKRecords (see SYNC_DESIGN.md, steps 3a/4). No networking, no CKSyncEngine —
+// just the record schema and value translation, so it is fully unit-testable on
+// macOS. (File-level AI CONTEXT header is at the top of the file.)
 //
 // Schema: one record per episode (type "EpisodeState", recordName = guid) and
 // one per subscription (type "SubscriptionState", recordName = subscriptionID),
@@ -19,6 +39,8 @@ public enum CloudKitSync {
     public static let zoneName = "AutohopSync"
     public static let episodeRecordType = "EpisodeState"
     public static let subscriptionRecordType = "SubscriptionState"
+    public static let historyRecordType = "HistoryEntry"
+    public static let statsRecordType = "DayStats"
 
     private static let jsonEncoder = JSONEncoder()
     private static let jsonDecoder = JSONDecoder()
@@ -33,6 +55,10 @@ public enum CloudKitSync {
 
     public static func subscriptionRecordID(id: UUID) -> CKRecord.ID {
         CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+    }
+
+    public static func historyRecordID(id: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: id, zoneID: zoneID)
     }
 
     // MARK: - Episode mapping
@@ -202,5 +228,64 @@ public enum CloudKitSync {
             chapterFilter: Synced(wrappedValue: decodeStruct(SubKey.chapterFilter, default: ChapterFilter()),
                                   modifiedAt: record[SubKey.chapterFilterModifiedAt] as? Date)
         )
+    }
+
+    // MARK: - Listening-history mapping (record-level LWW by lastListenedAt)
+
+    private enum HistKey {
+        static let entry = "entry"
+        static let lastListenedAt = "lastListenedAt"
+    }
+
+    public static func makeRecord(from entry: ListeningHistoryEntry) -> CKRecord {
+        let record = CKRecord(recordType: historyRecordType, recordID: historyRecordID(id: entry.id))
+        populate(record, from: entry)
+        return record
+    }
+
+    /// History is merged at the record level (whole entry wins by lastListenedAt),
+    /// so the full entry is always written as a JSON blob.
+    public static func populate(_ record: CKRecord, from entry: ListeningHistoryEntry) {
+        record[HistKey.entry] = try? jsonEncoder.encode(entry)
+        record[HistKey.lastListenedAt] = entry.lastListenedAt
+    }
+
+    public static func historyEntry(from record: CKRecord) -> ListeningHistoryEntry? {
+        guard let data = record[HistKey.entry] as? Data else { return nil }
+        return try? jsonDecoder.decode(ListeningHistoryEntry.self, from: data)
+    }
+
+    // MARK: - Stats mapping (per-device partition; recordName = "deviceID:dayKey")
+
+    private enum StatsKey {
+        static let deviceID = "deviceID"
+        static let dayKey = "dayKey"
+        static let day = "day"
+    }
+
+    public static func statsRecordID(deviceID: String, dayKey: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: "\(deviceID):\(dayKey)", zoneID: zoneID)
+    }
+
+    public static func makeRecord(deviceID: String, day: DayStats) -> CKRecord {
+        let record = CKRecord(recordType: statsRecordType, recordID: statsRecordID(deviceID: deviceID, dayKey: day.dayKey))
+        populate(record, deviceID: deviceID, day: day)
+        return record
+    }
+
+    public static func populate(_ record: CKRecord, deviceID: String, day: DayStats) {
+        record[StatsKey.deviceID] = deviceID
+        record[StatsKey.dayKey] = day.dayKey
+        record[StatsKey.day] = try? jsonEncoder.encode(day)
+    }
+
+    /// Decodes a server stats record. Returns the owning deviceID (so a device
+    /// can skip its own records) and the day partition.
+    public static func statsPartition(from record: CKRecord) -> (deviceID: String, day: DayStats)? {
+        guard let deviceID = record[StatsKey.deviceID] as? String,
+              let data = record[StatsKey.day] as? Data,
+              let day = try? jsonDecoder.decode(DayStats.self, from: data)
+        else { return nil }
+        return (deviceID, day)
     }
 }

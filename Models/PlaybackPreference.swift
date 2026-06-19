@@ -2,13 +2,26 @@ import Foundation
 
 // AI CONTEXT — Models/PlaybackPreference.swift
 // Per-podcast audio settings stored on Subscription.playbackPreference and
-// consumed by PlaybackEngine: speed (1.0–2.5x, default 1.6x), start/end skip
-// seconds (real file time), VocalBoostLevel (off/light/standard/strong —
-// selects which stages of the high-pass→dynamics→limiter chain are active),
-// TrimSilenceAmount (off/low/medium/high — selects SilenceDetector tuning).
+// consumed by PlaybackEngine: speed (1.0–2.5x), start/end skip seconds (real
+// file time), VocalBoostLevel (off/light/standard/strong — selects which stages
+// of the high-pass→dynamics→limiter chain are active), TrimSilenceAmount
+// (off/low/medium/high — selects SilenceDetector tuning).
 // Any non-off boost or trim forces the AVAudioEngine playback path; video
 // episodes ignore both and always use AVPlayer.
-public enum TrimSilenceAmount: String, CaseIterable, Codable {
+//
+// DEFAULTS — read carefully, there are two distinct notions:
+//  - `PlaybackPreference.default` = 1.0x / vocalBoost .off / trim .off. This is
+//    what a NEW subscription is seeded with (via AppSettings.defaultPlayback
+//    Preference, which itself defaults to .default).
+//  - Pre-existing users were moved to 1.6x / Strong / Low by ONE-SHOT migrations
+//    in AppState.bootstrap (playbackSpeed160Migrated / vocalBoostLevelMigrated /
+//    trimSilenceLowDefaultMigrated). Those are not "the default" — they are a
+//    historical migration of already-subscribed shows.
+// The member-wise init's vocalBoostLevel default, init(from:)'s missing-key
+// fallback, and `.default` all now agree on .off (ASSESSMENT.md B3, resolved
+// 2026-06-18). The legacy `vocalBoostEnabled` boolean key still maps true→.strong
+// / false→.off for old persisted data.
+public enum TrimSilenceAmount: String, CaseIterable, Codable, Sendable {
     case off
     case low
     case medium
@@ -24,7 +37,7 @@ public enum TrimSilenceAmount: String, CaseIterable, Codable {
     }
 }
 
-public enum VocalBoostLevel: String, CaseIterable, Codable {
+public enum VocalBoostLevel: String, CaseIterable, Codable, Sendable {
     case off
     case light
     case standard
@@ -53,7 +66,7 @@ public enum VocalBoostLevel: String, CaseIterable, Codable {
     }
 }
 
-public struct PlaybackPreference: Equatable, Codable {
+public struct PlaybackPreference: Equatable, Codable, Sendable {
     public var speed: Double
     public var startSkipSeconds: TimeInterval
     public var endSkipSeconds: TimeInterval
@@ -87,7 +100,7 @@ public struct PlaybackPreference: Equatable, Codable {
         speed: Double,
         startSkipSeconds: TimeInterval,
         endSkipSeconds: TimeInterval,
-        vocalBoostLevel: VocalBoostLevel = .strong,
+        vocalBoostLevel: VocalBoostLevel = .off,
         trimSilence: TrimSilenceAmount = .off
     ) {
         self.speed = speed
@@ -114,9 +127,12 @@ public struct PlaybackPreference: Equatable, Codable {
         if let savedLevel = try container.decodeIfPresent(VocalBoostLevel.self, forKey: .vocalBoostLevel) {
             vocalBoostLevel = savedLevel
         } else if let savedEnabled = try container.decodeIfPresent(Bool.self, forKey: .vocalBoostEnabled) {
+            // Legacy boolean key: true mapped to Strong, false to Off.
             vocalBoostLevel = savedEnabled ? .strong : .off
         } else {
-            vocalBoostLevel = .strong
+            // Neither key present → fall back to the default (.off), matching
+            // `.default` and the member-wise init (see ASSESSMENT.md B3).
+            vocalBoostLevel = Self.default.vocalBoostLevel
         }
         trimSilence = try container.decodeIfPresent(TrimSilenceAmount.self, forKey: .trimSilence) ?? .off
     }

@@ -21,18 +21,25 @@ struct AddFeedView: View {
                     Task { await viewModel.previewFeed() }
                 }
             }
+            .listRowBackground(Color.white.opacity(0.08))
 
             Section("Preview") {
                 previewContent
             }
+            .listRowBackground(Color.white.opacity(0.08))
 
             if let message = viewModel.saveMessage {
                 Section {
                     Text(message)
                         .foregroundStyle(.secondary)
                 }
+                .listRowBackground(Color.white.opacity(0.08))
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Add RSS Feed")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

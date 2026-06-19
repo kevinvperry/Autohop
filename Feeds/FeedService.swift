@@ -2,7 +2,10 @@ import Foundation
 
 // AI CONTEXT — Feeds/FeedService.swift
 // Network layer for fetching + parsing one RSS feed. Two entry points:
-//  - refresh(): unconditional GET, full parse (manual pull-to-refresh).
+//  - refresh(): unconditional GET, full parse (manual pull-to-refresh). Sends no
+//    validators, so a 304 can't legitimately occur; if a misbehaving server
+//    returns one anyway it surfaces as FeedServiceError.unexpectedNotModified
+//    (B7) rather than the old misleading .missingAudioEnclosure.
 //  - refreshIfModified(): HTTP conditional GET using stored ETag/Last-Modified
 //    (FeedValidators, persisted in Subscription.refreshStats) — the Release
 //    Radar fast path; a 304 returns .notModified with zero parse cost.
@@ -77,8 +80,9 @@ final class FeedService: FeedServicing {
         ) {
         case .notModified:
             // Can't happen without validators, but a misbehaving server could
-            // send 304 anyway — surface it as an empty-feed failure.
-            throw FeedServiceError.missingAudioEnclosure
+            // send 304 anyway — surface it distinctly rather than as a misleading
+            // missing-enclosure error.
+            throw FeedServiceError.unexpectedNotModified
         case .updated(let result, _):
             return result
         }
@@ -107,6 +111,9 @@ final class FeedService: FeedServicing {
             if http.statusCode == 304 {
                 return .notModified
             }
+            // Reject error responses (404/500/captive-portal HTML, etc.) instead of parsing the
+            // body as a feed. 304 is handled above; everything else must be a success status.
+            try HTTPResponseValidation.validate(http)
             newValidators.etag = http.value(forHTTPHeaderField: "ETag")
             newValidators.lastModified = http.value(forHTTPHeaderField: "Last-Modified")
         }
@@ -206,4 +213,8 @@ enum FeedServiceError: Error {
     case invalidFeed
     case missingAudioEnclosure
     case timedOut
+    /// A server returned 304 Not Modified even though `refresh()` sent no
+    /// validators (so it can't legitimately happen) — surfaced distinctly rather
+    /// than as a misleading `missingAudioEnclosure`.
+    case unexpectedNotModified
 }

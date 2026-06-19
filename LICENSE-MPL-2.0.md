@@ -17,10 +17,22 @@ The MPL-2.0-covered files in this project are:
     logic) is a direct port of `podcasts/AudioReadTask.swift` from
     Pocket Casts for iOS.
 
+  - `Models/SilenceGapAccounting.swift` — the gap-size thresholds and
+    re-insert counts (extracted from `SilenceDetector.swift` into a pure,
+    headlessly testable value type) are a direct port of
+    `podcasts/AudioReadTask.swift` from Pocket Casts for iOS.
+
   - `Playback/PlaybackEngine.swift` — the Vocal Boost signal chain
     (high-pass filter → dynamics processor → peak limiter, assembled from
     Apple system Audio Units) is architecturally derived from
     `podcasts/EffectsPlayer.swift` in Pocket Casts for iOS.
+
+  - `Models/Synced.swift` — the `Synced` property wrapper (generic
+    signature, stored `value`/`modifiedAt` pair, and change-detecting
+    `wrappedValue` setter) is a direct port of the `ModifiedDate` property
+    wrapper from `Modules/Sources/PocketCastsUtils/General/ModifiedDate.swift`
+    in Pocket Casts for iOS. Autohop renames it and adds its own CloudKit
+    last-write-wins helpers.
 
 No other Autohop files are subject to the MPL-2.0. In particular, the sleep
 timer (`Playback/SleepTimerService.swift`, `Views/SleepTimerSheetView.swift`)
@@ -28,18 +40,37 @@ was *informed by studying* Pocket Casts but contains no ported code,
 constants, or algorithms — it is original Autohop code under the MIT
 License, as recorded in the `NOTICE` file.
 
-Beyond the two covered files, Autohop gratefully acknowledges Pocket Casts
+Beyond the four covered files, Autohop gratefully acknowledges Pocket Casts
 for iOS as a broader source of **design ideas and inspiration**. Several
 Autohop features follow conventions that Pocket Casts established or
 popularised — including the concepts of silence trimming and a volume/vocal
-boost as per-podcast audio effects, an up-next style playback queue,
-episode auto-archive housekeeping, and on-device listening statistics
-(time listened / time saved). These are *concepts and UX conventions*, not
-copied code or assets: every implementation outside the two covered files
-is original Autohop work (independent algorithms, layouts, and visual
-design), and no Pocket Casts artwork, strings, or interface assets are
-used. This acknowledgement is offered for transparency and credit, not
-because the MPL-2.0 requires it.
+boost as per-podcast audio effects, the dark "audio effects" controls
+sheet for adjusting speed/trim/boost mid-playback, an up-next style
+playback queue, episode auto-archive housekeeping, and on-device
+listening statistics (time listened / time saved). The opt-in **cross-device
+sync** design (`Persistence/CloudSyncEngine.swift`, `Models/SyncState.swift`)
+was likewise informed by *studying* the Pocket Casts iOS sync engine —
+specifically its field-level conflict-resolution discipline — which Autohop
+re-applies on top of Apple's `CKSyncEngine`/CloudKit. (The `@Synced`
+property wrapper in `Models/Synced.swift`, which underpins that
+dirty-tracking, is itself a port of Pocket Casts' `ModifiedDate` wrapper and
+is therefore one of the MPL-2.0-covered files listed above, not a mere
+concept reimplementation.) These broader acknowledgements are *concepts,
+patterns, and UX conventions*, not copied code or assets: every
+implementation outside the MPL-covered files listed above is an original,
+independent Swift reimplementation (own algorithms, layouts, and visual
+design), and no Pocket Casts artwork, strings, or interface assets are used.
+This
+acknowledgement is offered for transparency and credit, not because the
+MPL-2.0 requires it.
+
+> **Maintainer note (resolved 2026-06-18):** `Models/Synced.swift` was
+> reviewed against Pocket Casts' `ModifiedDate` wrapper (ASSESSMENT.md L1).
+> Because its core mechanic — the generic signature and the change-detecting
+> `wrappedValue` setter — is substantively identical to the MPL-2.0 source,
+> it is treated as a port: it now carries the MPL-2.0 Exhibit A header and is
+> listed in the covered-files list above (and in `NOTICE`), rather than being
+> relicensed as a clean-room MIT reimplementation.
 
 Each covered file carries the MPL-2.0 Exhibit A notice in its header, and
 its source code is made available as part of the Autohop source

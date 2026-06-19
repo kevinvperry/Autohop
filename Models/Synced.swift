@@ -1,6 +1,22 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Portions of this file are derived from Pocket Casts for iOS
+// (https://github.com/Automattic/pocket-casts-ios), © Automattic, Inc.
+// Used under the Mozilla Public License, v. 2.0.
+//
+// Specifically, the `Synced` property wrapper is ported from the `ModifiedDate`
+// property wrapper in Modules/Sources/PocketCastsUtils/General/ModifiedDate.swift:
+// the generic signature, the stored `value`/`modifiedAt` pair, and the
+// change-detecting `wrappedValue` setter (`if value != newValue { modifiedAt =
+// Date() }`) originate there. Autohop renames it and adds its own CloudKit
+// last-write-wins helpers (`hasPendingChange`, `markClean`, `markDirty`,
+// `mergedSyncedField`); Pocket Casts' SQLite Int→Bool decoder is omitted.
+
 import Foundation
 
-// AI CONTEXT — Models/Synced.swift
+// AI CONTEXT — Models/Synced.swift  (LICENSE: MPL-2.0, see header)
 // Field-level dirty-tracking primitive for cross-device sync (see SYNC_DESIGN.md,
 // build step 2). Ported from Pocket Casts' `ModifiedDate` property wrapper.
 // Wraps any Codable & Equatable value and auto-stamps `modifiedAt` whenever the

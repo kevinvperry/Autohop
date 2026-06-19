@@ -1,5 +1,17 @@
 # Autohop — Feature & Settings Reference
 
+<!--
+AI CONTEXT — FEATURES.md
+Canonical product/behaviour reference for Autohop features, settings, defaults,
+and implementation-facing notes that must stay aligned with Swift views/models,
+website support copy, App Store text, and in-app help. Update this file whenever
+a user-visible feature, setting label/default, navigation path, or cross-cutting
+implementation behaviour changes. Section 17 documents the shared artwork cache
+and lazy image-loading system: source-byte disk cache, downsampled memory
+variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
+the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
+-->
+
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
 
@@ -15,8 +27,8 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 1. [Priority Stack](#1-priority-stack)
 2. [Find Podcasts (Search) & Discover](#2-find-podcasts-search)
    - [Search](#21-search)
-   - [Podcast Preview Page](#22-podcast-preview-page)
-   - [Subscribe Button Behaviour](#23-subscribe-button-behaviour)
+   - [Podcast Detail Page](#22-podcast-detail-page)
+   - [Subscribe / Unsubscribe Button Behaviour](#23-subscribe--unsubscribe-button-behaviour)
    - [Browse Subscriptions](#24-browse-subscriptions)
    - [Recently Viewed](#25-recently-viewed)
 3. [Queue](#3-queue)
@@ -44,14 +56,19 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 13. [OPML Import & Export](#13-opml-import--export)
 14. [Notifications](#14-notifications)
 15. [App Settings](#15-app-settings)
+    - [Startup](#150-startup)
     - [Release Radar](#151-release-radar)
     - [Auto Archive](#152-auto-archive)
     - [Downloading](#153-downloading)
     - [Controls](#154-controls)
-    - [Subscriptions](#155-subscriptions)
-    - [Storage](#156-storage)
-    - [About](#157-about)
+    - [Default Playback](#155-default-playback)
+    - [Subscriptions](#156-subscriptions)
+    - [Sync (iCloud)](#157-sync-icloud)
+    - [Storage](#158-storage)
+    - [About](#159-about)
 16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
+17. [Artwork Cache & Lazy Image Loading](#17-artwork-cache--lazy-image-loading)
+18. [First-Run Experience (New User Onboarding)](#18-first-run-experience-new-user-onboarding)
 
 ---
 
@@ -79,10 +96,10 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Toolbar buttons (left to right):**
 - Return to Player (play.circle.fill)
-- Hamburger menu (☰) → Discover, Downloads, Listening History, Stats, Import OPML, Settings
+- Hamburger menu (☰) → Discover, Downloads, Listening History, Stats, Sleep Schedule, Settings, Support
 - Reorder toggle ("Reorder" / "Done")
 - Refresh all feeds (arrow.clockwise)
-- Add Podcast / Discover (+) — opens the Discover charts sheet (search lives inside it)
+- Add Podcast / Discover (+) — pushes the Discover charts page (search lives inside it)
 
 ---
 
@@ -99,7 +116,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 **How it works:**
 1. User types a search term. Results appear automatically after a short debounce (400ms).
 2. Results are fetched from the iTunes podcast catalog — no account or API key required.
-3. Tapping a result opens the **Podcast Preview** page.
+3. Tapping a result opens the **Podcast Detail** page.
 
 **Search states:**
 - **Idle** — prompt to search + Recently Viewed history list (if any) + "Enter RSS URL" button
@@ -112,46 +129,52 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Results filtering:** Podcasts with no RSS feed URL (Apple Podcasts exclusives) are silently excluded from results.
 
-**Already subscribed:** If the user taps a result for a podcast they are already actively subscribed to, they are redirected straight to the existing Podcast Episodes page — no duplicate subscription is created.
+**Already subscribed:** If the user taps a result for a podcast they are already actively subscribed to, the same Podcast Detail page opens in its subscribed state (header shows Unsubscribe; Refresh Feed and Show Settings appear in the toolbar) — no duplicate subscription is created.
 
 ---
 
-### 2.2 Podcast Preview Page
+### 2.2 Podcast Detail Page
 
-Tapping a search result (or a Recently Viewed row) opens the Podcast Preview page. The RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load.
+A single page (`PodcastDetailView`) serves every state of a podcast — an unsubscribed preview, a browse-only preview, and an active subscription. Tapping a search result, a Discover chart entry, a Recently Viewed row, a Priority Stack row, or the show name in the Player all open this same page. For a preview, the RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load. The mini-player bar is always docked at the bottom.
 
 **Page structure:**
-1. **Header** — 120×120pt artwork, title, explicit/video pills, description (2-line truncated), author · categories
-2. **Subscribe button** — full-width, purple, always labelled "Subscribe". See §2.3 for behaviour.
+1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, show description (truncated to ~3 lines with a "…more" toggle that expands to the full text when long enough), author · categories.
+2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until actively subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown **only when actively subscribed**. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same flag exposed in Podcast Settings and Notification Settings, and still gated by the global notification toggle.
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
+
+**Toolbar:**
+- Back chevron (always) and a Share button (always).
+- **Refresh Feed** and **Show Settings** (gear → Podcast Settings) appear **only when actively subscribed** — never on a preview or browse-only page.
 
 **Episode list:**
 - Shows up to 50 most recent episodes on first load.
-- Full status pills (Unplayed, Queued, Paused, Playing, Played, Archived), download progress bar, date, duration — identical to the Podcast Episodes page.
+- Full status pills (Unplayed, Queued, Paused, Playing, Played, Archived), small Video/Explicit badges as a top-trailing overlay, download progress bar, date, duration.
 - Every episode row is a `NavigationLink` to Episode Detail.
 - **Load Older Episodes** button appears when 50+ episodes are loaded. Fetches full episode history.
 
-**Episode swipe actions** — identical to Podcast Episodes page:
+**Episode swipe actions:**
 - Leading: **Play** (green), **Play Next** (blue)
 - Trailing: **Archive / Unarchive** (purple), **Play Last** (orange)
 
 ---
 
-### 2.3 Subscribe Button Behaviour
+### 2.3 Subscribe / Unsubscribe Button Behaviour
 
-The Subscribe button on the Podcast Preview page always shows the label "Subscribe". Its action depends on the current subscription state for that feed:
+The header button toggles between Subscribe and Unsubscribe based on the current subscription state for that feed:
 
-| Current state | Action |
-|---|---|
-| No subscription exists | Creates a new active subscription, inserts at top of Priority Stack |
-| Browse subscription exists (auto-created, inactive) | Activates it, clears browse status, moves to top of Priority Stack |
-| Already actively subscribed | User is redirected at search level — Subscribe button is never shown |
+| Current state | Button | Action |
+|---|---|---|
+| No subscription exists | **Subscribe** | Creates a new active subscription, inserts at top of Priority Stack |
+| Browse subscription exists (auto-created, inactive) | **Subscribe** | Activates it, clears browse status, moves to top of Priority Stack |
+| Actively subscribed | **Unsubscribe** | Shows a confirmation dialog; on confirm, removes the subscription. The page stays open with the button flipped back to Subscribe |
+
+Unsubscribing is also still available from the Podcast Settings page (§10.5).
 
 ---
 
 ### 2.4 Browse Subscriptions
 
-When a user opens a Podcast Preview page, Autohop silently creates a **browse subscription** in the background. This enables the fully interactive episode list from first load without requiring the user to explicitly subscribe.
+When a user opens the Podcast Detail page for an unsubscribed show, Autohop silently creates a **browse subscription** in the background. This enables the fully interactive episode list from first load without requiring the user to explicitly subscribe.
 
 **Browse subscriptions are invisible to the user** — they do not appear in the Priority Stack or anywhere else in the app. They are only visible in the Search sheet's Recently Viewed history.
 
@@ -160,7 +183,7 @@ When a user opens a Podcast Preview page, Autohop silently creates a **browse su
 - Stored with a `browseDate` timestamp
 - Retained for **30 days** from the most recent visit
 - On revisit: episodes are refreshed (new content appears) and the 30-day clock resets
-- **Automatically deleted** after 30 days if no episode has been played or downloaded
+- **Automatically deleted** after 30 days only if no episode has been played or downloaded **and** the show has no listening-history entry (anything you've listened to is kept, so its history stays navigable)
 - Converted to a full active subscription when the user taps **Subscribe**
 
 **If a user plays, queues, or archives an episode** from the preview page without subscribing, the browse subscription is retained (episodes have been acted on) but the podcast remains invisible in the Priority Stack until the user explicitly subscribes.
@@ -176,7 +199,7 @@ Each row shows:
 - Title and author
 - "Viewed [date]" caption
 
-Tapping a row navigates back to the Podcast Preview page for that podcast, refreshing episodes and resetting the 30-day clock.
+Tapping a row navigates back to the Podcast Detail page for that podcast, refreshing episodes and resetting the 30-day clock.
 
 ---
 
@@ -196,7 +219,7 @@ Tapping a row navigates back to the Podcast Preview page for that podcast, refre
 
 **Data source:** Apple's public chart feeds — the Marketing Tools v2 feed for the Top 8 and the legacy iTunes RSS genre endpoint for the rails. No API key or account. Responses are cached on disk for 12 hours (`Caches/discover-charts`), so the page opens instantly on revisit. Pull to refresh re-fetches.
 
-**Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — already-subscribed shows go straight to their Podcast Episodes page; everything else opens Podcast Preview, which creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
+**Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — every entry opens the Podcast Detail page (§2.2), in its subscribed state for shows already subscribed, otherwise as a preview that creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
 
 ---
 
@@ -353,7 +376,7 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Download controls (global, in Settings):**
 - Download over WiFi (default: on)
-- Download over cellular (default: on)
+- Download over cellular (default: off)
 
 ---
 
@@ -425,7 +448,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Access:** Priority page → tap podcast row → episode list → gear icon (⚙) in top-right toolbar.
 
-The settings page is titled with the podcast name and groups settings into sections:
+The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing — visually uniform with App Settings (§15).
 
 ---
 
@@ -475,6 +498,8 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes, archiving older ones. Default of 1 keeps storage lean — the user always has the latest episode available. |
 
 **Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless. Auto Archive runs at most every 30 minutes."
+
+**Fresh-subscription backlog exemption:** When you subscribe to a show, its pre-existing back-catalogue (every episode published on or before the moment you subscribed, tracked by `Subscription.subscribedAt`) is left **browsable as Unplayed** — the Inactive Episodes and Episode Limit rules skip it. This stops subscribing to an established show from archiving its entire 50-episode backlog (and flooding Stats) on day one. Only episodes that arrive **after** you subscribe flow through the inactive/limit lifecycle. The newest episode still downloads immediately per the latest-episode principle. Legacy subscriptions created before this field existed have no `subscribedAt` and keep the old behaviour.
 
 ---
 
@@ -551,15 +576,27 @@ Hooks: playback tick (0.5 s) → listening time + hour + show attribution; `Sile
 Query API on `ListeningStatsStore`: `summary(for: .last(days:)/.lifetime)` (period aggregates incl. per-show, hour histogram, zero-filled day series for heatmaps), `lifetime` (legacy `PlaybackStats` shape used by `StatsView`), `currentStreakDays` / `longestStreakDays` (a day counts toward a streak at ≥ 60 s of listening). This is the data layer for the planned rich Stats page (period selector, heatmap, listening clock, top shows).
 
 ### Page layout (`Views/StatsView.swift`, June 2026)
-All sections respond to a period selector at the top: **7 Days / 30 Days / 90 Days / 1 Year / All Time** (purple pill row). Cards follow the standard design system (`Section-Heading` + `white.opacity(0.08)` rounded cards, dark scheme, purple accent).
+All sections respond to a period selector at the top: **This Week / [current month] / [current year] / Lifetime** (purple pill row). The middle two pills are dynamically labelled — the current month name (e.g. "June") and the current year (e.g. "2026"). Cards follow the standard design system (`Section-Heading` + `white.opacity(0.08)` rounded cards, dark scheme, purple accent).
 
-1. **Hero card** — big "Time listened" number (purple; All Time adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
-2. **Listening Heatmap** (7/30/90 days) — GitHub-style grid, columns are weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On 1 Year / All Time this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
+The first three ranges are **calendar-anchored** and reset at the start of each period (rather than being rolling trailing windows):
+
+| Pill | Window | Resets | Rank-movement compares against |
+|---|---|---|---|
+| **This Week** | Monday 00:00 → now (Monday = first day, Sunday = last, independent of locale) | every Monday | the previous full Monday–Sunday week |
+| **[Month]** (e.g. "June") | 1st of the month 00:00 → now | the 1st of each month | the previous full calendar month |
+| **[Year]** (e.g. "2026") | Jan 1 00:00 → now | Jan 1 | the previous full calendar year |
+| **Lifetime** | all recorded history | — | no comparison (no previous period) |
+
+Each is near-empty at the start of its period and fills in as it progresses.
+
+1. **Hero card** — big "Time listened" number (purple; Lifetime adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
+2. **Listening Heatmap** (This Week and the current month) — GitHub-style grid, columns are Monday-aligned weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On the year and Lifetime views this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
 3. **Listening Clock** — 24-hour rose chart (Canvas): midnight at top, noon at bottom, each hour a wedge whose radius scales with listening in that hour. Caption shows the peak hour range.
-4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous period of the same length — teal ▲n, grey ▼n, or purple NEW (no badges on All Time, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; periods made up entirely of pre-tracking days fall back to apportioning the period total by listening share, labelled "est."), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Episode outcomes come from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period. Tap again to collapse.
-5. **Shows You're Drifting From** (7/30/90 days only) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes; shows need ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed) to appear — auto-archive churn alone can never flag a show, so high-volume feeds the episode limit cycles through (100% auto-archived news bulletins) stay out of the list (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. The section is omitted entirely when nothing qualifies — no empty state. Not shown on 1 Year / All Time (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
+4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous comparable period — the previous week, calendar month, or calendar year (teal ▲n, grey ▼n, or purple NEW; no badges on Lifetime, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; periods made up entirely of pre-tracking days fall back to apportioning the period total by listening share, labelled "est."), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Episode outcomes come from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period. Tap again to collapse.
+5. **Shows You're Drifting From** (This Week and the current month only) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes. A show qualifies via **either** path: **drift** — ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed); or **neglect** — a "ghost subscription" with **zero completions and ≥ 4 auto-archived unplayed episodes**, i.e. new episodes keep arriving and aging out of the episode limit while the user never once finishes one. The **completion count** (not the auto-archive rate) is what separates a ghost sub from healthy high-volume use, where the user finishes some episodes and lets the rest cycle — those stay out of the list, so a daily news feed you actually dip into is never flagged (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "Downloaded 7, never played" for a ghost sub, "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. Only real, active subscriptions appear: `StatsView` filters out shows the user has unsubscribed from **and** invisible browse/preview subscriptions (`browseDate != nil`, auto-created when previewing a podcast in search) — without the latter filter, a previewed-but-never-subscribed show could surface via the neglect path. The section is omitted entirely when nothing qualifies — no empty state. Not shown on the year / Lifetime views (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
 6. **Time Saved By** — breakdown card (rows below) plus a purple Total row.
-7. **Privacy footer** — "Your listening stats never leave this device."
+7. **Data Downloaded** — a card showing the total data Autohop downloaded in the selected period (`ByteCountFormatter` `.file` style, e.g. "1.2 GB"), with a context line "N episodes · avg X each". Recorded per calendar day in `DayStats.bytesDownloaded` / `episodesDownloaded` (summed per period and cross-device sync-merged like the other stats), incremented from `AppState`'s download-success path using the actual on-disk file size. **Forward-only** — tracking began June 2026, so there is no backfill: only successful downloads count (re-downloads count again as real traffic; cancelled/failed/partial do not), and Lifetime accrues from this build onward.
+8. **Privacy footer** — "Your listening stats never leave this device."
 
 ### Time Saved breakdown
 Four rows showing how much time has been saved by each feature in the selected period:
@@ -604,12 +641,12 @@ Sum of all four time-saved categories, displayed in purple.
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
-| Global | New episode notifications | **On** | Settings → Release Radar → Notification Settings |
+| Global | New episode notifications | **Off** | Settings → Release Radar → Notification Settings |
 | Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation, or Settings → Release Radar → Notification Settings |
 
-**Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. New podcasts default to off at the per-podcast level — the user opts in only for shows they want to be notified about.
+**Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. Both default off, so the app is silent until the user explicitly opts in — first by enabling the global toggle, then per show.
 
-**iOS permission:** Standard `UNUserNotificationCenter` authorisation is required. Managed by `NotificationService`, which is also the app's `UNUserNotificationCenterDelegate` (installed in `AppDelegate`).
+**iOS permission:** `UNUserNotificationCenter` authorisation is **not requested at launch**. `NotificationService.configure()` (called from `AppDelegate`) only installs the delegate + notification categories; the system permission prompt is deferred until the user opts in — enabling a notification toggle, or turning on Sleep Schedule (`NotificationService.requestPermission()`). `NotificationService` is also the app's `UNUserNotificationCenterDelegate`.
 
 **Sleep Schedule prompt notification:** Separate from new-episode alerts, `NotificationService` also posts the time-sensitive "Are you still listening?" lock-screen notification with its background "Still Listening" action button (see §8.1). This is generated locally on demand and is not gated by the per-podcast notification toggles.
 
@@ -619,16 +656,77 @@ Sum of all four time-saved categories, displayed in purple.
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
+The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing. The Default Playback card (§15.5) is matched to the other section cards, and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
+
+---
+
+### 15.0 Startup
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| Open at launch | Menu picker | **Player** | Which screen Autohop opens to on a normal cold launch: **Player**, **Subscriptions** (your Priority Stack), or **Discover**. Discover/Subscriptions are pushed above the always-alive Player, so the back chevron unwinds to the Player. Stored in `AppSettings.launchScreen`. The first-run Welcome flow always takes precedence for brand-new users; this preference applies once onboarding is complete (see §18). |
+
 ---
 
 ### 15.1 Release Radar
 
-Autohop learns each podcast's release schedule (median publish interval anchored to its last episode) and starts watching the feed just before a new episode is expected. Feeds that expose only a single item at a time (hourly news bulletins) carry no cadence in the feed itself, so Autohop persists the publish dates it has seen (`RefreshStats.recentPublishDates`) and derives the schedule from those; until enough history exists, such feeds are checked at the Radar sensitivity cadence, backing off automatically while nothing new appears. Checks use HTTP conditional requests (ETag/If-Modified-Since), so the feed body is only downloaded when it has actually changed. Background refresh uses the same due dates (BGAppRefreshTask, due-date priority queue, up to 8 feeds per cycle); if a refresh cycle is already in flight when a background task fires, the task waits for that cycle to finish instead of completing early (completing early lets iOS suspend the app mid-request and strand it). Manual pull-to-refresh always refreshes every feed.
+Release Radar is Autohop's automatic feed-refresh system. Its job is to detect and download new podcast episodes faster than ordinary podcast apps while avoiding wasteful checks during periods when a feed is predictably quiet.
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
-| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **On**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. If iOS notification permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
+| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
+
+**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked regularly so random releases are not missed.
+
+**Data captured from RSS:** Every feed refresh records per-episode release observations in `RefreshStats.releaseObservations` (capped at 200). Each observation stores the episode key, GUID, title, audio URL, RSS `publishedAt`, first/last seen times, whether it was new when first seen, and a publish-date quality marker (`missing`, `plausible`, `futureDated`, `implausiblyOld`). This history is stored on the subscription so schedule learning survives app launches and works even when the current RSS feed only exposes one item.
+
+**Initial seeding:** When a new subscription is added, `SubscriptionStore` seeds release observations from the episodes already present in the fetched feed. New subscriptions then continue to be checked at the Radar sensitivity cadence until enough reliable observations exist to classify the schedule.
+
+**Schedule profiles:** `FeedScheduleProfiler` classifies each podcast into one of these profile kinds:
+
+| Profile | Meaning | Refresh behaviour |
+|---|---|---|
+| `learning` | Not enough reliable publish dates yet. | Check at the Radar sensitivity cadence to gather data. |
+| `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to regular first-seen surveillance because published times cannot be trusted. |
+| `hourly` | Episodes arrive near-hourly around the same minute of the hour. | Open a short window around the learned minute and check on high rotation. |
+| `burst` | Multiple episodes repeatedly appear inside a short daily window, then the feed goes quiet. | Check before and through the burst; keep checking after the first episode because more may follow. |
+| `dailyWeekdays` | Episodes cluster around one time of day on business weekdays. | Check near the learned weekday time; stand down on weekends and after the expected episode arrives. |
+| `weekly` | Episodes repeatedly land on the same weekday around the same time. | Check near the learned weekly slot; stand down until the next expected week. |
+| `multiSlot` | Episodes recur on a small set of weekdays around a similar time. | Check near those learned slots. |
+| `random` | Reliable dates exist, but no stable hourly/burst/daily/weekly pattern emerges. | Check regularly because no safe quiet window is known. |
+
+**Due prediction:** `FeedRefreshScheduling` converts a profile into the next time a feed deserves a fetch. Learned profiles create explicit release windows:
+
+| Profile | Pre-window | Active window |
+|---|---|---|
+| `hourly` | 3 minutes before the learned minute. | 2 minutes before to 15 minutes after the learned minute. |
+| `burst` | 10 minutes before the learned burst start. | Learned burst start through learned burst end + 30 minutes. |
+| `dailyWeekdays` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 45 minutes. |
+| `weekly` | 20 minutes before the window. | Typical time - 10 minutes through typical time + 120 minutes. |
+| `multiSlot` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 60 minutes. |
+
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence until 12 hours late, then to a 30 minute–2 hour cadence. This prevents one late episode from being missed while still avoiding indefinite high-frequency polling.
+
+**One-item hourly feeds:** Feeds that publish hourly but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, the feed can be profiled as `hourly` and checked around the learned minute instead of every hour all day. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
+
+**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly and burst feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. This matters most for background refresh, where only up to 8 feeds are attempted per cycle.
+
+**HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
+
+**Manual, timed, and background refresh:**
+
+| Trigger | Behaviour |
+|---|---|
+| Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. |
+| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due. No fixed cap. |
+| Background refresh | Uses the same due/prediction/priority pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early, because completing early can let iOS suspend the app mid-request. |
+
+**Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
+
+**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, state counts, and the top candidates. Each selected feed's `feed.refreshAll.itemStart` line includes refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, and recheck interval. These logs are the primary tuning surface for Release Radar.
+
+**Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
 ---
 
@@ -646,7 +744,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 |---|---|---|---|
 | Downloads | Navigation link | — | Opens the Downloads page showing active, queued, and completed downloads. |
 | Download over WiFi | Toggle | **On** | Allow downloads on Wi-Fi networks. |
-| Download over cellular | Toggle | **On** | Allow downloads over mobile data. Turn off to restrict downloads to Wi-Fi only. |
+| Download over cellular | Toggle | **Off** | Allow downloads over mobile data. Off by default so the download-first queue only stocks up over Wi-Fi until the user opts in. |
 
 ---
 
@@ -662,19 +760,48 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
-### 15.5 Subscriptions
+### 15.5 Default Playback
 
-| Setting | Type | Description |
-|---|---|---|
-| Manage podcasts | Navigation link | Opens the Priority Stack (PodcastsView) to reorder, add, or remove subscriptions. |
-| Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
-| Listening History | Navigation link | Opens Listening History. See [Section 11](#11-listening-history). |
-| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
-| Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
+The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Playback section (§10.2), plus Start skip / End skip steppers, presented here as the **global defaults**. Stored in `AppSettings.defaultPlaybackPreference` (a `PlaybackPreference`). The shared card view is `Views/PlaybackControlsCard.swift`.
+
+| Setting | Options | Default | Notes |
+|---|---|---|---|
+| Speed | 1.0x – 2.5x (0.1x steps) | **1.0x** | Default speed for new subscriptions and non-subscribed feed playback. |
+| Vocal Boost | Off / Light / Standard / Strong | **Off** | See [Vocal Boost](#43-vocal-boost). |
+| Trim Silence | Off / Low / Medium / High | **Off** | Audio episodes only. See [Trim Silence](#42-trim-silence). |
+| Start skip | 0 – 300s (5s steps) | **0 (off)** | Auto-skips N seconds at episode start. |
+| End skip | 0 – 300s (5s steps) | **0 (off)** | Auto-skips N seconds at episode end. |
+
+**Scope:** These defaults apply in two places: (1) every **new subscription** snapshots the current default at the moment it becomes a real subscription (`SubscriptionStore` seeds `playbackPreference` on add / OPML import / browse-preview activation); (2) playback of episodes from **non-subscribed (browse-only) feeds** resolves the default **live** through `AppState.effectivePreference(for:)` — a browse feed always reflects the current default, even retroactively. Editing the default **never** changes the settings of podcasts already subscribed to; those keep their own per-podcast values (§10.2). The one-shot migrations that moved pre-existing users to 1.6x / Strong / Low affected per-subscription values only and are independent of this panel.
 
 ---
 
-### 15.6 Storage
+### 15.6 Subscriptions
+
+| Setting | Type | Description |
+|---|---|---|
+| Manage podcasts | Button | Closes the Menu sheet to reveal the Priority Stack (PodcastsView) — the home page that always sits beneath the Menu — as a full page, never inside the sheet. Used to reorder, add, or remove subscriptions. |
+| Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
+| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
+| Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
+
+(Listening History is reached from the Menu, not this section.)
+
+---
+
+### 15.7 Sync (iCloud)
+
+Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **Off by default** — the on-device privacy stance holds until the user enables it. Stored in `AppSettings.iCloudSyncEnabled`; the engine is `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper), started/stopped by AppState as the toggle changes.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, priority, notifications), subscribe/unsubscribe, and listening history. |
+
+**What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys.
+
+---
+
+### 15.8 Storage
 
 | Display | Description |
 |---|---|
@@ -682,7 +809,7 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
-### 15.7 About
+### 15.9 About
 
 | Item | Description |
 |---|---|
@@ -703,16 +830,169 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 
 ---
 
+## 17. Artwork Cache & Lazy Image Loading
+
+**What it is:** A shared image-loading system for podcast and episode artwork, implemented by `Views/CachedArtworkImage.swift`. It replaces scattered direct artwork downloads with one app-wide cache path for visible UI thumbnails, prefetch work, Now Playing artwork, episode share cards, and notification thumbnails.
+
+**Primary goals:**
+- Prioritise artwork the user can see right now.
+- Keep scrolling smooth on episode lists with many unique episode images.
+- Avoid repeated network requests for the same artwork URL.
+- Avoid decoding and storing full-size podcast covers when the UI only needs a 40-54 pt row thumbnail.
+- Keep disk usage bounded and self-healing.
+
+### User-facing behaviour
+
+Artwork appears progressively. On-screen images load first; nearby episode images are prefetched just ahead of scrolling; off-screen prefetch work is cancelled when it is no longer useful. Placeholders remain visible until each image is ready.
+
+This is especially important on Podcast Detail pages where a feed can expose a different image for every episode. The first visible rows get priority, then the next rows likely to be reached by scrolling are warmed in the background.
+
+### Shared cache architecture
+
+`CachedArtworkImage` is the SwiftUI component used by podcast/episode artwork call sites. `ArtworkImageCache` is the actor that owns the cache and load policy.
+
+| Layer | Behaviour |
+|---|---|
+| Memory cache | `NSCache<NSString, UIImage>` stores decoded display variants, capped at 80 MB. Keys include the source URL hash and requested pixel size, so a 44 pt row image and 320 pt detail image can coexist without fighting. |
+| Disk cache | Stores original validated source bytes once per artwork URL under `Caches/Autohop/Artwork`. Display variants are not written separately. |
+| Metadata | `_metadata.json` tracks original URL, byte size, created date, and last access date for every source file. Missing or changed files self-heal on later access/prune. |
+| Pruning | Disk cache is capped at 250 MB and 90 days since last access. Pruning removes expired/missing entries first, then trims least-recently-used files until under budget. |
+| Failure cooldown | Failed or invalid image URLs are held in a 5-minute negative cache, preventing fast scrolling from repeatedly retrying bad hosts. |
+
+### Validation and safety
+
+Remote artwork responses are accepted only when all of these are true:
+
+- HTTP status is 2xx.
+- MIME type is `image/*` when supplied.
+- Response body is no larger than 5 MB.
+- Expected content length is not greater than 5 MB.
+- Image decoding succeeds before a UI image is cached.
+
+Notification artwork uses the same `ArtworkImageCache.sourceData(for:)` path as UI artwork, so new-episode notification thumbnails share the same validation, source-byte disk cache, failure cooldown, and pruning rules.
+
+### Downsampling
+
+Fixed-size artwork call sites pass `targetSize` into `CachedArtworkImage`. The cache converts that to a pixel size using the current display scale and uses ImageIO thumbnail creation to decode near the displayed size.
+
+Examples:
+
+| UI location | Target |
+|---|---|
+| Priority Stack rows | 44 pt |
+| Queue rows | 44 pt |
+| Downloads rows | 44 pt |
+| Stats show rows | 44 pt |
+| Notification Settings rows | 44 pt |
+| Mini-player artwork | 40 pt |
+| Listening History rows | 54 pt |
+| Podcast detail header | 128 pt |
+| Podcast settings/detail artwork | 120 pt |
+| Episode detail fallback artwork | 320 pt |
+| Now Playing lock-screen artwork | 512 pt |
+
+The source bytes are reused across all of these sizes; only decoded in-memory variants differ.
+
+### Lazy loading and prefetch priority
+
+The cache exposes three priorities:
+
+| Priority | Use |
+|---|---|
+| `visible` | On-screen artwork and Now Playing artwork. Can cancel lower-priority prefetch work for the same variant. |
+| `prefetch` | Nearby off-screen episode rows expected to appear soon. |
+| `background` | Non-urgent consumers such as notification attachment source bytes. |
+
+`PodcastDetailView` performs row-window prefetching:
+
+- When an episode row appears, it prefetches artwork for the next 12 rows.
+- It keeps a small 3-row look-behind window.
+- It deduplicates URLs before prefetching, so shared podcast artwork is not fetched repeatedly.
+- It cancels stale prefetches outside the active window.
+- Visible row image requests always keep priority over prefetch work.
+
+### Unified artwork consumers
+
+The shared cache is used by:
+
+- `CachedArtworkImage` in Priority, Discover, Search, Podcast Detail, Queue, Downloads, Stats, Settings, Notification Settings, Subscription Settings, mini-player, and Player artwork surfaces.
+- `EpisodeShareSheet`, which requests artwork sized for the rendered share card.
+- `NowPlayingService`, which requests 512 pt artwork and guards against late loads patching the wrong lock-screen card.
+- `NotificationService`, which requests cached source bytes for new-episode notification thumbnails.
+
+Feed description images shown inside episode descriptions intentionally remain `AsyncImage`. Those are arbitrary HTML content images, not canonical podcast/episode artwork, and they should not share the podcast artwork cache policy.
+
+### Feed metadata refresh
+
+Successful feed refreshes update stored subscription artwork URLs and authors when the RSS feed changes. This means changed podcast cover art can flow into every shared-cache call site after refresh, instead of remaining stuck on the artwork URL captured at subscription time.
+
+---
+
+## 18. First-Run Experience (New User Onboarding)
+
+**What it is:** The experience a brand-new user gets on first install, designed to teach Autohop's core model — *subscribe → Autohop builds a download-first queue from your Priority Stack → it just plays* — and get them from install to first audio without forcing playback or any launch-time permission prompts. Strategy and the full phased plan live in `ONBOARDING.md` and `ONBOARDING_PLAN.md`.
+
+**First-run state (`AppSettings`):** five flags, all default `false`, persisted like the other settings: `hasCompletedWelcome`, `hasSubscribedFirstShow`, `hasPlayedFirstEpisode`, `hasSeenDownloadFirstNote`, `dismissedGettingStarted`. On launch, `AppState.bootstrap` **reconciles existing users**: anyone who already has a real (non-browse) subscription is marked onboarded so upgraders never see the first-run flow (idempotent, only flips false→true). A brand-new install has zero subscriptions at bootstrap, so its flags stay false.
+
+**"Real" vs browse subscriptions:** onboarding counts only real subscriptions (`browseDate == nil`) via `AppState.realSubscriptionCount`. Opening a Podcast Detail preview creates an invisible browse subscription (§2.4) and does **not** count as "subscribed".
+
+### Launch routing (`RootView`)
+Decided while the launch splash is still visible:
+- **Brand-new user** (`isFirstRunNoSubscriptions`: `!hasCompletedWelcome && realSubscriptionCount == 0`) → the **Welcome** screen is presented as a full-screen cover over the splash (shared purple background, so the hand-off is seamless).
+- **Otherwise** → the user's **Open at launch** preference (§15.0, `AppSettings.launchScreen`): Player (root), Subscriptions, or Discover (the latter two pushed above the Player root).
+
+(`hasPlayedFirstEpisode` still flips to true the first time `startPlayback` begins audio; it now drives the getting-started checklist rather than launch routing.)
+
+### Welcome screen (`WelcomeView`)
+Shown once. A 3-panel paged carousel — the core model, then "Listen your way" (speed / trim silence / vocal boost), then "Made for real life" (Sleep Schedule / Shared Listening) — over three always-visible CTAs, recording `hasCompletedWelcome = true` on any exit:
+- **Find shows** → Discover (with Subscriptions behind it).
+- **Import from another app** → in-place OPML import (`fileImporter` → `AppState.importOPML`), then Subscriptions showing the populated library; a confirmation toast reports the count.
+- **I'll explore on my own** → Subscriptions (its guiding empty state).
+
+### Starter packs (`StarterPacksView`)
+A first-run "not sure where to start?" helper. Each pack is a genre's current Top-6 from Apple's public charts (`PodcastCharts`), scoped to the user's storefront — **chart-derived, zero-maintenance, always fresh, regionally correct**. "Add these shows" resolves each entry's RSS feed and subscribes to all at once via `AppState.subscribeToFeedURLs` (which resolves the first-subscription milestone silently, like a bulk import). Reached from the empty Subscriptions state ("Not sure where to start?") and a first-run banner at the top of Discover (shown only while `realSubscriptionCount == 0`).
+
+### Getting-started checklist (`GettingStartedChecklist`)
+A dismissible momentum card at the top of the Priority Stack tracking three steps — subscribe (`hasSubscribedFirstShow`), play (`hasPlayedFirstEpisode`), reorder (a `UserDefaults` signal set in `PodcastsView.onMove`). Auto-hides when all three are done or the user dismisses it (`dismissedGettingStarted`). Its footer carries the one-time lean-defaults expectation note ("Autohop keeps the latest episode and tidies older ones…").
+
+### First-subscription milestone + "You're all set" card
+`AppState.checkFirstSubscriptionMilestone()` (wired into the `subscriptionStore.objectWillChange` sink) fires once when the first real subscription appears: it sets `hasSubscribedFirstShow` and, for a **single deliberate subscribe** (exactly one real sub), posts `.autohopFirstSubscription` with the new subscription's id. A **bulk OPML import** (more than one real sub at once) flips the flag **silently** — no celebration.
+
+`RootView` presents `FirstSubscribeCard` (a bottom sheet) in response. The card fires a success haptic, ensures the show's latest episode is downloading (`AppState.downloadLatestEpisode`, idempotent), and shows live download progress. **Play latest** plays immediately if the file is ready, or *arms a wait* and auto-starts the instant the download completes — a cued first listen with no autoplay ambush. On play it dismisses and returns to the full Player. **Add more shows** just dismisses (the user is already in the browse flow).
+
+### Download-first education
+The first time the first-subscribe card runs a download (`hasSeenDownloadFirstNote == false`), it shows a one-time note — "Autohop downloads episodes before playing, so they start instantly and work offline" — then sets the flag so it never repeats.
+
+### Coach marks (tips)
+A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`). AppState enforces the policy: **one visible at a time**, **never re-shown** once dismissed (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session** (the rest surface later). Views call `appState.requestTip(_:)` on first arrival; `CoachMarkOverlay` (mounted once in RootView, behind sheets) renders the active tip as a dismissible bottom card with a "Got it" button. Triggers: **priorityStack** (Subscriptions with ≥1 show), **swipeActions** (Podcast Detail, once the user has a real subscription), **playerPanels** + **speed** (Player, when an episode is loaded), **sleepSchedule** (the Sleep Schedule page). Everything a tip teaches also lives in Menu → Support, so dismissing loses nothing.
+
+### Empty states (every new-user-reachable screen points forward)
+- **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.
+- **Subscriptions** (`PodcastsView`): "Your Priority Stack is empty" with **Find shows** and a working **Import subscriptions** (OPML).
+- **Queue / Listening History**: reassuring "builds itself" / "will show up here" copy.
+
+---
+
 ## Appendix: Model Defaults Quick Reference
 
 ### `PlaybackPreference.default`
 | Property | Default |
 |---|---|
-| speed | 1.6x |
+| speed | 1.0x |
 | startSkipSeconds | 0 (off) |
 | endSkipSeconds | 0 (off) |
-| vocalBoostLevel | .strong |
-| trimSilence | .low |
+| vocalBoostLevel | .off |
+| trimSilence | .off |
+
+> **Note on the 1.6x / Strong / Low values you may remember:** those are NOT the
+> default. They were applied to *already-subscribed* shows of pre-existing users
+> by one-shot first-launch migrations (`playbackSpeed160Migrated`,
+> `vocalBoostLevelMigrated`, `trimSilenceLowDefaultMigrated`). A brand-new
+> subscription is seeded from `AppSettings.defaultPlaybackPreference`, which
+> itself defaults to `PlaybackPreference.default` (1.0x / Off / Off). See §15.5.
+> (Code caveat: `PlaybackPreference`'s member-wise init and decoder fall back to
+> `.strong` vocal boost when the key is absent — a legacy-migration artifact that
+> disagrees with `.default`; see ASSESSMENT.md B3.)
 
 ### `AutoArchiveSettings.default`
 | Property | Default |
@@ -726,8 +1006,8 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 |---|---|
 | podcastPollMinutes | 5 |
 | downloadOverWifi | true |
-| downloadOverCellular | true |
-| notifyNewEpisodes | true |
+| downloadOverCellular | false |
+| notifyNewEpisodes | false |
 | skipBackSeconds | 15 |
 | skipForwardSeconds | 30 |
 | keepScreenAwakeDuringPlayback | false |
@@ -740,6 +1020,26 @@ Autohop learns each podcast's release schedule (median publish interval anchored
 | sleepScheduleEndMinutes | 360 (6:00am) |
 | sleepScheduleDurationMinutes | 20 (0 = end of episode) |
 | diagnosticLoggingEnabled | false |
+| iCloudSyncEnabled | false |
+| hasCompletedWelcome | false |
+| hasSubscribedFirstShow | false |
+| hasPlayedFirstEpisode | false |
+| hasSeenDownloadFirstNote | false |
+| dismissedGettingStarted | false |
+| launchScreen | .player |
+| defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
+
+### `RefreshStats` / `FeedRefreshScheduling` defaults
+| Property | Default |
+|---|---|
+| maxRecentPublishDates | 10 |
+| maxReleaseObservations | 200 |
+| defaultMinRecheckInterval | 5 minutes |
+| minPublishInterval | 15 minutes |
+| maxPublishInterval | 7 days |
+| defaultPublishInterval | 6 hours |
+| maxRecheckInterval | 24 hours |
+| windowOpenFraction | 0.75 |
 
 ### `Subscription.init` defaults
 | Property | Default |

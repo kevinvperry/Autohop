@@ -9,6 +9,8 @@ import UserNotifications
 // notification permission is denied, a banner with a deep link to the app's
 // system settings page is shown. Notifications fire only when BOTH the master
 // toggle and a podcast's toggle are on (gated in AppState.notifyNewEpisodeIfAllowed).
+// Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
+// downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
@@ -30,6 +32,10 @@ struct NotificationSettingsView: View {
             podcastsSection
         }
         .listSectionSpacing(28)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
         .navigationTitle("Notification Settings")
         .navigationBarTitleDisplayMode(.inline)
         .miniPlayerBar()
@@ -61,15 +67,19 @@ struct NotificationSettingsView: View {
         } footer: {
             Text("Until notifications are allowed in iOS Settings, the toggles below will have no effect.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
     private var masterSection: some View {
         Section {
-            Toggle("New episode notifications", isOn: masterBinding)
+            Toggle(isOn: masterBinding) {
+                SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+            }
         } footer: {
             Text("The master switch for new-episode notifications. A podcast only notifies when this and its own toggle below are both on.")
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     @ViewBuilder
@@ -97,6 +107,7 @@ struct NotificationSettingsView: View {
                 Text("Subscribe to a podcast to manage its notifications here.")
             }
         }
+        .listRowBackground(Color.white.opacity(0.08))
     }
 
     // MARK: - Bindings & actions
@@ -156,7 +167,7 @@ private struct NotificationPodcastRow: View {
     var body: some View {
         Toggle(isOn: $isOn) {
             HStack(spacing: 12) {
-                CachedArtworkImage(url: subscription.artworkURL) {
+                CachedArtworkImage(url: subscription.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     Image(systemName: "waveform")
                         .font(.body)
                         .foregroundStyle(.purple)

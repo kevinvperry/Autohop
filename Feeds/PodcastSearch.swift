@@ -38,7 +38,8 @@ actor PodcastSearchService {
             URLQueryItem(name: "entity", value: "podcast"),
             URLQueryItem(name: "limit", value: "25"),
         ]
-        let (data, _) = try await session.data(from: components.url!)
+        let (data, httpResponse) = try await session.data(from: components.url!)
+        try HTTPResponseValidation.validate(httpResponse)
         let response = try JSONDecoder().decode(iTunesSearchResponse.self, from: data)
         return response.results.compactMap { raw in
             guard let feedString = raw.feedUrl, let feedURL = URL(string: feedString) else { return nil }
@@ -100,8 +101,18 @@ final class PodcastSearchViewModel: ObservableObject {
         phase = .loading
         do {
             let results = try await service.search(query: term)
+            // A newer query may have cancelled this task while the request was in
+            // flight. Don't clobber the newer phase (.loading / .idle) with stale
+            // results.
+            guard !Task.isCancelled else { return }
             phase = results.isEmpty ? .empty : .results(results)
+        } catch is CancellationError {
+            // Intentional cancellation (query changed/cleared) — not an error.
+            return
         } catch {
+            // URLSession surfaces cancellation as URLError.cancelled, not
+            // CancellationError, so check explicitly before showing a failure.
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             phase = .failed("Search failed. Check your connection and try again.")
         }
     }
@@ -125,15 +136,18 @@ final class PodcastPreviewViewModel: ObservableObject {
         return nil
     }
 
-    private let feedURL: URL
+    private let feedURL: URL?
     private let loader = EpisodeFeedLoader()
 
-    init(feedURL: URL) {
+    /// `feedURL` is nil when the view was opened straight from a subscription ID
+    /// (the subscription already exists, so no feed fetch is ever needed).
+    init(feedURL: URL?) {
         self.feedURL = feedURL
     }
 
     /// Fetches the feed (up to 50 episodes).  Call once on view appear.
     func load() async {
+        guard let feedURL else { return }
         feedPhase = .loading
         do {
             let feed = try await loader.fetch(feedURL: feedURL, limit: 50)
@@ -145,6 +159,7 @@ final class PodcastPreviewViewModel: ObservableObject {
 
     /// Re-fetches with no episode limit.  Only used when there is no subscription yet.
     func loadFullHistory() async {
+        guard let feedURL else { return }
         guard !isLoadingFullHistory else { return }
         isLoadingFullHistory = true
         do {
