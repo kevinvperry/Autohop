@@ -25,8 +25,16 @@ struct MenuSheetView: View {
                     dismiss()
                     NotificationCenter.default.post(name: .autohopOpenDiscover, object: nil)
                 } label: {
-                    Label("Discover", systemImage: "safari")
-                        .foregroundStyle(.primary)
+                    // Button labels tint the whole label, so style the icon and
+                    // text separately to match the NavigationLink rows below
+                    // (accent-coloured icon, primary text) rather than an all-white label.
+                    Label {
+                        Text("Discover")
+                            .foregroundStyle(.primary)
+                    } icon: {
+                        Image(systemName: "safari")
+                            .foregroundStyle(Color.accentColor)
+                    }
                 }
                 .listRowBackground(Color.white.opacity(0.07))
 
