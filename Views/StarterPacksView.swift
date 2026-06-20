@@ -73,6 +73,11 @@ struct StarterPacksView: View {
         return Locale.current.region?.identifier.lowercased() ?? "us"
     }
 
+    private var pageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -85,7 +90,7 @@ struct StarterPacksView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.ignoresSafeArea())
+            .background(pageBackground.ignoresSafeArea())
             .navigationTitle("Starter Packs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -138,11 +143,12 @@ struct StarterPacksView: View {
         }
     }
 
+    @ViewBuilder
     private func packCard(_ pack: StarterPacksViewModel.Pack) -> some View {
         let isAdded = addedPackIDs.contains(pack.id)
         let isAdding = addingPackID == pack.id
 
-        return VStack(alignment: .leading, spacing: 12) {
+        let content = VStack(alignment: .leading, spacing: 12) {
             Text(pack.genre.name)
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
@@ -176,7 +182,12 @@ struct StarterPacksView: View {
             .disabled(isAdding || isAdded)
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.06)))
+
+        if #available(iOS 26, *) {
+            content.glassCard(cornerRadius: 16)
+        } else {
+            content.background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.06)))
+        }
     }
 
     private func addPack(_ pack: StarterPacksViewModel.Pack) {

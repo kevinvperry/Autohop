@@ -104,13 +104,18 @@ struct EpisodeShareSheet: View {
 
             // Cancel
             Button { dismiss() } label: {
-                Text("Cancel")
+                let inner = Text("Cancel")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color(white: 0.55))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color(white: 0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                if #available(iOS 26, *) {
+                    inner.glassCard(cornerRadius: 14)
+                } else {
+                    inner
+                        .background(Color(white: 0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 20)

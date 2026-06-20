@@ -86,14 +86,19 @@ struct SleepTimerSheetView: View {
             sleepTimer.start(mode: .duration(seconds))
             dismiss()
         } label: {
-            Text(label)
+            let inner = Text(label)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(Color(white: 0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.22), lineWidth: 0.5))
+            if #available(iOS 26, *) {
+                inner.glassCard(cornerRadius: 12)
+            } else {
+                inner
+                    .background(Color(white: 0.16))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.22), lineWidth: 0.5))
+            }
         }
         .buttonStyle(.plain)
     }
@@ -112,7 +117,7 @@ struct SleepTimerSheetView: View {
             Spacer()
 
             // Episode count stepper
-            HStack(spacing: 0) {
+            let stepper = HStack(spacing: 0) {
                 Button {
                     if episodeCount > 1 { episodeCount -= 1 }
                 } label: {
@@ -139,8 +144,13 @@ struct SleepTimerSheetView: View {
                 }
                 .disabled(episodeCount >= 10)
             }
-            .background(Color(white: 0.20))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            if #available(iOS 26, *) {
+                stepper.glassCard(cornerRadius: 10)
+            } else {
+                stepper
+                    .background(Color(white: 0.20))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
 
             Button {
                 sleepTimer.start(mode: .endOfEpisode(count: episodeCount))
@@ -192,14 +202,19 @@ struct SleepTimerSheetView: View {
                 Button {
                     sleepTimer.cancel()
                 } label: {
-                    Text("Cancel")
+                    let inner = Text("Cancel")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color(white: 0.55))
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
-                        .background(Color(white: 0.13))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.20), lineWidth: 0.5))
+                    if #available(iOS 26, *) {
+                        inner.glassCard(cornerRadius: 12)
+                    } else {
+                        inner
+                            .background(Color(white: 0.13))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.20), lineWidth: 0.5))
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -238,14 +253,19 @@ struct SleepTimerSheetView: View {
             Button {
                 sleepTimer.cancel()
             } label: {
-                Text("Cancel")
+                let inner = Text("Cancel")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color(white: 0.55))
                     .padding(.horizontal, 32)
                     .padding(.vertical, 12)
-                    .background(Color(white: 0.13))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.20), lineWidth: 0.5))
+                if #available(iOS 26, *) {
+                    inner.glassCard(cornerRadius: 12)
+                } else {
+                    inner
+                        .background(Color(white: 0.13))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(white: 0.20), lineWidth: 0.5))
+                }
             }
             .buttonStyle(.plain)
         }

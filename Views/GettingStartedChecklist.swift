@@ -25,8 +25,8 @@ struct GettingStartedChecklist: View {
         }
     }
 
-    private var card: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    @ViewBuilder private var card: some View {
+        let content = VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Getting started")
                     .font(.system(size: 16, weight: .bold))
@@ -55,11 +55,17 @@ struct GettingStartedChecklist: View {
                 .padding(.top, 2)
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.06))
+        if #available(iOS 26, *) {
+            content
+                .glassCard(cornerRadius: 16)
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.25), lineWidth: 1))
-        )
+        } else {
+            content.background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.25), lineWidth: 1))
+            )
+        }
     }
 
     private func row(_ title: String, done: Bool) -> some View {

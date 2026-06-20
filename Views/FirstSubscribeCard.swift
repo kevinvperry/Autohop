@@ -18,6 +18,11 @@ struct FirstSubscribeCard: View {
     @State private var didStartDownload = false
     @State private var showDownloadNote = false
 
+    private var pageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color(red: 0.08, green: 0.08, blue: 0.10)
+    }
+
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
     }
@@ -107,7 +112,7 @@ struct FirstSubscribeCard: View {
             Spacer(minLength: 12)
         }
         .frame(maxWidth: .infinity)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.10).ignoresSafeArea())
+        .background(pageBackground.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .presentationDetents([.height(showDownloadNote ? 540 : 470)])
         .presentationDragIndicator(.hidden)
@@ -121,7 +126,7 @@ struct FirstSubscribeCard: View {
 
     @ViewBuilder
     private var downloadStatusRow: some View {
-        HStack(spacing: 10) {
+        let content = HStack(spacing: 10) {
             if isDownloaded {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -139,7 +144,11 @@ struct FirstSubscribeCard: View {
         .font(.system(size: 14, weight: .semibold))
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+        if #available(iOS 26, *) {
+            content.glassCard(cornerRadius: 12)
+        } else {
+            content.background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+        }
     }
 
     private var playButtonTitle: String {

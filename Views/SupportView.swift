@@ -12,6 +12,15 @@ import SwiftUI
 // NavigationStack, so it uses the default back button like the other menu pages.
 
 struct SupportView: View {
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         List {
             Section {
@@ -28,8 +37,8 @@ struct SupportView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .scrollContentBackground(formScrollBackground)
+        .background(formPageBackground.ignoresSafeArea())
         .navigationTitle("Support")
         .navigationBarTitleDisplayMode(.inline)
         .miniPlayerBar()
@@ -69,6 +78,11 @@ private struct SupportSectionRow: View {
 private struct SupportSectionView: View {
     let section: SupportSection
 
+    private var pageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -93,7 +107,7 @@ private struct SupportSectionView: View {
             .padding(20)
             .padding(.bottom, 24)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(pageBackground.ignoresSafeArea())
         .navigationTitle(section.title)
         .navigationBarTitleDisplayMode(.inline)
         .miniPlayerBar()
@@ -205,7 +219,7 @@ private struct SupportTableRow: View {
     let row: [String]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let content = VStack(alignment: .leading, spacing: 6) {
             SupportText(row.first ?? "")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
@@ -226,8 +240,13 @@ private struct SupportTableRow: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        if #available(iOS 26, *) {
+            content.glassCard(cornerRadius: 12)
+        } else {
+            content
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        }
     }
 }
 
@@ -239,7 +258,7 @@ private struct SupportSwipeCard: View {
     let actions: [SupportSwipeAction]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let content = VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased())
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.7)
@@ -257,8 +276,13 @@ private struct SupportSwipeCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        if #available(iOS 26, *) {
+            content.glassCard(cornerRadius: 12)
+        } else {
+            content
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        }
     }
 }
 
