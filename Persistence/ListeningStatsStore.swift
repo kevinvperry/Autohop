@@ -82,6 +82,12 @@ public struct DayStats: Codable, Equatable {
     /// Number of episodes whose download completed on this day — pairs with
     /// `bytesDownloaded` for the "N episodes · avg size" stat line.
     public var episodesDownloaded: Int
+    /// Title snapshot for the shows in `perShowSeconds`, keyed by subscription
+    /// UUID string. Synced with the day so another device can label shows it has
+    /// never subscribed to (otherwise remote-only shows render as "Unknown show").
+    /// Local-only buckets normally leave this empty — it is populated when the day
+    /// is written for sync (see `flushPendingStatsDays`).
+    public var showTitles: [String: String]
 
     public init(
         dayKey: String,
@@ -97,7 +103,8 @@ public struct DayStats: Codable, Equatable {
         episodesCompleted: Int = 0,
         manualSkipForwardCount: Int = 0,
         bytesDownloaded: Int64 = 0,
-        episodesDownloaded: Int = 0
+        episodesDownloaded: Int = 0,
+        showTitles: [String: String] = [:]
     ) {
         self.dayKey = dayKey
         self.wallClockSeconds = wallClockSeconds
@@ -113,6 +120,7 @@ public struct DayStats: Codable, Equatable {
         self.manualSkipForwardCount = manualSkipForwardCount
         self.bytesDownloaded = bytesDownloaded
         self.episodesDownloaded = episodesDownloaded
+        self.showTitles = showTitles
     }
 
     public var totalTimeSaved: TimeInterval {
@@ -137,6 +145,8 @@ public struct DayStats: Codable, Equatable {
         r.manualSkipForwardCount += other.manualSkipForwardCount
         r.bytesDownloaded += other.bytesDownloaded
         r.episodesDownloaded += other.episodesDownloaded
+        // Combine label snapshots; this device's own labels win on conflict.
+        r.showTitles.merge(other.showTitles) { mine, _ in mine }
         return r
     }
 
@@ -146,7 +156,7 @@ public struct DayStats: Codable, Equatable {
         case dayKey, wallClockSeconds, hourSeconds, perShowSeconds, perShowTimeSaved
         case timeSavedVariableSpeed, timeSavedTrimSilence, timeSavedManualSkip, timeSavedAutoSkip
         case episodesStarted, episodesCompleted, manualSkipForwardCount
-        case bytesDownloaded, episodesDownloaded
+        case bytesDownloaded, episodesDownloaded, showTitles
     }
 
     public init(from decoder: Decoder) throws {
@@ -181,6 +191,8 @@ public struct DayStats: Codable, Equatable {
         // Absent in JSON written before download-data tracking (2026-06).
         bytesDownloaded = try c.decodeIfPresent(Int64.self, forKey: .bytesDownloaded) ?? 0
         episodesDownloaded = try c.decodeIfPresent(Int.self, forKey: .episodesDownloaded) ?? 0
+        // Absent in local buckets and in day records synced before title snapshots.
+        showTitles = try c.decodeIfPresent([String: String].self, forKey: .showTitles) ?? [:]
     }
 }
 
@@ -224,7 +236,7 @@ public struct ListeningStatsSummary {
     }
 }
 
-public enum StatsPeriod: Equatable {
+public enum StatsPeriod: Equatable, Hashable {
     case last(days: Int)
     /// The current calendar week so far — Monday 00:00 up to now. Resets each
     /// Monday. Variable length (1 day on Monday … up to 7 by Sunday).
@@ -255,6 +267,12 @@ public final class ListeningStatsStore: ObservableObject {
     @Published public private(set) var revision: Int = 0
 
     private var data = ListeningStatsData()
+    /// Memoized period summaries (see `summary(for:)`), invalidated when
+    /// `summaryCacheRevision` no longer matches the published `revision` or the
+    /// local day rolls over (period windows are date-relative).
+    private var summaryCache: [StatsPeriod: ListeningStatsSummary] = [:]
+    private var summaryCacheRevision = -1
+    private var summaryCacheDayKey = ""
     private var lastSavedAt: Date?
     private let calendar = Calendar.current
     private let fileURL: URL?
@@ -312,7 +330,12 @@ public final class ListeningStatsStore: ObservableObject {
         // would mean that day never gets re-attempted and silently never syncs.
         var failedKeys = Set<String>()
         for key in pendingStatsDayKeys {
-            guard let day = data.days[key] else { continue } // no bucket to write — drop the key
+            guard var day = data.days[key] else { continue } // no bucket to write — drop the key
+            // Attach a title snapshot for this day's shows so another device can
+            // label them; local buckets don't otherwise carry titles.
+            day.showTitles = day.perShowSeconds.keys.reduce(into: [String: String]()) { map, showKey in
+                if let title = data.showTitles[showKey] { map[showKey] = title }
+            }
             do {
                 try syncDatabase.recordStatsDay(day)
             } catch {
@@ -444,8 +467,18 @@ public final class ListeningStatsStore: ObservableObject {
 
     // MARK: - Queries
 
-    /// Titles for resolving `perShowSeconds` keys, including unsubscribed shows.
-    public var showTitles: [String: String] { data.showTitles }
+    /// Titles for resolving `perShowSeconds` keys, including unsubscribed shows
+    /// and shows that only exist on other devices (their labels arrive in the
+    /// synced day partitions). Local labels take precedence over remote snapshots.
+    public var showTitles: [String: String] {
+        var merged = data.showTitles
+        for days in remoteByDayKey.values {
+            for day in days {
+                merged.merge(day.showTitles) { mine, _ in mine }
+            }
+        }
+        return merged
+    }
 
     /// When stats collection first began (carried over from the legacy store if imported).
     public var startedAt: Date { data.legacyBaseline?.startedAt ?? data.startedAt }
@@ -464,7 +497,26 @@ public final class ListeningStatsStore: ObservableObject {
         return stats
     }
 
+    /// Period summaries are recomputed inside `StatsView.body`, so they can be
+    /// evaluated many times per SwiftUI redraw. Each walks every day bucket (and,
+    /// for `.lifetime`, merges all remote partitions), which scales with lifetime
+    /// history. Memoize by period and invalidate whenever `revision` changes
+    /// (bumped on every stats mutation and remote-partition reload), so a redraw
+    /// storm with unchanged data is served from cache.
     public func summary(for period: StatsPeriod) -> ListeningStatsSummary {
+        let todayKey = dayKey(for: Date())
+        if summaryCacheRevision != revision || summaryCacheDayKey != todayKey {
+            summaryCache.removeAll(keepingCapacity: true)
+            summaryCacheRevision = revision
+            summaryCacheDayKey = todayKey
+        }
+        if let cached = summaryCache[period] { return cached }
+        let result = computeSummary(for: period)
+        summaryCache[period] = result
+        return result
+    }
+
+    private func computeSummary(for period: StatsPeriod) -> ListeningStatsSummary {
         let buckets: [DayStats]
         switch period {
         case .last(let count):
