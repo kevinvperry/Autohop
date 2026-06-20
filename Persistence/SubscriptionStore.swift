@@ -551,8 +551,21 @@ public final class SubscriptionStore: ObservableObject {
 
     public func updateEpisodes(subscriptionID: UUID, episodes newEpisodes: [Episode]) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
-        let existingByGUID = Dictionary(uniqueKeysWithValues: subscriptions[index].episodes.map { ($0.guid, $0) })
-        let mergedEpisodes = newEpisodes.map { newEpisode -> Episode in
+        // guid is the episode identity key (parser falls back guid -> title ->
+        // random UUID, so it's always present). Build the lookup with
+        // uniquingKeysWith — `uniqueKeysWithValues` would CRASH if stored episodes
+        // ever contained a duplicate guid.
+        let existingByGUID = Dictionary(
+            subscriptions[index].episodes.map { ($0.guid, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // Dedupe the incoming feed by guid (keep first / newest occurrence). A feed
+        // that repeats a guid would otherwise map two episodes to the SAME existing
+        // id below, producing duplicate Identifiable ids — which crashes SwiftUI's
+        // ForEach in PodcastDetailView the moment a row is tapped.
+        var seenGUIDs = Set<String>()
+        let dedupedNewEpisodes = newEpisodes.filter { seenGUIDs.insert($0.guid).inserted }
+        let mergedEpisodes = dedupedNewEpisodes.map { newEpisode -> Episode in
             var merged = newEpisode
             if let existing = existingByGUID[newEpisode.guid] {
                 merged.id = existing.id

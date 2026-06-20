@@ -2162,6 +2162,19 @@ final class AppState: ObservableObject {
             subscriptionStore.updateDescription(subscriptionID: subscription.id, description: result.description)
             subscriptionStore.updateCategories(subscriptionID: subscription.id, categories: result.categories)
             subscriptionStore.updateIsExplicit(subscriptionID: subscription.id, isExplicit: result.isExplicit)
+            // Browse-only previews (opened from the Discover page) are NOT real
+            // subscriptions and must never auto-download or enter the queue. The
+            // Podcast Detail page calls refreshSubscription on a returning browse
+            // preview purely to refresh the displayed episode list — so stop here,
+            // after the display merge, before the download pipeline. Without this a
+            // preview's latest episode gets downloaded and appended to the queue on
+            // open (the reported "Play Last on load" bug).
+            if subscriptionStore.subscription(id: subscription.id)?.browseDate != nil {
+                logger.info("feed.refresh", "Skipping auto-download for browse preview", metadata: [
+                    "podcast": subscription.title
+                ])
+                return
+            }
             if refreshUpNextAfterMerge {
                 scheduleUpNextRefresh(reason: "feed.refresh.\(subscription.title)")
             }

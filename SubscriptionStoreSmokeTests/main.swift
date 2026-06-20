@@ -441,4 +441,17 @@ let freshRandomPriority = FeedRefreshPrioritizer.priority(
 )
 require(staleRandomPriority.score > freshRandomPriority.score, "Expected stale due random feed to outrank fresh due random feed")
 
-print("SubscriptionStoreSmoke passed: save, duplicate detection, reload, chapter filter persistence, played episode persistence, release observations, schedule profiling, learned-window scheduling, feed refresh scheduling, and refresh prioritization")
+// Regression (Podcast Detail crash): a feed that repeats a guid must collapse to
+// one episode and never produce duplicate Identifiable ids (which crashes
+// SwiftUI ForEach on tap). A second merge must also not trap on the guid-keyed
+// dictionary built from the stored episodes.
+let dupGUID = "dup-guid-regression"
+let dupA = Episode(subscriptionID: saved.id, guid: dupGUID, title: "Dup A", audioURL: audioURL)
+let dupB = Episode(subscriptionID: saved.id, guid: dupGUID, title: "Dup B", audioURL: audioURL)
+await reloaded.updateEpisodes(subscriptionID: saved.id, episodes: [dupA, dupB])
+let dupResult = await reloaded.subscription(id: saved.id)?.episodes ?? []
+require(dupResult.filter { $0.guid == dupGUID }.count == 1, "Expected duplicate-guid feed items to collapse to one episode")
+require(Set(dupResult.map { $0.id }).count == dupResult.count, "Expected unique episode ids after merging a duplicate-guid feed")
+await reloaded.updateEpisodes(subscriptionID: saved.id, episodes: [dupA, dupB]) // must not crash on re-merge
+
+print("SubscriptionStoreSmoke passed: save, duplicate detection, reload, chapter filter persistence, played episode persistence, release observations, schedule profiling, learned-window scheduling, feed refresh scheduling, refresh prioritization, and duplicate-guid dedup")

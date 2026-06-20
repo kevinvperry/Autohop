@@ -487,9 +487,15 @@ struct PodcastDetailView: View {
     @ViewBuilder
     private var episodeContent: some View {
         if let sub = subscription {
-            let episodes: [Episode] = sub.episodes.isEmpty
+            let rawEpisodes: [Episode] = sub.episodes.isEmpty
                 ? sub.latestEpisode.map { [$0] } ?? []
                 : sub.episodes
+            // Defensive: ForEach over duplicate Identifiable ids crashes on tap.
+            // updateEpisodes now prevents duplicates at the source, but episodes
+            // persisted before that fix may still contain them, so guarantee
+            // uniqueness here too.
+            var seenIDs = Set<UUID>()
+            let episodes = rawEpisodes.filter { seenIDs.insert($0.id).inserted }
 
             if episodes.isEmpty {
                 ContentUnavailableView(
