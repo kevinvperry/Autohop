@@ -13,9 +13,11 @@ import SwiftUI
 // Subscription.notificationsEnabled)
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
-// Next) and trailing (Archive / Play Last) swipes — NO share swipe. Toolbar
-// shows Refresh Feed + Show Settings only for an active subscription; the share
-// button and mini-player bar are always present. Episode rows pass 44 pt target
+// Next) and trailing (Archive / Play Last) swipes — NO share swipe. For an
+// active subscription the feed-refresh button sits on the "Episodes" heading row
+// (small purple circular glass button, matching the Subscriptions page) and the
+// toolbar shows Show Settings; the share button and mini-player bar are always
+// present. Episode rows pass 44 pt target
 // sizes into CachedArtworkImage and lazily prefetch artwork around the visible
 // row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
 // prefetches are cancelled so long feeds with many distinct episode images do
@@ -187,23 +189,9 @@ struct PodcastDetailView: View {
         }
 
         if isActivelySubscribed {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    guard let subscription, !isRefreshing else { return }
-                    isRefreshing = true
-                    Task {
-                        await appState.refreshSubscription(subscription)
-                        isRefreshing = false
-                    }
-                } label: {
-                    if isRefreshing {
-                        ProgressView()
-                    } else {
-                        Label("Refresh Feed", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(isRefreshing)
-
+            // Feed refresh lives above the episode list (see `episodesHeader`), to
+            // match the Subscriptions page. The toolbar keeps Share + Settings.
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     episodeToShare = subscription?.latestEpisode
                 } label: {
@@ -248,6 +236,15 @@ struct PodcastDetailView: View {
                 Image(systemName: "waveform")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.secondary)
+
+                Spacer()
+
+                // Feed refresh — small purple circular glass button above the
+                // episode list, matching the Subscriptions page. Active
+                // subscriptions only (browse previews aren't refreshed here).
+                if isActivelySubscribed {
+                    refreshButton
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 10)
@@ -256,6 +253,39 @@ struct PodcastDetailView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 18)
         }
+    }
+
+    /// Small purple circular refresh button shown on the Episodes heading row,
+    /// styled to match the Subscriptions page's refresh-all control.
+    private var refreshButton: some View {
+        Button {
+            guard let subscription, !isRefreshing else { return }
+            isRefreshing = true
+            Task {
+                await appState.refreshSubscription(subscription)
+                isRefreshing = false
+            }
+        } label: {
+            let refreshIcon = Group {
+                if isRefreshing {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.purple)
+                }
+            }
+            .frame(width: 30, height: 30)
+
+            if #available(iOS 26, *) {
+                refreshIcon.glassEffect(in: Circle())
+            } else {
+                refreshIcon.background(.ultraThinMaterial, in: Circle())
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isRefreshing)
+        .accessibilityLabel("Refresh Feed")
     }
 
     /// The Episodes list inside an iOS-glass card, matching the bell button and
