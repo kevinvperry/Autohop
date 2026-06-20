@@ -321,7 +321,9 @@ struct SettingsView: View {
                 fill: cardBackground
             )
             .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
+            // Match the faint defined-glass tint of every other section card so
+            // this custom control card doesn't read as a different background.
+            .listRowBackground(cardBackground)
         } header: {
             Text("Default Playback")
         } footer: {
