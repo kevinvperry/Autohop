@@ -17,8 +17,11 @@ import UniformTypeIdentifiers
 // (downloaded episode count), About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
 // All section footer copy here must stay in sync with FEATURES.md §15.
-// Visual style: dark page (scrollContentBackground hidden over black), each
-// section a white.opacity(0.08) card with .tint(.purple), and a purple
+// Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
+// subtle dark base (black.opacity(0.5)) with a faint white.opacity(0.05) tint on
+// each section card so edges read clearly, 36 pt listSectionSpacing between
+// sections. iOS 17–25: dark page (scrollContentBackground hidden over black),
+// each section a white.opacity(0.08) card. Both with .tint(.purple) and a purple
 // SettingsRowLabel glyph on every control row — matching the Default Playback
 // card (PlaybackControlsCard is passed fill: white.opacity(0.08) here) and the
 // linked sub-screens (NotificationSettings / AddFeed / DiagnosticLog /
@@ -60,7 +63,7 @@ struct SettingsView: View {
             }
             acknowledgementsSection
         }
-        .listSectionSpacing(28)
+        .listSectionSpacing(36)
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
@@ -109,10 +112,13 @@ struct SettingsView: View {
 
     // MARK: - Section styling
 
-    // iOS 26: native Form glass sections — clear row backgrounds let the system
-    // glass through. iOS 17–25: flat white.opacity(0.08) cards on black.
+    // iOS 26: "defined glass" — the native Form glass sections were washing out
+    // against a fully clear page, so each section card gets a faint white tint
+    // (lifting it off the backdrop into a readable rounded card) and the page
+    // sits on a subtle dark base so the card edges have something to contrast
+    // against. iOS 17–25: flat white.opacity(0.08) cards on solid black.
     private var cardBackground: Color {
-        if #available(iOS 26, *) { return .clear }
+        if #available(iOS 26, *) { return Color.white.opacity(0.05) }
         return Color.white.opacity(0.08)
     }
 
@@ -122,7 +128,7 @@ struct SettingsView: View {
     }
 
     private var formPageBackground: Color {
-        if #available(iOS 26, *) { return .clear }
+        if #available(iOS 26, *) { return Color.black.opacity(0.5) }
         return .black
     }
 

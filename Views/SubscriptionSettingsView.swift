@@ -19,7 +19,10 @@ import SwiftUI
 // description text for display. The podcast's episode list lives in
 // PodcastDetailView (reached by tapping a row); this file also hosts
 // EpisodeDetailView, whose status pills treat archived episodes with
-// Episode.wasCompleted as Played. Settings/detail artwork uses explicit
+// Episode.wasCompleted as Played. (Visual style follows App Settings' iOS 26
+// "defined glass": faint white.opacity(0.05) tint per section card over a
+// black.opacity(0.5) base, 36 pt section spacing; solid cards below iOS 26.)
+// Settings/detail artwork uses explicit
 // CachedArtworkImage targets (120 pt header/detail variants), sharing validated
 // source bytes with episode lists while avoiding full-size cover decodes.
 private func stripHTML(_ html: String) -> String {
@@ -98,8 +101,11 @@ struct SubscriptionSettingsView: View {
         appState.subscriptionStore.subscription(id: subscriptionID)
     }
 
+    // iOS 26: "defined glass" — a faint white tint lifts each native glass section
+    // card off a subtle dark page base so edges read clearly (matches SettingsView).
+    // iOS 17–25: flat white.opacity(0.08) cards on solid black.
     private var cardBackground: Color {
-        if #available(iOS 26, *) { return .clear }
+        if #available(iOS 26, *) { return Color.white.opacity(0.05) }
         return Color.white.opacity(0.08)
     }
 
@@ -109,7 +115,7 @@ struct SubscriptionSettingsView: View {
     }
 
     private var formPageBackground: Color {
-        if #available(iOS 26, *) { return .clear }
+        if #available(iOS 26, *) { return Color.black.opacity(0.5) }
         return .black
     }
 
@@ -133,7 +139,7 @@ struct SubscriptionSettingsView: View {
                 )
             }
         }
-        .listSectionSpacing(28)
+        .listSectionSpacing(36)
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
