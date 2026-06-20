@@ -308,12 +308,23 @@ public final class ListeningStatsStore: ObservableObject {
     /// without a write on every playback tick.
     public func flushPendingStatsDays() {
         guard let syncDatabase, !pendingStatsDayKeys.isEmpty else { return }
+        // Only drop keys that actually wrote. Clearing a key whose write failed
+        // would mean that day never gets re-attempted and silently never syncs.
+        var failedKeys = Set<String>()
         for key in pendingStatsDayKeys {
-            if let day = data.days[key] {
-                try? syncDatabase.recordStatsDay(day)
+            guard let day = data.days[key] else { continue } // no bucket to write — drop the key
+            do {
+                try syncDatabase.recordStatsDay(day)
+            } catch {
+                failedKeys.insert(key)
+                AppLogger.shared.error("sync.statsMarkerFailed", "Failed to record stats day for sync", metadata: [
+                    "dayKey": key,
+                    "error": String(describing: error)
+                ], alwaysPersist: true)
             }
         }
-        pendingStatsDayKeys.removeAll()
+        // Retain only the keys that failed, so the next flush retries them.
+        pendingStatsDayKeys = failedKeys
         lastStatsDayWriteAt = Date()
     }
 

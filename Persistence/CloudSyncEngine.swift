@@ -231,47 +231,66 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         guard let database else { return nil }
         let name = recordID.recordName
 
-        // Episode? (recordName == guid)
-        if let state = try? database.episodeSyncState(guid: name) {
-            let record = cachedOrNewRecord(
-                systemFields: try? database.episodeSystemFields(guid: name),
-                recordType: CloudKitSync.episodeRecordType, recordID: recordID
-            )
-            CloudKitSync.populate(record, from: state)
-            return record
+        // A nil from any lookup means "not this record type" (normal — try the next
+        // branch); a THROW means a real read/decode error. Swallowing the throw with
+        // `try?` would silently drop a queued push. So `try` here, and log genuine
+        // failures in the catch. (systemFields stays `try?` — a missing cached blob
+        // is normal for a new record and cachedOrNewRecord handles nil.)
+        do {
+            // Episode? (recordName == guid)
+            if let state = try database.episodeSyncState(guid: name) {
+                let record = cachedOrNewRecord(
+                    systemFields: try? database.episodeSystemFields(guid: name),
+                    recordType: CloudKitSync.episodeRecordType, recordID: recordID
+                )
+                CloudKitSync.populate(record, from: state)
+                return record
+            }
+
+            // Subscription? (recordName == subscriptionID UUID)
+            if let id = UUID(uuidString: name), let state = try database.subscriptionSyncState(id: id) {
+                let record = cachedOrNewRecord(
+                    systemFields: try? database.subscriptionSystemFields(id: id),
+                    recordType: CloudKitSync.subscriptionRecordType, recordID: recordID
+                )
+                CloudKitSync.populate(record, from: state)
+                return record
+            }
+
+            // History entry? (recordName == composite history key)
+            if let entry = try database.historyEntry(id: name) {
+                let record = cachedOrNewRecord(
+                    systemFields: try? database.historySystemFields(id: name),
+                    recordType: CloudKitSync.historyRecordType, recordID: recordID
+                )
+                CloudKitSync.populate(record, from: entry)
+                return record
+            }
+
+            // Stats partition? (recordName == "deviceID:dayKey")
+            if let dayKey = Self.statsDayKey(fromRecordName: name), let day = try database.statsDay(dayKey: dayKey) {
+                let record = cachedOrNewRecord(
+                    systemFields: try? database.statsSystemFields(dayKey: dayKey),
+                    recordType: CloudKitSync.statsRecordType, recordID: recordID
+                )
+                CloudKitSync.populate(record, deviceID: DeviceIdentity.current, day: day)
+                return record
+            }
+        } catch {
+            logger.error("sync.recordBuildFailed", "Failed to read local state while building a record to push", metadata: [
+                "recordName": name,
+                "error": String(describing: error)
+            ], alwaysPersist: true)
+            return nil
         }
 
-        // Subscription? (recordName == subscriptionID UUID)
-        if let id = UUID(uuidString: name), let state = try? database.subscriptionSyncState(id: id) {
-            let record = cachedOrNewRecord(
-                systemFields: try? database.subscriptionSystemFields(id: id),
-                recordType: CloudKitSync.subscriptionRecordType, recordID: recordID
-            )
-            CloudKitSync.populate(record, from: state)
-            return record
-        }
-
-        // History entry? (recordName == composite history key)
-        if let entry = try? database.historyEntry(id: name) {
-            let record = cachedOrNewRecord(
-                systemFields: try? database.historySystemFields(id: name),
-                recordType: CloudKitSync.historyRecordType, recordID: recordID
-            )
-            CloudKitSync.populate(record, from: entry)
-            return record
-        }
-
-        // Stats partition? (recordName == "deviceID:dayKey")
-        if let dayKey = Self.statsDayKey(fromRecordName: name), let day = try? database.statsDay(dayKey: dayKey) {
-            let record = cachedOrNewRecord(
-                systemFields: try? database.statsSystemFields(dayKey: dayKey),
-                recordType: CloudKitSync.statsRecordType, recordID: recordID
-            )
-            CloudKitSync.populate(record, deviceID: DeviceIdentity.current, day: day)
-            return record
-        }
-
-        return nil // nothing local to send (e.g. a since-deleted record)
+        // No branch matched and nothing threw. Usually a record deleted locally
+        // between queueing and push (benign), but it is also the only place a
+        // queued push can silently vanish — log at warning so it is observable.
+        logger.warning("sync.recordNotFound", "No local state matched a queued push record", metadata: [
+            "recordName": name
+        ])
+        return nil
     }
 
     /// Extracts the dayKey from a "deviceID:dayKey" stats record name.

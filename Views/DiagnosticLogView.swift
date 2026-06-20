@@ -9,6 +9,11 @@ struct DiagnosticLogView: View {
     @State private var logLines: [String] = []
     @State private var showClearConfirmation = false
 
+    private var pageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if logLines.isEmpty {
@@ -32,7 +37,7 @@ struct DiagnosticLogView: View {
                 }
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(pageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Diagnostic Log")

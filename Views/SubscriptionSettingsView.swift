@@ -98,6 +98,21 @@ struct SubscriptionSettingsView: View {
         appState.subscriptionStore.subscription(id: subscriptionID)
     }
 
+    private var cardBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color.white.opacity(0.08)
+    }
+
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         Group {
             if let sub = subscription {
@@ -119,8 +134,8 @@ struct SubscriptionSettingsView: View {
             }
         }
         .listSectionSpacing(28)
-        .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .scrollContentBackground(formScrollBackground)
+        .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle(subscription?.title ?? "Subscription")
@@ -237,7 +252,7 @@ struct SubscriptionSettingsView: View {
                 }
             }
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -276,7 +291,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     // MARK: - Sound Controls Card
@@ -288,7 +303,7 @@ struct SubscriptionSettingsView: View {
             onSpeedChange: { appState.updatePlaybackSpeed(for: sub.id, speed: $0) },
             onTrimChange: { appState.updateTrimSilence(for: sub.id, amount: $0) },
             onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) },
-            fill: Color.white.opacity(0.08)
+            fill: cardBackground
         )
     }
 
@@ -306,7 +321,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
 
         Section {
             Picker(selection: afterPlayedBinding(sub)) {
@@ -335,7 +350,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -378,7 +393,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Skips are position-based and apply to all future episodes of this podcast.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -392,7 +407,7 @@ struct SubscriptionSettingsView: View {
                 SettingsRowLabel(title: "URL", systemImage: "link")
             }
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -402,7 +417,7 @@ struct SubscriptionSettingsView: View {
                 showDeleteConfirm = true
             }
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     // MARK: - Bindings

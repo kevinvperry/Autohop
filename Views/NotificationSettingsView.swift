@@ -17,6 +17,21 @@ struct NotificationSettingsView: View {
 
     @State private var permissionDenied = false
 
+    private var cardBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color.white.opacity(0.08)
+    }
+
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     private var subscriptions: [Subscription] {
         appState.subscriptionStore.subscriptions
             .filter { $0.browseDate == nil }
@@ -32,8 +47,8 @@ struct NotificationSettingsView: View {
             podcastsSection
         }
         .listSectionSpacing(28)
-        .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .scrollContentBackground(formScrollBackground)
+        .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Notification Settings")
@@ -67,7 +82,7 @@ struct NotificationSettingsView: View {
         } footer: {
             Text("Until notifications are allowed in iOS Settings, the toggles below will have no effect.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -79,7 +94,7 @@ struct NotificationSettingsView: View {
         } footer: {
             Text("The master switch for new-episode notifications. A podcast only notifies when this and its own toggle below are both on.")
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -107,7 +122,7 @@ struct NotificationSettingsView: View {
                 Text("Subscribe to a podcast to manage its notifications here.")
             }
         }
-        .listRowBackground(Color.white.opacity(0.08))
+        .listRowBackground(cardBackground)
     }
 
     // MARK: - Bindings & actions

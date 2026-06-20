@@ -61,8 +61,8 @@ struct SettingsView: View {
             acknowledgementsSection
         }
         .listSectionSpacing(28)
-        .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .scrollContentBackground(formScrollBackground)
+        .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Settings")
@@ -109,10 +109,22 @@ struct SettingsView: View {
 
     // MARK: - Section styling
 
-    // Dark "card" fill for every section, matching the app's design system
-    // (`white.opacity(0.08)` rounded rows on the black page background) and the
-    // Default Playback card. Applied per-section via `.listRowBackground`.
-    private let cardBackground = Color.white.opacity(0.08)
+    // iOS 26: native Form glass sections — clear row backgrounds let the system
+    // glass through. iOS 17–25: flat white.opacity(0.08) cards on black.
+    private var cardBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color.white.opacity(0.08)
+    }
+
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
 
     // Purple leading icon + primary-coloured title for every toggle, link, stepper
     // and value row. Thin wrapper over the shared SettingsRowLabel (defined in

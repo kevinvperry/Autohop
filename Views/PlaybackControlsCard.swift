@@ -1,16 +1,12 @@
 import SwiftUI
 
 // AI CONTEXT — Views/PlaybackControlsCard.swift
-// Reusable dark "sound controls" card (Speed / Trim Silence / Vocal Boost)
-// matching AudioControlsSheetView. Single source of truth for this design,
-// shared by the per-podcast Playback section (SubscriptionSettingsView) and the
-// global Default Playback panel (SettingsView). It is purely presentational:
-// it reads a PlaybackPreference and reports edits through three closures, so the
-// caller decides whether the change targets a subscription or the global default.
-// The `fill` parameter sets the card colour: it defaults to the standalone
-// near-black, but SettingsView passes white.opacity(0.08) so the card matches the
-// other dark cards on the (black-backed) App Settings page. This file also hosts
-// SettingsRowLabel — the shared purple-icon row label used across the settings flow.
+// Reusable sound controls card (Speed / Trim Silence / Vocal Boost). Single
+// source of truth shared by SubscriptionSettingsView and SettingsView.
+// iOS 26: card uses glassCard(cornerRadius:12), stepper uses glassCard(cornerRadius:10).
+// iOS 17–25: card uses the `fill` background param (callers pass white.opacity(0.08)
+// or a conditional cardBackground). This file also hosts SettingsRowLabel — the
+// shared purple-icon row label used across the settings flow.
 struct PlaybackControlsCard: View {
     let preference: PlaybackPreference
     let onSpeedChange: (Double) -> Void
@@ -25,21 +21,26 @@ struct PlaybackControlsCard: View {
     private let dividerColor = Color(white: 0.20)
 
     var body: some View {
-        VStack(spacing: 0) {
+        let stack = VStack(spacing: 0) {
             speedRow
             Divider().background(dividerColor).padding(.leading, 60)
             trimSilenceRow
             Divider().background(dividerColor).padding(.leading, 60)
             vocalBoostRow
         }
-        .background(fill)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
         // No horizontal padding: callers zero out listRowInsets, so the row already
         // fills the standard grouped-section region. Any extra padding here would
-        // inset the card *inside* that region, making it narrower than sibling
-        // sections — so the card spans the full width to match the grey cards.
+        // inset the card *inside* that region, making it narrower than sibling sections.
         .padding(.vertical, 8)
         .preferredColorScheme(.dark)
+
+        if #available(iOS 26, *) {
+            stack.glassCard(cornerRadius: 12)
+        } else {
+            stack
+                .background(fill)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
     }
 
     private func rowIcon(_ name: String) -> some View {
@@ -93,8 +94,7 @@ struct PlaybackControlsCard: View {
                 }
                 .buttonStyle(.borderless)
             }
-            .background(Color(white: 0.20))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .glassCard(cornerRadius: 10)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)

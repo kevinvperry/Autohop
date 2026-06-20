@@ -78,8 +78,8 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
-| `Card-PlaybackControls` | Shared dark Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`), same visual as `AudioControls-Sheet`. Reused by the per-podcast Playback section and the global Default Playback panel in App Settings. Takes a `fill` parameter (default near-black; settings pages pass `white.opacity(0.08)` to match their section cards) |
-| `Form-SettingsDark` | The shared dark-`Form` recipe for every settings page: `scrollContentBackground(.hidden)` over `Color.black`, each `Section` a `white.opacity(0.08)` card via `.listRowBackground`, `.tint(.purple)`, `.listSectionSpacing(28)` |
+| `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`). iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background (callers pass `white.opacity(0.08)`). |
+| `Form-SettingsDark` | Settings page recipe. iOS 26: `scrollContentBackground(.visible)` + clear page background → native Liquid Glass Form sections, `Color.clear` row backgrounds. iOS 17–25: `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
@@ -2391,23 +2391,31 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 - **Row** (`ListeningHistoryRow`) — 54 pt artwork (`cornerRadius 9`, purple-gradient `Artwork-Placeholder` fallback) · podcast title (caption bold secondary, uppercased) · episode title (`.body.semibold`) · metadata line (status label + listened duration + remaining, caption secondary).
 - **Swipe actions** (`SwipeActions-EpisodeRow`) — mirrors `PodcastDetailView`: leading **Play** (green) / **Play Next** (blue); trailing **Archive** (purple, → **Unarchive** when the episode is archived/played) / **Play Last** (orange). Each resolves the entry to its `Episode` via `subscriptionStore.episode(subscriptionID:episodeID:)`, downloads first if not on device, and is hidden when the entry's episode can't be resolved or is the currently-playing episode.
 
-## Settings Pages — Dark Form Style
+## Settings Pages — Form Style
 
 **Label: `Form-SettingsDark`**
 
-> **Not slated for glass conversion.** The dark-`Form` pages — `SettingsView` (App Settings), `SubscriptionSettingsView` (Podcast Settings), `AddFeedView`, `DiagnosticLogView`, and `AcknowledgementsView` — intentionally keep this flat `white.opacity(0.08)` card recipe and are **not** to be migrated to glass. (Glass elements embedded in these pages — e.g. the `EpisodeStatusPill` on Podcast Settings, or `EpisodeDetailView` which lives in `SubscriptionSettingsView.swift` — are separate and stay glass.)
+All settings pages (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) use a two-tier recipe:
 
-Every settings page (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, and the linked sub-screens `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) renders its `Form`/`List` with one shared recipe instead of the stock iOS grouped style:
-
+**iOS 26 — native Liquid Glass Form sections:**
 ```swift
-.listSectionSpacing(28)
+.scrollContentBackground(.visible)   // let iOS 26 Form glass through
+.background(Color.clear.ignoresSafeArea())
+.tint(.purple)
+.preferredColorScheme(.dark)
+```
+Row backgrounds are `Color.clear` so the system glass section cards show unobstructed. The `Card-PlaybackControls` card uses `.glassCard(cornerRadius: 12)` (card surface) and `.glassCard(cornerRadius: 10)` (speed stepper).
+
+**iOS 17–25 — flat dark card recipe (unchanged):**
+```swift
 .scrollContentBackground(.hidden)
 .background(Color.black.ignoresSafeArea())
 .tint(.purple)
 .preferredColorScheme(.dark)
 ```
+Each `Section` gets `white.opacity(0.08)` via `.listRowBackground(Color.white.opacity(0.08))`. `Card-PlaybackControls` receives `fill: Color.white.opacity(0.08)`.
 
-Each `Section` gets a `white.opacity(0.08)` card via `.listRowBackground(Color.white.opacity(0.08))` (matching `ListRow-IdleBackground` / `Section-CardList`), so sections read as dark cards on black — identical to the rest of the app. The `Card-PlaybackControls` card on these pages is passed `fill: Color.white.opacity(0.08)` so it matches its sibling section cards exactly. Pop-up editor sheets (skip duration, edit title, edit priority) carry `.tint(.purple)` + `.preferredColorScheme(.dark)` to match.
+Each page uses three shared computed helpers (`cardBackground`, `formScrollBackground`, `formPageBackground`) to switch between the two tiers via `#available(iOS 26, *)`. Pop-up editor sheets (skip duration, edit title, edit priority) carry `.tint(.purple)` + `.preferredColorScheme(.dark)` on both tiers.
 
 Long section footers (> ~5 rendered rows) are split into multiple paragraphs with `\n\n` at a natural idea boundary for readability.
 

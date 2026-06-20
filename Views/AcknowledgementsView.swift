@@ -7,6 +7,21 @@ import SwiftUI
 struct AcknowledgementsView: View {
     @Environment(\.dismiss) private var dismiss
 
+    private var cardBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color.white.opacity(0.08)
+    }
+
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
     var body: some View {
         List {
             Section {
@@ -34,10 +49,10 @@ struct AcknowledgementsView: View {
                 }
                 .font(.footnote)
             }
-            .listRowBackground(Color.white.opacity(0.08))
+            .listRowBackground(cardBackground)
         }
-        .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .scrollContentBackground(formScrollBackground)
+        .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Acknowledgements")

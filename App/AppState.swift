@@ -3534,7 +3534,18 @@ final class ListeningHistoryStore: ObservableObject {
     /// Records a changed entry as pending for cross-device sync.
     private func recordPending(id: String) {
         guard let syncDatabase, let entry = entries.first(where: { $0.id == id }) else { return }
-        try? syncDatabase.recordHistoryEntry(entry)
+        do {
+            try syncDatabase.recordHistoryEntry(entry)
+        } catch {
+            // A swallowed failure here means the entry saved locally but the
+            // outgoing CloudKit row was never queued — log so a "history didn't
+            // sync" report leaves a trace (alwaysPersist survives the Diagnostics
+            // toggle being off).
+            AppLogger.shared.error("sync.historyMarkerFailed", "Failed to record pending history entry for sync", metadata: [
+                "entryID": id,
+                "error": String(describing: error)
+            ], alwaysPersist: true)
+        }
     }
 
     /// Merges a remote history entry with record-level last-write-wins
