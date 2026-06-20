@@ -19,9 +19,11 @@ import SwiftUI
 // description text for display. The podcast's episode list lives in
 // PodcastDetailView (reached by tapping a row); this file also hosts
 // EpisodeDetailView, whose status pills treat archived episodes with
-// Episode.wasCompleted as Played. (Visual style follows App Settings' iOS 26
-// "defined glass": faint white.opacity(0.05) tint per section card over a
-// black.opacity(0.5) base, 36 pt section spacing; solid cards below iOS 26.)
+// Episode.wasCompleted as Played. (Visual style on iOS 26: every section's row
+// background uses the same regular glassEffect surface as the Playback controls
+// card via sectionRowBackground, so the whole page reads as one consistent glass
+// treatment over a black.opacity(0.5) base, 36 pt section spacing; solid cards
+// below iOS 26.)
 // Settings/detail artwork uses explicit
 // CachedArtworkImage targets (120 pt header/detail variants), sharing validated
 // source bytes with episode lists while avoiding full-size cover decodes.
@@ -107,6 +109,19 @@ struct SubscriptionSettingsView: View {
     private var cardBackground: Color {
         if #available(iOS 26, *) { return Color.white.opacity(0.05) }
         return Color.white.opacity(0.08)
+    }
+
+    // Section row background. On iOS 26 every section uses the SAME regular-glass
+    // surface the Playback controls card draws (glassEffect), so the whole page
+    // reads as one consistent glass treatment rather than the Playback card
+    // standing out. iOS 17–25 keeps the flat dark card fill.
+    @ViewBuilder
+    private var sectionRowBackground: some View {
+        if #available(iOS 26, *) {
+            Color.clear.glassEffect(in: Rectangle())
+        } else {
+            cardBackground
+        }
     }
 
     private var formScrollBackground: Visibility {
@@ -258,7 +273,7 @@ struct SubscriptionSettingsView: View {
                 }
             }
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     @ViewBuilder
@@ -297,7 +312,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     // MARK: - Sound Controls Card
@@ -327,7 +342,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
 
         Section {
             Picker(selection: afterPlayedBinding(sub)) {
@@ -356,7 +371,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     @ViewBuilder
@@ -399,7 +414,7 @@ struct SubscriptionSettingsView: View {
         } footer: {
             Text("Skips are position-based and apply to all future episodes of this podcast.")
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     @ViewBuilder
@@ -413,7 +428,7 @@ struct SubscriptionSettingsView: View {
                 SettingsRowLabel(title: "URL", systemImage: "link")
             }
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     @ViewBuilder
@@ -423,7 +438,7 @@ struct SubscriptionSettingsView: View {
                 showDeleteConfirm = true
             }
         }
-        .listRowBackground(cardBackground)
+        .listRowBackground(sectionRowBackground)
     }
 
     // MARK: - Bindings
