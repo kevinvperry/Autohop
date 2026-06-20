@@ -5,7 +5,9 @@ import SwiftUI
 // source of truth shared by SubscriptionSettingsView and SettingsView.
 // iOS 26: card uses glassCard(cornerRadius:12), stepper uses glassCard(cornerRadius:10).
 // iOS 17–25: card uses the `fill` background param (callers pass white.opacity(0.08)
-// or a conditional cardBackground). This file also hosts SettingsRowLabel — the
+// or a conditional cardBackground). SettingsView passes usesHostBackground: true so
+// the card drops its own surface and inherits the section row background, matching
+// its sibling sections on iOS 26. This file also hosts SettingsRowLabel — the
 // shared purple-icon row label used across the settings flow.
 struct PlaybackControlsCard: View {
     let preference: PlaybackPreference
@@ -17,6 +19,13 @@ struct PlaybackControlsCard: View {
     // it with white.opacity(0.08) so the card matches the other dark cards on the
     // (black-backed) App Settings page.
     var fill: Color = Color(red: 0.10, green: 0.10, blue: 0.13)
+    // When true the card omits its own outer surface (no glassCard / fill) so the
+    // host — a Form section's own row background — provides the background. Used by
+    // SettingsView on iOS 26 so this card reads identically to its sibling
+    // sections instead of floating as a lighter glass card. Defaults false, which
+    // keeps the self-contained card chrome for the audio sheet and the per-podcast
+    // Playback section (those are unaffected).
+    var usesHostBackground: Bool = false
 
     private let dividerColor = Color(white: 0.20)
 
@@ -34,7 +43,11 @@ struct PlaybackControlsCard: View {
         .padding(.vertical, 8)
         .preferredColorScheme(.dark)
 
-        if #available(iOS 26, *) {
+        if usesHostBackground {
+            // Transparent: the host section's row background shows through, so the
+            // card matches sibling sections rather than drawing its own surface.
+            stack
+        } else if #available(iOS 26, *) {
             stack.glassCard(cornerRadius: 12)
         } else {
             stack

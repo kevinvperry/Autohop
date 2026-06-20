@@ -318,11 +318,12 @@ struct SettingsView: View {
                 onSpeedChange: { appState.updateDefaultPlaybackSpeed($0) },
                 onTrimChange: { appState.updateDefaultTrimSilence($0) },
                 onVocalChange: { appState.updateDefaultVocalBoost($0) },
-                fill: cardBackground
+                fill: cardBackground,
+                // Drop the card's own glass surface so it inherits the section row
+                // background below and matches every other section on the page.
+                usesHostBackground: true
             )
             .listRowInsets(EdgeInsets())
-            // Match the faint defined-glass tint of every other section card so
-            // this custom control card doesn't read as a different background.
             .listRowBackground(cardBackground)
         } header: {
             Text("Default Playback")
