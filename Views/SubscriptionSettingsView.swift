@@ -331,18 +331,34 @@ struct SubscriptionSettingsView: View {
     @ViewBuilder
     private func automationSection(_ sub: Subscription) -> some View {
         Section {
-            Toggle(isOn: notificationsBinding(sub)) {
-                SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+            // Rendered as one glass card (like the Playback controls card) rather
+            // than two Form rows: the "Exclude…" row wraps to two lines, and a
+            // per-row glassEffect renders a taller row at a visibly different shade.
+            // A single shared glass surface keeps both rows identical.
+            VStack(spacing: 0) {
+                Toggle(isOn: notificationsBinding(sub)) {
+                    SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+
+                Divider().background(Color(white: 0.20)).padding(.leading, 60)
+
+                Toggle(isOn: autoFeedRefreshExclusionBinding(sub)) {
+                    SettingsRowLabel(title: "Exclude from Auto Feed Refresh", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
-            Toggle(isOn: autoFeedRefreshExclusionBinding(sub)) {
-                SettingsRowLabel(title: "Exclude from Auto Feed Refresh", systemImage: "arrow.triangle.2.circlepath")
-            }
+            .tint(.purple)
+            .glassCard(cornerRadius: 12)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         } header: {
             Text("Automation")
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
         }
-        .listRowBackground(sectionRowBackground)
 
         Section {
             Picker(selection: afterPlayedBinding(sub)) {
