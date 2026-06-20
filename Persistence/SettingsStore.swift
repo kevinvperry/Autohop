@@ -41,7 +41,12 @@ final class SettingsStore: ObservableObject, SettingsStoring {
             let data = try JSONEncoder().encode(Stored(appSettings: appSettings))
             try data.write(to: url, options: [.atomic])
         } catch {
-            // In-memory state remains usable.
+            // In-memory state remains usable, but the change won't survive a
+            // relaunch — log so a setting that silently reverts (e.g. iCloud sync
+            // on/off) leaves a trace.
+            AppLogger.shared.warning("settings.saveFailed", "Could not persist app settings", metadata: [
+                "error": String(describing: error)
+            ])
         }
     }
 

@@ -455,10 +455,13 @@ final class AppState: ObservableObject {
             observableSettingsStore.objectWillChange
                 .sink { [weak self] _ in
                     self?.objectWillChange.send()
-                    self?.syncDiagnosticLogging()
-                    // didSet hasn't run yet on objectWillChange — sync after the value lands.
+                    // didSet hasn't run yet on objectWillChange — sync after the value
+                    // lands. syncDiagnosticLogging() reads appSettings too, so it must
+                    // be deferred as well or it acts on the previous value (enabling
+                    // diagnostics wouldn't take effect until the next settings change).
                     Task { @MainActor in
                         guard let self else { return }
+                        self.syncDiagnosticLogging()
                         self.syncSleepScheduleConfig()
                         self.cloudSyncEngine.syncEnabledChanged(self.settingsStore.appSettings.iCloudSyncEnabled)
                     }
