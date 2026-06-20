@@ -76,6 +76,10 @@ struct AppSettings: Equatable, Codable {
     // feeds. Editing this NEVER touches existing subscriptions' own settings —
     // see AppState.effectivePreference(for:) and SubscriptionStore seeding.
     var defaultPlaybackPreference: PlaybackPreference
+    // Default Auto Archive settings applied to every NEW subscription at subscribe
+    // time. Editing this NEVER touches existing subscriptions — each subscription
+    // keeps its own independent AutoArchiveSettings after that point.
+    var defaultAutoArchiveSettings: AutoArchiveSettings
 
     static let `default` = AppSettings(
         podcastPollMinutes: 5,
@@ -107,7 +111,8 @@ struct AppSettings: Equatable, Codable {
         hasSeenDownloadFirstNote: false,
         dismissedGettingStarted: false,
         launchScreen: .player,
-        defaultPlaybackPreference: .default
+        defaultPlaybackPreference: .default,
+        defaultAutoArchiveSettings: .default
     )
 
     private enum CodingKeys: String, CodingKey {
@@ -141,6 +146,7 @@ struct AppSettings: Equatable, Codable {
         case dismissedGettingStarted
         case launchScreen
         case defaultPlaybackPreference
+        case defaultAutoArchiveSettings
     }
 
     init(
@@ -173,7 +179,8 @@ struct AppSettings: Equatable, Codable {
         hasSeenDownloadFirstNote: Bool,
         dismissedGettingStarted: Bool,
         launchScreen: LaunchScreen,
-        defaultPlaybackPreference: PlaybackPreference
+        defaultPlaybackPreference: PlaybackPreference,
+        defaultAutoArchiveSettings: AutoArchiveSettings
     ) {
         self.podcastPollMinutes = podcastPollMinutes
         self.downloadOverWifi = downloadOverWifi
@@ -205,6 +212,7 @@ struct AppSettings: Equatable, Codable {
         self.dismissedGettingStarted = dismissedGettingStarted
         self.launchScreen = launchScreen
         self.defaultPlaybackPreference = defaultPlaybackPreference
+        self.defaultAutoArchiveSettings = defaultAutoArchiveSettings
     }
 
     init(from decoder: Decoder) throws {
@@ -239,5 +247,6 @@ struct AppSettings: Equatable, Codable {
         dismissedGettingStarted = try container.decodeIfPresent(Bool.self, forKey: .dismissedGettingStarted) ?? Self.default.dismissedGettingStarted
         launchScreen = try container.decodeIfPresent(LaunchScreen.self, forKey: .launchScreen) ?? Self.default.launchScreen
         defaultPlaybackPreference = try container.decodeIfPresent(PlaybackPreference.self, forKey: .defaultPlaybackPreference) ?? Self.default.defaultPlaybackPreference
+        defaultAutoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .defaultAutoArchiveSettings) ?? Self.default.defaultAutoArchiveSettings
     }
 }

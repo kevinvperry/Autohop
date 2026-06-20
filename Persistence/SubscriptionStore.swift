@@ -52,6 +52,11 @@ public final class SubscriptionStore: ObservableObject {
     /// actually subscribed to — after which the snapshot is independent.
     public var defaultPlaybackPreferenceProvider: (() -> PlaybackPreference)?
 
+    /// Supplies the global default AutoArchiveSettings (from AppSettings). Applied
+    /// to each new subscription at subscribe time. Set by AppState; falls back to
+    /// `.default` when nil. Never applied to existing subscriptions.
+    public var defaultAutoArchiveSettingsProvider: (() -> AutoArchiveSettings)?
+
     /// Requests deletion of an episode's downloaded media file. Set by AppState to
     /// call DownloadManager.deleteLocalFile(for:) — the store can't reach the
     /// DownloadManager directly. Invoked when a remote played/archived state merges
@@ -63,6 +68,10 @@ public final class SubscriptionStore: ObservableObject {
 
     private var seededDefaultPlaybackPreference: PlaybackPreference {
         defaultPlaybackPreferenceProvider?() ?? .default
+    }
+
+    private var seededDefaultAutoArchiveSettings: AutoArchiveSettings {
+        defaultAutoArchiveSettingsProvider?() ?? .default
     }
 
     /// - Parameter fileURL: legacy JSON location (defaults to the historical
@@ -115,6 +124,7 @@ public final class SubscriptionStore: ObservableObject {
         subscription.description = parsedFeed.description
         subscription.subscribedAt = Date()
         subscription.playbackPreference = seededDefaultPlaybackPreference
+        subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
 
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
@@ -163,6 +173,7 @@ public final class SubscriptionStore: ObservableObject {
         subscription.description = description
         subscription.subscribedAt = Date()
         subscription.playbackPreference = seededDefaultPlaybackPreference
+        subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
         seedReleaseObservations(for: &subscription, episodes: [latestEpisode])

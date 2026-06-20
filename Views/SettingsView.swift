@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
 // cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (sensitivity stepper +
 // Notification Settings link — the global notifications toggle now lives on
-// NotificationSettingsView as the master switch), Auto Archive (run-now button), Downloading
+// NotificationSettingsView as the master switch), Auto Archive (run-now button + global default pickers for Played/Inactive/EpisodeLimit applied to new subscriptions only), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
@@ -199,10 +199,37 @@ struct SettingsView: View {
                 }
             }
             .disabled(isRunningAutoArchive)
+
+            Picker(selection: defaultAfterPlayedBinding) {
+                ForEach(AutoArchiveSettings.AfterPlayed.allCases, id: \.self) { v in
+                    Text(v.title).tag(v)
+                }
+            } label: {
+                rowLabel("Played Episodes", systemImage: "checkmark.circle")
+            }
+            .pickerStyle(.menu)
+
+            Picker(selection: defaultAfterInactiveBinding) {
+                ForEach(AutoArchiveSettings.AfterInactive.allCases, id: \.self) { v in
+                    Text(v.title).tag(v)
+                }
+            } label: {
+                rowLabel("Inactive Episodes", systemImage: "clock.arrow.circlepath")
+            }
+            .pickerStyle(.menu)
+
+            Picker(selection: defaultEpisodeLimitBinding) {
+                ForEach(AutoArchiveSettings.EpisodeLimit.allCases, id: \.self) { v in
+                    Text(v.title).tag(v)
+                }
+            } label: {
+                rowLabel("Episode Limit", systemImage: "square.stack")
+            }
+            .pickerStyle(.menu)
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Auto Archive normally runs on its own (at most every 30 minutes). This forces an immediate pass over every podcast using its own Auto Archive rules.")
+            Text("Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes.")
         }
         .listRowBackground(cardBackground)
     }
@@ -583,6 +610,27 @@ struct SettingsView: View {
         Binding(
             get: { appState.settingsStore.appSettings.diagnosticLoggingEnabled },
             set: { appState.settingsStore.appSettings.diagnosticLoggingEnabled = $0 }
+        )
+    }
+
+    private var defaultAfterPlayedBinding: Binding<AutoArchiveSettings.AfterPlayed> {
+        Binding(
+            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterPlayed },
+            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterPlayed = $0 }
+        )
+    }
+
+    private var defaultAfterInactiveBinding: Binding<AutoArchiveSettings.AfterInactive> {
+        Binding(
+            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterInactive },
+            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterInactive = $0 }
+        )
+    }
+
+    private var defaultEpisodeLimitBinding: Binding<AutoArchiveSettings.EpisodeLimit> {
+        Binding(
+            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.episodeLimit },
+            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.episodeLimit = $0 }
         )
     }
 

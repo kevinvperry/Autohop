@@ -416,6 +416,9 @@ final class AppState: ObservableObject {
         subscriptionStore.defaultPlaybackPreferenceProvider = { [weak self] in
             self?.settingsStore.appSettings.defaultPlaybackPreference ?? .default
         }
+        subscriptionStore.defaultAutoArchiveSettingsProvider = { [weak self] in
+            self?.settingsStore.appSettings.defaultAutoArchiveSettings ?? .default
+        }
         // When a remote played/archived state arrives for an episode this device
         // still has downloaded, drop the local media file (ASSESSMENT.md B1). The
         // store clears the download fields itself; this just deletes the file.
