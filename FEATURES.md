@@ -448,7 +448,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Access:** Priority page → tap podcast row → episode list → gear icon (⚙) in top-right toolbar.
 
-The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing — visually uniform with App Settings (§15).
+The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 36pt section spacing. On iOS 26 every section uses the same regular `glassEffect` surface as the Playback controls card, so the whole page reads as one consistent glass treatment; below iOS 26 it falls back to `white.opacity(0.08)` cards on black.
 
 ---
 
@@ -489,7 +489,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 ### 10.4 Auto Archive section
 
-Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes, or immediately on demand via Settings → Run Auto Archive Now.
+Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes, or immediately on demand via Settings → Run Auto Archive Now. New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
 
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|
@@ -656,7 +656,7 @@ Sum of all four time-saved categories, displayed in purple.
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
-The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): `white.opacity(0.08)` section cards on black, a purple `SettingsRowLabel` glyph on every control row, purple tint, and 28pt section spacing. The Default Playback card (§15.5) is matched to the other section cards, and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
+The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 36pt section spacing. On iOS 26 it uses "defined glass" — native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base so card edges read clearly; below iOS 26 it falls back to `white.opacity(0.08)` cards on black. The Default Playback card (§15.5) is matched to the other section cards (via `usesHostBackground`), and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
 
 ---
 
@@ -732,9 +732,16 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 ### 15.2 Auto Archive
 
-| Setting | Description |
-|---|---|
-| Run Auto Archive Now | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 30 minutes. Shows a spinner while running. |
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| Run Auto Archive Now | Button | — | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 30 minutes. Shows a spinner while running. |
+| Played Episodes | Menu picker | **After Playing** | Global default for Rule 1 (see §10.4) applied to **new subscriptions only**. |
+| Inactive Episodes | Menu picker | **1 Week** | Global default for Rule 2 applied to **new subscriptions only**. |
+| Episode Limit | Menu picker | **1** | Global default for Rule 3 applied to **new subscriptions only**. |
+
+The three pickers mirror the per-podcast Auto Archive rules (§10.4) and set the **global default** seeded into each podcast at the moment it becomes a real subscription. Stored in `AppSettings.defaultAutoArchiveSettings` (an `AutoArchiveSettings`). **Scope:** these defaults only ever apply to *new* subscriptions (add / OPML import / browse-preview activation, via `SubscriptionStore`); editing them **never** changes the Auto Archive settings of podcasts already subscribed — those keep their own per-podcast values (§10.4). There is no bulk "apply to all" action. The initial value matches the historical hardcoded defaults (After Playing / 1 Week / Keep 1), so existing users see no behavioural change.
+
+**Footer note (shown in app):** "Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings. Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes."
 
 ---
 
@@ -1028,6 +1035,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | dismissedGettingStarted | false |
 | launchScreen | .player |
 | defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
+| defaultAutoArchiveSettings | AutoArchiveSettings.default (After Playing / 1 Week / keep 1) — global default seeded into new subscriptions only |
 
 ### `RefreshStats` / `FeedRefreshScheduling` defaults
 | Property | Default |
