@@ -211,6 +211,7 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 **Page structure (top to bottom):**
 - **Search shortcut** — a search-field-shaped button that opens the unchanged Podcast Search sheet
+- **Top Episodes hero** — the storefront's Top 8 *episodes* (not shows) as big paging cards at the very top of the page. The header's **See All** button pushes the **Top Episodes** page (`TopEpisodesView`) — an editorial Top-50 episode list where a large feature card appears every 7th entry (ranks 1/8/15/22/29/36/43) and the rest are compact ranked rows, each showing episode artwork (placeholder fallback), episode title, show name, and relative publish time ("4 hours ago"). Tapping resolves the parent podcast and opens Podcast Detail (§2.2). Data: the Marketing Tools `podcast-episodes.json` feed (limit 50), release dates enriched per parent podcast via the iTunes Lookup API, cached per country.
 - **Top Podcasts hero** — the storefront's Top 8 as big sideways-paging cards (purple gradient, oversized ghosted rank numeral, artwork, rank pill, title/artist/genre)
 - **Genre rails** — horizontally scrolling Top-15 shelves for Comedy, News, True Crime, Society & Culture, Business, Sports, Health & Fitness, Technology, Science, and TV & Film; a rail that fails to load is simply omitted
 - **Country spotlight heroes** — two additional "Top Podcasts · <Country>" hero carousels (identical design to the top hero) woven into the rails: spotlight A appears between Sports and Health & Fitness, spotlight B at the very end. They show fixed storefronts — A = United States (or UK if the user's country is already US); B = United Kingdom (or Australia if the user's country is UK, and also Australia when A has taken UK, i.e. a US user). `DiscoverViewModel.spotlightCountries(selected:)` resolves the pair so neither duplicates the user's country or each other. Each spotlight loads independently (omitted on failure, never blocking the page) and resolves taps against *its own* storefront so the show opens reliably.
@@ -238,6 +239,11 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 - `allowsFullSwipe: false` on both edges — full swipe is disabled intentionally to prevent accidental actions.
 
 **Pin badges:** Episodes with a Play Next or Play Last override show a pin badge above the duration — blue for Play Next, orange for Play Last.
+
+**Action animations:** Each swipe action is animated with a matched haptic (`.sensoryFeedback`) and the list reorders fluidly (a no-bounce `.smooth` spring keyed to the queue's episode order):
+- **Play Next / Play Last** — a light impact haptic; the row pops gently and flashes a directional badge at its leading edge (blue ↑ "to top" / orange ↓ "to bottom"), then the row visibly glides to its new top/bottom slot. The reorder is deferred until the swipe row finishes closing, so a neighbouring episode never appears to jump over the one being moved.
+- **Archive** — a success haptic; the row slides toward the trailing edge while shrinking and fading as a purple archive-box badge fades in, then the archive commits and the gap closes behind it.
+- **Unpin** — a light impact haptic; the row glides back to its natural priority slot.
 
 ---
 

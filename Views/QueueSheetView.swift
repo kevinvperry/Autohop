@@ -6,16 +6,35 @@ import SwiftUI
 // Chrome (NavRules): centered title, SheetCloseButton ✕ top-right, pull-to-
 // refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
 // leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
-// Play Next (blue) / Play Last (orange) overrides. Row offset/opacity state
-// animates removals. Rows use 44 pt CachedArtworkImage thumbnails, matching the
-// Priority/Downloads/Stats cache variant for reuse during repeated queue opens.
+// Play Next (blue) / Play Last (orange) overrides.
+// ACTION ANIMATIONS: the List carries `.animation(value: downloadedQueue.map(\.id))`
+// so any order/membership change glides rows to their new slots. performMove
+// (Play Next/Last) fires a light haptic, pops the row + flashes a directional
+// arrow badge (blue up / orange down) at the leading edge, then commits the
+// reorder so the row visibly travels to the top/bottom. performArchive fires a
+// success haptic, slides the row trailing while shrinking/fading it as an
+// archive-box badge fades in, then commits the archive so the gap closes.
+// performUnpin returns a row to its natural slot. Per-row transient state lives
+// in rowOffsets(CGSize)/rowOpacities/rowScales/archivingIDs/moveIndicators;
+// move/archiveHapticTrigger drive .sensoryFeedback. Rows use 44 pt
+// CachedArtworkImage thumbnails, matching the Priority/Downloads/Stats cache
+// variant for reuse during repeated queue opens.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var isRefreshing = false
     @State private var appearTime: Date?
-    @State private var rowOffsets: [UUID: CGFloat] = [:]
+    // Per-row transient transforms driving the action animations.
+    @State private var rowOffsets: [UUID: CGSize] = [:]
     @State private var rowOpacities: [UUID: Double] = [:]
+    @State private var rowScales: [UUID: CGFloat] = [:]
+    // Rows currently playing the archive "file into a box" animation.
+    @State private var archivingIDs: Set<UUID> = []
+    // Transient directional cue shown while a row moves to the top/bottom.
+    @State private var moveIndicators: [UUID: RowMoveDirection] = [:]
+    // Bumped to fire the matching haptic via .sensoryFeedback.
+    @State private var moveHapticTrigger = 0
+    @State private var archiveHapticTrigger = 0
     @State private var expandedEpisodeID: UUID? = nil
 
     private let logger = AppLogger.shared
@@ -125,8 +144,22 @@ struct QueueSheetView: View {
                                     }
                                 }
                             }
-                            .offset(y: rowOffsets[episode.id] ?? 0)
+                            .scaleEffect(rowScales[episode.id] ?? 1)
+                            .offset(rowOffsets[episode.id] ?? .zero)
                             .opacity(rowOpacities[episode.id] ?? 1)
+                            // Action cues composite on top at full opacity even as the
+                            // row content fades (archive) — the move arrow rides at the
+                            // leading edge, the archive box at the trailing edge.
+                            .overlay(alignment: .leading) {
+                                if let dir = moveIndicators[episode.id] {
+                                    moveBadge(dir)
+                                }
+                            }
+                            .overlay(alignment: .trailing) {
+                                if archivingIDs.contains(episode.id) {
+                                    archiveBadge()
+                                }
+                            }
                             .contentShape(Rectangle())
                             .listRowBackground(isCurrent ? Color.purple.opacity(0.08) : Color.clear)
                             .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -139,8 +172,7 @@ struct QueueSheetView: View {
                                 .tint(.green)
 
                                 Button {
-                                    animateRow(id: episode.id, direction: .up)
-                                    appState.playEpisodeNext(episode)
+                                    performMove(episode, direction: .up)
                                 } label: {
                                     Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
                                 }
@@ -148,9 +180,7 @@ struct QueueSheetView: View {
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button {
-                                    Task {
-                                        await appState.archiveEpisodeAndPlayNext(episode)
-                                    }
+                                    performArchive(episode)
                                 } label: {
                                     Label("Archive", systemImage: "archivebox")
                                 }
@@ -158,8 +188,7 @@ struct QueueSheetView: View {
 
                                 if pinnedNext || pinnedLast {
                                     Button {
-                                        animateRow(id: episode.id, direction: .down)
-                                        appState.unpinEpisode(episode)
+                                        performUnpin(episode)
                                     } label: {
                                         Label("Unpin", systemImage: "pin.slash.fill")
                                     }
@@ -167,8 +196,7 @@ struct QueueSheetView: View {
                                 }
 
                                 Button {
-                                    animateRow(id: episode.id, direction: .down)
-                                    appState.playEpisodeLast(episode)
+                                    performMove(episode, direction: .down)
                                 } label: {
                                     Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
                                 }
@@ -178,6 +206,12 @@ struct QueueSheetView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    // Animate structural changes (row moves to top/bottom, archive
+                    // gap-close) whenever the queue order/membership changes. `.smooth`
+                    // is a no-bounce spring tuned for fluid position changes.
+                    .animation(.smooth(duration: 0.45), value: appState.downloadedQueue.map(\.id))
+                    .sensoryFeedback(.impact(weight: .light), trigger: moveHapticTrigger)
+                    .sensoryFeedback(.success, trigger: archiveHapticTrigger)
                 }
             }
             .navigationTitle("Queue")
@@ -246,26 +280,96 @@ struct QueueSheetView: View {
         return date.formatted(date: .abbreviated, time: .omitted)
     }
 
-    private enum RowMoveDirection { case up, down }
+    private enum RowMoveDirection: Equatable { case up, down }
 
-    private func animateRow(id: UUID, direction: RowMoveDirection) {
-        let targetOffset: CGFloat = direction == .up ? -10 : 10
-        rowOffsets[id] = 0
-        rowOpacities[id] = 1
-        withAnimation(.easeIn(duration: 0.18)) {
-            rowOffsets[id] = targetOffset
-            rowOpacities[id] = 0.5
+    // MARK: - Action animations
+
+    /// Play Next / Play Last. Fires a light haptic, pops + flashes a directional
+    /// arrow on the row, then commits the reorder — the List's `.animation(value:)`
+    /// glides the row to its new top/bottom slot.
+    private func performMove(_ episode: Episode, direction: RowMoveDirection) {
+        let id = episode.id
+        moveHapticTrigger += 1
+        // Immediate feedback as the swipe closes: gentle lift + directional cue.
+        withAnimation(.smooth(duration: 0.2)) {
+            moveIndicators[id] = direction
+            rowScales[id] = 1.03
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
-                rowOffsets[id] = 0
-                rowOpacities[id] = 1
+        // Defer the actual reorder until the swipe-action row has finished closing.
+        // Committing while the row is still offset made the List reshuffle the
+        // neighbours before this row settled — so an adjacent episode appeared to
+        // jump over it. With the swipe closed first, the List's .smooth
+        // value-animation glides this row cleanly from its resting position.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            switch direction {
+            case .up:   appState.playEpisodeNext(episode)
+            case .down: appState.playEpisodeLast(episode)
             }
+            withAnimation(.smooth(duration: 0.4)) { rowScales[id] = 1.0 }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+            withAnimation(.easeOut(duration: 0.25)) { moveIndicators[id] = nil }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
+            rowScales.removeValue(forKey: id)
+        }
+    }
+
+    /// Archive. Fires a success haptic, slides the row toward the trailing edge
+    /// while shrinking + fading it as an archive box fades in, then commits the
+    /// archive — the List's `.animation(value:)` closes the gap behind it.
+    private func performArchive(_ episode: Episode) {
+        let id = episode.id
+        archiveHapticTrigger += 1
+        withAnimation(.easeIn(duration: 0.3)) {
+            _ = archivingIDs.insert(id)
+            rowOffsets[id] = CGSize(width: 60, height: 0)
+            rowScales[id] = 0.8
+            rowOpacities[id] = 0.0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+            Task { await appState.archiveEpisodeAndPlayNext(episode) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            archivingIDs.remove(id)
             rowOffsets.removeValue(forKey: id)
+            rowScales.removeValue(forKey: id)
             rowOpacities.removeValue(forKey: id)
         }
+    }
+
+    /// Unpin. Removing the override returns the row to its natural priority slot;
+    /// the List's `.animation(value:)` glides it there. Light haptic for feedback.
+    private func performUnpin(_ episode: Episode) {
+        moveHapticTrigger += 1
+        appState.unpinEpisode(episode)
+    }
+
+    // MARK: - Action cue badges
+
+    @ViewBuilder
+    private func moveBadge(_ direction: RowMoveDirection) -> some View {
+        let isUp = direction == .up
+        Image(systemName: isUp ? "arrow.up.to.line" : "arrow.down.to.line")
+            .font(.system(size: 12, weight: .heavy))
+            .foregroundStyle(.white)
+            .padding(6)
+            .background(Circle().fill(isUp ? Color.blue : Color.orange))
+            .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            .padding(.leading, 2)
+            .transition(.scale.combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private func archiveBadge() -> some View {
+        Image(systemName: "archivebox.fill")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(10)
+            .background(Circle().fill(Color.purple))
+            .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+            .padding(.trailing, 8)
+            .transition(.scale.combined(with: .opacity))
     }
 
     private func sentenceParagraphs(_ text: String) -> String {

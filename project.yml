@@ -72,6 +72,8 @@ targets:
           - README.md
           - "**/*.md"
           - ".build/**"
+          - ".git/**"                        # git internals — never bundle as app resources
+                                             # (branch/tag/log basenames can collide → "duplicate output file")
           - "SmokeTests/**"                  # contains main.swift
           - "OPMLSmokeTests/**"              # contains main.swift
           - "SubscriptionStoreSmokeTests/**" # contains main.swift

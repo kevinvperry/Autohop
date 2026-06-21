@@ -48,6 +48,7 @@ struct DiscoverView: View {
     private enum Route: Hashable {
         case preview(PodcastSearchResult)
         case episodes(UUID)
+        case topEpisodes
     }
 
     /// Ordered Discover feed item: a genre rail or one of the two country
@@ -143,6 +144,8 @@ struct DiscoverView: View {
                 PodcastDetailView(result: result)
             case .episodes(let subscriptionID):
                 PodcastDetailView(subscriptionID: subscriptionID)
+            case .topEpisodes:
+                TopEpisodesView(viewModel: viewModel, country: country)
             }
         }
         .miniPlayerBar()
@@ -311,9 +314,24 @@ struct DiscoverView: View {
 
     private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.title3.weight(.bold))
-                .padding(.horizontal, 20)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                Spacer()
+                Button {
+                    pendingRoute = .topEpisodes
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("See All")
+                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .foregroundStyle(.purple)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
 
             TabView(selection: index) {
                 ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, episode in

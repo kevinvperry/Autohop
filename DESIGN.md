@@ -94,6 +94,9 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Chart-DataDownloaded` | Stats Data Downloaded card: cyan total + mini-stats + cyan bar chart of download volume over time |
 | `ListRow-TopShow` | Stats top-shows row: rank · 44pt artwork · title + relative purple bar · duration |
 | `Card-ShowStatsExpanded` | Stats inline per-show detail card: tap a Top Shows / Drifting row to toggle; 2-column stat-tile grid in a nested `white.opacity(0.05)` card |
+| `Card-TopEpisodeFeature` | Top Episodes page large feature card (`Views/TopEpisodesView.swift`): full-width purple→black gradient, oversized ghosted rank numeral top-trailing, 140pt artwork + `#rank` capsule, title (2 lines), show, relative time. One every 7th rank (1/8/15/22/29/36/43) |
+| `ListRow-TopEpisode` | Top Episodes page compact row: rank numeral · 84pt artwork · episode title (2 lines) + show + relative publish time |
+| `QueueAction-Animation` | Queue swipe-action animations + haptics (see Swipe Actions — Episode Rows section) |
 
 ---
 
@@ -513,6 +516,29 @@ HStack(spacing: 12) {
 }
 .contentShape(Rectangle())
 ```
+
+---
+
+## Top Episodes Page — Feature Card & Compact Row
+
+**Labels: `Card-TopEpisodeFeature`, `ListRow-TopEpisode`** (`Views/TopEpisodesView.swift`)
+
+The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets).
+
+**Feature card (`Card-TopEpisodeFeature`)** — mirrors the Discover episode-hero card, sized as a static full-width tile:
+- 232 pt tall, `cornerRadius 22`, `white.opacity(0.08)` hairline stroke
+- Purple→black diagonal gradient background (`Color(red:0.20,green:0.08,blue:0.42).opacity(0.95)` → `black.opacity(0.85)`)
+- Oversized ghosted rank numeral (220 pt, `white.opacity(0.07)`) pinned top-trailing, `allowsHitTesting(false)`
+- Bottom-aligned `HStack`: **140 pt artwork** (`cornerRadius 18`) + a `VStack` of `#rank` capsule · title (`title3.bold`, 2 lines) · show (`subheadline`, secondary) · relative publish time (`caption`, tertiary)
+- Extra separation: 24 pt top padding (4 pt for rank 1) + 14 pt bottom, so heroes stand apart from the rows
+- Resolving tap shows `resolvingOverlay`; `.disabled` while any episode resolves
+
+**Compact row (`ListRow-TopEpisode`)** — `HStack(spacing: 14)`, 8 pt vertical padding:
+- Rank numeral — 28 pt fixed width, `system(16, .bold, .rounded)`, secondary
+- **84 pt artwork** (`cornerRadius 13`), `ArtworkPlaceholder` fallback
+- `VStack`: episode title (`subheadline.semibold`, 2 lines) · show (`caption`, secondary) · relative publish time (`caption2`, tertiary)
+
+Both use the relative time label (`relativeReleasedLabel`, "4 hours ago"). Tapping resolves the parent podcast's feed and pushes `PodcastDetailView` (same routing rule as Discover — active sub → episodes, else preview).
 
 ---
 
@@ -1083,6 +1109,11 @@ Four swipe actions used on episode rows. Full-swipe is disabled on both edges. A
 ### Conditional visibility — Subscription page only
 - The currently playing episode shows **no swipe actions** on either edge.
 - Archive is replaced by Unarchive when the episode is already `.archived` or `.played`.
+
+**Queue action animations (`QueueAction-Animation`, Queue page only).** The Queue list carries `.animation(value: downloadedQueue.map(\.id))` so order/membership changes glide rows to their new slots. On top of that, each action adds a cue + a matched haptic (`.sensoryFeedback`):
+- **Play Next / Play Last** — light impact haptic; the row pops (scale 1.05) and flashes a directional badge at the leading edge (`arrow.up.to.line` blue for top / `arrow.down.to.line` orange for bottom), then commits the reorder so the row visibly travels to the top/bottom.
+- **Archive** — success haptic; the row slides toward the trailing edge while shrinking + fading as an `archivebox.fill` badge (purple circle) fades in at the trailing edge, then the archive commits and the gap closes behind it.
+- **Unpin** — light impact haptic; the row glides back to its natural priority slot.
 
 ```swift
 // Queue page pattern

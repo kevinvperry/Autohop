@@ -485,6 +485,13 @@ final class DiscoverViewModel: ObservableObject {
     private let service = PodcastChartsService()
     private var loadedCountry: String?
 
+    // Top 50 episodes for the "See All" child page (Views/TopEpisodesView.swift).
+    // Loaded lazily/separately from the 8-item Discover hero so the main charts
+    // page stays fast; cached per country by the service.
+    @Published private(set) var top50Phase: Phase = .loading
+    @Published private(set) var top50Episodes: [ChartEpisode] = []
+    private var loaded50Country: String?
+
     /// Resolves the two fixed spotlight storefronts relative to the user's
     /// selected country so neither duplicates it or each other.
     /// Card A: US, falling back to UK when the user is in the US.
@@ -556,5 +563,26 @@ final class DiscoverViewModel: ObservableObject {
     /// Resolve a top-episode card to the parent podcast's search result.
     func resolveEpisodePodcast(_ episode: ChartEpisode, country: String) async -> PodcastSearchResult? {
         try? await service.resolveEpisodePodcastFeed(for: episode, country: country)
+    }
+
+    /// Loads the Top 50 episodes for the "See All" child page. No-op if already
+    /// loaded for this country; the service caches the underlying fetch.
+    func loadTop50(country: String) async {
+        if loaded50Country == country, !top50Episodes.isEmpty { return }
+        top50Phase = .loading
+        let eps = (try? await service.topEpisodes(country: country, limit: 50)) ?? []
+        guard !eps.isEmpty else {
+            top50Phase = .failed("Couldn't load top episodes. Check your connection and try again.")
+            return
+        }
+        loaded50Country = country
+        top50Episodes = eps
+        top50Phase = .loaded
+    }
+
+    /// Force-refresh the Top 50 list (pull-to-refresh on the child page).
+    func reloadTop50(country: String) async {
+        loaded50Country = nil
+        await loadTop50(country: country)
     }
 }
