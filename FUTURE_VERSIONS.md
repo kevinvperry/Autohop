@@ -25,6 +25,17 @@ see ONBOARDING_PLAN.md. This is the one deferred piece.)*
 
 ---
 
+## Stats
+
+- 💡 **"Year in Review" shareable card** — alongside the yearly Listening Recap (v1.2),
+  add a Wrapped-style share card (reuse the `EpisodeShareCardView` rendering pipeline)
+  summarising the year: total hours, time saved, #1 show, longest streak, a fun
+  "listening personality" stat from the hour buckets. High organic-marketing value;
+  deferred from the initial Listening Recaps feature (weekly/monthly/yearly opt-in
+  notifications + the Stats "last period" toggle ship first).
+
+---
+
 ## Polish
 
 - 💡 **iOS 18 Dark + Tinted icon variants** — a nice-to-have polish (the icon shows

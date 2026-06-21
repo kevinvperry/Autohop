@@ -239,6 +239,17 @@ struct RootView: View {
             FirstSubscribeCard(subscriptionID: context.id)
         }
         .task {
+            // Re-arm Listening Recap notifications from saved settings at launch
+            // (idempotent), so an opted-in user's recaps survive relaunch/reinstall
+            // even if they never reopen the Recaps screen.
+            let s = appState.settingsStore.appSettings
+            NotificationService.shared.scheduleRecaps(
+                weekly: s.recapWeeklyEnabled,
+                monthly: s.recapMonthlyEnabled,
+                yearly: s.recapYearlyEnabled
+            )
+        }
+        .task {
             // First-run routing (ONBOARDING_PLAN.md Phase 2). Decided while the
             // splash is still up so the Welcome cover (same purple background)
             // is already in place when the splash fades.

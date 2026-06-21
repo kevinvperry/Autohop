@@ -167,7 +167,10 @@ struct DiscoverView: View {
     private var chartsContent: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 48) {
+                // LazyVStack so the ~10 image-heavy genre rails + hero carousels
+                // build only as they scroll into view (was a plain VStack, which
+                // laid them all out eagerly and stuttered the vertical scroll).
+                LazyVStack(alignment: .leading, spacing: 48) {
                     VStack(alignment: .leading, spacing: 16) {
                         searchShortcut
                             .padding(.horizontal, 20)
@@ -599,7 +602,7 @@ struct DiscoverView: View {
                 .padding(.horizontal, 20)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
+                LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(rail.podcasts) { podcast in
                         railTile(podcast)
                     }

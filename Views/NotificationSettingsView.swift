@@ -16,6 +16,7 @@ struct NotificationSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var permissionDenied = false
+    @State private var showRecaps = false
 
     private var cardBackground: Color {
         if #available(iOS 26, *) { return .clear }
@@ -44,6 +45,7 @@ struct NotificationSettingsView: View {
                 permissionSection
             }
             masterSection
+            recapsSection
             podcastsSection
         }
         .listSectionSpacing(28)
@@ -61,6 +63,7 @@ struct NotificationSettingsView: View {
                 Task { await refreshPermissionStatus() }
             }
         }
+        .sheet(isPresented: $showRecaps) { RecapSettingsView() }
     }
 
     // MARK: - Sections
@@ -93,6 +96,28 @@ struct NotificationSettingsView: View {
             }
         } footer: {
             Text("The master switch for new-episode notifications. A podcast only notifies when this and its own toggle below are both on.")
+        }
+        .listRowBackground(cardBackground)
+    }
+
+    @ViewBuilder
+    private var recapsSection: some View {
+        Section {
+            Button {
+                showRecaps = true
+            } label: {
+                HStack {
+                    SettingsRowLabel(title: "Listening Recaps", systemImage: "chart.bar.doc.horizontal")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } footer: {
+            Text("Opt in to weekly, monthly, or yearly summaries of your listening.")
         }
         .listRowBackground(cardBackground)
     }
@@ -197,5 +222,125 @@ private struct NotificationPodcastRow: View {
                     .lineLimit(2)
             }
         }
+    }
+}
+
+// AI CONTEXT — RecapSettingsView ("Listening Recaps" sheet). Opt-in toggles for
+// the weekly / monthly / yearly stats-summary notifications (AppSettings.recap*
+// Enabled, all OFF by default). Presented as a sheet from the Stats page toolbar
+// and from Notification Settings. Each toggle change persists the flag, requests
+// notification permission on first opt-in (reusing NotificationService.request
+// Permission), and reconciles the schedule via NotificationService.scheduleRecaps
+// (idempotent recurring calendar notifications — see that method). onAppear also
+// reschedules to self-heal after a reinstall. Mechanism B: the notifications are
+// evergreen teasers; tapping one deep-links into the Stats "Last" view (Phase 3).
+struct RecapSettingsView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var permissionDenied = false
+
+    private var cardBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return Color.white.opacity(0.08)
+    }
+    private var formScrollBackground: Visibility {
+        if #available(iOS 26, *) { return .visible }
+        return .hidden
+    }
+    private var formPageBackground: Color {
+        if #available(iOS 26, *) { return .clear }
+        return .black
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if permissionDenied { permissionSection }
+
+                Section {
+                    Toggle(isOn: recapBinding(\.recapWeeklyEnabled)) {
+                        SettingsRowLabel(title: "Weekly recap", systemImage: "calendar")
+                    }
+                    Toggle(isOn: recapBinding(\.recapMonthlyEnabled)) {
+                        SettingsRowLabel(title: "Monthly recap", systemImage: "calendar.badge.clock")
+                    }
+                    Toggle(isOn: recapBinding(\.recapYearlyEnabled)) {
+                        SettingsRowLabel(title: "Yearly recap", systemImage: "sparkles")
+                    }
+                } header: {
+                    Text("Send me a recap")
+                } footer: {
+                    Text("Get a friendly summary of your listening when a week, month, or year wraps up — delivered around 9am. Tap a recap to open your stats for that period.\n\nCalculated on your device. Your listening never leaves your phone. All off by default.")
+                }
+                .listRowBackground(cardBackground)
+            }
+            .listSectionSpacing(28)
+            .scrollContentBackground(formScrollBackground)
+            .background(formPageBackground.ignoresSafeArea())
+            .tint(.purple)
+            .preferredColorScheme(.dark)
+            .navigationTitle("Listening Recaps")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    SheetCloseButton { dismiss() }
+                }
+            }
+            .task { await refreshPermissionStatus() }
+            .onAppear { reschedule() }   // self-heal (e.g. after a reinstall)
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await refreshPermissionStatus() } }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var permissionSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Notifications are turned off for Autohop in iOS Settings", systemImage: "bell.slash.fill")
+                    .font(.subheadline.weight(.semibold))
+                Button("Open iOS Settings") {
+                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+            .padding(.vertical, 4)
+        } footer: {
+            Text("Until notifications are allowed in iOS Settings, recaps won't be delivered.")
+        }
+        .listRowBackground(cardBackground)
+    }
+
+    private func recapBinding(_ keyPath: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { appState.settingsStore.appSettings[keyPath: keyPath] },
+            set: { newValue in
+                appState.settingsStore.appSettings[keyPath: keyPath] = newValue
+                if newValue {
+                    NotificationService.shared.requestPermission()
+                    Task { await refreshPermissionStatus() }
+                }
+                reschedule()
+            }
+        )
+    }
+
+    private func reschedule() {
+        let s = appState.settingsStore.appSettings
+        NotificationService.shared.scheduleRecaps(
+            weekly: s.recapWeeklyEnabled,
+            monthly: s.recapMonthlyEnabled,
+            yearly: s.recapYearlyEnabled
+        )
+    }
+
+    private func refreshPermissionStatus() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        await MainActor.run { permissionDenied = settings.authorizationStatus == .denied }
     }
 }

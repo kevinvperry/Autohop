@@ -246,6 +246,13 @@ public enum StatsPeriod: Equatable, Hashable {
     case currentMonth
     /// The current calendar year so far — Jan 1 00:00 up to now. Resets on Jan 1.
     case currentYear
+    /// The previous full calendar week (the Monday–Sunday before the current one).
+    /// Powers the Stats "Last" toggle and the weekly Listening Recap.
+    case previousWeek
+    /// The previous full calendar month.
+    case previousMonth
+    /// The previous full calendar year.
+    case previousYear
     case lifetime
 }
 
@@ -527,6 +534,18 @@ public final class ListeningStatsStore: ObservableObject {
             buckets = days(from: startOfCurrentMonth())
         case .currentYear:
             buckets = days(from: startOfCurrentYear())
+        case .previousWeek:
+            let thisWeek = startOfCurrentWeek()
+            let lastWeek = calendar.date(byAdding: .day, value: -7, to: thisWeek) ?? thisWeek
+            buckets = days(from: lastWeek, upTo: thisWeek)
+        case .previousMonth:
+            let thisMonth = startOfCurrentMonth()
+            let lastMonth = calendar.date(byAdding: .month, value: -1, to: thisMonth) ?? thisMonth
+            buckets = days(from: lastMonth, upTo: thisMonth)
+        case .previousYear:
+            let thisYear = startOfCurrentYear()
+            let lastYear = calendar.date(byAdding: .year, value: -1, to: thisYear) ?? thisYear
+            buckets = days(from: lastYear, upTo: thisYear)
         case .lifetime:
             buckets = allDayKeys().sorted().map { combinedDay($0) }
         }
@@ -586,6 +605,22 @@ public final class ListeningStatsStore: ObservableObject {
             let thisYear = startOfCurrentYear()
             guard let prevYear = calendar.date(byAdding: .year, value: -1, to: thisYear) else { return nil }
             accumulate(&totals, from: prevYear, upTo: thisYear)
+        case .previousWeek:
+            // "Last week" compares against the week before it.
+            let thisWeek = startOfCurrentWeek()
+            guard let lastWeek = calendar.date(byAdding: .day, value: -7, to: thisWeek),
+                  let weekBefore = calendar.date(byAdding: .day, value: -14, to: thisWeek) else { return nil }
+            accumulate(&totals, from: weekBefore, upTo: lastWeek)
+        case .previousMonth:
+            let thisMonth = startOfCurrentMonth()
+            guard let lastMonth = calendar.date(byAdding: .month, value: -1, to: thisMonth),
+                  let monthBefore = calendar.date(byAdding: .month, value: -2, to: thisMonth) else { return nil }
+            accumulate(&totals, from: monthBefore, upTo: lastMonth)
+        case .previousYear:
+            let thisYear = startOfCurrentYear()
+            guard let lastYear = calendar.date(byAdding: .year, value: -1, to: thisYear),
+                  let yearBefore = calendar.date(byAdding: .year, value: -2, to: thisYear) else { return nil }
+            accumulate(&totals, from: yearBefore, upTo: lastYear)
         }
         return totals
     }
@@ -724,6 +759,20 @@ public final class ListeningStatsStore: ObservableObject {
             guard let date = calendar.date(byAdding: .day, value: offset, to: first) else { return nil }
             return combinedDay(dayKey(for: date))
         }
+    }
+
+    /// Day buckets in the half-open range [start, end), oldest first. Used by the
+    /// previous-period summaries (a concluded week/month/year).
+    private func days(from start: Date, upTo end: Date) -> [DayStats] {
+        var result: [DayStats] = []
+        var cursor = calendar.startOfDay(for: start)
+        let stop = calendar.startOfDay(for: end)
+        while cursor < stop {
+            result.append(combinedDay(dayKey(for: cursor)))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+        return result
     }
 
     private func qualifies(_ date: Date) -> Bool {

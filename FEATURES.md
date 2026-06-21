@@ -10,6 +10,8 @@ implementation behaviour changes. Section 17 documents the shared artwork cache
 and lazy image-loading system: source-byte disk cache, downsampled memory
 variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
+Section 15.1 documents Release Radar's learned scheduling, foreground/background
+caps, deferred backlog draining, cancellation checkpoints, and diagnostic fields.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -595,11 +597,13 @@ The first three ranges are **calendar-anchored** and reset at the start of each 
 
 Each is near-empty at the start of its period and fills in as it progresses.
 
+**This / Last toggle.** Below the pill row, a distinct **solid segmented bar** (a purple sliding chip on a flat track — deliberately styled differently from the glass pills) switches the selected Week / Month / Year between the current period and the **previous concluded one**, with contextual labels inside it (**This Week / Last Week**, This Month / Last Month, This Year / Last Year). Selecting "Last" drives the whole page — hero numbers, heatmap (laying out the prior week/month grid), trend chart, clock, top shows (with rank-movement vs. the period before *that*), time-saved, and data-downloaded — from the concluded period (`StatsPeriod.previousWeek/.previousMonth/.previousYear`). The bar is **hidden entirely** when **Lifetime** is selected, or when **the previous period has no listening** (`store.summary(for: previous).wallClockSeconds == 0`), so an empty "Last" view is never offered. Per-show detail cards are upper-bounded so a concluded period doesn't bleed into the present, and the present-tense "Shows You're Drifting From" section is hidden in Last mode. This toggle is the in-app surface the weekly/monthly/yearly **Listening Recap** notifications will deep-link into (planned).
+
 1. **Hero card** — big "Time listened" number (purple; Lifetime adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
 2. **Listening Heatmap** (This Week and the current month) — GitHub-style grid, columns are Monday-aligned weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On the year and Lifetime views this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
 3. **Listening Clock** — 24-hour rose chart (Canvas): midnight at top, noon at bottom, each hour a wedge whose radius scales with listening in that hour. Caption shows the peak hour range.
 4. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous comparable period — the previous week, calendar month, or calendar year (teal ▲n, grey ▼n, or purple NEW; no badges on Lifetime, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; periods made up entirely of pre-tracking days fall back to apportioning the period total by listening share, labelled "est."), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Episode outcomes come from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period. Tap again to collapse.
-5. **Shows You're Drifting From** (This Week and the current month only) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes. A show qualifies via **either** path: **drift** — ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed); or **neglect** — a "ghost subscription" with **zero completions and ≥ 4 auto-archived unplayed episodes**, i.e. new episodes keep arriving and aging out of the episode limit while the user never once finishes one. The **completion count** (not the auto-archive rate) is what separates a ghost sub from healthy high-volume use, where the user finishes some episodes and lets the rest cycle — those stay out of the list, so a daily news feed you actually dip into is never flagged (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "Downloaded 7, never played" for a ghost sub, "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. Only real, active subscriptions appear: `StatsView` filters out shows the user has unsubscribed from **and** invisible browse/preview subscriptions (`browseDate != nil`, auto-created when previewing a podcast in search) — without the latter filter, a previewed-but-never-subscribed show could surface via the neglect path. The section is omitted entirely when nothing qualifies — no empty state. Not shown on the year / Lifetime views (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
+5. **Shows You're Drifting From** (This Week and the current month only, and only in **This** mode — hidden when the This/Last bar is on "Last", since it's a present-tense signal) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Each entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes. A show qualifies via **either** path: **drift** — ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed); or **neglect** — a "ghost subscription" with **zero completions and ≥ 4 auto-archived unplayed episodes**, i.e. new episodes keep arriving and aging out of the episode limit while the user never once finishes one. The **completion count** (not the auto-archive rate) is what separates a ghost sub from healthy high-volume use, where the user finishes some episodes and lets the rest cycle — those stay out of the list, so a daily news feed you actually dip into is never flagged (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "Downloaded 7, never played" for a ghost sub, "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. Only real, active subscriptions appear: `StatsView` filters out shows the user has unsubscribed from **and** invisible browse/preview subscriptions (`browseDate != nil`, auto-created when previewing a podcast in search) — without the latter filter, a previewed-but-never-subscribed show could surface via the neglect path. The section is omitted entirely when nothing qualifies — no empty state. Not shown on the year / Lifetime views (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
 6. **Time Saved By** — breakdown card (rows below) plus a purple Total row.
 7. **Data Downloaded** — a card showing the total data Autohop downloaded in the selected period (`ByteCountFormatter` `.file` style, e.g. "1.2 GB"), with a context line "N episodes · avg X each". Recorded per calendar day in `DayStats.bytesDownloaded` / `episodesDownloaded` (summed per period and cross-device sync-merged like the other stats), incremented from `AppState`'s download-success path using the actual on-disk file size. **Forward-only** — tracking began June 2026, so there is no backfill: only successful downloads count (re-downloads count again as real traffic; cancelled/failed/partial do not), and Lifetime accrues from this build onward.
 8. **Privacy footer** — "Your listening stats never leave this device."
@@ -656,6 +660,22 @@ Sum of all four time-saved categories, displayed in purple.
 
 **Sleep Schedule prompt notification:** Separate from new-episode alerts, `NotificationService` also posts the time-sensitive "Are you still listening?" lock-screen notification with its background "Still Listening" action button (see §8.1). This is generated locally on demand and is not gated by the per-podcast notification toggles.
 
+### 14.1 Listening Recaps (opt-in periodic summaries)
+
+A separate, opt-in family of notifications that summarise the user's listening when a period concludes. Three independent toggles (`AppSettings.recapWeeklyEnabled / recapMonthlyEnabled / recapYearlyEnabled`), **all off by default**, in a **Listening Recaps** sheet (`RecapSettingsView`) reachable from **two places**: the **bell button in the Stats page toolbar**, and a **Listening Recaps row in Notification Settings**.
+
+| Recap | Delivered | Covers |
+|---|---|---|
+| Weekly | Monday 09:00 | the prior Monday–Sunday week |
+| Monthly | 1st of the month 09:00 | the prior calendar month |
+| Yearly | Jan 1 09:00 | the year just gone |
+
+**Mechanism (B — teaser + in-app numbers).** Each recap is a **recurring local `UNCalendarNotificationTrigger`** scheduled by `NotificationService.scheduleRecaps(weekly:monthly:yearly:)` (idempotent — called on every toggle change, on `RecapSettingsView` appear, and at launch from `RootView` so they survive relaunch/reinstall). Because local notifications carry fixed content, the body is an **evergreen teaser** ("Your week in listening 📊 — Tap to see how you listened last week."); the real figures are shown **in-app** when the user taps it, which deep-links into the Stats **"Last"** view for that period (the tap-routing itself is a later phase — the notification's `userInfo` already carries the recap key). Delivery time is a fixed 09:00 local; recaps use normal priority (respect Focus/DND).
+
+**Opt-in & permission:** enabling any toggle requests notification permission via the same `requestPermission()` path as new-episode alerts; a denied-permission banner with an "Open iOS Settings" link is shown. All computed on-device — listening data never leaves the phone.
+
+> Known v1 trade-off: with pre-scheduled local notifications a recap still fires for a quiet period (it can't be cancelled at the boundary without background execution); the in-app recap wording handles a near-empty period gracefully. The Stats **"Last"** toggle already hides itself when a previous period has no data (see §12).
+
 ---
 
 ## 15. App Settings
@@ -683,7 +703,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
 | Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
 
-**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked regularly so random releases are not missed.
+**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked, but at a lower surveillance cadence so random releases are not missed without turning every quiet feed into a minute-by-minute poll.
 
 **Data captured from RSS:** Every feed refresh records per-episode release observations in `RefreshStats.releaseObservations` (capped at 200). Each observation stores the episode key, GUID, title, audio URL, RSS `publishedAt`, first/last seen times, whether it was new when first seen, and a publish-date quality marker (`missing`, `plausible`, `futureDated`, `implausiblyOld`). This history is stored on the subscription so schedule learning survives app launches and works even when the current RSS feed only exposes one item.
 
@@ -693,14 +713,14 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 
 | Profile | Meaning | Refresh behaviour |
 |---|---|---|
-| `learning` | Not enough reliable publish dates yet. | Check at the Radar sensitivity cadence to gather data. |
-| `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to regular first-seen surveillance because published times cannot be trusted. |
+| `learning` | Not enough reliable publish dates yet. | Check at the Radar sensitivity cadence briefly, then decay after repeated empty checks. |
+| `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to first-seen surveillance because published times cannot be trusted; recent real releases can temporarily tighten the cadence. |
 | `hourly` | Episodes arrive near-hourly around the same minute of the hour. | Open a short window around the learned minute and check on high rotation. |
 | `burst` | Multiple episodes repeatedly appear inside a short daily window, then the feed goes quiet. | Check before and through the burst; keep checking after the first episode because more may follow. |
 | `dailyWeekdays` | Episodes cluster around one time of day on business weekdays. | Check near the learned weekday time; stand down on weekends and after the expected episode arrives. |
 | `weekly` | Episodes repeatedly land on the same weekday around the same time. | Check near the learned weekly slot; stand down until the next expected week. |
 | `multiSlot` | Episodes recur on a small set of weekdays around a similar time. | Check near those learned slots. |
-| `random` | Reliable dates exist, but no stable hourly/burst/daily/weekly pattern emerges. | Check regularly because no safe quiet window is known. |
+| `random` | Reliable dates exist, but no stable hourly/burst/daily/weekly pattern emerges. | Use low-frequency surveillance, usually 15–60 minutes depending on recent activity and the Radar sensitivity setting. |
 
 **Due prediction:** `FeedRefreshScheduling` converts a profile into the next time a feed deserves a fetch. Learned profiles create explicit release windows:
 
@@ -712,11 +732,13 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | `weekly` | 20 minutes before the window. | Typical time - 10 minutes through typical time + 120 minutes. |
 | `multiSlot` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 60 minutes. |
 
-If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence until 12 hours late, then to a 30 minute–2 hour cadence. This prevents one late episode from being missed while still avoiding indefinite high-frequency polling.
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence until 12 hours late, then to a 30 minute–2 hour cadence. Missed-release urgency expires after 6 post-window empty checks or 6 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. This prevents one late episode from being missed while avoiding indefinite high-frequency polling.
 
 **One-item hourly feeds:** Feeds that publish hourly but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, the feed can be profiled as `hourly` and checked around the learned minute instead of every hour all day. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
-**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly and burst feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. This matters most for background refresh, where only up to 8 feeds are attempted per cycle.
+**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly and burst feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed.
+
+**Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
 
 **HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
 
@@ -725,12 +747,12 @@ If the expected episode has not appeared by the end of its learned window, the f
 | Trigger | Behaviour |
 |---|---|
 | Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. |
-| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due. No fixed cap. |
-| Background refresh | Uses the same due/prediction/priority pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early, because completing early can let iOS suspend the app mid-request. |
+| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. |
+| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. |
 
 **Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
 
-**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, state counts, and the top candidates. Each selected feed's `feed.refreshAll.itemStart` line includes refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, and recheck interval. These logs are the primary tuning surface for Release Radar.
+**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. These logs are the primary tuning surface for Release Radar.
 
 **Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
@@ -1045,7 +1067,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
 | defaultAutoArchiveSettings | AutoArchiveSettings.default (After Playing / 1 Week / keep 1) — global default seeded into new subscriptions only |
 
-### `RefreshStats` / `FeedRefreshScheduling` defaults
+### `RefreshStats` / `FeedRefreshScheduling` / refresh-cycle defaults
 | Property | Default |
 |---|---|
 | maxRecentPublishDates | 10 |
@@ -1056,6 +1078,11 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | defaultPublishInterval | 6 hours |
 | maxRecheckInterval | 24 hours |
 | windowOpenFraction | 0.75 |
+| missedReleaseEmptyFetchLimit | 6 empty post-window checks |
+| missedReleaseMaxUrgencyAge | 6 hours |
+| foregroundRefreshFeedLimit | 12 due feeds |
+| backgroundRefreshFeedLimit | 8 due feeds |
+| refreshDeferralMaxScoreBoost | 40 points |
 
 ### `Subscription.init` defaults
 | Property | Default |

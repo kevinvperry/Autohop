@@ -192,6 +192,65 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         schedule(content, identifier: "new-episode-\(UUID().uuidString)")
     }
 
+    // MARK: - Listening Recaps (opt-in periodic stats summaries)
+
+    /// userInfo key carrying which recap a tapped notification belongs to, so the
+    /// delegate can deep-link into the matching Stats "Last" period (Phase 3).
+    static let recapUserInfoKey = "autohopRecap"
+
+    private static let recapWeeklyID = "recap.weekly"
+    private static let recapMonthlyID = "recap.monthly"
+    private static let recapYearlyID = "recap.yearly"
+
+    /// Reconciles the three recap notifications against the user's opt-in flags.
+    /// Idempotent — safe to call on every toggle change and at launch. Each recap
+    /// is a recurring local calendar notification delivered at 9am (Mechanism B):
+    /// the body is an evergreen teaser; the real numbers are shown in-app when the
+    /// user taps it (it deep-links into the Stats "Last" view).
+    func scheduleRecaps(weekly: Bool, monthly: Bool, yearly: Bool) {
+        // Weekly — Monday 09:00 (Gregorian weekday 2 = Monday), for the prior week.
+        reconcileRecap(
+            id: Self.recapWeeklyID, enabled: weekly, recapKey: "weekly",
+            components: DateComponents(hour: 9, minute: 0, weekday: 2),
+            title: "Your week in listening 📊",
+            body: "Tap to see how you listened last week."
+        )
+        // Monthly — the 1st at 09:00, for the prior month.
+        reconcileRecap(
+            id: Self.recapMonthlyID, enabled: monthly, recapKey: "monthly",
+            components: DateComponents(day: 1, hour: 9, minute: 0),
+            title: "Your month in listening 📊",
+            body: "Tap to see your month in podcasts."
+        )
+        // Yearly — Jan 1 at 09:00, for the year just gone.
+        reconcileRecap(
+            id: Self.recapYearlyID, enabled: yearly, recapKey: "yearly",
+            components: DateComponents(month: 1, day: 1, hour: 9, minute: 0),
+            title: "Your year in listening 🎧",
+            body: "Tap to see your year in podcasts."
+        )
+    }
+
+    private func reconcileRecap(
+        id: String, enabled: Bool, recapKey: String,
+        components: DateComponents, title: String, body: String
+    ) {
+        let center = UNUserNotificationCenter.current()
+        // Always clear first so a toggle-off removes it and a toggle-on never
+        // stacks duplicates.
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        guard enabled else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = [Self.recapUserInfoKey: recapKey]
+
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+    }
+
     // MARK: - Private
 
     private func schedule(_ content: UNMutableNotificationContent, identifier: String) {

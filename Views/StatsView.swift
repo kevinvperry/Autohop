@@ -4,6 +4,14 @@ import Charts
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
 // FEATURES.md §12). Period selector — This Week / current month / current year /
 // Lifetime — drives every section, all data from ListeningStatsStore.summary().
+// A "This / Last" toggle (StatsRangeSelector, bound to `showingLast`) switches
+// week/month/year to the previous concluded period (StatsPeriod.previous*); it's
+// disabled for Lifetime. `isLast = showingLast && range.supportsLast`. Last mode
+// re-labels the pills (Last Week / May / 2025), bounds the per-show history detail
+// with sinceDate(last:)/untilDate(last:), and hides the present-tense "Drifting
+// From" section. Everything else is summary-driven so it follows automatically.
+// This toggle is the in-app surface the weekly/monthly/yearly Listening Recap
+// notifications will deep-link into (Phase 2/3).
 // All but Lifetime are calendar-anchored and reset at the start of each period:
 // This Week = Monday 00:00 → now (Monday-first, locale-independent); the month
 // pill (dynamic label, e.g. "June") = 1st → now; the year pill ("2026") = Jan 1
@@ -47,13 +55,39 @@ private enum StatsRange: CaseIterable, Identifiable {
         }
     }
 
-    /// Pill label. Month and year are dynamic (e.g. "June", "2026").
-    var title: String {
+    /// Whether the This/Last toggle applies (everything except Lifetime).
+    var supportsLast: Bool {
         switch self {
-        case .thisWeek:  return "This Week"
-        case .thisMonth: return Date().formatted(.dateTime.month(.wide))
-        case .thisYear:  return Date().formatted(.dateTime.year())
-        case .lifetime:  return "Lifetime"
+        case .thisWeek, .thisMonth, .thisYear: return true
+        case .lifetime:                        return false
+        }
+    }
+
+    /// Contextual labels for the This/Last bar. Nil for Lifetime (no bar).
+    var thisLastLabels: (this: String, last: String)? {
+        switch self {
+        case .thisWeek:  return ("This Week", "Last Week")
+        case .thisMonth: return ("This Month", "Last Month")
+        case .thisYear:  return ("This Year", "Last Year")
+        case .lifetime:  return nil
+        }
+    }
+
+    /// Pill label, reflecting the current This/Last selection. Month and year are
+    /// dynamic — current ("June" / "2026") or previous ("May" / "2025") in Last mode.
+    func title(last: Bool) -> String {
+        let calendar = Calendar.current
+        switch self {
+        case .thisWeek:
+            return last ? "Last Week" : "This Week"
+        case .thisMonth:
+            let date = last ? (calendar.date(byAdding: .month, value: -1, to: Date()) ?? Date()) : Date()
+            return date.formatted(.dateTime.month(.wide))
+        case .thisYear:
+            let date = last ? (calendar.date(byAdding: .year, value: -1, to: Date()) ?? Date()) : Date()
+            return date.formatted(.dateTime.year())
+        case .lifetime:
+            return "Lifetime"
         }
     }
 
@@ -67,11 +101,11 @@ private enum StatsRange: CaseIterable, Identifiable {
         }
     }
 
-    var period: StatsPeriod {
+    func period(last: Bool) -> StatsPeriod {
         switch self {
-        case .thisWeek:  return .currentWeek
-        case .thisMonth: return .currentMonth
-        case .thisYear:  return .currentYear
+        case .thisWeek:  return last ? .previousWeek  : .currentWeek
+        case .thisMonth: return last ? .previousMonth : .currentMonth
+        case .thisYear:  return last ? .previousYear  : .currentYear
         case .lifetime:  return .lifetime
         }
     }
@@ -84,23 +118,47 @@ private enum StatsRange: CaseIterable, Identifiable {
         }
     }
 
-    /// Start-of-day cutoff for history-based per-show stats. Nil for Lifetime.
-    var sinceDate: Date? {
+    /// Inclusive start-of-day cutoff for history-based per-show stats. In Last mode
+    /// this is the start of the *previous* period. Nil for Lifetime.
+    func sinceDate(last: Bool) -> Date? {
         let calendar = Calendar.current
         switch self {
         case .lifetime:
             return nil
         case .thisWeek:
-            // Monday 00:00 of the current week (Monday treated as first day).
-            let startOfDay = calendar.startOfDay(for: Date())
-            let weekday = calendar.component(.weekday, from: startOfDay)
-            let daysSinceMonday = (weekday - 2 + 7) % 7
-            return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay)
+            let start = Self.startOfWeek(for: Date(), calendar: calendar)
+            return last ? calendar.date(byAdding: .day, value: -7, to: start) : start
         case .thisMonth:
-            return calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+            let start = calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+                ?? calendar.startOfDay(for: Date())
+            return last ? calendar.date(byAdding: .month, value: -1, to: start) : start
         case .thisYear:
-            return calendar.date(from: calendar.dateComponents([.year], from: Date()))
+            let start = calendar.date(from: calendar.dateComponents([.year], from: Date()))
+                ?? calendar.startOfDay(for: Date())
+            return last ? calendar.date(byAdding: .year, value: -1, to: start) : start
         }
+    }
+
+    /// Exclusive upper bound for history-based per-show stats — only set in Last
+    /// mode, where it's the start of the *current* period (so a concluded period
+    /// doesn't bleed into the present).
+    func untilDate(last: Bool) -> Date? {
+        guard last else { return nil }
+        let calendar = Calendar.current
+        switch self {
+        case .lifetime:  return nil
+        case .thisWeek:  return Self.startOfWeek(for: Date(), calendar: calendar)
+        case .thisMonth: return calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))
+        case .thisYear:  return calendar.date(from: calendar.dateComponents([.year], from: Date()))
+        }
+    }
+
+    /// Monday 00:00 of the week containing `date` (Monday-first, locale-independent).
+    static func startOfWeek(for date: Date, calendar: Calendar) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: startOfDay)
+        let daysSinceMonday = (weekday - 2 + 7) % 7
+        return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay) ?? startOfDay
     }
 }
 
@@ -109,6 +167,10 @@ private struct StatsContentView: View {
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
     @State private var range: StatsRange = .thisMonth
+    /// This/Last toggle — when true, show the previous concluded period. Ignored
+    /// for Lifetime (see `isLast`). Deep-linked from the Listening Recap notifications.
+    @State private var showingLast = false
+    @State private var showRecaps = false
     @State private var driftShowToUnsubscribe: ShowEngagement?
     @State private var showDriftUnsubscribeConfirm = false
     /// Subscription UUID string of the Top Shows row expanded into a detail card.
@@ -118,8 +180,15 @@ private struct StatsContentView: View {
     /// Comma-joined subscription UUIDs the user muted from the drifting list.
     @AppStorage("stats.hiddenDriftShowIDs") private var hiddenDriftShowIDsRaw: String = ""
 
+    /// Whether the previous period has any listening to show.
+    private var hasLastData: Bool {
+        range.supportsLast && store.summary(for: range.period(last: true)).wallClockSeconds > 0
+    }
+    /// Effective Last state — only when supported AND there's data for it.
+    private var isLast: Bool { showingLast && hasLastData }
+
     var body: some View {
-        let summary = store.summary(for: range.period)
+        let summary = store.summary(for: range.period(last: isLast))
 
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
@@ -147,6 +216,17 @@ private struct StatsContentView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Stats")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showRecaps = true
+                } label: {
+                    Image(systemName: "bell.badge")
+                }
+                .accessibilityLabel("Listening Recaps")
+            }
+        }
+        .sheet(isPresented: $showRecaps) { RecapSettingsView() }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
         .confirmationDialog(
@@ -168,7 +248,7 @@ private struct StatsContentView: View {
     // MARK: - Range selector
 
     private var rangeSelector: some View {
-        StatsRangeSelector(range: $range)
+        StatsRangeSelector(range: $range, showingLast: $showingLast, canShowLast: hasLastData)
     }
 
     // MARK: - Hero card
@@ -381,7 +461,7 @@ private struct StatsContentView: View {
                 Spacer()
                 if totalShows > shows.count {
                     NavigationLink {
-                        TopShowsListView(store: store, historyStore: historyStore, range: range)
+                        TopShowsListView(store: store, historyStore: historyStore, range: range, showingLast: isLast)
                     } label: {
                         HStack(spacing: 3) {
                             Text("Show All")
@@ -419,7 +499,8 @@ private struct StatsContentView: View {
                                     subscriptionID: show.id,
                                     entries: historyStore.entries,
                                     summary: summary,
-                                    since: range.sinceDate
+                                    since: range.sinceDate(last: isLast),
+                                    until: range.untilDate(last: isLast)
                                 ),
                                 settingsSubscriptionID: nil
                             )
@@ -447,7 +528,9 @@ private struct StatsContentView: View {
     /// silently truncates longer ranges, and a year-old struggle isn't actionable.
     @ViewBuilder
     private func driftingShowsSection(_ summary: ListeningStatsSummary) -> some View {
-        if range.usesHeatmap, let since = range.sinceDate {
+        // Present-tense signal ("shows you're drifting from") — only meaningful for
+        // the current period, so it's hidden in Last mode.
+        if !isLast, range.usesHeatmap, let since = range.sinceDate(last: false) {
             // Only real, active subscriptions qualify. Unsubscribed shows are
             // excluded (drift from a show you already left is resolved), and so are
             // invisible browse/preview subscriptions (browseDate != nil) auto-created
@@ -475,7 +558,8 @@ private struct StatsContentView: View {
                                         subscriptionID: show.subscriptionID.uuidString,
                                         entries: historyStore.entries,
                                         summary: summary,
-                                        since: since
+                                        since: since,
+                                        until: nil
                                     ),
                                     settingsSubscriptionID: show.subscriptionID
                                 )
@@ -789,37 +873,84 @@ private struct StatsContentView: View {
 
 private struct StatsRangeSelector: View {
     @Binding var range: StatsRange
+    @Binding var showingLast: Bool
+    /// Whether the previous period actually has data to show. The This/Last bar
+    /// is hidden entirely when false (or on Lifetime), so we never offer an
+    /// empty "Last" view.
+    var canShowLast: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(StatsRange.allCases) { item in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { range = item }
-                } label: {
-                    let pill = Text(item.title)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(range == item ? Color.white : Color.secondary)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 7)
-
-                    // iOS glass; purple-tinted on the selected range.
-                    if #available(iOS 26, *) {
-                        if range == item {
-                            pill.glassEffect(.regular.tint(.purple), in: Capsule())
-                        } else {
-                            pill.glassEffect(in: Capsule())
-                        }
-                    } else {
-                        pill.background(
-                            range == item ? Color.purple : Color.white.opacity(0.08),
-                            in: Capsule()
-                        )
-                    }
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                ForEach(StatsRange.allCases) { item in
+                    pill(item)
                 }
-                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity)
+
+            // Distinct solid segmented bar (deliberately unlike the glass pills),
+            // shown only when there's a previous period worth viewing.
+            if range.supportsLast, canShowLast, let labels = range.thisLastLabels {
+                thisLastBar(labels)
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func pill(_ item: StatsRange) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { range = item }
+        } label: {
+            // Pills always show the current-period label; the bar carries This/Last.
+            let pill = Text(item.title(last: false))
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(range == item ? Color.white : Color.secondary)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 7)
+
+            // iOS glass; purple-tinted on the selected range.
+            if #available(iOS 26, *) {
+                if range == item {
+                    pill.glassEffect(.regular.tint(.purple), in: Capsule())
+                } else {
+                    pill.glassEffect(in: Capsule())
+                }
+            } else {
+                pill.background(
+                    range == item ? Color.purple : Color.white.opacity(0.08),
+                    in: Capsule()
+                )
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Solid two-segment bar — a sliding purple chip on a flat track. Content-width
+    /// (narrow) and centered, visually separate from the glass period pills above.
+    private func thisLastBar(_ labels: (this: String, last: String)) -> some View {
+        HStack(spacing: 0) {
+            barSegment(labels.this, active: !showingLast) { showingLast = false }
+            barSegment(labels.last, active: showingLast)  { showingLast = true }
+        }
+        .padding(3)
+        .background(Color.white.opacity(0.10), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+        .fixedSize()
+    }
+
+    private func barSegment(_ title: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { action() }
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(active ? Color.white : Color.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(active ? Color.purple : Color.clear, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -925,12 +1056,14 @@ private struct ShowPeriodDetail {
         subscriptionID: String,
         entries: [ListeningHistoryEntry],
         summary: ListeningStatsSummary,
-        since: Date?
+        since: Date?,
+        until: Date? = nil
     ) {
         var percents: [Double] = []
         var releaseDelays: [TimeInterval] = []
         for entry in entries where entry.subscriptionID.uuidString == subscriptionID {
             if let since, entry.lastListenedAt < since { continue }
+            if let until, entry.lastListenedAt >= until { continue }
             episodesTouched += 1
             lastListenedAt = max(lastListenedAt ?? .distantPast, entry.lastListenedAt)
             if let percent = entry.completionPercent {
@@ -1127,17 +1260,23 @@ private struct TopShowsListView: View {
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
     @State var range: StatsRange
+    @State var showingLast: Bool
     @State private var expandedShowID: String?
 
+    private var hasLastData: Bool {
+        range.supportsLast && store.summary(for: range.period(last: true)).wallClockSeconds > 0
+    }
+    private var isLast: Bool { showingLast && hasLastData }
+
     var body: some View {
-        let summary = store.summary(for: range.period)
+        let summary = store.summary(for: range.period(last: isLast))
         let shows = summary.topShows(titles: store.showTitles, limit: 50)
         let maxSeconds = shows.first?.seconds ?? 0
         let movements = rankMovements(currentShows: shows)
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                StatsRangeSelector(range: $range)
+                StatsRangeSelector(range: $range, showingLast: $showingLast, canShowLast: hasLastData)
 
                 if shows.isEmpty || maxSeconds == 0 {
                     Text("No listening in this period yet")
@@ -1170,7 +1309,8 @@ private struct TopShowsListView: View {
                                         subscriptionID: show.id,
                                         entries: historyStore.entries,
                                         summary: summary,
-                                        since: range.sinceDate
+                                        since: range.sinceDate(last: isLast),
+                                        until: range.untilDate(last: isLast)
                                     ),
                                     settingsSubscriptionID: nil
                                 )
@@ -1207,7 +1347,7 @@ private struct TopShowsListView: View {
     private func rankMovements(
         currentShows: [(id: String, title: String, seconds: TimeInterval)]
     ) -> [String: RankMovement]? {
-        guard let previousSeconds = store.previousPeriodShowSeconds(for: range.period) else { return nil }
+        guard let previousSeconds = store.previousPeriodShowSeconds(for: range.period(last: isLast)) else { return nil }
 
         // Rank across all shows from the previous window, not just its top 50,
         // so a show climbing from #60 reads as a rise rather than NEW.

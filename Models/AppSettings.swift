@@ -62,6 +62,12 @@ struct AppSettings: Equatable, Codable {
     // Cross-device iCloud sync (CloudKit). Opt-in, OFF by default so the
     // on-device privacy stance holds until the user explicitly enables it.
     var iCloudSyncEnabled: Bool
+    // Listening Recaps: opt-in periodic stats-summary notifications (Mechanism B —
+    // a teaser notification that deep-links into the Stats "Last" view). All OFF by
+    // default; scheduled/cancelled via NotificationService.scheduleRecaps.
+    var recapWeeklyEnabled: Bool
+    var recapMonthlyEnabled: Bool
+    var recapYearlyEnabled: Bool
     // First-run onboarding state (see ONBOARDING_PLAN.md). All default false.
     var hasCompletedWelcome: Bool
     var hasSubscribedFirstShow: Bool
@@ -105,6 +111,9 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated: false,
         autoArchiveSettingsMigrated: false,
         iCloudSyncEnabled: false,
+        recapWeeklyEnabled: false,
+        recapMonthlyEnabled: false,
+        recapYearlyEnabled: false,
         hasCompletedWelcome: false,
         hasSubscribedFirstShow: false,
         hasPlayedFirstEpisode: false,
@@ -139,6 +148,9 @@ struct AppSettings: Equatable, Codable {
         case playbackSpeed160Migrated
         case autoArchiveSettingsMigrated
         case iCloudSyncEnabled
+        case recapWeeklyEnabled
+        case recapMonthlyEnabled
+        case recapYearlyEnabled
         case hasCompletedWelcome
         case hasSubscribedFirstShow
         case hasPlayedFirstEpisode
@@ -173,6 +185,9 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated: Bool,
         autoArchiveSettingsMigrated: Bool,
         iCloudSyncEnabled: Bool,
+        recapWeeklyEnabled: Bool,
+        recapMonthlyEnabled: Bool,
+        recapYearlyEnabled: Bool,
         hasCompletedWelcome: Bool,
         hasSubscribedFirstShow: Bool,
         hasPlayedFirstEpisode: Bool,
@@ -205,6 +220,9 @@ struct AppSettings: Equatable, Codable {
         self.playbackSpeed160Migrated = playbackSpeed160Migrated
         self.autoArchiveSettingsMigrated = autoArchiveSettingsMigrated
         self.iCloudSyncEnabled = iCloudSyncEnabled
+        self.recapWeeklyEnabled = recapWeeklyEnabled
+        self.recapMonthlyEnabled = recapMonthlyEnabled
+        self.recapYearlyEnabled = recapYearlyEnabled
         self.hasCompletedWelcome = hasCompletedWelcome
         self.hasSubscribedFirstShow = hasSubscribedFirstShow
         self.hasPlayedFirstEpisode = hasPlayedFirstEpisode
@@ -240,6 +258,9 @@ struct AppSettings: Equatable, Codable {
         playbackSpeed160Migrated = try container.decodeIfPresent(Bool.self, forKey: .playbackSpeed160Migrated) ?? Self.default.playbackSpeed160Migrated
         autoArchiveSettingsMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveSettingsMigrated) ?? Self.default.autoArchiveSettingsMigrated
         iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? Self.default.iCloudSyncEnabled
+        recapWeeklyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapWeeklyEnabled) ?? Self.default.recapWeeklyEnabled
+        recapMonthlyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapMonthlyEnabled) ?? Self.default.recapMonthlyEnabled
+        recapYearlyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapYearlyEnabled) ?? Self.default.recapYearlyEnabled
         hasCompletedWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedWelcome) ?? Self.default.hasCompletedWelcome
         hasSubscribedFirstShow = try container.decodeIfPresent(Bool.self, forKey: .hasSubscribedFirstShow) ?? Self.default.hasSubscribedFirstShow
         hasPlayedFirstEpisode = try container.decodeIfPresent(Bool.self, forKey: .hasPlayedFirstEpisode) ?? Self.default.hasPlayedFirstEpisode

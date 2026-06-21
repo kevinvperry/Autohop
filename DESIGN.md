@@ -88,6 +88,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `MetaGrid-EpisodePage` | Two-column MetaCard-Details grid: Published · Duration · File Size · Classification · File Status · Priority Rank |
 | `Toolbar-EpisodePage` | Episode page toolbar: Return to Player leading only, empty nav title |
 | `Selector-PeriodPills` | Stats page period selector: glass capsule pill row, purple-tinted glass selected / plain glass unselected |
+| `Selector-ThisLast` | Stats This/Last bar (`StatsView.swift`): a **solid** two-segment capsule — flat `white.opacity(0.10)` track + 3pt inset, purple sliding chip on the active side — deliberately *unlike* the glass `Selector-PeriodPills`. Content-width (narrow), centered, contextual labels ("This Week / Last Week"). Hidden on Lifetime or when the previous period has no data |
 | `Card-StatsHero` | Stats hero card: big purple time-listened number + three stat columns (time saved teal) |
 | `Chart-Heatmap` | GitHub-style listening heatmap (30/90d) or Swift Charts monthly bars (1y/lifetime) |
 | `Chart-ListeningClock` | 24-hour rose chart in Canvas — wedge radius scales with listening per hour |
