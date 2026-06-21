@@ -405,7 +405,7 @@ struct DiscoverView: View {
                             .lineLimit(1)
 
                         if let date = episode.releaseDate {
-                            Text(relativeReleasedLabel(date))
+                            Text(relativePublishedLabel(date))
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)

@@ -209,12 +209,29 @@ extension View {
 // Shared by the "Published" and "Released Time" meta cards on the Player Details
 // panel and the Episode Detail page, so both grids stay in sync.
 
-/// Named day for recent episodes, abbreviated date otherwise: "Today" / "Yesterday" / "12 Jun".
+/// Tiered relative publish label used across every episode list for consistency:
+/// "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" / an
+/// abbreviated exact date for anything older (year shown only when it isn't the
+/// current year, e.g. "12 Jun" / "28 Dec 2024").
 func relativePublishedLabel(_ date: Date) -> String {
+    let now = Date()
+    let elapsed = now.timeIntervalSince(date)
     let calendar = Calendar.current
-    if calendar.isDateInToday(date) { return "Today" }
+
+    if elapsed < 60 { return "Just now" }
+    if elapsed < 3600 {
+        let mins = Int(elapsed / 60)
+        return "\(mins) min\(mins == 1 ? "" : "s") ago"
+    }
+    if elapsed < 86_400 {
+        let hours = Int(elapsed / 3600)
+        return "\(hours) hour\(hours == 1 ? "" : "s") ago"
+    }
     if calendar.isDateInYesterday(date) { return "Yesterday" }
-    return date.formatted(date: .abbreviated, time: .omitted)
+    let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+    return sameYear
+        ? date.formatted(.dateTime.day().month(.abbreviated))
+        : date.formatted(.dateTime.day().month(.abbreviated).year())
 }
 
 /// Elapsed time since publish: "10 minutes ago", "1 hour ago", "2 days ago", "8 months ago".

@@ -10,7 +10,7 @@ import SwiftUI
 // (rank - 1) % 7 == 0) and the rest render as compact ranked rows, so big
 // artwork breaks up the scroll. Each entry shows episode artwork (CachedArtworkImage,
 // placeholder when absent — Apple supplies one image per chart episode), episode
-// title, show name, and a relative publish label (relativeReleasedLabel, e.g.
+// title, show name, and a relative publish label (relativePublishedLabel, e.g.
 // "4 hours ago"). Tapping resolves the parent podcast's feed (reusing
 // viewModel.resolveEpisodePodcast) and pushes PodcastDetailView on the ambient
 // stack via pendingRoute — same routing rule as Discover (active sub → episodes,
@@ -152,7 +152,7 @@ struct TopEpisodesView: View {
                             .lineLimit(1)
 
                         if let date = episode.releaseDate {
-                            Text(relativeReleasedLabel(date))
+                            Text(relativePublishedLabel(date))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
@@ -207,7 +207,7 @@ struct TopEpisodesView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if let date = episode.releaseDate {
-                        Text(relativeReleasedLabel(date))
+                        Text(relativePublishedLabel(date))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)

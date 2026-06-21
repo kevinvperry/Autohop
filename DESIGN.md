@@ -2034,7 +2034,7 @@ A two-column `LazyVGrid` of key/value **glass** cards shown at the bottom of the
 - **Key** — `size 10, weight .bold`, `.textCase(.uppercase)`, `.tracking(0.5)`, `Color(white: 0.33)`
 - **Value** — `size 13, weight .bold`, white, `lineLimit(2)`
 
-Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. **Published** uses `relativePublishedLabel` ("Today" / "Yesterday" / abbreviated date) and **Released** uses `relativeReleasedLabel` (elapsed-since-publish, e.g. "2 days ago") — both shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
+Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. **Published** uses `relativePublishedLabel` — the **shared tiered relative-date formatter** used across every episode list for consistency: "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" / an abbreviated exact date for anything older ("12 Jun", with year only when not the current year). **Released** uses `relativeReleasedLabel` (always-elapsed, e.g. "2 days ago" / "8 months ago"). Both are shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
 
 ```swift
 @ViewBuilder
@@ -2278,7 +2278,7 @@ Fields shown (when available):
 
 | Field | Source | Always shown |
 |---|---|---|
-| Published | `relativePublishedLabel(ep.publishedAt)` — "Today" / "Yesterday" / abbreviated date | Only when non-nil |
+| Published | `relativePublishedLabel(ep.publishedAt)` — shared tiered relative date ("Just now" / "15 mins ago" / "2 hours ago" / "Yesterday" / abbreviated date) | Only when non-nil |
 | Released | `relativeReleasedLabel(ep.publishedAt)` — elapsed since publish, e.g. "2 days ago" | Only when non-nil |
 | Duration | `ep.durationSeconds`, formatted `"Xh Ym"` / `"Ym"` | Only when non-nil |
 | File Size | `ep.fileSizeBytes`, formatted `"X MB"` / `"X.X GB"` | Only when non-nil |

@@ -40,6 +40,7 @@ struct SleepScheduleView: View {
             }
         }
         .listSectionSpacing(28)
+        .tint(.purple)
         .onAppear { appState.requestTip(.sleepSchedule) }
         .navigationTitle("Sleep Schedule")
         .navigationBarTitleDisplayMode(.inline)
