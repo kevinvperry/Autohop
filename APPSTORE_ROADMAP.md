@@ -2,8 +2,10 @@
 
 **Status legend:** ✅ done · 🔄 in progress · ⬜ not started · 🧍 needs you (Apple account / device / asset / decision)
 **Owner:** **[Me]** = doable in-repo by the assistant · **[You]** = requires your Apple account, hardware, or a manual store action.
-**Last updated:** 2026-06-14
-**STATUS: SUBMITTED — v1.0 (build 1) "Waiting for Review" as of 2026-06-14. Apple ID 6777946512. Awaiting review outcome (24–48h).**
+**Last updated:** 2026-06-20
+**STATUS: v1.0 (build 1) APPROVED & LIVE 2026-06-17 (apps.apple.com/au/app/autohop/id6777946512). Now preparing v1.1 (build 2) — a large feature update (iCloud Sync, Release Radar, iOS 26 Liquid Glass redesign, OPML import/export, first-run onboarding) plus a full App Store SEO/ASO overhaul (see Appendix 1). `project.yml` bumped to 1.1/2 (2026-06-20).**
+
+> **v1.1 submission steps:** ✅ **Step 0 — version bump (1.1/build 2) + `xcodegen generate`** done & verified in pbxproj (2026-06-21). · ✅ **Step 1 — CloudKit schema live in Production** (`iCloud.com.kevinperry.autohop`): EpisodeState, SubscriptionState, HistoryEntry, DayStats all present in Production; no pending deploy (verified 2026-06-21) · ✅ **Step 2 — build 1.1 (2) archived, validated & uploaded** to ASC (Processing in TestFlight, 2026-06-21 8:49 AM) · ✅ **Step 3 — ASC metadata/ASO done**: name `Autohop: Podcast Player`, subtitle `Auto-queue, sync & sleep`, promo text, What's New, updated description, and per-storefront keyword fields for English (U.S./U.K./Australia) (2026-06-21) · ✅ **Step 4 — screenshots updated** (6.9" refreshed for Liquid Glass + new iCloud Sync shot, across US/UK/AU localizations) (2026-06-21) · ✅ **Step 5 — build 1.1 (2) attached, review notes pasted (incl. CloudKit paragraph), App Privacy confirmed "Data Not Collected"** (2026-06-21) · ✅ **Step 6 — SUBMITTED, "Waiting for Review"** (manual release chosen) (2026-06-21). **ALL STEPS COMPLETE.** Remaining: click "Release This Version" once Apple approves. ✅ listing copy, What's New, review notes drafted in-repo (Appendices 1–4).
 
 > **v1 scope decision: iPhone only.** `TARGETED_DEVICE_FAMILY = 1`. iPad layout/screenshots are out of scope for v1.
 
@@ -100,17 +102,50 @@
 
 ---
 
-## Appendix 1 — App Store listing copy (draft)
+## Appendix 1 — App Store listing copy (v1.1)
 
-**App name:** Autohop
+> **ASO rationale (2026-06-20).** v1.0 shipped with the store name as the bare
+> coined word "Autohop" — the single highest-weighted search field carried zero
+> generic terms, so the app only ranked for people who already knew its name.
+> v1.1 moves real search terms into the high-weight **Name** and **Subtitle**
+> and frees the low-weight keyword field of duplicates. Apple auto-combines words
+> across fields and handles plurals, so e.g. Name "Podcast Player" + keyword
+> "trim" ranks for "podcast trim silence". The home-screen icon label is unchanged
+> ("Autohop"); only the App Store Connect listing name changes.
+>
+> **Multiply keyword space (🧍 You):** add **English (UK)** and **English (Australia)**
+> localizations in App Store Connect, each with its own 100-char keyword field
+> (e.g. swap in `streaming,subscriptions,smart speaker,audiobook,carplay`).
 
-**Subtitle (≤30):** `Priority-queue podcast player`
+**App name (≤30):** `Autohop: Podcast Player` *(23)*
+
+**Subtitle (≤30):** `Auto-queue, sync & sleep` *(24)*
 
 **Promotional text (≤170):**
-`Set your show priorities once and listen for hours, hands-free. New: a nightly Sleep Schedule that checks if you're still awake, and one-tap Shared Listening for the car.`
+`New in 1.1: iCloud Sync keeps your subscriptions, queue, and progress in step across your devices — plus a refreshed iOS 26 interface, OPML import, and a guided setup.`
 
-**Keywords (≤100, comma-separated, no spaces):**
-`podcast,player,queue,priority,trim silence,vocal boost,sleep timer,download,offline,chapters`
+**Keywords (≤100, comma-separated, no spaces, no words already in name/subtitle):**
+`trim,silence,vocal,boost,offline,download,chapters,episodes,playlist,commute,driving,rss,opml,radio`
+
+**What's New in This Version (≤4000):**
+```
+iCLOUD SYNC
+Your subscriptions, priority order, queue, listening history, and playback position now stay in sync across your devices through your private iCloud — no account, no sign-up. Pick up on one device exactly where you left off on another.
+
+A REFRESHED INTERFACE
+A redesigned, iOS 26 "Liquid Glass" look across Discover, the player, sheets, and Settings — easier to read and lighter on the eyes.
+
+SMARTER NEW-EPISODE DETECTION
+An improved Release Radar learns each show's publishing rhythm and catches new episodes within minutes of release.
+
+OPML IMPORT & EXPORT
+Bring your subscriptions in from any other podcast app — and take them with you — via standard OPML.
+
+A GUIDED START
+A new first-run experience helps you subscribe, set priorities, and get listening in minutes.
+
+Plus dozens of performance and reliability refinements under the hood.
+```
 
 **Description:**
 ```
@@ -118,6 +153,9 @@ Autohop is the podcast player for people who are serious about listening. Set yo
 
 PRIORITY STACK
 Rank your podcasts once by drag-and-drop. Autohop always plays your highest-priority show's ready episodes first, then moves down the list. Finish an episode mid-commute and the next one starts on its own.
+
+ACROSS YOUR DEVICES
+iCloud Sync keeps your subscriptions, priority order, queue, history, and playback position matched across your iPhones — privately, through your own iCloud account. No login, no server, nothing to set up beyond a single switch.
 
 SLEEP SCHEDULE (an Autohop exclusive)
 A sleep timer that runs itself, every night. Set your bedtime hours once; Autohop checks in with a soft chime — "still listening?" Tap any control to keep going, even a "Still Listening" button right on your lock screen. Drift off and playback gently fades out and rewinds to the last thing you heard.
@@ -136,10 +174,11 @@ BUILT TO STAY AHEAD
 - Per-podcast auto-archive keeps storage tidy automatically.
 - Chapter support with automatic skipping of chapters you've disabled.
 - Audio and video podcasts, with full-screen landscape video.
+- OPML import and export — move your subscriptions in from, or out to, any other app.
 - A private, on-device Stats page: listening heatmap, 24-hour clock, top shows, streaks, and exactly how much time Autohop has saved you.
 
 PRIVATE BY DESIGN
-No account. No analytics. No third-party SDKs. Everything Autohop stores stays on your device.
+No account. No analytics. No third-party SDKs. Everything Autohop stores stays on your device — and iCloud Sync uses only your own private iCloud, which Autohop's developer can never see.
 
 Autohop is open source under the MIT License, with two audio-engine files used under the Mozilla Public License 2.0 (derived from Pocket Casts for iOS).
 ```
@@ -166,8 +205,11 @@ NSAllowsArbitraryLoads is enabled because podcast feeds, episode audio/video enc
 TIME SENSITIVE NOTIFICATIONS
 The optional "Sleep Schedule" feature posts a local, time-sensitive notification ("Are you still listening?") with a "Still Listening" action so a user can confirm from the lock screen without unlocking. It is generated entirely on-device; APNs is not used.
 
+ICLOUD SYNC (new in 1.1)
+Autohop can sync a user's subscriptions, priority order, queue, listening history, stats, and playback position across their own devices using CloudKit and the user's PRIVATE iCloud database (CKSyncEngine). No Autohop-operated server is involved and the developer cannot access this data; it is the user's own iCloud. Sync is optional. No account or login is added — it uses the device's existing iCloud account.
+
 PRIVACY
-Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only. See the privacy manifest and https://kevmarl.com/autohop/privacy.
+Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only, and — when the user enables iCloud Sync — in their own private iCloud (CloudKit private database), never on any developer server. See the privacy manifest and https://kevmarl.com/autohop/privacy.
 
 HOW TO TEST SLEEP SCHEDULE QUICKLY
 Menu (☰) → Sleep Schedule → enable, set the active-hours window to cover the current time, set "Ask Every" to the shortest interval, then play any downloaded episode and wait for the prompt.
@@ -178,17 +220,24 @@ Two audio files (SilenceDetector.swift, PlaybackEngine.swift) are derived from P
 
 ---
 
-## Appendix 3 — Screenshot shot list (iPhone 6.9" + 6.7")
+## Appendix 3 — Screenshot shot list (iPhone 6.9" + 6.7") — v1.1
 
-1. **Player — Now Playing** (artwork, scrubber, controls) — the hero shot.
-2. **Priority Stack** (Subscriptions home, a few ranked shows).
-3. **Queue** with a swipe action revealed (Play Next / Archive).
-4. **Audio Controls** sheet (speed / Trim Silence / Vocal Boost) — ideally with Shared Listening on.
-5. **Sleep Schedule** page (the exclusive — show the active hours + Ask Every).
-6. **Stats** (heatmap + hero numbers).
-7. **Discover** (Top-8 hero + a genre rail).
+> **⚠️ Re-capture for v1.1.** The live screenshots predate the iOS 26 "Liquid Glass"
+> redesign and the iCloud Sync feature. At minimum re-shoot **Discover** and the
+> **player/sheets** (their UI has changed) and **add the iCloud Sync shot** — it is
+> the strongest new tentpole and "sync" is now a primary search/subtitle term.
 
-Tip: add a one-line caption overlay per shot leading with the benefit. Keep ordering benefit-first (Player, Priority, Sleep Schedule rank highest).
+Shots, with a benefit-first caption overlay on each (lead with the benefit, not the feature name):
+
+1. **Player — Now Playing** (new Liquid Glass look) — *"Set your priorities once. Listen for hours."*
+2. **Priority Stack** (Subscriptions home, ranked shows) — *"Your shows, in your order — automatically."*
+3. **iCloud Sync** (Settings sync toggle, or a "synced across devices" framing) — *"Pick up where you left off, on any iPhone."* ← NEW for 1.1
+4. **Sleep Schedule** (active hours + Ask Every) — *"A sleep timer that runs itself, every night."*
+5. **Audio Controls** sheet (speed / Trim Silence / Vocal Boost, Shared Listening on) — *"Tuned per show — trim silence, boost voices."*
+6. **Discover** (redesigned Top-8 hero + genre rail) — *"Find your next favourite podcast."*
+7. **Stats** (heatmap + hero numbers) — *"See exactly how much time Autohop saves you."*
+
+Ordering is benefit-first: Player → Priority → iCloud Sync → Sleep Schedule rank highest (first 3 shots carry most of the conversion weight in the search-results thumbnail strip).
 
 ---
 

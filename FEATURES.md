@@ -813,6 +813,8 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 | Display | Description |
 |---|---|
 | Downloaded episodes | Count of all episodes currently downloaded to the device, across every subscription. To free storage, archive episodes manually or tighten the Episode Limit rule in per-podcast Auto Archive settings. |
+| Total size | On-disk size of all downloaded media (computed by summing file sizes under `Autohop/Downloads`, shown via `ByteCountFormatter`). Loaded asynchronously on a background task so it never blocks the Storage section appearing. |
+| Manage Downloads | Navigates to the Downloads page. |
 
 ---
 

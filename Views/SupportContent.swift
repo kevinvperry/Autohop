@@ -90,7 +90,7 @@ enum SupportGuide {
     static let sections: [SupportSection] = [
         gettingStarted, priorityStack, queue, player, audioControls, chapters,
         downloads, podcastSettings, sleepTimer, sleepSchedule, video,
-        notifications, opml, listeningHistory, stats, appSettings,
+        notifications, opml, iCloudSync, listeningHistory, stats, appSettings,
     ]
 
     // MARK: Getting Started
@@ -419,6 +419,34 @@ enum SupportGuide {
         ]
     )
 
+    // MARK: iCloud Sync
+
+    private static let iCloudSync = SupportSection(
+        id: "icloud-sync", icon: "icloud", title: "iCloud Sync",
+        summary: "Keep your listening in step across your devices",
+        blocks: [
+            .paragraph("iCloud Sync keeps your podcasts and your place in them matched across all the iPhones signed into the same iCloud account. Start an episode on one device and pick it up on another, right where you left off."),
+            .paragraph("It's **off by default**. Autohop is private to your device until you choose to turn it on."),
+            .heading("Turning it on"),
+            .steps([
+                "Go to **Settings → Sync**.",
+                "Turn on **iCloud Sync**.",
+                "Do the same on your other devices, signed into the same iCloud account.",
+            ]),
+            .heading("What syncs"),
+            .bullets([
+                "Your subscriptions, and the order you ranked them in",
+                "Each podcast's own settings (speed, Trim Silence, Vocal Boost, skips, auto-archive rules)",
+                "Played, paused and archived state, and your exact position in each episode",
+                "Your listening history and your stats",
+            ]),
+            .heading("What stays on each device"),
+            .paragraph("**Downloaded episode files** are not synced — each device downloads its own copies, so sync never uses your mobile data to move audio around. A few device-specific app settings (like which screen Autohop opens to, and Radar sensitivity) also stay on each device."),
+            .callout(.note, "**Private by design:** Sync uses your own **private iCloud** (Apple's CloudKit). Your listening is stored in your personal iCloud account — Autohop has no server and the developer can never see your data. There's no separate account to create and no login beyond the iCloud you already use."),
+            .callout(.tip, "**Two devices at once?** If the same episode is playing in two places, the device you're actively listening on wins, so your position never jumps backwards. For everything else, the most recent change is the one that's kept."),
+        ]
+    )
+
     // MARK: Listening History
 
     private static let listeningHistory = SupportSection(
@@ -489,6 +517,7 @@ enum SupportGuide {
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [
                 ["Run Auto Archive Now", "Manually trigger the auto-archive pass across all podcasts. Checks every subscription against its per-podcast Auto Archive rules. Runs automatically at most every 30 minutes."],
+                ["Played / Inactive / Episode Limit defaults", "The auto-archive rules given to every new podcast you subscribe to. Changing them never touches podcasts you've already added — each show keeps its own rules. See Per-Podcast Settings for what each rule does."],
             ]),
             .heading("Downloading"),
             .table(headers: nil, rows: [
@@ -512,8 +541,12 @@ enum SupportGuide {
                 ["Import OPML", "Import subscriptions from another podcast app. See the OPML Import & Export section."],
                 ["Export OPML", "Export your subscription list as an OPML file for backup or migration."],
             ]),
+            .heading("Default Playback"),
+            .paragraph("Sets the speed, Vocal Boost, Trim Silence, and start/end skip given to every **new** subscription, and used to play feeds you're only previewing. Changing these never affects podcasts you've already subscribed to — adjust those from each podcast's own settings."),
+            .heading("Sync"),
+            .paragraph("Turn on **iCloud Sync** to keep your listening in step across your devices. Off by default. See the iCloud Sync section for the full picture."),
             .heading("Storage"),
-            .paragraph("Shows the count of currently downloaded episodes. To free storage, archive episodes in the Queue or adjust the Episode Limit in your per-podcast auto-archive settings."),
+            .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes in the Queue or adjust the Episode Limit in your per-podcast auto-archive settings."),
             .heading("About"),
             .paragraph("Shows the app version number and a link to Open Source Acknowledgements."),
             .callout(.tip, "**Having an issue?** Get in touch from the Contact page at kevmarl.com — include your iOS version and a description of what happened."),
