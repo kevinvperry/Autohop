@@ -22,6 +22,11 @@ import SwiftUI
 // at card scale instead of retaining full-resolution storefront art in memory.
 // FIRST-RUN: while the user has no real subscriptions (appState.realSubscriptionCount
 // == 0) a starterPacksBanner sits above the rails and presents StarterPacksView.
+// TOP EPISODES: the Top Episodes hero header has a "See All" button that pushes
+// TopEpisodesView (the Top-50 child page) via AppRoute-style pendingRoute.
+// PERF: the feed is a LazyVStack and each genre rail a LazyHStack, so the ~10
+// image-heavy rails + hero carousels build only as they scroll into view
+// (was a plain VStack/HStack, which laid everything out eagerly and stuttered).
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

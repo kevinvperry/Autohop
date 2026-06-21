@@ -23,6 +23,9 @@ import SwiftUI
 // onboardingToast overlay, plus the FirstSubscribeCard .sheet (keyed by
 // FirstSubscribeContext on the .autohopFirstSubscription notification). handleWelcome
 // records hasCompletedWelcome and routes per the user's Welcome choice.
+// LISTENING RECAPS: a launch .task re-arms the opt-in recap notifications from
+// saved settings (NotificationService.scheduleRecaps, idempotent) so they
+// survive relaunch/reinstall even if the user never reopens the Recaps screen.
 enum AppRoute: Hashable {
     case podcasts
     case sleepSchedule

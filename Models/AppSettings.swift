@@ -27,6 +27,8 @@ enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
 // the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag
 // once shipped or the migration will re-run. Defaults here must stay in sync
 // with the FEATURES.md "Model Defaults Quick Reference" appendix.
+// recapWeekly/Monthly/YearlyEnabled (all default false) are the opt-in Listening
+// Recap toggles, scheduled via NotificationService.scheduleRecaps (see §14.1).
 // The hasCompletedWelcome / hasSubscribedFirstShow / hasPlayedFirstEpisode /
 // hasSeenDownloadFirstNote / dismissedGettingStarted flags drive the first-run
 // onboarding experience (see ONBOARDING_PLAN.md) — all default false so a fresh

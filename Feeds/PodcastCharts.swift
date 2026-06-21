@@ -10,6 +10,9 @@ import Foundation
 // which is the bridge into the existing browse-subscription flow.
 // Responses are cached to Caches/discover-charts with a 12 h TTL (2 h for
 // episodes) so Discover opens instantly and survives offline.
+// DiscoverViewModel also exposes loadTop50/top50Episodes (top episodes, limit 50,
+// release-date enriched) for the "See All" Top Episodes child page
+// (Views/TopEpisodesView.swift) — loaded lazily so the main Discover page stays fast.
 // Consumed by DiscoverViewModel.
 
 // MARK: - Models

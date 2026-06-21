@@ -22,9 +22,17 @@ import UserNotifications
 //
 // PERMISSION TIMING: configure() (delegate + categories) runs at launch but does
 // NOT prompt. Authorization is requested via requestPermission() only from
-// user-triggered opt-ins — the notification toggles (NotificationSettingsView)
-// and enabling Sleep Schedule (SleepScheduleView). This avoids an unprompted
-// launch-time permission dialog and improves opt-in rates.
+// user-triggered opt-ins — the notification toggles (NotificationSettingsView),
+// enabling Sleep Schedule (SleepScheduleView), and enabling a Listening Recap
+// (RecapSettingsView). This avoids an unprompted launch-time permission dialog.
+//
+// LISTENING RECAPS: scheduleRecaps(weekly:monthly:yearly:) reconciles three
+// opt-in recurring local calendar notifications (Mon 9am / 1st 9am / Jan 1 9am)
+// against AppSettings.recap*Enabled — idempotent (remove-then-add), called on
+// toggle change, on RecapSettingsView appear, and at launch from RootView. The
+// body is an evergreen teaser; the real figures are shown in-app on tap (the
+// userInfo recapUserInfoKey carries which period, for a later deep-link into the
+// Stats "Last" view). Mechanism B — see FEATURES.md §14.1.
 //
 // Artwork thumbnails for new-episode notifications use ArtworkImageCache.sourceData
 // rather than a separate URLSession download, so notification art shares the same

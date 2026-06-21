@@ -10,6 +10,12 @@ import Foundation
 // 30 s during playback and force-flushed on pause/background (AutohopApp).
 // Legacy lifetime totals from playback-stats.json are imported once as
 // `legacyBaseline` so pre-daily-bucketing history isn't lost.
+// PERIODS: summary(for: StatsPeriod) aggregates a window; StatsPeriod includes
+// the current calendar week/month/year, .lifetime, AND the previous concluded
+// week/month/year (.previousWeek/.previousMonth/.previousYear) — the latter
+// power the Stats "This/Last" toggle and the Listening Recap notifications,
+// computed via the bounded days(from:upTo:) helper. previousPeriodShowSeconds
+// handles the new cases too (a "Last" view compares against the period before it).
 // QUERY API (used by StatsView): summary(for: .last(days:)/.lifetime),
 // lifetime (legacy PlaybackStats shape), currentStreakDays/longestStreakDays
 // (a day counts at ≥ 60 s), previousPeriodShowSeconds (rank-movement badges).

@@ -9,6 +9,8 @@ import UserNotifications
 // notification permission is denied, a banner with a deep link to the app's
 // system settings page is shown. Notifications fire only when BOTH the master
 // toggle and a podcast's toggle are on (gated in AppState.notifyNewEpisodeIfAllowed).
+// A "Listening Recaps" row presents RecapSettingsView (also at the bottom of this
+// file) as a sheet — the opt-in weekly/monthly/yearly stats-summary notifications.
 // Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
 // downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
