@@ -6,8 +6,8 @@ import GRDB
 // sync work (see SYNC_DESIGN.md). Replaces the single subscriptions.json blob
 // with one row per subscription and one row per episode, written incrementally
 // inside a single transaction. This is a like-for-like backend swap:
-// SubscriptionStore keeps its identical @Published [Subscription] facade and
-// public API; only persistence moved here.
+// SubscriptionStore keeps its identical [Subscription] facade and public API;
+// only persistence moved here.
 //
 // WRITE PATH (`persist(current:previous:)` → `write(_:previous:into:)`): diffs
 // against the prior snapshot so only genuinely-changed rows touch disk
@@ -22,9 +22,12 @@ import GRDB
 // that counts payload encodes so the diff can be asserted. `replaceAll` (one-time
 // JSON import) passes `previous: nil` so every episode is treated as new.
 //
-// Also hosts the field-level sync-state projections (steps 2-4): per-episode and
-// per-subscription rows with a JSON payload + indexed `hasPendingChanges` + a
-// cached CKRecord `systemFields` blob, maintained centrally from `persist`.
+// Also hosts the field-level sync-state projections: per-episode,
+// per-subscription, history, and stats rows with JSON payloads + indexed pending
+// flags + cached CKRecord `systemFields` blobs, maintained centrally from
+// `persist`. Migration v7 scopes episode sync rows by
+// `subscriptionID|guid:<guid>` so identical RSS GUIDs in different feeds cannot
+// collide.
 
 /// SQLite-backed persistence for subscriptions, episodes, and their sync state.
 /// Thread-safe: GRDB's `DatabaseQueue` serialises all access; the JSON
@@ -150,6 +153,34 @@ final class AutohopDatabase: @unchecked Sendable {
             }
         }
 
+        // Phase 5: episode sync identity is scoped by subscription. RSS GUIDs are
+        // only stable within a feed; separate subscriptions can legitimately
+        // reuse the same GUID, so CloudKit and local sync-state rows key on
+        // `(subscriptionID, guid)` while keeping `guid` indexed for diagnostics.
+        migrator.registerMigration("v7_episode_sync_scoped_keys") { db in
+            try db.create(table: "episode_sync_state_v7") { t in
+                t.column("syncKey", .text).primaryKey()
+                t.column("guid", .text).notNull().indexed()
+                t.column("subscriptionID", .text).notNull().indexed()
+                t.column("payload", .blob).notNull()
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false).indexed()
+                t.column("systemFields", .blob)
+            }
+            try db.execute(sql: """
+                INSERT INTO episode_sync_state_v7
+                    (syncKey, guid, subscriptionID, payload, hasPendingChanges, systemFields)
+                SELECT subscriptionID || '|guid:' || guid,
+                       guid,
+                       subscriptionID,
+                       payload,
+                       hasPendingChanges,
+                       systemFields
+                FROM episode_sync_state
+                """)
+            try db.drop(table: "episode_sync_state")
+            try db.rename(table: "episode_sync_state_v7", to: "episode_sync_state")
+        }
+
         return migrator
     }
 
@@ -185,6 +216,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     private struct EpisodeSyncRow: Codable, FetchableRecord, PersistableRecord {
         static let databaseTableName = "episode_sync_state"
+        var syncKey: String
         var guid: String
         var subscriptionID: String
         var payload: Data
@@ -306,11 +338,12 @@ final class AutohopDatabase: @unchecked Sendable {
                 }
 
                 for episode in subscription.episodes {
-                    guard let epRow = try EpisodeSyncRow.fetchOne(db, key: episode.guid) else { continue }
+                    let syncKey = EpisodeSyncState.syncKey(subscriptionID: subscription.id, guid: episode.guid)
+                    guard let epRow = try EpisodeSyncRow.fetchOne(db, key: syncKey) else { continue }
                     let epDecodes = (try? decoder.decode(EpisodeSyncState.self, from: epRow.payload)) != nil
                     guard !epDecodes else { continue }
                     if EpisodeSyncState.isPristine(episode) {
-                        try EpisodeSyncRow.deleteOne(db, key: episode.guid)
+                        try EpisodeSyncRow.deleteOne(db, key: syncKey)
                     } else {
                         try save(episodeState: EpisodeSyncState(episode: episode, subscriptionID: subscription.id), into: db)
                     }
@@ -442,7 +475,8 @@ final class AutohopDatabase: @unchecked Sendable {
     private func recordEpisodeSyncState(_ episode: Episode, subscriptionID: UUID, into db: Database) throws {
         // try? on the decode so a stale payload re-seeds rather than throwing
         // and rolling back the whole persist transaction.
-        if let row = try EpisodeSyncRow.fetchOne(db, key: episode.guid),
+        let syncKey = EpisodeSyncState.syncKey(subscriptionID: subscriptionID, guid: episode.guid)
+        if let row = try EpisodeSyncRow.fetchOne(db, key: syncKey),
            var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) {
             state.apply(episode)
             try save(episodeState: state, into: db)
@@ -474,8 +508,9 @@ final class AutohopDatabase: @unchecked Sendable {
 
     private func save(episodeState state: EpisodeSyncState, into db: Database) throws {
         // Preserve any cached CKRecord system fields across re-saves.
-        let existingSystemFields = try EpisodeSyncRow.fetchOne(db, key: state.guid)?.systemFields
+        let existingSystemFields = try EpisodeSyncRow.fetchOne(db, key: state.syncKey)?.systemFields
         let row = EpisodeSyncRow(
+            syncKey: state.syncKey,
             guid: state.guid,
             subscriptionID: state.subscriptionID.uuidString,
             payload: try encoder.encode(state),
@@ -509,10 +544,10 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     /// Clears the dirty stamps on the given projections after a successful push.
-    func markSynced(episodeGuids: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
+    func markSynced(episodeSyncKeys: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
         try dbQueue.write { db in
-            for guid in episodeGuids {
-                guard let row = try EpisodeSyncRow.fetchOne(db, key: guid),
+            for syncKey in episodeSyncKeys {
+                guard let row = try EpisodeSyncRow.fetchOne(db, key: syncKey),
                       var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) else { continue }
                 state.markClean()
                 try save(episodeState: state, into: db)
@@ -536,10 +571,28 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
-    /// Single episode projection by guid.
-    func episodeSyncState(guid: String) throws -> EpisodeSyncState? {
+    /// Single episode projection by scoped sync key.
+    func episodeSyncState(syncKey: String) throws -> EpisodeSyncState? {
         try dbQueue.read { db in
-            guard let row = try EpisodeSyncRow.fetchOne(db, key: guid) else { return nil }
+            guard let row = try EpisodeSyncRow.fetchOne(db, key: syncKey) else { return nil }
+            return try decoder.decode(EpisodeSyncState.self, from: row.payload)
+        }
+    }
+
+    func episodeSyncState(subscriptionID: UUID, guid: String) throws -> EpisodeSyncState? {
+        try episodeSyncState(syncKey: EpisodeSyncState.syncKey(subscriptionID: subscriptionID, guid: guid))
+    }
+
+    /// Compatibility lookup for restored CKSyncEngine state that may still hold
+    /// a pre-Phase-5 bare-GUID pending record. Ambiguous duplicate GUIDs return
+    /// nil rather than risking a cross-feed push.
+    func legacyEpisodeSyncState(guid: String) throws -> EpisodeSyncState? {
+        try dbQueue.read { db in
+            let rows = try EpisodeSyncRow
+                .filter(Column("guid") == guid)
+                .limit(2)
+                .fetchAll(db)
+            guard rows.count == 1, let row = rows.first else { return nil }
             return try decoder.decode(EpisodeSyncState.self, from: row.payload)
         }
     }
@@ -550,17 +603,17 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     /// Cached CKRecord system fields for an episode, if we've seen its server record.
-    func episodeSystemFields(guid: String) throws -> Data? {
+    func episodeSystemFields(syncKey: String) throws -> Data? {
         try dbQueue.read { db in
-            try EpisodeSyncRow.fetchOne(db, key: guid)?.systemFields
+            try EpisodeSyncRow.fetchOne(db, key: syncKey)?.systemFields
         }
     }
 
     /// Store CKRecord system fields for an episode (no-op if the projection row
     /// doesn't exist yet).
-    func storeEpisodeSystemFields(_ data: Data?, guid: String) throws {
+    func storeEpisodeSystemFields(_ data: Data?, syncKey: String) throws {
         try dbQueue.write { db in
-            guard var row = try EpisodeSyncRow.fetchOne(db, key: guid) else { return }
+            guard var row = try EpisodeSyncRow.fetchOne(db, key: syncKey) else { return }
             row.systemFields = data
             try row.save(db)
         }

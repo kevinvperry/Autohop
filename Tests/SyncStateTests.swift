@@ -1,7 +1,8 @@
 // AI CONTEXT — Tests/SyncStateTests.swift. Unit tests for the field-level
 // dirty-tracking primitive (@Synced) and the EpisodeSyncState/
 // SubscriptionSyncState projections introduced for cross-device sync
-// (SYNC_DESIGN.md, build step 2). Pure value-type tests — no database.
+// (SYNC_DESIGN.md). Includes the subscription-scoped EpisodeSyncState.syncKey.
+// Pure value-type tests — no database.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -59,6 +60,7 @@ final class SyncStateTests: XCTestCase {
         let state = EpisodeSyncState(episode: episode, subscriptionID: episode.subscriptionID)
         XCTAssertTrue(state.hasPendingChanges)
         XCTAssertEqual(state.guid, "g1")
+        XCTAssertEqual(state.syncKey, EpisodeSyncState.syncKey(subscriptionID: episode.subscriptionID, guid: "g1"))
     }
 
     func testPristineEpisodeIsDetected() {

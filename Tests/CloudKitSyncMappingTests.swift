@@ -1,7 +1,8 @@
 // AI CONTEXT — Tests/CloudKitSyncMappingTests.swift. Unit tests for the
 // field-level last-write-wins merge (EpisodeSyncState.merged) and the
 // CKRecord <-> EpisodeSyncState mapping (CloudKitSync) — the testable core of
-// build step 3a. No network or CKSyncEngine; CKRecords are constructed in-memory.
+// sync. Covers subscription-scoped EpisodeState record names and legacy bare-GUID
+// decode compatibility. No network or CKSyncEngine; CKRecords are in-memory.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -92,15 +93,49 @@ final class CloudKitSyncMappingTests: XCTestCase {
         let state = EpisodeSyncState(episode: ep, subscriptionID: subID)
 
         let record = CloudKitSync.makeRecord(from: state)
-        XCTAssertEqual(record.recordID.recordName, "abc")
+        XCTAssertEqual(record.recordID.recordName, EpisodeSyncState.syncKey(subscriptionID: subID, guid: "abc"))
         XCTAssertEqual(record.recordType, CloudKitSync.episodeRecordType)
+        XCTAssertEqual(record["guid"] as? String, "abc")
 
         let decoded = try XCTUnwrap(CloudKitSync.episodeSyncState(from: record))
         XCTAssertEqual(decoded.guid, "abc")
         XCTAssertEqual(decoded.subscriptionID, subID)
+        XCTAssertEqual(decoded.syncKey, state.syncKey)
         XCTAssertEqual(decoded.playedState, .played)
         XCTAssertTrue(decoded.wasCompleted)
         XCTAssertEqual(decoded.lastPlayedAt, ep.lastPlayedAt)
+    }
+
+    func testDuplicateGuidsInDifferentSubscriptionsProduceDifferentRecordNames() {
+        let firstSub = UUID()
+        let secondSub = UUID()
+        var firstEp = episode(guid: "shared-guid")
+        firstEp.subscriptionID = firstSub
+        var secondEp = episode(guid: "shared-guid")
+        secondEp.subscriptionID = secondSub
+
+        let first = EpisodeSyncState(episode: firstEp, subscriptionID: firstSub)
+        let second = EpisodeSyncState(episode: secondEp, subscriptionID: secondSub)
+
+        XCTAssertEqual(first.guid, second.guid)
+        XCTAssertNotEqual(CloudKitSync.makeRecord(from: first).recordID.recordName,
+                          CloudKitSync.makeRecord(from: second).recordID.recordName)
+    }
+
+    func testLegacyBareGuidRecordStillDecodesUsingSubscriptionField() throws {
+        let subID = UUID()
+        let record = CKRecord(
+            recordType: CloudKitSync.episodeRecordType,
+            recordID: CKRecord.ID(recordName: "legacy-guid", zoneID: CloudKitSync.zoneID)
+        )
+        record["subscriptionID"] = subID.uuidString
+        record["playedState"] = PlayedState.played.rawValue
+        record["playedStateModifiedAt"] = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let decoded = try XCTUnwrap(CloudKitSync.episodeSyncState(from: record))
+        XCTAssertEqual(decoded.guid, "legacy-guid")
+        XCTAssertEqual(decoded.subscriptionID, subID)
+        XCTAssertEqual(decoded.syncKey, EpisodeSyncState.syncKey(subscriptionID: subID, guid: "legacy-guid"))
     }
 
     func testCleanFieldsAreNotWritten() {

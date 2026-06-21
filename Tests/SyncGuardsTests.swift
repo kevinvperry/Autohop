@@ -1,7 +1,9 @@
 // AI CONTEXT — Tests/SyncGuardsTests.swift. Tests the step-6 sync guards:
 // active-player-wins (a remote played/archived change must not interrupt the
 // episode loaded in the player) and self-heal (a remote state stashed before an
-// episode existed locally is applied when the feed later brings it in).
+// episode existed locally is applied when the feed later brings it in). Guards
+// are scoped by subscriptionID+GUID so duplicate RSS GUIDs across feeds do not
+// cross-apply.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -30,7 +32,9 @@ final class SyncGuardsTests: XCTestCase {
         await store.flushPendingSaves()
 
         // The player has g1 loaded on this device.
-        store.nowPlayingGuidProvider = { "g1" }
+        store.nowPlayingEpisodeSyncKeyProvider = {
+            EpisodeSyncState.syncKey(subscriptionID: sub, guid: "g1")
+        }
 
         // A remote record says g1 was archived elsewhere.
         var remoteEp = ep
@@ -48,7 +52,7 @@ final class SyncGuardsTests: XCTestCase {
         let store = try makeStore(sub: sub, seed: ep)
         await store.flushPendingSaves()
 
-        store.nowPlayingGuidProvider = { "something-else" } // g1 is NOT loaded
+        store.nowPlayingEpisodeSyncKeyProvider = { "something-else" } // g1 is NOT loaded
 
         var remoteEp = ep
         remoteEp.playedState = .archived
@@ -77,5 +81,26 @@ final class SyncGuardsTests: XCTestCase {
         let healed = store.subscription(id: sub)?.episodes.first { $0.guid == "new-ep" }
         XCTAssertEqual(healed?.playedState, .played)
         XCTAssertEqual(healed?.wasCompleted, true)
+    }
+
+    func testRemoteEpisodeStateIsScopedToMatchingSubscription() async throws {
+        let sharedGUID = "shared-guid"
+        let firstSub = UUID()
+        let secondSub = UUID()
+        let store = SubscriptionStore.inMemory()
+        _ = try store.addSubscription(id: firstSub, feedURL: URL(string: "https://f.com/one")!, title: "One",
+                                      author: nil, artworkURL: nil, latestEpisode: episode(sharedGUID, sub: firstSub))
+        _ = try store.addSubscription(id: secondSub, feedURL: URL(string: "https://f.com/two")!, title: "Two",
+                                      author: nil, artworkURL: nil, latestEpisode: episode(sharedGUID, sub: secondSub))
+        await store.flushPendingSaves()
+
+        var remoteEp = episode(sharedGUID, sub: secondSub)
+        remoteEp.playedState = .archived
+        let updated = store.applyRemoteEpisodeState(EpisodeSyncState(episode: remoteEp, subscriptionID: secondSub, dirtyAt: Date()))
+        await store.flushPendingSaves()
+
+        XCTAssertTrue(updated)
+        XCTAssertEqual(store.subscription(id: firstSub)?.episodes.first?.playedState, .unplayed)
+        XCTAssertEqual(store.subscription(id: secondSub)?.episodes.first?.playedState, .archived)
     }
 }

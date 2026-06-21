@@ -45,7 +45,7 @@ final class StatsSyncTests: XCTestCase {
 
         try db.recordStatsDay(day("2026-06-14", seconds: 600))
         XCTAssertEqual(try db.pendingStatsDays().count, 1)
-        try db.markSynced(episodeGuids: [], subscriptionIDs: [], statsDayKeys: ["2026-06-14"])
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: ["2026-06-14"])
         XCTAssertTrue(try db.pendingStatsDays().isEmpty)
 
         try db.applyRemoteStatsPartition(deviceID: "other", day: day("2026-06-14", seconds: 300))

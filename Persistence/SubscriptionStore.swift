@@ -5,7 +5,9 @@ import Foundation
 // at Application Support/Autohop/subscriptions.json; saves are coalesced on a
 // utility queue so a 70-feed refresh cycle produces one disk write, written
 // atomically. @MainActor: all mutation happens on the main actor and views
-// observe `subscriptions` directly.
+// observe `subscriptions` through AppState's subscriptionStore.objectWillChange
+// bridge. The array is not @Published on purpose: save() is the single publisher,
+// which lets refresh-stat-only writes persist quietly without waking UI/sync.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted — the merge also reconstructs wasCompleted from
@@ -20,12 +22,15 @@ import Foundation
 // priorityRank normalization (contiguous 1..n after any insert/move/delete),
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
+// Remote episode sync applies by subscription-scoped sync key and protects the
+// currently loaded player episode (active-player-wins); refresh-stat-only writes
+// deliberately persist without publishing so they do not wake views or sync.
 // GOTCHA: accessors generally distinguish active subscriptions
 // (browseDate == nil) from browse ones; queue/refresh/UI must not see browse
 // subscriptions except in the search sheet's Recently Viewed list.
 @MainActor
 public final class SubscriptionStore: ObservableObject {
-    @Published public private(set) var subscriptions: [Subscription] = []
+    public private(set) var subscriptions: [Subscription] = []
     /// Record store. Exposed within the module so CloudSyncEngine can read
     /// pending sync-state and cached CKRecord system fields.
     let database: AutohopDatabase?
@@ -39,10 +44,11 @@ public final class SubscriptionStore: ObservableObject {
     /// Snapshot of what last reached disk, keyed by id, so save() writes only
     /// the rows that actually changed.
     private var persistedSnapshot: [UUID: Subscription] = [:]
-    /// Returns the guid of the episode loaded in the player on this device, so a
-    /// remote played/archived change can't interrupt it (active-player-wins).
+    /// Returns the subscription-scoped sync key of the episode loaded in the
+    /// player on this device, so a remote played/archived change can't interrupt
+    /// it (active-player-wins).
     /// Set by AppState; nil when nothing is loaded.
-    public var nowPlayingGuidProvider: (() -> String?)?
+    public var nowPlayingEpisodeSyncKeyProvider: (() -> String?)?
 
     /// Supplies the global default PlaybackPreference (from AppSettings). Used to
     /// seed a subscription's own playbackPreference at the moment it becomes a
@@ -230,7 +236,10 @@ public final class SubscriptionStore: ObservableObject {
     public func updateRefreshStats(subscriptionID: UUID, stats: RefreshStats) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         subscriptions[index].refreshStats = stats
-        save()
+        // Refresh stats are scheduler bookkeeping, often written after cheap 304s.
+        // Persist them without invalidating views or waking the sync engine's
+        // objectWillChange observer on every feed check.
+        save(notifyObservers: false)
     }
 
     public func updateCategories(subscriptionID: UUID, categories: [String]) {
@@ -614,7 +623,7 @@ public final class SubscriptionStore: ObservableObject {
             // episode existed locally (stashed as a sync projection). Now that
             // the feed brings it in, apply that synced state.
             if existingByGUID[newEpisode.guid] == nil,
-               let projection = try? database?.episodeSyncState(guid: newEpisode.guid) {
+               let projection = try? database?.episodeSyncState(subscriptionID: subscriptionID, guid: newEpisode.guid) {
                 merged.playedState = projection.playedState
                 merged.wasCompleted = projection.wasCompleted
                 merged.lastPlayedAt = projection.lastPlayedAt
@@ -668,8 +677,8 @@ public final class SubscriptionStore: ObservableObject {
     public func applyRemoteEpisodeState(_ remote: EpisodeSyncState) -> Bool {
         guard let database else { return false }
 
-        let localProjection = try? database.episodeSyncState(guid: remote.guid)
-        let location = locateEpisode(guid: remote.guid)
+        let localProjection = try? database.episodeSyncState(syncKey: remote.syncKey)
+        let location = locateEpisode(subscriptionID: remote.subscriptionID, guid: remote.guid)
 
         let baseline: EpisodeSyncState
         if let localProjection {
@@ -696,7 +705,7 @@ public final class SubscriptionStore: ObservableObject {
         // Active-player-wins: if this episode is loaded in the player on THIS
         // device, don't let a remote played/archived state interrupt it — keep
         // the local playedState and re-stamp it so it pushes back as authoritative.
-        if let location, remote.guid == nowPlayingGuidProvider?() {
+        if let location, remote.syncKey == nowPlayingEpisodeSyncKeyProvider?() {
             let localPlayed = subscriptions[location.sub].episodes[location.ep].playedState
             if merged.playedState != localPlayed {
                 merged.$playedState = Synced(wrappedValue: localPlayed, modifiedAt: Date())
@@ -719,7 +728,7 @@ public final class SubscriptionStore: ObservableObject {
         // media file (storage leak) and a "downloaded + archived" episode
         // (ASSESSMENT.md B1). The actual file delete is surfaced through
         // onEpisodeFileShouldDelete (set by AppState) since the store can't reach
-        // DownloadManager directly — mirroring nowPlayingGuidProvider.
+        // DownloadManager directly — mirroring nowPlayingEpisodeSyncKeyProvider.
         if merged.playedState == .played || merged.playedState == .archived {
             let hadLocalDownload = episode.downloadState == .downloaded
                 || episode.localFileURL != nil
@@ -807,13 +816,10 @@ public final class SubscriptionStore: ObservableObject {
         return .applied
     }
 
-    private func locateEpisode(guid: String) -> (sub: Int, ep: Int)? {
-        for (s, subscription) in subscriptions.enumerated() {
-            if let e = subscription.episodes.firstIndex(where: { $0.guid == guid }) {
-                return (s, e)
-            }
-        }
-        return nil
+    private func locateEpisode(subscriptionID: UUID, guid: String) -> (sub: Int, ep: Int)? {
+        guard let s = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return nil }
+        guard let e = subscriptions[s].episodes.firstIndex(where: { $0.guid == guid }) else { return nil }
+        return (s, e)
     }
 
     private func updateLatestEpisode(subscriptionID: UUID, update: (inout Episode) -> Void) {
@@ -1000,8 +1006,10 @@ public final class SubscriptionStore: ObservableObject {
         Dictionary(subs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    private func save() {
-        objectWillChange.send()
+    private func save(notifyObservers: Bool = true) {
+        if notifyObservers {
+            objectWillChange.send()
+        }
         guard let database else { return }
         // Coalesce saves issued while a write is in flight: rerun once it lands
         // so the final state always reaches disk (dropping them loses data).
@@ -1037,7 +1045,7 @@ public final class SubscriptionStore: ObservableObject {
                 self.pendingSave = false
                 if self.saveCoalesced {
                     self.saveCoalesced = false
-                    self.save()
+                    self.save(notifyObservers: false)
                 }
             }
         }

@@ -8,15 +8,16 @@ import Foundation
 // value, so the projection tracks exactly which fields changed since the last
 // push.
 //
-// Identity follows the design: episodes key on `guid` (the stable cross-refresh
-// id; the local UUID regenerates), subscriptions key on `subscriptionID`.
+// Identity follows the design: episodes key on a subscription-scoped
+// `(subscriptionID, guid)` sync key (the local UUID regenerates, and GUIDs can
+// collide across feeds), subscriptions key on `subscriptionID`.
 //
 // Playback POSITION is intentionally absent here — it lives in the listening-
 // history domain and is handled in a later sync step.
 
 // MARK: - Episode
 
-/// Per-episode user-state projection, keyed by `guid`.
+/// Per-episode user-state projection, keyed by `(subscriptionID, guid)`.
 public struct EpisodeSyncState: Codable, Equatable {
     public let guid: String
     public let subscriptionID: UUID
@@ -87,6 +88,24 @@ public struct EpisodeSyncState: Codable, Equatable {
         result._wasCompleted = mergedSyncedField(local: _wasCompleted, remote: remote._wasCompleted)
         result._lastPlayedAt = mergedSyncedField(local: _lastPlayedAt, remote: remote._lastPlayedAt)
         return result
+    }
+
+    public var syncKey: String {
+        Self.syncKey(subscriptionID: subscriptionID, guid: guid)
+    }
+
+    public static func syncKey(subscriptionID: UUID, guid: String) -> String {
+        "\(subscriptionID.uuidString)|guid:\(guid)"
+    }
+
+    public static func subscriptionID(fromSyncKey syncKey: String) -> UUID? {
+        guard let range = syncKey.range(of: "|guid:") else { return nil }
+        return UUID(uuidString: String(syncKey[..<range.lowerBound]))
+    }
+
+    public static func guid(fromSyncKey syncKey: String) -> String? {
+        guard let range = syncKey.range(of: "|guid:") else { return nil }
+        return String(syncKey[range.upperBound...])
     }
 }
 

@@ -3,10 +3,12 @@ import BackgroundTasks
 
 // AI CONTEXT — App/AppDelegate.swift
 // UIKit delegate bridged into the SwiftUI app via @UIApplicationDelegateAdaptor
-// (see AutohopApp.swift). Handles the four things SwiftUI cannot:
+// (see AutohopApp.swift). Handles the five things SwiftUI cannot:
 //  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (must happen
 //     before didFinishLaunching returns) and the BGAppRefreshTask handler,
-//     which calls AppState.shared.refreshSubscriptionsForBackground().
+//     which calls AppState.shared.refreshSubscriptionsForBackground(). Expiration
+//     cancels AppState's active refresh cycle so selected-but-unfinished feeds
+//     are checkpointed back into Release Radar's deferred backlog.
 //  2. Background URLSession wake: stores the system completion handler on
 //     DownloadManager so it fires after urlSessionDidFinishEvents.
 //  3. OPML/.xml file-open events → AppState.importOPML.
@@ -106,6 +108,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             AppLogger.shared.warning("background.expired", "Background app refresh expired before finishing", metadata: [
                 "identifier": task.identifier
             ])
+            Task { @MainActor in
+                AppState.shared.cancelActiveRefreshCycle(reason: "background.expired")
+            }
             work.cancel()
             task.setTaskCompleted(success: false)
         }

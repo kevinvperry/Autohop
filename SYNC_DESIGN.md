@@ -1,5 +1,15 @@
 # Autohop — Cross-Device Sync Design
 
+<!--
+AI CONTEXT — SYNC_DESIGN.md
+Canonical design/status note for Autohop's opt-in CloudKit sync layer. Keep this
+aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
+Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
+Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
+(`subscriptionID|guid:<guid>`), refresh scheduling stats remain local, and
+download/media state never syncs.
+-->
+
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
 review of the Pocket Casts iOS sync engine — its conflict-resolution discipline
 applied on top of CloudKit.
@@ -9,8 +19,9 @@ applied on top of CloudKit.
    stance holds until the user enables sync.
 2. **Local store is the source of truth** (GRDB/SQLite); CloudKit is a sidecar.
 3. **Sync mutable user-state, never the catalog.** Episode title/description/
-   artwork rehydrate from the feed. Stable identity = `guid` (episodes) /
-   `subscriptionID` (subscriptions); the local episode UUID regenerates.
+   artwork rehydrate from the feed. Stable identity = `(subscriptionID, guid)`
+   for episodes and `subscriptionID` for subscriptions; the local episode UUID
+   regenerates, and RSS GUIDs can collide across feeds.
 4. **Downloads are per-device and never sync.**
 5. **Pick the conflict strategy per domain.** Most fields are field-level
    last-write-wins; stats (a later step) are additive and partition per device.
@@ -23,13 +34,18 @@ merge per-field. Private database, custom zone `AutohopSync`.
 ## Local store: GRDB
 `subscriptions.json` migrated one-time into GRDB rows (`AutohopDatabase`), behind
 the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
+Release Radar refresh stats are persisted locally on the subscription row but are
+not part of the CloudKit sync projection; refresh-stat-only saves publish no
+`objectWillChange`, so routine polling evidence does not wake the UI or sync
+engine.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
 dirty-tracking; nil stamp = clean. (`Synced` is a port of Pocket Casts'
 `ModifiedDate` wrapper and is **MPL-2.0-covered** — see NOTICE / LICENSE-MPL-2.0.md.)
 Projections (Models/SyncState.swift):
-- `EpisodeSyncState` (key `guid`): playedState, wasCompleted, lastPlayedAt.
+- `EpisodeSyncState` (key `subscriptionID|guid:<guid>`): playedState,
+  wasCompleted, lastPlayedAt.
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
   notificationsEnabled, excludeFromAutoFeedRefresh, playbackPreference,
   autoArchiveSettings, chapterFilter, + constant `feedURL`.
@@ -37,6 +53,9 @@ Projections (Models/SyncState.swift):
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
 leaves a `subscribed = false` tombstone.
+Migration v7 moved episode sync rows from bare GUID primary keys to
+subscription-scoped keys. CloudKit record names now match that key; legacy
+bare-GUID server records still decode using their stored `subscriptionID` field.
 
 ## Field-level merge (`merged(withRemote:)`)
 Per field: a non-nil local stamp wins only if strictly newer than the remote's;
@@ -48,7 +67,8 @@ struct level (deliberate v1 simplification).
 1. ✅ **GRDB store migration** behind the SubscriptionStore facade.
 2. ✅ **`@Synced` + sync-state projections**, dirty-tracking in `persist`.
 3. ✅ **Episode user-state over CloudKit** — `CloudKitSync` mapper (EpisodeState,
-   recordName = guid), `CloudSyncEngine` (CKSyncEngine delegate): push pending
+   recordName = subscriptionID|guid:<guid>), `CloudSyncEngine`
+   (CKSyncEngine delegate): push pending
    states, pull → `applyRemoteEpisodeState` (merge into projection + domain),
    serverRecordChanged/zoneNotFound handling, cached CKRecord system fields
    (migration v3), persisted change token, opt-in toggle in Settings → Sync.
@@ -77,10 +97,11 @@ struct level (deliberate v1 simplification).
      cross-device summing; real-device verification pending.
 
 6. ✅ **Active-player-wins + self-heal guards**
-   - Active-player-wins: `SubscriptionStore.nowPlayingGuidProvider` (set by AppState
-     from `PlaybackEngine.currentEpisode`) — in `applyRemoteEpisodeState`, if the
-     remote record is for the episode loaded in the player, the local playedState
-     is kept and re-stamped so it pushes back, instead of a remote played/archived
+   - Active-player-wins: `SubscriptionStore.nowPlayingEpisodeSyncKeyProvider`
+     (set by AppState from `PlaybackEngine.currentEpisode`) — in
+     `applyRemoteEpisodeState`, if the remote record is for the exact
+     subscription-scoped episode loaded in the player, the local playedState is
+     kept and re-stamped so it pushes back, instead of a remote played/archived
      interrupting playback.
    - Self-heal: a remote episode-state stashed before the episode existed locally
      is applied in `updateEpisodes` when the feed later brings that episode in.
@@ -100,10 +121,13 @@ per-device stats — with field-level LWW, active-player-wins, and self-heal.
   `recordName` queryable index is only for browsing in the CloudKit Console).
 
 ## Tests
-`Tests/SyncStateTests.swift`, `CloudKitSyncMappingTests.swift`,
-`RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift` (35 total). The
-`CloudSyncEngine` itself is build/on-device-verified (CKSyncEngine can't run in
-`swift test`).
+Sync coverage lives in `Tests/SyncStateTests.swift`,
+`CloudKitSyncMappingTests.swift`, `EpisodeDiffPersistTests.swift`,
+`RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift`,
+`SyncGuardsTests.swift`, `HistorySyncTests.swift`, and `StatsSyncTests.swift`.
+The pure projection/mapping/database paths run under `swift test`; the
+`CloudSyncEngine` itself is build/on-device-verified because CKSyncEngine needs
+entitlements, a container, and a signed-in account.
 
 ## Diagnostics / observability
 `CloudSyncEngine` is instrumented through `AppLogger` with `sync.*` event keys —

@@ -3,17 +3,22 @@ import CloudKit
 import Combine
 
 // AI CONTEXT — Persistence/CloudSyncEngine.swift
-// CKSyncEngine wrapper for cross-device sync (SYNC_DESIGN.md, steps 3b/4).
+// CKSyncEngine wrapper for cross-device sync (SYNC_DESIGN.md).
 // OPT-IN: only runs while AppSettings.iCloudSyncEnabled is true (AppState drives
-// start/stop). Syncs episode user-state AND subscription settings.
+// start/stop). Syncs episode user-state, subscription settings, listening
+// history, and additive per-device listening stats. Downloads and catalog content
+// never sync.
 //
 // Push: observes SubscriptionStore changes (debounced), scans the database for
-// pending Episode/Subscription sync-states (dirty fields), and queues saves.
-// Records are built by CloudKitSync, starting from cached CKRecord system fields
-// so updates carry the right change tag.
+// pending sync-state rows (dirty fields/partitions), and queues saves. Records
+// are built by CloudKitSync, starting from cached CKRecord system fields so
+// updates carry the right change tag. EpisodeState record IDs are
+// subscription-scoped (`subscriptionID|guid:<guid>`); cached legacy bare-GUID
+// system fields are ignored if they do not match the scoped record ID.
 // Pull: fetched server records are decoded and merged into the local store via
-// SubscriptionStore.applyRemote*; a remote subscription for a podcast not present
-// here triggers `onSubscriptionNeedsMaterialization` (AppState fetches the feed).
+// SubscriptionStore.applyRemote*, ListeningHistoryStore, and ListeningStatsStore;
+// a remote subscription for a podcast not present here triggers
+// `onSubscriptionNeedsMaterialization` (AppState fetches the feed).
 //
 // Cannot be exercised by `swift test` (CKSyncEngine needs a container,
 // entitlements, and a signed-in account) — verified by building and running on a
@@ -168,7 +173,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let deviceID = DeviceIdentity.current
 
         var changes = episodes.map {
-            CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(guid: $0.guid))
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(for: $0))
         }
         changes += subscriptions.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.subscriptionRecordID(id: $0.subscriptionID))
@@ -237,10 +242,12 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         // failures in the catch. (systemFields stays `try?` — a missing cached blob
         // is normal for a new record and cachedOrNewRecord handles nil.)
         do {
-            // Episode? (recordName == guid)
-            if let state = try database.episodeSyncState(guid: name) {
+            // Episode? (recordName == subscriptionID|guid:<guid>; fall back to a
+            // pre-Phase-5 bare-GUID pending record only when unambiguous).
+            if let state = try database.episodeSyncState(syncKey: name)
+                ?? database.legacyEpisodeSyncState(guid: name) {
                 let record = cachedOrNewRecord(
-                    systemFields: try? database.episodeSystemFields(guid: name),
+                    systemFields: try? database.episodeSystemFields(syncKey: state.syncKey),
                     recordType: CloudKitSync.episodeRecordType, recordID: recordID
                 )
                 CloudKitSync.populate(record, from: state)
@@ -301,7 +308,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     }
 
     private func cachedOrNewRecord(systemFields: Data?, recordType: String, recordID: CKRecord.ID) -> CKRecord {
-        if let systemFields, let cached = Self.record(fromSystemFields: systemFields) {
+        if let systemFields,
+           let cached = Self.record(fromSystemFields: systemFields),
+           cached.recordType == recordType,
+           cached.recordID == recordID {
             return cached
         }
         return CKRecord(recordType: recordType, recordID: recordID)
@@ -331,8 +341,8 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 return
             }
             await MainActor.run { _ = subscriptionStore.applyRemoteEpisodeState(remote) }
-            runDB("storeEpisodeSystemFields", metadata: ["guid": name]) {
-                try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), guid: name)
+            runDB("storeEpisodeSystemFields", metadata: ["syncKey": remote.syncKey]) {
+                try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: remote.syncKey)
             }
 
         case CloudKitSync.subscriptionRecordType:
@@ -472,27 +482,28 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let name = record.recordID.recordName
         switch record.recordType {
         case CloudKitSync.episodeRecordType:
-            runDB("markSaved.episode", metadata: ["guid": name]) {
-                try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), guid: name)
-                try self.database?.markSynced(episodeGuids: [name], subscriptionIDs: [])
+            let syncKey = CloudKitSync.episodeSyncKey(from: record) ?? name
+            runDB("markSaved.episode", metadata: ["syncKey": syncKey]) {
+                try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: syncKey)
+                try self.database?.markSynced(episodeSyncKeys: [syncKey], subscriptionIDs: [])
             }
         case CloudKitSync.subscriptionRecordType:
             if let id = UUID(uuidString: name) {
                 runDB("markSaved.subscription", metadata: ["id": name]) {
                     try self.database?.storeSubscriptionSystemFields(Self.systemFields(of: record), id: id)
-                    try self.database?.markSynced(episodeGuids: [], subscriptionIDs: [id])
+                    try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
                 }
             }
         case CloudKitSync.historyRecordType:
             runDB("markSaved.history", metadata: ["id": name]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: name)
-                try self.database?.markSynced(episodeGuids: [], subscriptionIDs: [], historyIDs: [name])
+                try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [name])
             }
         case CloudKitSync.statsRecordType:
             if let dayKey = Self.statsDayKey(fromRecordName: name) {
                 runDB("markSaved.stats", metadata: ["dayKey": dayKey]) {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
-                    try self.database?.markSynced(episodeGuids: [], subscriptionIDs: [], statsDayKeys: [dayKey])
+                    try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: [dayKey])
                 }
             }
         default:

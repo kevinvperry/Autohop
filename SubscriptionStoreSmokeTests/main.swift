@@ -4,10 +4,12 @@
 // Also carries the focused Release Radar regression checks that do not need the
 // full app/dependency graph: RefreshStats legacy decoding and history caps,
 // release-observation persistence, learned schedule classification (hourly,
-// burst, weekday, weekly, unreliable dates), learned-window due prediction, and
+// burst, weekday, weekly, unreliable dates), learned-window due prediction,
+// missed-release urgency expiry, learning/random cadence decay, and
 // FeedRefreshPrioritizer ordering for missed, active, learning, ranked, stale,
-// and random due feeds.
+// and random due feeds, plus pure refresh-budget selection.
 import Foundation
+import Combine
 import AutohopCore
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -65,6 +67,26 @@ require(subscription?.title == "774 ABC Melbourne Breakfast", "Expected persiste
 require(subscription?.chapterFilter.skippedPositions == [1], "Expected persisted chapter filter")
 require(subscription?.refreshStats.releaseObservations.count == 1, "Expected initial release observation to persist")
 require(subscription?.refreshStats.releaseObservations.first?.dateQuality == .missing, "Expected missing publish date to be recorded")
+
+var refreshStatsNotificationCount = 0
+let refreshStatsNotificationToken = await reloaded.objectWillChange.sink {
+    refreshStatsNotificationCount += 1
+}
+let refreshStatsOnlyDate = Date(timeIntervalSince1970: 1_780_050_000)
+var refreshStatsOnly = subscription!.refreshStats
+refreshStatsOnly.recordFetch(foundNewEpisode: false, at: refreshStatsOnlyDate)
+await reloaded.updateRefreshStats(subscriptionID: saved.id, stats: refreshStatsOnly)
+require(refreshStatsNotificationCount == 0, "Expected refresh-stat-only updates to persist quietly")
+await reloaded.flushPendingSaves()
+let refreshStatsReloaded = await SubscriptionStore(fileURL: fileURL)
+let persistedQuietStats = await refreshStatsReloaded.subscription(id: saved.id)?.refreshStats
+require(
+    persistedQuietStats?.lastFetchedAt == refreshStatsOnlyDate,
+    "Expected quiet refresh stats to persist"
+)
+await reloaded.updateTitle(subscriptionID: saved.id, title: "774 ABC Melbourne Breakfast Updated")
+require(refreshStatsNotificationCount == 1, "Expected visible subscription edits to notify observers")
+refreshStatsNotificationToken.cancel()
 
 let firstPublishedAt = Date(timeIntervalSince1970: 1_780_000_000)
 let secondPublishedAt = Date(timeIntervalSince1970: 1_780_003_600)
@@ -340,6 +362,31 @@ let weekdayMissed = FeedRefreshScheduling.prediction(
 require(weekdayMissed.state == .missedRelease, "Expected missing Monday episode to enter missed-release checks")
 require(weekdayMissed.nextDueAt <= makeDate(2026, 1, 12, 10, 30), "Expected missed-release feed to remain due")
 
+let weekdayMissedExpiredByEmptyChecks = FeedRefreshScheduling.prediction(
+    profile: weekdayProfile,
+    latestPublishedAt: makeDate(2026, 1, 9, 9, 32),
+    publishDates: weekdayObservations.compactMap(\.publishedAt),
+    stats: RefreshStats(
+        lastFetchedAt: makeDate(2026, 1, 12, 10, 40),
+        consecutiveEmptyFetches: FeedRefreshScheduling.missedReleaseEmptyFetchLimit
+    ),
+    minRecheckInterval: fiveMinutes,
+    now: makeDate(2026, 1, 12, 10, 45),
+    calendar: utcCalendar
+)
+require(
+    weekdayMissedExpiredByEmptyChecks.state == .fallback,
+    "Expected repeated empty missed-release checks to expire high-priority urgency"
+)
+require(
+    weekdayMissedExpiredByEmptyChecks.recheckInterval == 60 * 60,
+    "Expected expired missed-release surveillance to use a low-frequency cadence"
+)
+require(
+    weekdayMissedExpiredByEmptyChecks.nextDueAt > makeDate(2026, 1, 12, 10, 45),
+    "Expected expired missed-release feed not to remain immediately due after a recent empty check"
+)
+
 let weeklyWeekendQuiet = FeedRefreshScheduling.prediction(
     profile: weeklyProfile,
     latestPublishedAt: makeDate(2026, 1, 7, 7, 0),
@@ -351,6 +398,117 @@ let weeklyWeekendQuiet = FeedRefreshScheduling.prediction(
 )
 require(weeklyWeekendQuiet.state == .quiet, "Expected Wednesday weekly feed to stay quiet on Saturday")
 require(weeklyWeekendQuiet.nextDueAt == makeDate(2026, 1, 14, 6, 30), "Expected next weekly pre-window on Wednesday")
+
+let weeklyMissedExpiredByAge = FeedRefreshScheduling.prediction(
+    profile: weeklyProfile,
+    latestPublishedAt: makeDate(2026, 1, 7, 7, 0),
+    publishDates: weeklyObservations.compactMap(\.publishedAt),
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 14, 15, 0)),
+    minRecheckInterval: fiveMinutes,
+    now: makeDate(2026, 1, 14, 16, 0),
+    calendar: utcCalendar
+)
+require(
+    weeklyMissedExpiredByAge.state == .fallback,
+    "Expected old missed-release windows to expire even without enough empty checks"
+)
+require(
+    weeklyMissedExpiredByAge.nextDueAt <= makeDate(2026, 1, 14, 16, 0),
+    "Expected aged-out missed-release feed to be eligible only as low-priority fallback work"
+)
+
+let oneMinute: TimeInterval = 60
+let learningScheduleProfile = FeedScheduleProfile(
+    kind: .learning,
+    confidence: 0.1,
+    observationCount: 0,
+    reliableDateCount: 0,
+    activeWeekdays: [],
+    reason: "Still learning"
+)
+let freshLearning = FeedRefreshScheduling.prediction(
+    profile: learningScheduleProfile,
+    latestPublishedAt: nil,
+    publishDates: [],
+    stats: RefreshStats(
+        lastFetchedAt: makeDate(2026, 1, 5, 10, 0),
+        consecutiveEmptyFetches: 1
+    ),
+    minRecheckInterval: oneMinute,
+    now: makeDate(2026, 1, 5, 10, 2),
+    calendar: utcCalendar
+)
+require(freshLearning.state == .learning, "Expected learning profile to remain in learning state")
+require(freshLearning.recheckInterval == oneMinute, "Expected fresh learning feeds to honor 1-minute Radar briefly")
+
+let decayedLearning = FeedRefreshScheduling.prediction(
+    profile: learningScheduleProfile,
+    latestPublishedAt: nil,
+    publishDates: [],
+    stats: RefreshStats(
+        lastFetchedAt: makeDate(2026, 1, 5, 10, 0),
+        consecutiveEmptyFetches: 7
+    ),
+    minRecheckInterval: oneMinute,
+    now: makeDate(2026, 1, 5, 10, 3),
+    calendar: utcCalendar
+)
+require(decayedLearning.recheckInterval == 4 * oneMinute, "Expected repeated empty learning checks to decay from 1 minute")
+require(decayedLearning.nextDueAt > makeDate(2026, 1, 5, 10, 3), "Expected decayed learning feed not to stay immediately due")
+
+let randomScheduleProfile = FeedScheduleProfile(
+    kind: .random,
+    confidence: 0.7,
+    observationCount: 12,
+    reliableDateCount: 12,
+    activeWeekdays: [],
+    reason: "No stable schedule"
+)
+let randomBaseline = FeedRefreshScheduling.prediction(
+    profile: randomScheduleProfile,
+    latestPublishedAt: nil,
+    publishDates: [],
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 5, 10, 0)),
+    minRecheckInterval: oneMinute,
+    now: makeDate(2026, 1, 5, 10, 10),
+    calendar: utcCalendar
+)
+require(randomBaseline.state == .randomSurveillance, "Expected random profile to use random surveillance state")
+require(randomBaseline.recheckInterval == 15 * oneMinute, "Expected random feeds to floor 1-minute Radar at 15 minutes")
+require(randomBaseline.nextDueAt > makeDate(2026, 1, 5, 10, 10), "Expected random baseline not to remain due every minute")
+
+let recentRandom = FeedRefreshScheduling.prediction(
+    profile: randomScheduleProfile,
+    latestPublishedAt: nil,
+    publishDates: [],
+    stats: RefreshStats(
+        lastFetchedAt: makeDate(2026, 1, 5, 10, 0),
+        lastNewEpisodeAt: makeDate(2026, 1, 5, 9, 30)
+    ),
+    minRecheckInterval: oneMinute,
+    now: makeDate(2026, 1, 5, 10, 6),
+    calendar: utcCalendar
+)
+require(recentRandom.recheckInterval == 5 * oneMinute, "Expected recent random activity to boost checks without falling to 1 minute")
+
+let unreliableScheduleProfile = FeedScheduleProfile(
+    kind: .unreliableDates,
+    confidence: 0.75,
+    observationCount: 8,
+    reliableDateCount: 0,
+    activeWeekdays: [],
+    reason: "Dates missing"
+)
+let unreliableBaseline = FeedRefreshScheduling.prediction(
+    profile: unreliableScheduleProfile,
+    latestPublishedAt: nil,
+    publishDates: [],
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 5, 10, 0)),
+    minRecheckInterval: oneMinute,
+    now: makeDate(2026, 1, 5, 10, 10),
+    calendar: utcCalendar
+)
+require(unreliableBaseline.recheckInterval == 15 * oneMinute, "Expected unreliable-date feeds to floor 1-minute Radar at 15 minutes")
 
 // ── FeedRefreshPrioritizer: due feeds are ranked by release likelihood ───────
 let priorityNow = makeDate(2026, 1, 5, 10, 30)
@@ -393,6 +551,18 @@ let missedPriority = FeedRefreshPrioritizer.priority(
     now: makeDate(2026, 1, 12, 10, 30)
 )
 require(missedPriority.score > activePriority.score, "Expected missed release to outrank active release window")
+
+let expiredMissedPriority = FeedRefreshPrioritizer.priority(
+    prediction: weeklyMissedExpiredByAge,
+    profile: weeklyProfile,
+    priorityRank: 5,
+    lastFetchedAt: makeDate(2026, 1, 14, 15, 0),
+    now: makeDate(2026, 1, 14, 16, 0)
+)
+require(
+    expiredMissedPriority.score < activePriority.score,
+    "Expected expired missed-release urgency to fall behind an active release window"
+)
 
 let highRankPriority = FeedRefreshPrioritizer.priority(
     prediction: learningPrediction,
@@ -441,6 +611,62 @@ let freshRandomPriority = FeedRefreshPrioritizer.priority(
 )
 require(staleRandomPriority.score > freshRandomPriority.score, "Expected stale due random feed to outrank fresh due random feed")
 
+// ── FeedRefreshBudgeting: caps are pure and preserve priority order ───────────
+struct BudgetCandidate {
+    let id: String
+    let state: FeedRefreshWindowState
+}
+
+let budgetCandidates = [
+    BudgetCandidate(id: "learning-a", state: .learning),
+    BudgetCandidate(id: "random-a", state: .randomSurveillance),
+    BudgetCandidate(id: "active-a", state: .activeWindow),
+    BudgetCandidate(id: "learning-b", state: .learning),
+    BudgetCandidate(id: "pre-a", state: .preWindow)
+]
+
+let unlimitedBudget = FeedRefreshBudgeting.select(
+    candidates: budgetCandidates,
+    policy: FeedRefreshBudgetPolicy(maxSelections: nil),
+    state: { $0.state }
+)
+require(
+    unlimitedBudget.selected.map(\.id) == budgetCandidates.map(\.id),
+    "Expected unlimited budget to select every candidate in priority order"
+)
+require(unlimitedBudget.cappedOutCount == 0, "Expected unlimited budget to defer nothing")
+
+let cappedBudget = FeedRefreshBudgeting.select(
+    candidates: budgetCandidates,
+    policy: FeedRefreshBudgetPolicy(maxSelections: 2),
+    state: { $0.state }
+)
+require(
+    cappedBudget.selected.map(\.id) == ["learning-a", "random-a"],
+    "Expected capped budget to select the first two prioritized candidates"
+)
+require(
+    cappedBudget.deferred.map(\.id) == ["active-a", "learning-b", "pre-a"],
+    "Expected capped budget to defer all candidates past the cap"
+)
+
+let bypassBudget = FeedRefreshBudgeting.select(
+    candidates: budgetCandidates,
+    policy: FeedRefreshBudgetPolicy(
+        maxSelections: 2,
+        capBypassStates: [.activeWindow, .preWindow]
+    ),
+    state: { $0.state }
+)
+require(
+    bypassBudget.selected.map(\.id) == ["learning-a", "random-a", "active-a", "pre-a"],
+    "Expected active/pre-window candidates to bypass the cap without changing order"
+)
+require(
+    bypassBudget.deferred.map(\.id) == ["learning-b"],
+    "Expected only non-bypass candidates past the normal budget to be deferred"
+)
+
 // Regression (Podcast Detail crash): a feed that repeats a guid must collapse to
 // one episode and never produce duplicate Identifiable ids (which crashes
 // SwiftUI ForEach on tap). A second merge must also not trap on the guid-keyed
@@ -454,4 +680,4 @@ require(dupResult.filter { $0.guid == dupGUID }.count == 1, "Expected duplicate-
 require(Set(dupResult.map { $0.id }).count == dupResult.count, "Expected unique episode ids after merging a duplicate-guid feed")
 await reloaded.updateEpisodes(subscriptionID: saved.id, episodes: [dupA, dupB]) // must not crash on re-merge
 
-print("SubscriptionStoreSmoke passed: save, duplicate detection, reload, chapter filter persistence, played episode persistence, release observations, schedule profiling, learned-window scheduling, feed refresh scheduling, refresh prioritization, and duplicate-guid dedup")
+print("SubscriptionStoreSmoke passed: save, duplicate detection, reload, chapter filter persistence, played episode persistence, release observations, schedule profiling, learned-window scheduling, feed refresh scheduling, refresh prioritization, refresh budgeting, and duplicate-guid dedup")

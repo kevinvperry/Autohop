@@ -39,13 +39,18 @@ import UIKit
 //    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
 //    Release Radar due-feed polling. They ask Models/Subscription.swift for a
 //    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
-//    only due feeds are considered, then limited background slots (max 8) go to
-//    the highest-scoring feeds rather than simply the oldest due feeds. Manual
-//    refresh still ignores due dates and refreshes every eligible feed.
+//    only due feeds are considered, then limited foreground/background slots go
+//    to the highest-scoring feeds. Capped-out feeds are checkpointed in
+//    deferredRefreshBacklog and receive a bounded fairness boost on later cycles
+//    so long wakes are drained over multiple runs instead of hammering every
+//    overdue feed at once. Manual refresh still ignores due dates and refreshes
+//    every eligible feed.
 //  - Refresh diagnostics: timed/background cycles log a feed.refreshAll.plan
 //    summary plus per-feed score/profile/prediction metadata on
-//    feed.refreshAll.itemStart when the diagnostic log is enabled. These logs
-//    are the intended tuning surface for the learned refresh system.
+//    feed.refreshAll.itemStart when the diagnostic log is enabled. Refresh logs
+//    include subscriptionID + a stable feedHash alongside the title so renamed
+//    feeds remain traceable. These logs are the intended tuning surface for the
+//    learned refresh system.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
@@ -57,7 +62,8 @@ import UIKit
 //    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
 //    restorePlaybackPosition) never re-read/re-decode the file; writes stay
 //    immediate (savePlaybackPosition throttled ~10 s) to playback-position.json,
-//    keyed by episode GUID/URL so re-fetched episodes resume correctly.
+//    keyed by subscription-scoped episode GUID/URL so re-fetched episodes resume
+//    correctly without colliding across feeds.
 //    Listening history + stats recorded on playback ticks (recordProgress only
 //    accrues time; played/archived status transitions go through mark()).
 //  - OPML import/export with progress reporting.
@@ -212,6 +218,7 @@ final class AppState: ObservableObject {
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
     private var activeRefreshCycle: Task<Bool, Never>?
+    private var deferredRefreshBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
     private var suppressUpNextRefresh = false
     private var upNextRefreshTask: Task<Void, Never>?
     private var feedFailureBackoffUntil: [UUID: Date] = [:]
@@ -371,6 +378,11 @@ final class AppState: ObservableObject {
     private let defaultFeedEpisodeLimit = 50
     private let feedFailureBackoffInterval: TimeInterval = 30 * 60
     private let backgroundRefreshFeedLimit = 8
+    private let foregroundRefreshFeedLimit = 12
+    private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
+    private let refreshDeferralScoreBoostPerCycle = 12.0
+    private let refreshDeferralAgeBoostPerHour = 2.0
+    private let refreshDeferralMaxScoreBoost = 40.0
 
     // MARK: - Init
 
@@ -408,8 +420,9 @@ final class AppState: ObservableObject {
         }
         // Active-player-wins: tell the store which episode is loaded in the
         // player so a remote played/archived change can't interrupt it.
-        subscriptionStore.nowPlayingGuidProvider = { [weak self] in
-            self?.playbackEngine.currentEpisode?.guid
+        subscriptionStore.nowPlayingEpisodeSyncKeyProvider = { [weak self] in
+            guard let episode = self?.playbackEngine.currentEpisode else { return nil }
+            return EpisodeSyncState.syncKey(subscriptionID: episode.subscriptionID, guid: episode.guid)
         }
         // New/activated subscriptions seed their playback settings from the
         // global default panel; browse feeds resolve it live (effectivePreference).
@@ -431,9 +444,9 @@ final class AppState: ObservableObject {
 
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
-                // Drop the memoized queue synchronously (P3): objectWillChange fires
-                // before the new value lands, and the main actor is single-threaded,
-                // so the next read recomputes from the updated subscriptions.
+                // Drop the memoized queue synchronously (P3): SubscriptionStore
+                // publishes visible saves after mutating in memory, so the next
+                // read recomputes from the updated subscriptions.
                 self?.invalidateDownloadedQueueCache()
                 Task { @MainActor in
                     guard let self else { return }
@@ -2090,13 +2103,11 @@ final class AppState: ObservableObject {
     // MARK: - Feed refresh
 
     func refreshSubscription(_ subscription: Subscription, episodeLimit: Int? = 50, refreshUpNextAfterMerge: Bool = true) async {
-        resourceMonitor.logSnapshot(reason: "feed.refresh.before", context: resourceContext([
-            "podcast": subscription.title
-        ]))
-        logger.info("feed.refresh", "Refreshing podcast feed", metadata: [
-            "podcast": subscription.title,
-            "url": subscription.feedURL.absoluteString
-        ])
+        resourceMonitor.logSnapshot(
+            reason: "feed.refresh.before",
+            context: resourceContext(refreshFeedMetadata(for: subscription, includeURL: false))
+        )
+        logger.info("feed.refresh", "Refreshing podcast feed", metadata: refreshFeedMetadata(for: subscription))
         let previouslyKnownEpisodeKeys = Set(subscription.episodes.map(RefreshStats.releaseObservationKey(for:)))
         do {
             let outcome = try await feedService.refreshIfModified(
@@ -2114,9 +2125,11 @@ final class AppState: ObservableObject {
                 var stats = subscription.refreshStats
                 stats.recordFetch(foundNewEpisode: false)
                 subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
-                logger.info("feed.notModified", "Feed unchanged (304)", metadata: [
-                    "podcast": subscription.title
-                ])
+                logger.info(
+                    "feed.notModified",
+                    "Feed unchanged (304)",
+                    metadata: refreshFeedMetadata(for: subscription, includeURL: false)
+                )
                 return
             }
 
@@ -2139,21 +2152,19 @@ final class AppState: ObservableObject {
                old.localFileURL != nil,
                result.latestEpisode.guid != old.guid,
                currentPlayerEpisode?.id != old.id {
-                logger.info("feed.cleanupOldLatest", "Deleting old latest episode after new feed item", metadata: [
+                logger.info("feed.cleanupOldLatest", "Deleting old latest episode after new feed item", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                     "episode": old.title,
-                    "podcast": subscription.title
-                ])
+                ]))
                 try? await downloadManager.deleteLocalFile(for: old)
                 subscriptionStore.markEpisodeNotDownloaded(subscriptionID: old.subscriptionID, episodeID: old.id)
             }
 
-            logger.info("feed.refreshMerge", "Merging refreshed feed episodes", metadata: [
-                "podcast": subscription.title,
+            logger.info("feed.refreshMerge", "Merging refreshed feed episodes", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "oldLatest": oldLatestGUID ?? "none",
                 "newLatest": result.latestEpisode.guid,
                 "episodeCount": "\(result.episodes.count)",
                 "newlyObservedEpisodes": "\(newlyObservedEpisodes)"
-            ])
+            ]))
             subscriptionStore.updateEpisodes(
                 subscriptionID: subscription.id,
                 episodes: result.episodes
@@ -2173,9 +2184,11 @@ final class AppState: ObservableObject {
             // preview's latest episode gets downloaded and appended to the queue on
             // open (the reported "Play Last on load" bug).
             if subscriptionStore.subscription(id: subscription.id)?.browseDate != nil {
-                logger.info("feed.refresh", "Skipping auto-download for browse preview", metadata: [
-                    "podcast": subscription.title
-                ])
+                logger.info(
+                    "feed.refresh",
+                    "Skipping auto-download for browse preview",
+                    metadata: refreshFeedMetadata(for: subscription, includeURL: false)
+                )
                 return
             }
             if refreshUpNextAfterMerge {
@@ -2185,15 +2198,19 @@ final class AppState: ObservableObject {
                   latestPlayedState != .played,
                   latestPlayedState != .archived
             else {
-                logger.info("feed.refresh", "Latest episode is already played or archived", metadata: [
-                    "podcast": subscription.title
-                ])
+                logger.info(
+                    "feed.refresh",
+                    "Latest episode is already played or archived",
+                    metadata: refreshFeedMetadata(for: subscription, includeURL: false)
+                )
                 return
             }
             guard result.latestEpisode.guid != oldLatestGUID || oldLatestWasDownloaded == false else {
-                logger.info("feed.refresh", "No new download needed", metadata: [
-                    "podcast": subscription.title
-                ])
+                logger.info(
+                    "feed.refresh",
+                    "No new download needed",
+                    metadata: refreshFeedMetadata(for: subscription, includeURL: false)
+                )
                 return
             }
             await enforceEpisodeLimitBeforeDownload(subscriptionID: subscription.id)
@@ -2206,41 +2223,45 @@ final class AppState: ObservableObject {
             if refreshUpNextAfterMerge {
                 scheduleUpNextRefresh(reason: "feed.download.\(result.subscriptionTitle)")
             }
-            logger.info("feed.refresh", "Feed refresh completed", metadata: [
+            logger.info("feed.refresh", "Feed refresh completed", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "podcast": result.subscriptionTitle,
                 "episodeCount": "\(result.episodes.count)"
-            ])
+            ]))
             resourceMonitor.logSnapshot(reason: "feed.refresh.afterSuccess", context: resourceContext([
                 "podcast": result.subscriptionTitle,
+                "subscriptionID": subscription.id.uuidString,
+                "feedHash": refreshFeedHash(for: subscription.feedURL),
                 "episodeCount": "\(result.episodes.count)"
             ]))
         } catch {
             if isCancellationError(error) {
-                logger.info("feed.refreshCancelled", "Feed refresh cancelled", metadata: [
-                    "podcast": subscription.title
-                ])
+                logger.info(
+                    "feed.refreshCancelled",
+                    "Feed refresh cancelled",
+                    metadata: refreshFeedMetadata(for: subscription, includeURL: false)
+                )
                 return
             }
             // Requests stranded by app suspension surface as timeouts or dropped
             // connections once the app wakes. Those say nothing about the feed's
             // health — retry on the normal schedule instead of backing off.
             if isTransientTransportError(error), UIApplication.shared.applicationState != .active {
-                logger.info("feed.refreshDeferred", "Feed refresh dropped while app inactive — no backoff applied", metadata: [
-                    "podcast": subscription.title,
+                logger.info("feed.refreshDeferred", "Feed refresh dropped while app inactive — no backoff applied", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                     "error": String(describing: error)
-                ])
+                ]))
                 return
             }
             let backoffUntil = Date().addingTimeInterval(feedFailureBackoffInterval)
             feedFailureBackoffUntil[subscription.id] = backoffUntil
-            logger.error("feed.refreshFailed", "Feed refresh failed", metadata: [
-                "podcast": subscription.title,
+            logger.error("feed.refreshFailed", "Feed refresh failed", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "error": String(describing: error),
                 "backoffUntil": backoffUntil.formatted(date: .omitted, time: .standard)
-            ])
-            resourceMonitor.logSnapshot(reason: "feed.refresh.afterFailure", context: resourceContext([
-                "podcast": subscription.title
-            ]), force: true)
+            ]))
+            resourceMonitor.logSnapshot(
+                reason: "feed.refresh.afterFailure",
+                context: resourceContext(refreshFeedMetadata(for: subscription, includeURL: false)),
+                force: true
+            )
         }
     }
 
@@ -2259,7 +2280,8 @@ final class AppState: ObservableObject {
     func refreshDueSubscriptions() async -> Bool {
         await refreshSubscriptions(
             reason: "timed-due",
-            maxSubscriptions: nil,
+            maxSubscriptions: foregroundRefreshFeedLimit,
+            capBypassStates: foregroundRefreshCapBypassStates,
             includeBackoffFeeds: false,
             onlyDueFeeds: true
         )
@@ -2276,10 +2298,25 @@ final class AppState: ObservableObject {
         )
     }
 
+    func cancelActiveRefreshCycle(reason: String) {
+        guard let activeRefreshCycle else {
+            logger.info("feed.refreshAll.cancelRequestIgnored", "No refresh cycle was active", metadata: [
+                "reason": reason
+            ])
+            return
+        }
+        logger.warning("feed.refreshAll.cancelRequested", "Refresh cycle cancellation requested", metadata: [
+            "reason": reason,
+            "backlogCount": "\(deferredRefreshBacklog.count)"
+        ])
+        activeRefreshCycle.cancel()
+    }
+
     @discardableResult
     private func refreshSubscriptions(
         reason: String,
         maxSubscriptions: Int?,
+        capBypassStates: Set<FeedRefreshWindowState> = [],
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool,
         joinActiveCycle: Bool = false
@@ -2306,6 +2343,7 @@ final class AppState: ObservableObject {
             await self.performRefreshCycle(
                 reason: reason,
                 maxSubscriptions: maxSubscriptions,
+                capBypassStates: capBypassStates,
                 includeBackoffFeeds: includeBackoffFeeds,
                 onlyDueFeeds: onlyDueFeeds
             )
@@ -2318,6 +2356,7 @@ final class AppState: ObservableObject {
     private func performRefreshCycle(
         reason: String,
         maxSubscriptions: Int?,
+        capBypassStates: Set<FeedRefreshWindowState>,
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool
     ) async -> Bool {
@@ -2346,27 +2385,42 @@ final class AppState: ObservableObject {
         let dueCandidates = onlyDueFeeds
             ? refreshCandidatesForCycle(eligibleSubscriptions, now: now)
             : []
-        let selectedCandidates: [RefreshCycleCandidate]
-        if let maxSubscriptions, maxSubscriptions > 0 {
-            selectedCandidates = Array(dueCandidates.prefix(maxSubscriptions))
-        } else {
-            selectedCandidates = dueCandidates
-        }
+        let budgetSelection = FeedRefreshBudgeting.select(
+            candidates: dueCandidates,
+            policy: FeedRefreshBudgetPolicy(
+                maxSelections: maxSubscriptions,
+                capBypassStates: capBypassStates
+            ),
+            state: { $0.prediction.state }
+        )
+        let selectedCandidates = budgetSelection.selected
+        let deferredCandidates = budgetSelection.deferred
         let subscriptions = onlyDueFeeds
             ? selectedCandidates.map(\.subscription)
             : eligibleSubscriptions
         if onlyDueFeeds {
+            reconcileDeferredRefreshBacklog(
+                dueCandidates: dueCandidates,
+                selectedCandidates: selectedCandidates,
+                deferredCandidates: deferredCandidates,
+                now: now,
+                reason: reason
+            )
             logRefreshCycleDecisionSummary(
                 candidates: dueCandidates,
+                selectedCandidates: selectedCandidates,
+                deferredCandidates: deferredCandidates,
                 selectedCount: selectedCandidates.count,
                 eligibleCount: eligibleSubscriptions.count,
                 skippedBackoffCount: backoffSubscriptions.count,
                 skippedInactiveCount: skippedSubscriptions.count,
                 maxSubscriptions: maxSubscriptions,
+                capBypassStates: capBypassStates,
                 reason: reason
             )
         }
         if onlyDueFeeds, selectedCandidates.isEmpty {
+            scheduleBackgroundRefreshForNextDueFeed()
             return false
         }
         let selectedCandidatesByID = Dictionary(uniqueKeysWithValues: selectedCandidates.map { ($0.subscription.id, $0) })
@@ -2382,14 +2436,18 @@ final class AppState: ObservableObject {
                 "podcasts": backoffSubscriptions.map(\.title).joined(separator: ", ")
             ])
         }
+        var completedSubscriptionIDs = Set<UUID>()
+        var wasCancelled = false
         for (index, subscription) in subscriptions.enumerated() {
-            var itemStartMetadata = [
+            if Task.isCancelled {
+                wasCancelled = true
+                break
+            }
+            var itemStartMetadata = refreshFeedMetadata(for: subscription, extra: [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
-                "podcast": subscription.title,
-                "url": subscription.feedURL.absoluteString,
                 "reason": reason
-            ]
+            ])
             if let candidate = selectedCandidatesByID[subscription.id] {
                 itemStartMetadata.merge(refreshDecisionMetadata(for: candidate)) { _, new in new }
             }
@@ -2399,18 +2457,37 @@ final class AppState: ObservableObject {
                 episodeLimit: defaultFeedEpisodeLimit,
                 refreshUpNextAfterMerge: false
             )
-            logger.info("feed.refreshAll.itemFinished", "Finished subscription in timed cycle", metadata: [
+            if Task.isCancelled {
+                wasCancelled = true
+                break
+            }
+            completedSubscriptionIDs.insert(subscription.id)
+            logger.info("feed.refreshAll.itemFinished", "Finished subscription in timed cycle", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
-                "podcast": subscription.title,
+                "reason": reason
+            ]))
+        }
+        if wasCancelled {
+            let unfinishedCandidates = selectedCandidates.filter { candidate in
+                !completedSubscriptionIDs.contains(candidate.subscription.id)
+            }
+            restoreUnfinishedRefreshBacklog(
+                candidates: unfinishedCandidates,
+                now: Date(),
+                reason: reason
+            )
+            scheduleBackgroundRefreshForNextDueFeed()
+            logger.warning("feed.refreshAll.cancelled", "Refresh cycle stopped before all selected feeds completed", metadata: [
+                "attempted": "\(completedSubscriptionIDs.count)",
+                "unfinished": "\(unfinishedCandidates.count)",
+                "deferredBacklog": "\(deferredRefreshBacklog.count)",
                 "reason": reason
             ])
+            resourceMonitor.logSnapshot(reason: "feed.refreshAll.cancelled", context: resourceContext(), force: true)
+            return !completedSubscriptionIDs.isEmpty
         }
-        let soonestDue = subscriptionStore.subscriptions
-            .filter { !$0.excludeFromAutoFeedRefresh }
-            .map { nextRefreshDue(for: $0) }
-            .min()
-        BackgroundTaskCoordinator.scheduleAppRefresh(earliestBeginDate: soonestDue)
+        scheduleBackgroundRefreshForNextDueFeed()
         refreshUpNextEpisode(reason: "feed.refreshAll.finished")
         await runAutoArchiveIfNeeded(reason: "feed.refreshAll")
         logger.info("feed.refreshAll", "Finished refreshing all podcast feeds", metadata: [
@@ -2463,6 +2540,21 @@ final class AppState: ObservableObject {
         var profile: FeedScheduleProfile
         var prediction: FeedRefreshPrediction
         var priority: FeedRefreshPriority
+        var deferredCount: Int = 0
+        var deferredSince: Date?
+        var deferredScoreBoost: Double = 0
+    }
+
+    private struct DeferredRefreshBacklogEntry {
+        var subscriptionID: UUID
+        var title: String
+        var feedURL: URL
+        var firstDeferredAt: Date
+        var lastDeferredAt: Date
+        var lastDueAt: Date
+        var deferralCount: Int
+        var state: FeedRefreshWindowState
+        var score: Double
     }
 
     /// Priority queue for feeds already due. Learned active windows and missed
@@ -2483,16 +2575,21 @@ final class AppState: ObservableObject {
                     lastFetchedAt: subscription.refreshStats.lastFetchedAt,
                     now: now
                 )
-                return RefreshCycleCandidate(
+                var candidate = RefreshCycleCandidate(
                     subscription: subscription,
                     profile: profile,
                     prediction: prediction,
                     priority: priority
                 )
+                applyDeferredRefreshBoost(to: &candidate, now: now)
+                return candidate
             }
             .sorted { lhs, rhs in
                 if lhs.priority.score != rhs.priority.score {
                     return lhs.priority.score > rhs.priority.score
+                }
+                if lhs.deferredSince != rhs.deferredSince {
+                    return (lhs.deferredSince ?? .distantFuture) < (rhs.deferredSince ?? .distantFuture)
                 }
                 if lhs.prediction.nextDueAt != rhs.prediction.nextDueAt {
                     return lhs.prediction.nextDueAt < rhs.prediction.nextDueAt
@@ -2506,11 +2603,14 @@ final class AppState: ObservableObject {
 
     private func logRefreshCycleDecisionSummary(
         candidates: [RefreshCycleCandidate],
+        selectedCandidates: [RefreshCycleCandidate],
+        deferredCandidates: [RefreshCycleCandidate],
         selectedCount: Int,
         eligibleCount: Int,
         skippedBackoffCount: Int,
         skippedInactiveCount: Int,
         maxSubscriptions: Int?,
+        capBypassStates: Set<FeedRefreshWindowState>,
         reason: String
     ) {
         logger.info("feed.refreshAll.plan", "Planned due-feed refresh cycle", metadata: [
@@ -2520,15 +2620,19 @@ final class AppState: ObservableObject {
             "selected": "\(selectedCount)",
             "cappedOut": "\(max(0, candidates.count - selectedCount))",
             "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all",
+            "capBypassStates": refreshStateList(capBypassStates),
             "skippedBackoff": "\(skippedBackoffCount)",
             "skippedInactive": "\(skippedInactiveCount)",
+            "deferredBacklog": "\(deferredRefreshBacklog.count)",
             "stateCounts": refreshStateCounts(for: candidates),
-            "topCandidates": refreshTopCandidateSummary(for: candidates)
+            "topCandidates": refreshTopCandidateSummary(for: candidates),
+            "selectedCandidates": refreshTopCandidateSummary(for: selectedCandidates),
+            "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
         ])
     }
 
     private func refreshDecisionMetadata(for candidate: RefreshCycleCandidate) -> [String: String] {
-        [
+        var metadata = [
             "refreshScore": String(format: "%.1f", candidate.priority.score),
             "refreshFactors": candidate.priority.reason,
             "profileKind": candidate.profile.kind.rawValue,
@@ -2542,6 +2646,12 @@ final class AppState: ObservableObject {
             "expectedWindowEnd": refreshLogDate(candidate.prediction.expectedWindowEnd),
             "recheckIntervalSeconds": candidate.prediction.recheckInterval.map { "\(Int($0.rounded()))" } ?? "none"
         ]
+        if candidate.deferredCount > 0 {
+            metadata["deferredRefreshCount"] = "\(candidate.deferredCount)"
+            metadata["deferredRefreshSince"] = refreshLogDate(candidate.deferredSince)
+            metadata["deferredRefreshBoost"] = String(format: "%.1f", candidate.deferredScoreBoost)
+        }
+        return metadata
     }
 
     private func refreshStateCounts(for candidates: [RefreshCycleCandidate]) -> String {
@@ -2556,11 +2666,20 @@ final class AppState: ObservableObject {
             .joined(separator: ",")
     }
 
+    private func refreshStateList(_ states: Set<FeedRefreshWindowState>) -> String {
+        let values = FeedRefreshWindowState.allCases
+            .filter(states.contains)
+            .map(\.rawValue)
+        return values.isEmpty ? "none" : values.joined(separator: ",")
+    }
+
     private func refreshTopCandidateSummary(for candidates: [RefreshCycleCandidate]) -> String {
         candidates.prefix(5)
             .map { candidate in
                 let score = String(format: "%.1f", candidate.priority.score)
-                return "\(score)|\(candidate.prediction.state.rawValue)|\(candidate.profile.kind.rawValue)|\(candidate.subscription.title)"
+                let hash = refreshFeedHash(for: candidate.subscription.feedURL)
+                let deferred = candidate.deferredCount > 0 ? "|deferred:\(candidate.deferredCount)" : ""
+                return "\(score)|\(candidate.prediction.state.rawValue)|\(candidate.profile.kind.rawValue)|id:\(candidate.subscription.id.uuidString)|hash:\(hash)\(deferred)|\(candidate.subscription.title)"
             }
             .joined(separator: "; ")
     }
@@ -2568,6 +2687,130 @@ final class AppState: ObservableObject {
     private func refreshLogDate(_ date: Date?) -> String {
         guard let date else { return "none" }
         return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func refreshFeedMetadata(
+        for subscription: Subscription,
+        includeURL: Bool = true,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata = [
+            "podcast": subscription.title,
+            "subscriptionID": subscription.id.uuidString,
+            "feedHash": refreshFeedHash(for: subscription.feedURL)
+        ]
+        if includeURL {
+            metadata["url"] = subscription.feedURL.absoluteString
+        }
+        metadata.merge(extra) { _, new in new }
+        return metadata
+    }
+
+    private func refreshFeedHash(for url: URL) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in url.absoluteString.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private func scheduleBackgroundRefreshForNextDueFeed() {
+        let soonestDue = subscriptionStore.subscriptions
+            .filter { !$0.excludeFromAutoFeedRefresh }
+            .map { nextRefreshDue(for: $0) }
+            .min()
+        BackgroundTaskCoordinator.scheduleAppRefresh(earliestBeginDate: soonestDue)
+    }
+
+    private func applyDeferredRefreshBoost(to candidate: inout RefreshCycleCandidate, now: Date) {
+        guard let entry = deferredRefreshBacklog[candidate.subscription.id] else { return }
+        let ageHours = max(0, now.timeIntervalSince(entry.firstDeferredAt) / 3600)
+        let boost = min(
+            refreshDeferralMaxScoreBoost,
+            Double(entry.deferralCount) * refreshDeferralScoreBoostPerCycle
+                + ageHours * refreshDeferralAgeBoostPerHour
+        )
+        let roundedBoost = (boost * 10).rounded() / 10
+        guard roundedBoost > 0 else { return }
+        candidate.deferredCount = entry.deferralCount
+        candidate.deferredSince = entry.firstDeferredAt
+        candidate.deferredScoreBoost = roundedBoost
+        candidate.priority.score = ((candidate.priority.score + roundedBoost) * 10).rounded() / 10
+        candidate.priority.factors.append("deferred \(entry.deferralCount)x")
+        candidate.priority.reason = candidate.priority.factors.joined(separator: ", ")
+    }
+
+    private func reconcileDeferredRefreshBacklog(
+        dueCandidates: [RefreshCycleCandidate],
+        selectedCandidates: [RefreshCycleCandidate],
+        deferredCandidates: [RefreshCycleCandidate],
+        now: Date,
+        reason: String
+    ) {
+        let previousBacklogCount = deferredRefreshBacklog.count
+        let dueIDs = Set(dueCandidates.map(\.subscription.id))
+        deferredRefreshBacklog = deferredRefreshBacklog.filter { dueIDs.contains($0.key) }
+
+        for candidate in selectedCandidates {
+            deferredRefreshBacklog.removeValue(forKey: candidate.subscription.id)
+        }
+        for candidate in deferredCandidates {
+            recordDeferredRefreshCandidate(candidate, now: now)
+        }
+
+        if !deferredCandidates.isEmpty || deferredRefreshBacklog.count != previousBacklogCount {
+            logger.info("feed.refreshAll.backlog", "Checkpointed deferred due-feed backlog", metadata: [
+                "reason": reason,
+                "selected": "\(selectedCandidates.count)",
+                "deferred": "\(deferredCandidates.count)",
+                "backlogCount": "\(deferredRefreshBacklog.count)",
+                "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
+            ])
+        }
+    }
+
+    private func restoreUnfinishedRefreshBacklog(
+        candidates: [RefreshCycleCandidate],
+        now: Date,
+        reason: String
+    ) {
+        guard !candidates.isEmpty else { return }
+        for candidate in candidates {
+            recordDeferredRefreshCandidate(candidate, now: now)
+        }
+        logger.warning("feed.refreshAll.checkpoint", "Checkpointed unfinished selected feeds", metadata: [
+            "reason": reason,
+            "unfinished": "\(candidates.count)",
+            "backlogCount": "\(deferredRefreshBacklog.count)",
+            "unfinishedCandidates": refreshTopCandidateSummary(for: candidates)
+        ])
+    }
+
+    private func recordDeferredRefreshCandidate(_ candidate: RefreshCycleCandidate, now: Date) {
+        let subscription = candidate.subscription
+        if var entry = deferredRefreshBacklog[subscription.id] {
+            entry.title = subscription.title
+            entry.feedURL = subscription.feedURL
+            entry.lastDeferredAt = now
+            entry.lastDueAt = candidate.prediction.nextDueAt
+            entry.deferralCount += 1
+            entry.state = candidate.prediction.state
+            entry.score = candidate.priority.score
+            deferredRefreshBacklog[subscription.id] = entry
+        } else {
+            deferredRefreshBacklog[subscription.id] = DeferredRefreshBacklogEntry(
+                subscriptionID: subscription.id,
+                title: subscription.title,
+                feedURL: subscription.feedURL,
+                firstDeferredAt: now,
+                lastDeferredAt: now,
+                lastDueAt: candidate.prediction.nextDueAt,
+                deferralCount: 1,
+                state: candidate.prediction.state,
+                score: candidate.priority.score
+            )
+        }
     }
 
     /// Archives the oldest excess episodes so the newest can always download —
@@ -3413,10 +3656,11 @@ final class AppState: ObservableObject {
 
 // AI CONTEXT — ListeningHistoryStore: persists per-episode listening log to
 // Application Support/Autohop/listening-history.json (max 500 entries, oldest
-// dropped). Entries are keyed by episode GUID/URL (historyKey) so the same
-// episode re-fetched from a feed merges into one entry. recordProgress() is
-// called from AppState playback ticks; mark() sets played/archived status with
-// a CompletionKind used later by ShowEngagementAnalyzer ("drifting" stats).
+// dropped). Entries are keyed by subscription-scoped episode GUID/URL
+// (historyKey) so the same episode re-fetched from a feed merges into one entry
+// without colliding across feeds. recordProgress() is called from AppState
+// playback ticks; mark() sets played/archived status with a CompletionKind used
+// later by ShowEngagementAnalyzer ("drifting" stats).
 // UI filters out entries with < 60 s listened — that rule lives in the views,
 // not here. Value types live in Models/ListeningHistory.swift.
 @MainActor

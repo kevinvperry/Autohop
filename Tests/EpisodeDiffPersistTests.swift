@@ -4,7 +4,8 @@
 // changed, instead of the old delete-all-then-reinsert-everything path that
 // re-wrote every episode row (and ran a per-episode sync-state round-trip) on any
 // subscription change. Asserts via the `_testEpisodeRowPayloadWrites` seam plus
-// load-back correctness (value change, reorder/insert, delete).
+// load-back correctness (value change, reorder/insert, delete), including
+// subscription-scoped episode sync rows when two feeds reuse the same GUID.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -68,6 +69,34 @@ final class EpisodeDiffPersistTests: XCTestCase {
         // Only the touched episode produced a pending sync projection.
         let pending = try db.pendingEpisodeSyncStates()
         XCTAssertEqual(pending.count, 1)
+    }
+
+    func testEpisodeSyncStateIsScopedBySubscriptionWhenGuidsMatch() throws {
+        let db = try AutohopDatabase()
+        let sharedGUID = "shared-guid"
+        let firstID = UUID()
+        let secondID = UUID()
+
+        var first = Subscription(id: firstID, feedURL: URL(string: "https://f.com/one")!, title: "One", priorityRank: 1)
+        var firstEpisode = Episode(subscriptionID: firstID, guid: sharedGUID, title: "Episode", audioURL: URL(string: "https://f.com/one.mp3")!)
+        firstEpisode.playedState = .played
+        first.episodes = [firstEpisode]
+        first.latestEpisode = firstEpisode
+
+        var second = Subscription(id: secondID, feedURL: URL(string: "https://f.com/two")!, title: "Two", priorityRank: 2)
+        var secondEpisode = Episode(subscriptionID: secondID, guid: sharedGUID, title: "Episode", audioURL: URL(string: "https://f.com/two.mp3")!)
+        secondEpisode.playedState = .archived
+        second.episodes = [secondEpisode]
+        second.latestEpisode = secondEpisode
+
+        try db.persist(current: [first, second], previous: [:])
+
+        let pending = try db.pendingEpisodeSyncStates()
+        XCTAssertEqual(pending.count, 2)
+        XCTAssertEqual(Set(pending.map(\.guid)), Set([sharedGUID]))
+        XCTAssertEqual(Set(pending.map(\.syncKey)).count, 2)
+        XCTAssertEqual(try db.episodeSyncState(subscriptionID: firstID, guid: sharedGUID)?.playedState, .played)
+        XCTAssertEqual(try db.episodeSyncState(subscriptionID: secondID, guid: sharedGUID)?.playedState, .archived)
     }
 
     func testPrependedEpisodeInsertsOneRowAndPreservesOrder() throws {

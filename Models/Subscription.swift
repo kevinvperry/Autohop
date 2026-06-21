@@ -21,12 +21,16 @@ import Foundation
 //    confidence without touching app state or network code.
 //  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
 //    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
-//    rotation during active/missed windows, stand down during quiet periods, and
-//    fall back to the legacy cadence model when the profile is incomplete.
+//    rotation during active/fresh-missed windows, expire stale missed-release
+//    urgency after repeated empty checks or window age, stand down during quiet
+//    periods, and fall back to the legacy cadence model when the profile is
+//    incomplete.
 //  - FeedRefreshPrioritizer: scores already-due feeds so AppState's timed and
 //    background cycles spend limited refresh slots on missed releases, active
 //    windows, high-confidence hourly/burst feeds, learning/random feeds, user
 //    priority rank, stale feeds, and overdue feeds before ordinary due work.
+//  - FeedRefreshBudgeting: pure budget selector used by AppState to cap due-feed
+//    cycles while letting active/pre-window states bypass the foreground cap.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
 //    order), episodes array, playbackPreference, notificationsEnabled
 //    (default false), excludeFromAutoFeedRefresh, and browseDate — non-nil
@@ -799,7 +803,7 @@ public enum FeedScheduleProfiler {
 
 // MARK: - Feed refresh scheduling
 
-public enum FeedRefreshWindowState: String, CaseIterable, Codable, Sendable {
+public enum FeedRefreshWindowState: String, CaseIterable, Codable, Sendable, Hashable {
     case learning
     case unreliableDates
     case randomSurveillance
@@ -851,6 +855,11 @@ public enum FeedRefreshScheduling {
     public static let maxRecheckInterval: TimeInterval = 24 * 60 * 60
     /// Fraction of the median interval at which checking starts ahead of the expected drop.
     public static let windowOpenFraction = 0.75
+    /// Missed-release urgency is deliberately short-lived. After enough post-window
+    /// 304/no-new checks, or once the missed window is old, the feed falls back to
+    /// low-priority surveillance instead of dominating future capped cycles.
+    public static let missedReleaseEmptyFetchLimit = 6
+    public static let missedReleaseMaxUrgencyAge: TimeInterval = 6 * 60 * 60
 
     private struct RefreshSlot {
         var preWindowStart: Date
@@ -1052,34 +1061,48 @@ public enum FeedRefreshScheduling {
             )
 
         case .random:
-            let interval = min(baseRecheck, 15 * 60)
+            let interval = randomSurveillanceRecheckInterval(
+                stats: stats,
+                baseRecheck: baseRecheck,
+                now: now
+            )
             return regularPrediction(
                 profile: profile,
                 state: .randomSurveillance,
                 stats: stats,
                 recheckInterval: interval,
                 now: now,
-                reason: "Random feed: check regularly because no reliable quiet window is known."
+                reason: "Random feed: use low-frequency surveillance because no reliable quiet window is known."
             )
 
         case .learning:
+            let interval = learningRecheckInterval(
+                profile: profile,
+                stats: stats,
+                baseRecheck: baseRecheck
+            )
             return regularPrediction(
                 profile: profile,
                 state: .learning,
                 stats: stats,
-                recheckInterval: baseRecheck,
+                recheckInterval: interval,
                 now: now,
-                reason: "Learning feed: check regularly until enough release history is captured."
+                reason: "Learning feed: check frequently at first, then decay after repeated empty checks."
             )
 
         case .unreliableDates:
+            let interval = unreliableDatesRecheckInterval(
+                stats: stats,
+                baseRecheck: baseRecheck,
+                now: now
+            )
             return regularPrediction(
                 profile: profile,
                 state: .unreliableDates,
                 stats: stats,
-                recheckInterval: baseRecheck,
+                recheckInterval: interval,
                 now: now,
-                reason: "RSS dates are unreliable; fall back to regular first-seen surveillance."
+                reason: "RSS dates are unreliable; use low-frequency first-seen surveillance."
             )
         }
     }
@@ -1261,6 +1284,22 @@ public enum FeedRefreshScheduling {
         }
 
         let lateBy = now.timeIntervalSince(slot.windowEnd)
+        if missedReleaseUrgencyExpired(lateBy: lateBy, stats: stats, slot: slot) {
+            let interval = expiredMissedReleaseRecheckInterval(baseRecheck: baseRecheck)
+            let fallbackDue = dueFromLastFetch(stats.lastFetchedAt, interval: interval, now: now)
+            let nextWindowDue = nextSlot?.preWindowStart
+            let nextDue = [fallbackDue, nextWindowDue].compactMap { $0 }.min() ?? fallbackDue
+            return FeedRefreshPrediction(
+                nextDueAt: nextDue,
+                state: .fallback,
+                profileKind: profile.kind,
+                expectedWindowStart: slot.windowStart,
+                expectedWindowEnd: slot.windowEnd,
+                recheckInterval: interval,
+                reason: "Missed-release urgency expired after repeated empty checks or window age; use low-priority surveillance until the next learned window."
+            )
+        }
+
         let interval = missedRecheck(lateBy, baseRecheck)
         return FeedRefreshPrediction(
             nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: interval, now: now),
@@ -1344,6 +1383,91 @@ public enum FeedRefreshScheduling {
         return lastFetchedAt.addingTimeInterval(interval)
     }
 
+    private static func missedReleaseUrgencyExpired(
+        lateBy: TimeInterval,
+        stats: RefreshStats,
+        slot: RefreshSlot
+    ) -> Bool {
+        if lateBy >= missedReleaseMaxUrgencyAge {
+            return true
+        }
+
+        guard stats.consecutiveEmptyFetches >= missedReleaseEmptyFetchLimit,
+              let lastFetchedAt = stats.lastFetchedAt,
+              lastFetchedAt >= slot.windowEnd
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func expiredMissedReleaseRecheckInterval(baseRecheck: TimeInterval) -> TimeInterval {
+        min(max(baseRecheck * 12, 60 * 60), 6 * 60 * 60)
+    }
+
+    private static func learningRecheckInterval(
+        profile: FeedScheduleProfile,
+        stats: RefreshStats,
+        baseRecheck: TimeInterval
+    ) -> TimeInterval {
+        guard stats.lastFetchedAt != nil else { return baseRecheck }
+        let emptyFetches = max(0, stats.consecutiveEmptyFetches)
+        guard emptyFetches > 3 else { return baseRecheck }
+
+        let decayStep = min(5, (emptyFetches - 1) / 3)
+        let decayed = baseRecheck * pow(2, Double(decayStep))
+        let cap: TimeInterval = profile.observationCount == 0 ? 30 * 60 : 60 * 60
+        return min(max(baseRecheck, decayed), cap)
+    }
+
+    private static func randomSurveillanceRecheckInterval(
+        stats: RefreshStats,
+        baseRecheck: TimeInterval,
+        now: Date
+    ) -> TimeInterval {
+        var interval = surveillanceBaselineInterval(
+            stats: stats,
+            baseRecheck: baseRecheck
+        )
+
+        if let lastNewEpisodeAt = stats.lastNewEpisodeAt {
+            let age = max(0, now.timeIntervalSince(lastNewEpisodeAt))
+            if age <= 2 * 60 * 60 {
+                interval = min(interval, max(baseRecheck, 5 * 60))
+            } else if age <= 6 * 60 * 60 {
+                interval = min(interval, max(baseRecheck, 10 * 60))
+            }
+        }
+
+        return interval
+    }
+
+    private static func unreliableDatesRecheckInterval(
+        stats: RefreshStats,
+        baseRecheck: TimeInterval,
+        now: Date
+    ) -> TimeInterval {
+        randomSurveillanceRecheckInterval(
+            stats: stats,
+            baseRecheck: baseRecheck,
+            now: now
+        )
+    }
+
+    private static func surveillanceBaselineInterval(
+        stats: RefreshStats,
+        baseRecheck: TimeInterval
+    ) -> TimeInterval {
+        var interval = min(max(baseRecheck, 15 * 60), 60 * 60)
+        let emptyFetches = max(0, stats.consecutiveEmptyFetches)
+        if emptyFetches >= 24 {
+            interval = max(interval, 60 * 60)
+        } else if emptyFetches >= 12 {
+            interval = max(interval, 30 * 60)
+        }
+        return interval
+    }
+
     private static func missedRecheckInterval(lateBy: TimeInterval, baseRecheck: TimeInterval) -> TimeInterval {
         if lateBy <= 2 * 60 * 60 {
             return baseRecheck
@@ -1366,6 +1490,70 @@ public struct FeedRefreshPriority: Equatable, Codable, Sendable {
         self.score = score
         self.reason = reason
         self.factors = factors
+    }
+}
+
+// MARK: - Feed refresh budgeting
+
+public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
+    /// Nil, zero, or a negative value means "unlimited" for compatibility with
+    /// the existing manual/foreground refresh paths.
+    public var maxSelections: Int?
+    /// States that should be selected even after the normal budget is full. These
+    /// candidates do not consume budget slots.
+    public var capBypassStates: Set<FeedRefreshWindowState>
+
+    public init(
+        maxSelections: Int?,
+        capBypassStates: Set<FeedRefreshWindowState> = []
+    ) {
+        self.maxSelections = maxSelections
+        self.capBypassStates = capBypassStates
+    }
+}
+
+public struct FeedRefreshBudgetSelection<Candidate> {
+    public var selected: [Candidate]
+    public var deferred: [Candidate]
+
+    public var cappedOutCount: Int { deferred.count }
+
+    public init(selected: [Candidate], deferred: [Candidate]) {
+        self.selected = selected
+        self.deferred = deferred
+    }
+}
+
+public enum FeedRefreshBudgeting {
+    /// Applies a refresh budget to an already-prioritized candidate list while
+    /// preserving candidate order. Bypass states remain selected even when the
+    /// normal cap has been filled.
+    public static func select<Candidate>(
+        candidates: [Candidate],
+        policy: FeedRefreshBudgetPolicy,
+        state: (Candidate) -> FeedRefreshWindowState
+    ) -> FeedRefreshBudgetSelection<Candidate> {
+        guard let maxSelections = policy.maxSelections, maxSelections > 0 else {
+            return FeedRefreshBudgetSelection(selected: candidates, deferred: [])
+        }
+
+        var remainingBudget = maxSelections
+        var selected: [Candidate] = []
+        var deferred: [Candidate] = []
+        selected.reserveCapacity(min(candidates.count, maxSelections))
+
+        for candidate in candidates {
+            if policy.capBypassStates.contains(state(candidate)) {
+                selected.append(candidate)
+            } else if remainingBudget > 0 {
+                selected.append(candidate)
+                remainingBudget -= 1
+            } else {
+                deferred.append(candidate)
+            }
+        }
+
+        return FeedRefreshBudgetSelection(selected: selected, deferred: deferred)
     }
 }
 

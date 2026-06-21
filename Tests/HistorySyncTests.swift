@@ -56,7 +56,7 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertEqual(try db.pendingHistoryEntries().count, 1)
         XCTAssertEqual(try db.historyEntry(id: e.id)?.episodeTitle, "Episode")
 
-        try db.markSynced(episodeGuids: [], subscriptionIDs: [], historyIDs: [e.id])
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [e.id])
         XCTAssertTrue(try db.pendingHistoryEntries().isEmpty)
     }
 
