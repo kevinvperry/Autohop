@@ -1,8 +1,12 @@
 // AI CONTEXT — Tests/CloudKitSyncMappingTests.swift. Unit tests for the
 // field-level last-write-wins merge (EpisodeSyncState.merged) and the
 // CKRecord <-> EpisodeSyncState mapping (CloudKitSync) — the testable core of
-// sync. Covers subscription-scoped EpisodeState record names and legacy bare-GUID
-// decode compatibility. No network or CKSyncEngine; CKRecords are in-memory.
+// sync. Covers type-namespaced CloudKit record names, subscription-scoped
+// EpisodeState identity, and legacy bare-GUID/unprefixed decode compatibility.
+// No network or CKSyncEngine; CKRecords are in-memory. When changing
+// CloudKitSync record-name helpers, update both the current namespaced and
+// legacy decode assertions here so the Phase-2 namespace repair remains
+// backward-compatible.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -93,7 +97,7 @@ final class CloudKitSyncMappingTests: XCTestCase {
         let state = EpisodeSyncState(episode: ep, subscriptionID: subID)
 
         let record = CloudKitSync.makeRecord(from: state)
-        XCTAssertEqual(record.recordID.recordName, EpisodeSyncState.syncKey(subscriptionID: subID, guid: "abc"))
+        XCTAssertEqual(record.recordID.recordName, CloudKitSync.episodeRecordName(syncKey: EpisodeSyncState.syncKey(subscriptionID: subID, guid: "abc")))
         XCTAssertEqual(record.recordType, CloudKitSync.episodeRecordType)
         XCTAssertEqual(record["guid"] as? String, "abc")
 
@@ -104,6 +108,20 @@ final class CloudKitSyncMappingTests: XCTestCase {
         XCTAssertEqual(decoded.playedState, .played)
         XCTAssertTrue(decoded.wasCompleted)
         XCTAssertEqual(decoded.lastPlayedAt, ep.lastPlayedAt)
+    }
+
+    func testNamespacedEpisodeRecordCanDecodeFromRecordNameOnly() throws {
+        let subID = UUID()
+        let syncKey = EpisodeSyncState.syncKey(subscriptionID: subID, guid: "abc")
+        let record = CKRecord(
+            recordType: CloudKitSync.episodeRecordType,
+            recordID: CloudKitSync.episodeRecordID(syncKey: syncKey)
+        )
+
+        let decoded = try XCTUnwrap(CloudKitSync.episodeSyncState(from: record))
+        XCTAssertEqual(decoded.guid, "abc")
+        XCTAssertEqual(decoded.subscriptionID, subID)
+        XCTAssertEqual(decoded.syncKey, syncKey)
     }
 
     func testDuplicateGuidsInDifferentSubscriptionsProduceDifferentRecordNames() {
@@ -136,6 +154,20 @@ final class CloudKitSyncMappingTests: XCTestCase {
         XCTAssertEqual(decoded.guid, "legacy-guid")
         XCTAssertEqual(decoded.subscriptionID, subID)
         XCTAssertEqual(decoded.syncKey, EpisodeSyncState.syncKey(subscriptionID: subID, guid: "legacy-guid"))
+    }
+
+    func testLegacyScopedEpisodeRecordStillDecodesFromRecordName() throws {
+        let subID = UUID()
+        let syncKey = EpisodeSyncState.syncKey(subscriptionID: subID, guid: "legacy-guid")
+        let record = CKRecord(
+            recordType: CloudKitSync.episodeRecordType,
+            recordID: CKRecord.ID(recordName: syncKey, zoneID: CloudKitSync.zoneID)
+        )
+
+        let decoded = try XCTUnwrap(CloudKitSync.episodeSyncState(from: record))
+        XCTAssertEqual(decoded.guid, "legacy-guid")
+        XCTAssertEqual(decoded.subscriptionID, subID)
+        XCTAssertEqual(decoded.syncKey, syncKey)
     }
 
     func testCleanFieldsAreNotWritten() {

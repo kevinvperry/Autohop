@@ -12,6 +12,12 @@ variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
 Section 15.1 documents Release Radar's learned scheduling, foreground/background
 caps, deferred backlog draining, cancellation checkpoints, and diagnostic fields.
+Section 7/15.1 documents that feed refresh schedules auto-downloads without
+waiting for media transfer completion. Section 15.7 documents CloudKit
+type-namespaced record IDs and collision containment. Section 15.9 documents
+diagnostic resource snapshots (`footprintMB`) and main-thread hang context.
+These notes are the user/product-facing counterpart to the June 2026 diagnostic
+repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -271,6 +277,8 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 **Audio row (below the transport controls):** Sound Settings · Sleep Timer · AirPlay route picker (shows the current output name) · Share · Archive.
 
+**Audio route changes:** Removing AirPods/headphones still pauses playback and requires deliberate user action to resume. Active output transitions while the AVAudioEngine path is playing (for example AirPods ↔ Speaker route changes that do not represent device removal) proactively restart the engine buffer loop from the current playback position, with a short debounce, so the render watchdog is less likely to be the first recovery path.
+
 **Share:** Opens `EpisodeShareSheet` — previews a rendered share card (episode artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL.
 
 **Archive:** Opens a confirmation sheet; on confirm, archives the currently playing episode, deletes its downloaded file, and advances to the next queued episode.
@@ -376,7 +384,7 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Download-first playback:** Autohop only plays files already on the device — no streaming. Background downloads keep the queue stocked automatically as new episodes are fetched.
 
-**Auto-download:** New episodes discovered during a feed refresh are automatically queued for download (`AppState.refreshSubscription()` triggers download on new episode detection).
+**Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional.
 
 **Download states:** `notDownloaded` → `queued` → `downloading` → `downloaded` / `failed`
 
@@ -742,17 +750,19 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 **HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
 
+**Refresh/download separation:** A successful refresh finishes once the RSS response has been fetched, parsed, merged into the subscription, and any automatic download has been scheduled. Slow or stalled media transfers continue through the download queue and no longer keep manual refresh, timed Release Radar refresh, or background refresh marked in progress. The scheduled auto-download path re-validates that the subscription still exists, is not a browse preview, still has the same latest episode, and that the latest episode has not already been played or archived.
+
 **Manual, timed, and background refresh:**
 
 | Trigger | Behaviour |
 |---|---|
-| Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. |
-| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. |
-| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. |
+| Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. It does not wait for any scheduled auto-download to complete. |
+| Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. Auto-downloads run separately after each successful feed merge. |
+| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
 
 **Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
 
-**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. These logs are the primary tuning surface for Release Radar.
+**Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. `feed.autoDownloadScheduled`, `feed.autoDownloadStart`, and `feed.autoDownloadSkipped` trace the post-refresh media scheduling path. These logs are the primary tuning surface for Release Radar.
 
 **Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
@@ -834,6 +844,8 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys.
 
+**CloudKit identity and repair:** CloudKit record names are type-namespaced (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique across record types inside the shared zone. Legacy unprefixed records still decode for existing iCloud data. A known permanent legacy collision where a `HistoryEntry` record blocks an `EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the hot retry loop, and left dirty locally so the next queue pass can send it under the new `episode:` name. Restored pre-namespace save attempts are dropped before sending; deletes are preserved. Old unprefixed CloudKit records may remain as harmless server-side orphans.
+
 ---
 
 ### 15.8 Storage
@@ -852,6 +864,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, and `resources.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory; main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, and download state. |
 
 ---
 

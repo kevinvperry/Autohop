@@ -7,6 +7,14 @@ import CloudKit
 // mapping between sync-state projections / history / stats and CloudKit CKRecords
 // (no networking, no CKSyncEngine), so it is fully unit-testable on macOS. The
 // detailed schema/merge contract is documented on the `CloudKitSync` enum below.
+//
+// IMPORTANT FOR FUTURE AI MODELS: CloudKit record IDs are unique across record
+// types inside a zone, so every outbound record name MUST stay type-prefixed
+// (`episode:`, `subscription:`, `history:`, `stats:`). Do not construct
+// CKRecord.IDs by hand elsewhere; use these helpers so legacy unprefixed decode
+// fallbacks and current namespaced IDs stay paired. SubscriptionState also
+// stores `subscriptionID` as a field because the namespaced record name is no
+// longer just the UUID.
 
 // Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
 // Generated once and persisted in UserDefaults — stats records are keyed by
@@ -26,13 +34,17 @@ public enum DeviceIdentity {
 // just the record schema and value translation, so it is fully unit-testable on
 // macOS. (File-level AI CONTEXT header is at the top of the file.)
 //
-// Schema: one record per episode (type "EpisodeState", recordName =
-// subscriptionID|guid:<guid>) and one per subscription (type "SubscriptionState",
-// recordName = subscriptionID), plus HistoryEntry and DayStats records in the
-// same custom zone. EpisodeState still decodes legacy bare-GUID record names by
-// combining them with the stored subscriptionID field. Each syncable field is
-// stored alongside a `<field>ModifiedAt` date carrying that field's authoritative
-// server timestamp — the basis for the field-level last-write-wins merge.
+// Schema: one record per episode, subscription, history entry, and stats day in
+// the same custom zone. Outbound record names are type-namespaced
+// (`episode:...`, `subscription:...`, `history:...`, `stats:...`) because
+// CloudKit record IDs are unique across record types inside a zone; the legacy
+// unprefixed names can therefore collide (the production example was a
+// HistoryEntry record later saved as EpisodeState). Decoders still accept legacy
+// unprefixed records fetched from existing iCloud databases.
+//
+// Each syncable field is stored alongside a `<field>ModifiedAt` date carrying
+// that field's authoritative server timestamp — the basis for the field-level
+// last-write-wins merge.
 //
 // OUTBOUND RULE: populate() writes only fields with a pending local change, so
 // pushing a record that changed one field never clobbers the server's value/
@@ -44,6 +56,13 @@ public enum CloudKitSync {
     public static let historyRecordType = "HistoryEntry"
     public static let statsRecordType = "DayStats"
 
+    private enum RecordName {
+        static let episodePrefix = "episode:"
+        static let subscriptionPrefix = "subscription:"
+        static let historyPrefix = "history:"
+        static let statsPrefix = "stats:"
+    }
+
     private static let jsonEncoder = JSONEncoder()
     private static let jsonDecoder = JSONDecoder()
 
@@ -51,8 +70,16 @@ public enum CloudKitSync {
         CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
     }
 
+    public static func episodeRecordName(syncKey: String) -> String {
+        "\(RecordName.episodePrefix)\(syncKey)"
+    }
+
+    public static func episodeSyncKey(fromRecordName recordName: String) -> String {
+        stripped(recordName, prefix: RecordName.episodePrefix) ?? recordName
+    }
+
     public static func episodeRecordID(syncKey: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: syncKey, zoneID: zoneID)
+        CKRecord.ID(recordName: episodeRecordName(syncKey: syncKey), zoneID: zoneID)
     }
 
     public static func episodeRecordID(subscriptionID: UUID, guid: String) -> CKRecord.ID {
@@ -63,12 +90,56 @@ public enum CloudKitSync {
         episodeRecordID(syncKey: state.syncKey)
     }
 
+    public static func subscriptionRecordName(id: UUID) -> String {
+        "\(RecordName.subscriptionPrefix)\(id.uuidString)"
+    }
+
+    public static func subscriptionID(fromRecordName recordName: String) -> UUID? {
+        let idString = stripped(recordName, prefix: RecordName.subscriptionPrefix) ?? recordName
+        return UUID(uuidString: idString)
+    }
+
     public static func subscriptionRecordID(id: UUID) -> CKRecord.ID {
-        CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+        CKRecord.ID(recordName: subscriptionRecordName(id: id), zoneID: zoneID)
+    }
+
+    public static func historyRecordName(id: String) -> String {
+        "\(RecordName.historyPrefix)\(id)"
+    }
+
+    public static func historyID(fromRecordName recordName: String) -> String {
+        stripped(recordName, prefix: RecordName.historyPrefix) ?? recordName
     }
 
     public static func historyRecordID(id: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: id, zoneID: zoneID)
+        CKRecord.ID(recordName: historyRecordName(id: id), zoneID: zoneID)
+    }
+
+    public static func statsRecordName(deviceID: String, dayKey: String) -> String {
+        "\(RecordName.statsPrefix)\(deviceID):\(dayKey)"
+    }
+
+    public static func statsIdentity(fromRecordName recordName: String) -> (deviceID: String, dayKey: String)? {
+        let body = stripped(recordName, prefix: RecordName.statsPrefix) ?? recordName
+        let parts = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        return (String(parts[0]), String(parts[1]))
+    }
+
+    public static func statsDayKey(fromRecordName recordName: String) -> String? {
+        statsIdentity(fromRecordName: recordName)?.dayKey
+    }
+
+    public static func isCurrentRecordName(_ recordName: String) -> Bool {
+        recordName.hasPrefix(RecordName.episodePrefix)
+            || recordName.hasPrefix(RecordName.subscriptionPrefix)
+            || recordName.hasPrefix(RecordName.historyPrefix)
+            || recordName.hasPrefix(RecordName.statsPrefix)
+    }
+
+    private static func stripped(_ value: String, prefix: String) -> String? {
+        guard value.hasPrefix(prefix) else { return nil }
+        return String(value.dropFirst(prefix.count))
     }
 
     // MARK: - Episode mapping
@@ -119,12 +190,13 @@ public enum CloudKitSync {
     /// the merge). Returns nil only if the required identity is unreadable.
     public static func episodeSyncState(from record: CKRecord, subscriptionID fallbackSubscriptionID: UUID? = nil) -> EpisodeSyncState? {
         let recordName = record.recordID.recordName
+        let legacyOrSyncKey = episodeSyncKey(fromRecordName: recordName)
         let guid = (record[Key.guid] as? String)
-            ?? EpisodeSyncState.guid(fromSyncKey: recordName)
-            ?? recordName
+            ?? EpisodeSyncState.guid(fromSyncKey: legacyOrSyncKey)
+            ?? legacyOrSyncKey
 
         guard let subscriptionID = (record[Key.subscriptionID] as? String).flatMap(UUID.init(uuidString:))
-            ?? EpisodeSyncState.subscriptionID(fromSyncKey: recordName)
+            ?? EpisodeSyncState.subscriptionID(fromSyncKey: legacyOrSyncKey)
             ?? fallbackSubscriptionID
         else { return nil }
 
@@ -153,6 +225,7 @@ public enum CloudKitSync {
     // MARK: - Subscription mapping
 
     private enum SubKey {
+        static let subscriptionID = "subscriptionID"
         static let feedURL = "feedURL"
         static let subscribed = "subscribed"
         static let subscribedModifiedAt = "subscribedModifiedAt"
@@ -181,6 +254,7 @@ public enum CloudKitSync {
     /// Overlays only the dirty fields onto the record (preserving server values
     /// for fields unchanged locally). `feedURL` is constant and always written.
     public static func populate(_ record: CKRecord, from state: SubscriptionSyncState) {
+        record[SubKey.subscriptionID] = state.subscriptionID.uuidString
         record[SubKey.feedURL] = state.feedURL.absoluteString
 
         if let modifiedAt = state.$subscribed.modifiedAt {
@@ -218,7 +292,8 @@ public enum CloudKitSync {
     }
 
     public static func subscriptionSyncState(from record: CKRecord) -> SubscriptionSyncState? {
-        guard let id = UUID(uuidString: record.recordID.recordName),
+        guard let id = (record[SubKey.subscriptionID] as? String).flatMap(UUID.init(uuidString:))
+                ?? subscriptionID(fromRecordName: record.recordID.recordName),
               let feedURLString = record[SubKey.feedURL] as? String,
               let feedURL = URL(string: feedURLString)
         else { return nil }
@@ -275,7 +350,7 @@ public enum CloudKitSync {
         return try? jsonDecoder.decode(ListeningHistoryEntry.self, from: data)
     }
 
-    // MARK: - Stats mapping (per-device partition; recordName = "deviceID:dayKey")
+    // MARK: - Stats mapping (per-device partition; recordName = "stats:deviceID:dayKey")
 
     private enum StatsKey {
         static let deviceID = "deviceID"
@@ -284,7 +359,7 @@ public enum CloudKitSync {
     }
 
     public static func statsRecordID(deviceID: String, dayKey: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: "\(deviceID):\(dayKey)", zoneID: zoneID)
+        CKRecord.ID(recordName: statsRecordName(deviceID: deviceID, dayKey: dayKey), zoneID: zoneID)
     }
 
     public static func makeRecord(deviceID: String, day: DayStats) -> CKRecord {

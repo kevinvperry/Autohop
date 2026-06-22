@@ -1,8 +1,10 @@
 // AI CONTEXT — Tests/HistorySyncTests.swift. Tests listening-history sync
-// (SYNC_DESIGN.md step 5a): the CKRecord round-trip and the AutohopDatabase
-// pending/record accessors. Record-level LWW by lastListenedAt. No CloudKit
-// network. (The applyRemote merge itself lives in ListeningHistoryStore in the
-// app target and is exercised by the on-device build.)
+// (SYNC_DESIGN.md step 5a): the type-namespaced CKRecord round-trip and the
+// AutohopDatabase pending/record accessors. Record-level LWW by lastListenedAt.
+// No CloudKit network. (The applyRemote merge itself lives in
+// ListeningHistoryStore in the app target and is exercised by the on-device
+// build.) The record-name parser assertions protect the Phase-2 legacy fallback
+// for old unprefixed HistoryEntry records.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -36,7 +38,7 @@ final class HistorySyncTests: XCTestCase {
         let e = entry()
         let record = CloudKitSync.makeRecord(from: e)
         XCTAssertEqual(record.recordType, CloudKitSync.historyRecordType)
-        XCTAssertEqual(record.recordID.recordName, e.id)
+        XCTAssertEqual(record.recordID.recordName, CloudKitSync.historyRecordName(id: e.id))
 
         let decoded = CloudKitSync.historyEntry(from: record)
         XCTAssertEqual(decoded?.id, e.id)
@@ -44,6 +46,12 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertEqual(decoded?.podcastTitle, "Podcast")
         XCTAssertEqual(decoded?.listenedSeconds, 600)
         XCTAssertEqual(decoded?.lastListenedAt, e.lastListenedAt)
+    }
+
+    func testHistoryRecordNameParserAcceptsLegacyAndNamespacedIDs() {
+        let id = "sub|guid:g1"
+        XCTAssertEqual(CloudKitSync.historyID(fromRecordName: id), id)
+        XCTAssertEqual(CloudKitSync.historyID(fromRecordName: CloudKitSync.historyRecordName(id: id)), id)
     }
 
     // MARK: - Database pending tracking

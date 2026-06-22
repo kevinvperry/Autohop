@@ -6,8 +6,12 @@ Canonical design/status note for Autohop's opt-in CloudKit sync layer. Keep this
 aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
 Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
 Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
-(`subscriptionID|guid:<guid>`), refresh scheduling stats remain local, and
+(`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
+(`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique
+across record types inside a zone. Refresh scheduling stats remain local, and
 download/media state never syncs.
+June 2026 diagnostic repair context lives here too: collision quarantine,
+legacy pending-save retirement, and functional self-repair under namespaced IDs.
 -->
 
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
@@ -54,8 +58,20 @@ Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
 leaves a `subscribed = false` tombstone.
 Migration v7 moved episode sync rows from bare GUID primary keys to
-subscription-scoped keys. CloudKit record names now match that key; legacy
-bare-GUID server records still decode using their stored `subscriptionID` field.
+subscription-scoped keys. CloudKit record payloads still carry the local
+identity, but outbound record names are now type-namespaced:
+
+| Domain | Current record name | Legacy fallback |
+|---|---|---|
+| EpisodeState | `episode:<subscriptionID>|guid:<guid>` | unprefixed scoped key, or bare GUID when the record stores `subscriptionID` |
+| SubscriptionState | `subscription:<subscriptionID>` | unprefixed subscription UUID |
+| HistoryEntry | `history:<historyID>` | unprefixed history ID |
+| DayStats | `stats:<deviceID>:<dayKey>` | unprefixed `deviceID:dayKey` |
+
+The namespace is required because CloudKit record IDs are unique across record
+types inside a zone; an old HistoryEntry record can otherwise block a later
+EpisodeState save with the same record name. Decoders keep the legacy fallbacks
+so existing iCloud data remains readable.
 
 ## Field-level merge (`merged(withRemote:)`)
 Per field: a non-nil local stamp wins only if strictly newer than the remote's;
@@ -67,8 +83,8 @@ struct level (deliberate v1 simplification).
 1. ✅ **GRDB store migration** behind the SubscriptionStore facade.
 2. ✅ **`@Synced` + sync-state projections**, dirty-tracking in `persist`.
 3. ✅ **Episode user-state over CloudKit** — `CloudKitSync` mapper (EpisodeState,
-   recordName = subscriptionID|guid:<guid>), `CloudSyncEngine`
-   (CKSyncEngine delegate): push pending
+   current recordName = `episode:<subscriptionID>|guid:<guid>`),
+   `CloudSyncEngine` (CKSyncEngine delegate): push pending
    states, pull → `applyRemoteEpisodeState` (merge into projection + domain),
    serverRecordChanged/zoneNotFound handling, cached CKRecord system fields
    (migration v3), persisted change token, opt-in toggle in Settings → Sync.
@@ -76,8 +92,9 @@ struct level (deliberate v1 simplification).
    cannot test CloudKit). Account-status guard prevents a retry-storm when no
    iCloud account.
 4. ✅ **Subscription + per-podcast settings over CloudKit** — `SubscriptionState`
-   record type (recordName = subscriptionID), all settings + `feedURL`; engine
-   handles both record types; `applyRemoteSubscriptionState` updates settings /
+   record type (current recordName = `subscription:<subscriptionID>`), all
+   settings + `feedURL` + stored `subscriptionID`; engine handles both record
+   types; `applyRemoteSubscriptionState` updates settings /
    processes unsubscribe / signals `.needsMaterialization`;
    `AppState.materializeRemoteSubscription` fetches the feed via FeedService and
    creates the podcast, then applies settings. Migration v4 caches subscription
@@ -85,16 +102,18 @@ struct level (deliberate v1 simplification).
 
 5. ✅ **Listening history + stats**
    - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
-     migration v5). ListeningHistoryStore records pending on mutation + merges via
-     applyRemote; denormalized title/artwork kept.
+     current recordName = `history:<historyID>`, migration v5).
+     ListeningHistoryStore records pending on mutation + merges via applyRemote;
+     denormalized title/artwork kept.
    - 5b Stats: **additive — partition by `(deviceID, dayKey)` and sum on read**
      (never LWW). `DeviceIdentity.current` (UserDefaults UUID); DayStats record
-     per device-day; `stats_sync_state` (this device's pending) + `remote_stats`
-     (other devices) tables (migration v6). `DayStats.merged` sums; ListeningStats
-     `combinedDay` folds remote partitions into every read path (summary/streaks/
-     per-show/lifetime). Engine skips its own echoed records by deviceID.
-     legacyBaseline sync deferred (kept per-device for v1). Unit-tested incl.
-     cross-device summing; real-device verification pending.
+     per device-day (current recordName = `stats:<deviceID>:<dayKey>`);
+     `stats_sync_state` (this device's pending) + `remote_stats` (other devices)
+     tables (migration v6). `DayStats.merged` sums; ListeningStats `combinedDay`
+     folds remote partitions into every read path (summary/streaks/per-show/
+     lifetime). Engine skips its own echoed records by deviceID. legacyBaseline
+     sync deferred (kept per-device for v1). Unit-tested incl. cross-device
+     summing; real-device verification pending.
 
 6. ✅ **Active-player-wins + self-heal guards**
    - Active-player-wins: `SubscriptionStore.nowPlayingEpisodeSyncKeyProvider`
@@ -107,9 +126,37 @@ struct level (deliberate v1 simplification).
      is applied in `updateEpisodes` when the feed later brings that episode in.
    3 unit tests.
 
-**All six steps complete.** Opt-in iCloud sync covers episode user-state,
-per-podcast settings + subscribe/unsubscribe, listening history, and additive
-per-device stats — with field-level LWW, active-player-wins, and self-heal.
+**All six sync build steps complete.** Opt-in iCloud sync covers episode
+user-state, per-podcast settings + subscribe/unsubscribe, listening history, and
+additive per-device stats — with field-level LWW, active-player-wins, and
+self-heal.
+
+## Namespace repair / collision containment
+June 2026 diagnostic review found a permanent CloudKit type-collision loop: a
+legacy unprefixed `HistoryEntry` record name could be retried as an `EpisodeState`
+save, causing CKSyncEngine to repeatedly reject it and re-enter the hot retry
+path.
+
+Current containment and repair behavior:
+- `CloudSyncEngine.isPermanentRecordTypeCollision` recognizes the narrow
+  HistoryEntry → EpisodeState collision signature for `invalidArguments` /
+  `serverRejectedRequest`.
+- `sync.pushQuarantined` is logged once per record, the stale pending save is
+  removed from CKSyncEngine state, and the local dirty row is left dirty rather
+  than marked synced.
+- Fresh outbound saves use the new type-prefixed record names, so the dirty row
+  is projected to a non-colliding `episode:` record on the next local queue pass.
+- Restored pre-namespace `.saveRecord` changes are retired by
+  `isRetiredLegacyPendingSave` before sending; `.deleteRecord` changes are
+  preserved so unsubscribe/history/stat tombstone behavior is not lost.
+- Cached CKRecord system fields are reused only when the cached record type and
+  `recordID` exactly match the outgoing namespaced record, avoiding a stale
+  change-tag/record-ID mismatch during first post-migration save.
+
+This is functional self-repair, not a server cleanup job. Old unprefixed records
+may remain as harmless CloudKit orphans. A targeted orphan-delete tool can be
+added later if needed; a full zone reset is intentionally avoided because it has
+more cross-device risk than benefit.
 
 ## CloudKit setup notes
 - Container `iCloud.com.kevinperry.autohop`; CloudKit + Push + Background Modes
@@ -124,7 +171,8 @@ per-device stats — with field-level LWW, active-player-wins, and self-heal.
 Sync coverage lives in `Tests/SyncStateTests.swift`,
 `CloudKitSyncMappingTests.swift`, `EpisodeDiffPersistTests.swift`,
 `RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift`,
-`SyncGuardsTests.swift`, `HistorySyncTests.swift`, and `StatsSyncTests.swift`.
+`SyncGuardsTests.swift`, `HistorySyncTests.swift`, `StatsSyncTests.swift`, and
+`CloudSyncEnginePermanentFailureTests.swift`.
 The pure projection/mapping/database paths run under `swift test`; the
 `CloudSyncEngine` itself is build/on-device-verified because CKSyncEngine needs
 entitlements, a container, and a signed-in account.
@@ -135,12 +183,15 @@ the primary way to debug sync on-device, since it can't be unit-tested. Grep the
 Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
 
 - **Lifecycle:** `sync.toggle`, `sync.engineActivated` (restoredState), `sync.stopped`, `sync.startAborted`/`sync.accountStatusFailed`, `sync.account*` (signIn/signOut/switch).
-- **Push:** `sync.queued` (per-type counts), `sync.pushed` (saved count), `sync.pushFailed` (CK error code — ERROR), `sync.zoneRecreate`, `sync.recordGone`.
+- **Push:** `sync.queued` (per-type counts plus quarantined count), `sync.pushed`
+  (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
+  `sync.pushQuarantined` (known permanent record-type collision), `sync.legacyPendingDropped`
+  (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.
 - **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`.
 - **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
 
 Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
-events (`sync.pushFailed`, `sync.dbWriteFailed`, `sync.accountStatusFailed`) use
-`AppLogger.error(..., alwaysPersist: true)`, so they are recorded even when the
-Diagnostics toggle is off; INFO/WARN remain gated. The log file stays capped at
-~1 MB with rotation.
+events (`sync.pushFailed`, `sync.pushQuarantined`, `sync.dbWriteFailed`,
+`sync.accountStatusFailed`) use `AppLogger.error(..., alwaysPersist: true)`, so
+they are recorded even when the Diagnostics toggle is off; INFO/WARN remain
+gated. The log file stays capped at ~1 MB with rotation.

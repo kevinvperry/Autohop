@@ -1,7 +1,10 @@
 // AI CONTEXT — Tests/SubscriptionSyncTests.swift. Tests subscription-settings
 // sync (SYNC_DESIGN.md step 4): SubscriptionSyncState field-level merge, the
-// CKRecord mapping, and SubscriptionStore.applyRemoteSubscriptionState
-// (settings apply / unsubscribe / materialization signal). No CloudKit network.
+// type-namespaced CKRecord mapping, legacy record-name decode compatibility, and
+// SubscriptionStore.applyRemoteSubscriptionState (settings apply / unsubscribe /
+// materialization signal). No CloudKit network. Subscription records carry
+// `subscriptionID` as a field because the current CloudKit record name is
+// prefixed; keep the legacy unprefixed decode path for existing iCloud data.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -54,7 +57,7 @@ final class SubscriptionSyncTests: XCTestCase {
 
         let record = CloudKitSync.makeRecord(from: state)
         XCTAssertEqual(record.recordType, CloudKitSync.subscriptionRecordType)
-        XCTAssertEqual(record.recordID.recordName, sub.id.uuidString)
+        XCTAssertEqual(record.recordID.recordName, CloudKitSync.subscriptionRecordName(id: sub.id))
 
         let decoded = CloudKitSync.subscriptionSyncState(from: record)
         XCTAssertNotNil(decoded)
@@ -62,6 +65,20 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(decoded?.feedURL, sub.feedURL)
         XCTAssertEqual(decoded?.playbackPreference.speed, 1.6)
         XCTAssertEqual(decoded?.notificationsEnabled, true)
+    }
+
+    func testLegacySubscriptionRecordNameStillDecodes() {
+        let sub = makeSubscription(title: "Legacy Podcast")
+        let record = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CKRecord.ID(recordName: sub.id.uuidString, zoneID: CloudKitSync.zoneID)
+        )
+        record["feedURL"] = sub.feedURL.absoluteString
+        record["title"] = sub.title
+
+        let decoded = CloudKitSync.subscriptionSyncState(from: record)
+        XCTAssertEqual(decoded?.subscriptionID, sub.id)
+        XCTAssertEqual(decoded?.feedURL, sub.feedURL)
     }
 
     // MARK: - Apply to local

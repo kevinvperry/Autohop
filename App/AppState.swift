@@ -31,11 +31,20 @@ import UIKit
 //    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles;
 //    reconcileOrphanedDownloads() repairs DB-vs-filesystem mismatches at launch.
 //  - Feed refresh: refreshSubscription fetches feeds conditionally, records
-//    per-episode release observations, merges new episodes (auto-downloading
-//    them), and applies per-feed failure backoff in feedFailureBackoffUntil.
-//    Refresh also updates mutable feed metadata on the Subscription (author +
-//    artworkURL) so changed podcast art is picked up by the shared artwork cache
-//    after the next successful refresh instead of being frozen at subscribe time.
+//    per-episode release observations, merges new episodes, and applies per-feed
+//    failure backoff in feedFailureBackoffUntil. Auto-downloads discovered by a
+//    refresh are deliberately scheduled after the feed merge instead of awaited
+//    by the refresh cycle, so slow/stalled audio transfers cannot block manual
+//    refresh, due-feed polling, or BGAppRefresh completion. Refresh also updates
+//    mutable feed metadata on the Subscription (author + artworkURL) so changed
+//    podcast art is picked up by the shared artwork cache after the next
+//    successful refresh instead of being frozen at subscribe time.
+//    IMPORTANT: keep user-initiated download/play-now paths awaitable, but do
+//    not put `await downloadEpisode` back inside the feed-refresh success path.
+//    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
+//    scheduled media transfer re-validates subscription state, browse previews,
+//    latest-episode staleness, and played/archived status before entering the
+//    bounded download queue.
 //    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
 //    Release Radar due-feed polling. They ask Models/Subscription.swift for a
 //    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
@@ -49,8 +58,10 @@ import UIKit
 //    summary plus per-feed score/profile/prediction metadata on
 //    feed.refreshAll.itemStart when the diagnostic log is enabled. Refresh logs
 //    include subscriptionID + a stable feedHash alongside the title so renamed
-//    feeds remain traceable. These logs are the intended tuning surface for the
-//    learned refresh system.
+//    feeds remain traceable. ResourceMonitor's main-thread watchdog also calls
+//    resourceContext() only after a suspected hang, adding playback, refresh,
+//    queue, scene, and download state to ui.mainThreadHang/recovered logs. These
+//    logs are the intended tuning surface for the learned refresh system.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
@@ -2213,19 +2224,16 @@ final class AppState: ObservableObject {
                 )
                 return
             }
-            await enforceEpisodeLimitBeforeDownload(subscriptionID: subscription.id)
-            await downloadEpisode(
-                subscriptionStore.subscription(id: subscription.id)?.latestEpisode ?? result.latestEpisode,
+            scheduleAutoDownloadAfterRefresh(
+                episode: subscriptionStore.subscription(id: subscription.id)?.latestEpisode ?? result.latestEpisode,
                 subscriptionID: subscription.id,
                 podcastTitle: result.subscriptionTitle,
-                showCompletionMessage: false
+                refreshUpNextAfterMerge: refreshUpNextAfterMerge
             )
-            if refreshUpNextAfterMerge {
-                scheduleUpNextRefresh(reason: "feed.download.\(result.subscriptionTitle)")
-            }
             logger.info("feed.refresh", "Feed refresh completed", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "podcast": result.subscriptionTitle,
-                "episodeCount": "\(result.episodes.count)"
+                "episodeCount": "\(result.episodes.count)",
+                "autoDownload": "scheduled"
             ]))
             resourceMonitor.logSnapshot(reason: "feed.refresh.afterSuccess", context: resourceContext([
                 "podcast": result.subscriptionTitle,
@@ -2262,6 +2270,96 @@ final class AppState: ObservableObject {
                 context: resourceContext(refreshFeedMetadata(for: subscription, includeURL: false)),
                 force: true
             )
+        }
+    }
+
+    private func scheduleAutoDownloadAfterRefresh(
+        episode: Episode,
+        subscriptionID: UUID,
+        podcastTitle: String,
+        refreshUpNextAfterMerge: Bool
+    ) {
+        logger.info("feed.autoDownloadScheduled", "Auto-download scheduled after feed refresh", metadata: [
+            "podcast": podcastTitle,
+            "episode": episode.title,
+            "episodeID": episode.id.uuidString
+        ])
+        Task { @MainActor [weak self] in
+            await self?.runAutoDownloadAfterRefresh(
+                episode: episode,
+                subscriptionID: subscriptionID,
+                podcastTitle: podcastTitle,
+                refreshUpNextAfterMerge: refreshUpNextAfterMerge
+            )
+        }
+    }
+
+    private func runAutoDownloadAfterRefresh(
+        episode: Episode,
+        subscriptionID: UUID,
+        podcastTitle: String,
+        refreshUpNextAfterMerge: Bool
+    ) async {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because subscription no longer exists", metadata: [
+                "podcast": podcastTitle,
+                "episode": episode.title,
+                "episodeID": episode.id.uuidString
+            ])
+            return
+        }
+        guard subscription.browseDate == nil else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped for browse preview", metadata: [
+                "podcast": podcastTitle,
+                "episode": episode.title,
+                "episodeID": episode.id.uuidString
+            ])
+            return
+        }
+        guard let latestEpisode = subscription.latestEpisode else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because subscription has no latest episode", metadata: [
+                "podcast": subscription.title,
+                "subscriptionID": subscriptionID.uuidString
+            ])
+            return
+        }
+        guard latestEpisode.guid == episode.guid else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because a newer feed item replaced it", metadata: [
+                "podcast": subscription.title,
+                "scheduledEpisode": episode.title,
+                "latestEpisode": latestEpisode.title,
+                "scheduledEpisodeID": episode.id.uuidString,
+                "latestEpisodeID": latestEpisode.id.uuidString
+            ])
+            return
+        }
+        guard latestEpisode.playedState != .played,
+              latestEpisode.playedState != .archived
+        else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because latest episode is already resolved", metadata: [
+                "podcast": subscription.title,
+                "episode": latestEpisode.title,
+                "episodeID": latestEpisode.id.uuidString,
+                "playedState": latestEpisode.playedState.rawValue
+            ])
+            return
+        }
+
+        logger.info("feed.autoDownloadStart", "Starting auto-download after feed refresh", metadata: [
+            "podcast": subscription.title,
+            "episode": latestEpisode.title,
+            "episodeID": latestEpisode.id.uuidString
+        ])
+        await enforceEpisodeLimitBeforeDownload(subscriptionID: subscriptionID)
+        let targetEpisode = subscriptionStore.subscription(id: subscriptionID)?.latestEpisode ?? latestEpisode
+        await downloadEpisode(
+            targetEpisode,
+            subscriptionID: subscriptionID,
+            podcastTitle: podcastTitle,
+            showCompletionMessage: false
+        )
+        if refreshUpNextAfterMerge {
+            scheduleUpNextRefresh(reason: "feed.download.\(podcastTitle)")
         }
     }
 
@@ -3641,11 +3739,15 @@ final class AppState: ObservableObject {
     private func resourceContext(_ extra: [String: String] = [:]) -> [String: String] {
         var context = [
             "isPlaying": "\(isPlaying)",
+            "sceneActive": "\(isSceneActive)",
+            "refreshActive": "\(activeRefreshCycle != nil)",
             "currentEpisode": currentPlayerEpisode?.title ?? "none",
             "currentTime": "\(Int(currentPlayerTime))",
             "queueCount": "\(downloadedQueue.count)",
             "subscriptionCount": "\(subscriptionStore.subscriptions.count)",
             "activeDownloads": "\(downloadProgress.count)",
+            "activeDownloadSlots": "\(activeDownloadCount)",
+            "pendingDownloads": "\(pendingDownloadQueue.count)",
             "upNext": upNextEpisode?.title ?? "none"
         ]
         extra.forEach { context[$0.key] = $0.value }

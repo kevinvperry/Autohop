@@ -6,10 +6,21 @@ import Darwin.Mach
 // Captures device/process resource snapshots (Mach task memory, battery,
 // thermal state, low-power mode) for diagnostic log context. AppState attaches
 // a snapshot's metadata to significant log events and runs a periodic sampling
-// timer while diagnostics are enabled. Debug/observability only — no feature
-// behaviour depends on these values.
+// timer while diagnostics are enabled. The main-thread watchdog reuses the same
+// lightweight context provider only when a hang/recovery is detected, so hang
+// bursts include app state without doing extra work on every 100 ms watchdog
+// tick.
+//
+// IMPORTANT: `footprintMB` is the real iOS physical footprint
+// (task_vm_info.phys_footprint) and intentionally replaced the old virtual
+// address-space `memoryMB` value, which could report hundreds of GB and was not
+// useful. Do not reintroduce `memoryMB` unless it is a clearly labelled virtual
+// size. Debug/observability only — no feature behaviour depends on these values.
 struct ResourceSnapshot {
-    var memoryMB: Int
+    /// iOS jetsam-relevant physical footprint from task_vm_info.phys_footprint.
+    /// This replaced the old virtual address-space metric, which reported
+    /// hundreds of GB and was not useful for diagnosing memory pressure.
+    var footprintMB: Int
     var residentMemoryMB: Int
     var batteryLevelPercent: Int?
     var batteryState: String
@@ -22,7 +33,7 @@ struct ResourceSnapshot {
 
     var metadata: [String: String] {
         [
-            "memoryMB": "\(memoryMB)",
+            "footprintMB": "\(footprintMB)",
             "residentMemoryMB": "\(residentMemoryMB)",
             "batteryPercent": batteryLevelPercent.map(String.init) ?? "unknown",
             "batteryState": batteryState,
@@ -44,6 +55,7 @@ final class ResourceMonitor {
     private var samplingTask: Task<Void, Never>?
     private var lastSnapshotTime: Date?
     private let minimumManualSnapshotInterval: TimeInterval = 8
+    private var contextProvider: (@MainActor () -> [String: String])?
 
     // Watchdog state — accessed only from watchdogQueue
     private let watchdogQueue = DispatchQueue(label: "com.autohop.watchdog", qos: .utility)
@@ -62,6 +74,7 @@ final class ResourceMonitor {
 
     func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
         guard samplingTask == nil else { return }
+        contextProvider = context
         logger.info("resources.monitorStart", "Resource monitor started")
         samplingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -108,37 +121,40 @@ final class ResourceMonitor {
         watchdogPingTime = pingTime
 
         DispatchQueue.main.async { [weak self] in
+            let elapsed = CFAbsoluteTimeGetCurrent() - pingTime
+            let context = elapsed >= (self?.watchdogHangThreshold ?? 0)
+                ? self?.contextProvider?() ?? [:]
+                : [:]
             self?.watchdogQueue.async {
-                self?.watchdogPong(pingTime: pingTime)
+                self?.watchdogPong(pingTime: pingTime, elapsed: elapsed, context: context)
             }
         }
 
         scheduleWatchdogTick()
     }
 
-    private func watchdogPong(pingTime: Double) {
+    private func watchdogPong(pingTime: Double, elapsed: TimeInterval, context: [String: String]) {
         let pongTime = CFAbsoluteTimeGetCurrent()
-        let elapsed = pongTime - pingTime
 
         if elapsed >= watchdogSuspensionThreshold {
-            logger.info("ui.watchdogSuspensionGap", "Watchdog gap — app was suspended, not hung", metadata: [
-                "durationMs": "\(Int((elapsed * 1000).rounded()))"
-            ])
+            var metadata = context
+            metadata["durationMs"] = "\(Int((elapsed * 1000).rounded()))"
+            logger.info("ui.watchdogSuspensionGap", "Watchdog gap — app was suspended, not hung", metadata: metadata)
         } else if elapsed >= watchdogHangThreshold {
             if !watchdogHanging {
                 watchdogHanging = true
                 let ms = Int((elapsed * 1000).rounded())
-                logger.warning("ui.mainThreadHang", "Main thread hang detected", metadata: [
-                    "durationMs": "\(ms)"
-                ])
+                var metadata = context
+                metadata["durationMs"] = "\(ms)"
+                logger.warning("ui.mainThreadHang", "Main thread hang detected", metadata: metadata)
             }
         } else {
             if watchdogHanging {
                 watchdogHanging = false
                 let ms = Int((elapsed * 1000).rounded())
-                logger.info("ui.mainThreadHangRecovered", "Main thread hang recovered", metadata: [
-                    "lastResponseMs": "\(ms)"
-                ])
+                var metadata = context
+                metadata["lastResponseMs"] = "\(ms)"
+                logger.info("ui.mainThreadHangRecovered", "Main thread hang recovered", metadata: metadata)
             }
         }
 
@@ -154,7 +170,7 @@ final class ResourceMonitor {
         let processInfo = ProcessInfo.processInfo
 
         return ResourceSnapshot(
-            memoryMB: taskMemory.virtualMB,
+            footprintMB: taskMemory.footprintMB,
             residentMemoryMB: taskMemory.residentMB,
             batteryLevelPercent: batteryLevel,
             batteryState: batteryStateLabel(device.batteryState),
@@ -180,7 +196,7 @@ final class ResourceMonitor {
         }
     }
 
-    private func taskMemoryMB() -> (virtualMB: Int, residentMB: Int) {
+    private func taskMemoryMB() -> (footprintMB: Int, residentMB: Int) {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let result = withUnsafeMutablePointer(to: &info) {
@@ -190,10 +206,19 @@ final class ResourceMonitor {
         }
 
         guard result == KERN_SUCCESS else { return (0, 0) }
-        return (
-            Int(info.virtual_size / 1_048_576),
-            Int(info.resident_size / 1_048_576)
-        )
+
+        let residentMB = Int(info.resident_size / 1_048_576)
+        var vmInfo = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / 4
+        let vmResult = withUnsafeMutablePointer(to: &vmInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+            }
+        }
+        let footprintMB = vmResult == KERN_SUCCESS
+            ? Int(vmInfo.phys_footprint / 1_048_576)
+            : residentMB
+        return (footprintMB, residentMB)
     }
 
     private func batteryStateLabel(_ state: UIDevice.BatteryState) -> String {

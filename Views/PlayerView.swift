@@ -1788,7 +1788,10 @@ private struct UpNextRow: View {
     }
 
     private func formatDate(_ date: Date) -> String {
-        relativePublishedLabel(date)   // shared tiered formatter (EpisodeBadges.swift)
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(date: .abbreviated, time: .omitted)
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {

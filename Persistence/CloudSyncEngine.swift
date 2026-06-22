@@ -12,9 +12,21 @@ import Combine
 // Push: observes SubscriptionStore changes (debounced), scans the database for
 // pending sync-state rows (dirty fields/partitions), and queues saves. Records
 // are built by CloudKitSync, starting from cached CKRecord system fields so
-// updates carry the right change tag. EpisodeState record IDs are
-// subscription-scoped (`subscriptionID|guid:<guid>`); cached legacy bare-GUID
-// system fields are ignored if they do not match the scoped record ID.
+// updates carry the right change tag. Outbound CloudKit record names are now
+// type-namespaced (`episode:...`, `history:...`, etc.) so records of different
+// types cannot collide inside the shared zone; restored pre-namespace pending
+// saves are dropped and replaced by freshly queued namespaced saves. Cached
+// legacy system fields are ignored when their CKRecord.ID no longer matches.
+// Known-permanent CloudKit type collisions are quarantined in memory and left
+// dirty locally so the namespaced retry can repair/re-send them.
+//
+// REPAIR INVARIANTS: never mark a quarantined permanent collision as synced; the
+// local dirty row is the repair source. `activateEngine()` queues dirty local
+// rows at startup, so post-namespace builds project those rows to `episode:`
+// IDs. `isRetiredLegacyPendingSave` intentionally retires only restored legacy
+// `.saveRecord` changes; legacy `.deleteRecord` changes are preserved to avoid
+// dropping unsubscribe/tombstone intent.
+//
 // Pull: fetched server records are decoded and merged into the local store via
 // SubscriptionStore.applyRemote*, ListeningHistoryStore, and ListeningStatsStore;
 // a remote subscription for a podcast not present here triggers
@@ -43,6 +55,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private var engine: CKSyncEngine?
     private var isStarting = false
     private var cancellables = Set<AnyCancellable>()
+    private var quarantinedRecordKeys = Set<QuarantinedRecordKey>()
 
     /// Invoked when a remote subscription record arrives for a podcast not on
     /// this device — the app layer fetches the feed and creates it, then
@@ -172,25 +185,28 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let stats = read("stats days", database.pendingStatsDays)
         let deviceID = DeviceIdentity.current
 
-        var changes = episodes.map {
+        let episodeChanges = episodes.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(for: $0))
         }
-        changes += subscriptions.map {
+        let subscriptionChanges = subscriptions.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.subscriptionRecordID(id: $0.subscriptionID))
         }
-        changes += history.map {
+        let historyChanges = history.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.historyRecordID(id: $0.id))
         }
-        changes += stats.map {
+        let statsChanges = stats.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.statsRecordID(deviceID: deviceID, dayKey: $0.dayKey))
         }
+        let changes = (episodeChanges + subscriptionChanges + historyChanges + statsChanges)
+            .filter { !isQuarantined($0) }
         guard !changes.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: changes)
         logger.info("sync.queued", "Queued local changes to push", metadata: [
-            "episodes": "\(episodes.count)",
-            "subscriptions": "\(subscriptions.count)",
-            "history": "\(history.count)",
-            "stats": "\(stats.count)",
+            "episodes": "\(episodeChanges.filter { !isQuarantined($0) }.count)",
+            "subscriptions": "\(subscriptionChanges.filter { !isQuarantined($0) }.count)",
+            "history": "\(historyChanges.filter { !isQuarantined($0) }.count)",
+            "stats": "\(statsChanges.filter { !isQuarantined($0) }.count)",
+            "quarantined": "\((episodeChanges + subscriptionChanges + historyChanges + statsChanges).count - changes.count)",
             "device": deviceID
         ])
     }
@@ -222,7 +238,24 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let scope = context.options.scope
-        let pendingChanges = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
+        var pendingChanges: [CKSyncEngine.PendingRecordZoneChange] = []
+        var retiredLegacyChanges: [CKSyncEngine.PendingRecordZoneChange] = []
+
+        for change in syncEngine.state.pendingRecordZoneChanges where scope.contains(change) {
+            if isQuarantined(change) { continue }
+            if Self.isRetiredLegacyPendingSave(change) {
+                retiredLegacyChanges.append(change)
+                continue
+            }
+            pendingChanges.append(change)
+        }
+
+        if !retiredLegacyChanges.isEmpty {
+            syncEngine.state.remove(pendingRecordZoneChanges: retiredLegacyChanges)
+            logger.info("sync.legacyPendingDropped", "Dropped restored pre-namespace pending saves", metadata: [
+                "count": "\(retiredLegacyChanges.count)"
+            ])
+        }
         guard !pendingChanges.isEmpty else { return nil }
 
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pendingChanges) { [weak self] recordID in
@@ -235,6 +268,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private func recordToSave(for recordID: CKRecord.ID) -> CKRecord? {
         guard let database else { return nil }
         let name = recordID.recordName
+        let episodeSyncKey = CloudKitSync.episodeSyncKey(fromRecordName: name)
+        let subscriptionID = CloudKitSync.subscriptionID(fromRecordName: name)
+        let historyID = CloudKitSync.historyID(fromRecordName: name)
+        let statsDayKey = CloudKitSync.statsDayKey(fromRecordName: name)
 
         // A nil from any lookup means "not this record type" (normal — try the next
         // branch); a THROW means a real read/decode error. Swallowing the throw with
@@ -242,9 +279,9 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         // failures in the catch. (systemFields stays `try?` — a missing cached blob
         // is normal for a new record and cachedOrNewRecord handles nil.)
         do {
-            // Episode? (recordName == subscriptionID|guid:<guid>; fall back to a
-            // pre-Phase-5 bare-GUID pending record only when unambiguous).
-            if let state = try database.episodeSyncState(syncKey: name)
+            // Episode? (current recordName == episode:<subscriptionID|guid:<guid>);
+            // fall back to restored legacy pending names only when unambiguous.
+            if let state = try database.episodeSyncState(syncKey: episodeSyncKey)
                 ?? database.legacyEpisodeSyncState(guid: name) {
                 let record = cachedOrNewRecord(
                     systemFields: try? database.episodeSystemFields(syncKey: state.syncKey),
@@ -254,8 +291,8 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 return record
             }
 
-            // Subscription? (recordName == subscriptionID UUID)
-            if let id = UUID(uuidString: name), let state = try database.subscriptionSyncState(id: id) {
+            // Subscription? (current recordName == subscription:<subscriptionID>).
+            if let id = subscriptionID, let state = try database.subscriptionSyncState(id: id) {
                 let record = cachedOrNewRecord(
                     systemFields: try? database.subscriptionSystemFields(id: id),
                     recordType: CloudKitSync.subscriptionRecordType, recordID: recordID
@@ -264,18 +301,18 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 return record
             }
 
-            // History entry? (recordName == composite history key)
-            if let entry = try database.historyEntry(id: name) {
+            // History entry? (current recordName == history:<composite history key>).
+            if let entry = try database.historyEntry(id: historyID) {
                 let record = cachedOrNewRecord(
-                    systemFields: try? database.historySystemFields(id: name),
+                    systemFields: try? database.historySystemFields(id: historyID),
                     recordType: CloudKitSync.historyRecordType, recordID: recordID
                 )
                 CloudKitSync.populate(record, from: entry)
                 return record
             }
 
-            // Stats partition? (recordName == "deviceID:dayKey")
-            if let dayKey = Self.statsDayKey(fromRecordName: name), let day = try database.statsDay(dayKey: dayKey) {
+            // Stats partition? (current recordName == stats:<deviceID>:<dayKey>).
+            if let dayKey = statsDayKey, let day = try database.statsDay(dayKey: dayKey) {
                 let record = cachedOrNewRecord(
                     systemFields: try? database.statsSystemFields(dayKey: dayKey),
                     recordType: CloudKitSync.statsRecordType, recordID: recordID
@@ -298,13 +335,6 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             "recordName": name
         ])
         return nil
-    }
-
-    /// Extracts the dayKey from a "deviceID:dayKey" stats record name.
-    private static func statsDayKey(fromRecordName name: String) -> String? {
-        let parts = name.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2 else { return nil }
-        return String(parts[1])
     }
 
     private func cachedOrNewRecord(systemFields: Data?, recordType: String, recordID: CKRecord.ID) -> CKRecord {
@@ -463,6 +493,14 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                     "name": record.recordID.recordName
                 ])
             default:
+                if Self.isPermanentRecordTypeCollision(
+                    code: failure.error.code,
+                    localizedDescription: failure.error.localizedDescription,
+                    recordType: record.recordType
+                ) {
+                    quarantinePermanentPushFailure(record: record, error: failure.error)
+                    continue
+                }
                 // Transient — CKSyncEngine will retry automatically. Recorded so a
                 // user who never sees their data sync has a trail of the CK errors.
                 logger.error("sync.pushFailed", "Record push failed (will retry)", metadata: [
@@ -475,6 +513,75 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         }
     }
 
+    static func isPermanentRecordTypeCollision(
+        code: CKError.Code,
+        localizedDescription: String,
+        recordType: String
+    ) -> Bool {
+        guard recordType == CloudKitSync.episodeRecordType else { return false }
+        guard code == .invalidArguments || code == .serverRejectedRequest else { return false }
+        return localizedDescription.contains("invalid attempt to update record from type")
+            && localizedDescription.contains("HistoryEntry")
+            && localizedDescription.contains("EpisodeState")
+    }
+
+    private func quarantinePermanentPushFailure(record: CKRecord, error: CKError) {
+        let key = QuarantinedRecordKey(recordID: record.recordID)
+        let wasInserted = quarantinedRecordKeys.insert(key).inserted
+        engine?.state.remove(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
+        guard wasInserted else { return }
+
+        logger.error("sync.pushQuarantined", "Permanent CloudKit record-type collision quarantined pending namespace migration", metadata: [
+            "type": record.recordType,
+            "name": record.recordID.recordName,
+            "code": "\(error.code.rawValue)",
+            "reason": "recordTypeCollision",
+            "action": "suppressedUntilNamespaceMigration",
+            "error": error.localizedDescription
+        ], alwaysPersist: true)
+    }
+
+    private func isQuarantined(_ change: CKSyncEngine.PendingRecordZoneChange) -> Bool {
+        guard let recordID = Self.recordID(from: change) else { return false }
+        return isQuarantined(recordID)
+    }
+
+    private func isQuarantined(_ recordID: CKRecord.ID) -> Bool {
+        quarantinedRecordKeys.contains(QuarantinedRecordKey(recordID: recordID))
+    }
+
+    private static func recordID(from change: CKSyncEngine.PendingRecordZoneChange) -> CKRecord.ID? {
+        switch change {
+        case .saveRecord(let recordID), .deleteRecord(let recordID):
+            return recordID
+        @unknown default:
+            return nil
+        }
+    }
+
+    static func isRetiredLegacyPendingSave(_ change: CKSyncEngine.PendingRecordZoneChange) -> Bool {
+        switch change {
+        case .saveRecord(let recordID):
+            return !CloudKitSync.isCurrentRecordName(recordID.recordName)
+        case .deleteRecord:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private struct QuarantinedRecordKey: Hashable {
+        let recordName: String
+        let zoneName: String
+        let ownerName: String
+
+        init(recordID: CKRecord.ID) {
+            self.recordName = recordID.recordName
+            self.zoneName = recordID.zoneID.zoneName
+            self.ownerName = recordID.zoneID.ownerName
+        }
+    }
+
     /// Caches system fields and clears the dirty stamp for a successfully saved record.
     /// DB writes here were previously `try?`-swallowed; a failure leaves the record
     /// permanently dirty (it re-pushes every sync), so they are logged as errors.
@@ -482,25 +589,27 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let name = record.recordID.recordName
         switch record.recordType {
         case CloudKitSync.episodeRecordType:
-            let syncKey = CloudKitSync.episodeSyncKey(from: record) ?? name
+            let syncKey = CloudKitSync.episodeSyncKey(from: record)
+                ?? CloudKitSync.episodeSyncKey(fromRecordName: name)
             runDB("markSaved.episode", metadata: ["syncKey": syncKey]) {
                 try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: syncKey)
                 try self.database?.markSynced(episodeSyncKeys: [syncKey], subscriptionIDs: [])
             }
         case CloudKitSync.subscriptionRecordType:
-            if let id = UUID(uuidString: name) {
-                runDB("markSaved.subscription", metadata: ["id": name]) {
+            if let id = CloudKitSync.subscriptionID(fromRecordName: name) {
+                runDB("markSaved.subscription", metadata: ["id": id.uuidString]) {
                     try self.database?.storeSubscriptionSystemFields(Self.systemFields(of: record), id: id)
                     try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
                 }
             }
         case CloudKitSync.historyRecordType:
-            runDB("markSaved.history", metadata: ["id": name]) {
-                try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: name)
-                try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [name])
+            let id = CloudKitSync.historyID(fromRecordName: name)
+            runDB("markSaved.history", metadata: ["id": id]) {
+                try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: id)
+                try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [id])
             }
         case CloudKitSync.statsRecordType:
-            if let dayKey = Self.statsDayKey(fromRecordName: name) {
+            if let dayKey = CloudKitSync.statsDayKey(fromRecordName: name) {
                 runDB("markSaved.stats", metadata: ["dayKey": dayKey]) {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
                     try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: [dayKey])

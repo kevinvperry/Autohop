@@ -37,12 +37,18 @@ import Foundation
 //
 // ALSO OWNS: AVAudioSession configuration (spoken-audio mode when boost on),
 // interruption and route-change handling (AirPod removal must not auto-resume:
-// pausedByRouteChange / wasPlayingBeforeInterruption guards), start/end skip
-// (real file time, fires onAutoSkip), disabled-chapter skipping per
-// ChapterFilter, and a render watchdog that detects a running-but-silent
-// engine and recovers it. Chapters present at play() time drive skip filtering
-// immediately; chapters that arrive LATER (external podcast:chapters fetched
-// after playback starts, P7) are applied to the live session via
+// pausedByRouteChange / wasPlayingBeforeInterruption guards; active engine-path
+// route switches proactively restart the buffer loop from the current position
+// before the render watchdog has to recover silence), start/end skip (real file
+// time, fires onAutoSkip), disabled-chapter skipping per ChapterFilter, and a
+// render watchdog that detects a running-but-silent engine and recovers it.
+// Route-change invariant: `.oldDeviceUnavailable` pauses and notifies the app;
+// `.newDeviceAvailable` / `.routeConfigurationChange` may restart only the
+// active AVAudioEngine buffer loop, debounced, from currentPlaybackTime().
+// Do not make headphone removal auto-resume while improving route recovery.
+// Chapters present at play() time drive skip filtering immediately; chapters
+// that arrive LATER (external podcast:chapters fetched after playback starts,
+// P7) are applied to the live session via
 // updateChapters(_:filter:for:), which updates currentEpisode.chapters +
 // currentFilter only while the same episode is still playing.
 //
@@ -151,6 +157,7 @@ final class PlaybackEngine: PlaybackControlling {
     private var lastRenderedAt: CFAbsoluteTime = 0
     private var resumedAt: CFAbsoluteTime = 0
     private var lastRecoveryAt: CFAbsoluteTime = 0
+    private var lastRouteRestartAt: CFAbsoluteTime = 0
 
     private(set) var currentEpisode: Episode?
     private var currentFilter: ChapterFilter?
@@ -1141,9 +1148,55 @@ final class PlaybackEngine: PlaybackControlling {
             onPlaybackInterrupted?()
         case .newDeviceAvailable:
             pausedByRouteChange = false
+            restartEngineAfterRouteChangeIfNeeded(reason: reasonLabel, output: newPort)
+        case .routeConfigurationChange:
+            restartEngineAfterRouteChangeIfNeeded(reason: reasonLabel, output: newPort)
         default:
             break
         }
+    }
+
+    private func restartEngineAfterRouteChangeIfNeeded(reason: String, output: String) {
+        guard engineUsesEngine, engineIsPlaying, !engineReadFinished else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastRouteRestartAt > 1.0 else {
+            logger.info("engine.routeRestartSkipped", "Skipped route restart during debounce window", metadata: [
+                "reason": reason,
+                "newOutput": output,
+                "episode": currentEpisode?.title ?? "none"
+            ])
+            return
+        }
+        lastRouteRestartAt = now
+        let position = currentPlaybackTime()
+
+        logger.info("engine.routeRestart", "Restarting engine buffer loop after route change", metadata: [
+            "reason": reason,
+            "newOutput": output,
+            "episode": currentEpisode?.title ?? "none",
+            "positionSecs": String(format: "%.1f", position)
+        ])
+
+        audioPlayerNode?.stop()
+        stopEngineBufferLoop()
+
+        if let engine = audioEngine, !engine.isRunning {
+            do {
+                try engine.start()
+            } catch {
+                logger.warning("engine.routeRestartFailed", "Engine restart failed after route change", metadata: [
+                    "reason": reason,
+                    "newOutput": output,
+                    "episode": currentEpisode?.title ?? "none",
+                    "error": error.localizedDescription
+                ])
+                return
+            }
+        }
+
+        startEngineBufferLoop(from: position, shouldPlay: true)
+        resumedAt = now
+        lastRenderedAt = now
     }
 
     private func routeChangeReasonLabel(_ reason: AVAudioSession.RouteChangeReason) -> String {
