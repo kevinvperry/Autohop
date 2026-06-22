@@ -1,6 +1,8 @@
 // AI CONTEXT — Tests/RemoteEpisodeApplyTests.swift. Tests SubscriptionStore's
 // remote-apply path (applyRemoteEpisodeState) — the local side of CloudKit
 // episode sync (SYNC_DESIGN.md step 3b). Uses an in-memory store; no CloudKit.
+// Includes the sparse-remote regression guard from the namespace repair: an
+// absent remote field must not reset clean local played/completed state.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -59,6 +61,28 @@ final class RemoteEpisodeApplyTests: XCTestCase {
         await store.flushPendingSaves()
 
         // Local (newer) wins.
+        XCTAssertEqual(store.subscription(id: sub)?.episodes.first?.playedState, .played)
+    }
+
+    func testSparseRemoteEpisodeDoesNotResetCleanLocalState() async throws {
+        let (store, sub, episode) = try makeStoreWithEpisode()
+
+        store.markEpisodePlayed(subscriptionID: sub, episodeID: episode.id)
+        await store.flushPendingSaves()
+        let syncKey = EpisodeSyncState.syncKey(subscriptionID: sub, guid: episode.guid)
+        try store.database?.markSynced(episodeSyncKeys: [syncKey], subscriptionIDs: [])
+
+        let sparseRemote = EpisodeSyncState(
+            guid: episode.guid,
+            subscriptionID: sub,
+            playedState: Synced(wrappedValue: .unplayed),
+            wasCompleted: Synced(wrappedValue: false),
+            lastPlayedAt: Synced(wrappedValue: nil)
+        )
+
+        store.applyRemoteEpisodeState(sparseRemote)
+        await store.flushPendingSaves()
+
         XCTAssertEqual(store.subscription(id: sub)?.episodes.first?.playedState, .played)
     }
 

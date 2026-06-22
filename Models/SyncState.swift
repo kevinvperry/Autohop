@@ -14,6 +14,10 @@ import Foundation
 //
 // Playback POSITION is intentionally absent here — it lives in the listening-
 // history domain and is handled in a later sync step.
+//
+// `markAllDirty` is used by CloudKit namespace repair/recovery when a brand-new
+// namespaced server record must be uploaded as a full snapshot, even if the
+// local fields were previously clean.
 
 // MARK: - Episode
 
@@ -74,14 +78,21 @@ public struct EpisodeSyncState: Codable, Equatable {
         _lastPlayedAt.markClean()
     }
 
+    public mutating func markAllDirty(at date: Date = Date()) {
+        _playedState.markDirty(at: date)
+        _wasCompleted.markDirty(at: date)
+        _lastPlayedAt.markDirty(at: date)
+    }
+
     /// Field-level last-write-wins merge of an incoming remote projection into
     /// this local one. Per field:
     ///  - a non-nil local `modifiedAt` is an unsynced local edit; it wins only
     ///    if it is strictly newer than the remote field's authoritative stamp,
     ///    and then stays dirty (it will be pushed back, overwriting the server).
-    ///  - otherwise the remote value is adopted and the field is marked clean
-    ///    (nil stamp = "no local opinion", so the server is authoritative).
-    /// A clean local field therefore always yields to the remote value.
+    ///  - otherwise a stamped remote value is adopted and the field is marked clean.
+    ///  - a nil remote stamp means "field absent / no remote opinion", so local
+    ///    is preserved instead of fabricating a default.
+    /// A clean local field therefore yields only to a stamped remote value.
     public func merged(withRemote remote: EpisodeSyncState) -> EpisodeSyncState {
         var result = self
         result._playedState = mergedSyncedField(local: _playedState, remote: remote._playedState)
@@ -214,5 +225,16 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _playbackPreference.markClean()
         _autoArchiveSettings.markClean()
         _chapterFilter.markClean()
+    }
+
+    public mutating func markAllDirty(at date: Date = Date()) {
+        _subscribed.markDirty(at: date)
+        _title.markDirty(at: date)
+        _priorityRank.markDirty(at: date)
+        _notificationsEnabled.markDirty(at: date)
+        _excludeFromAutoFeedRefresh.markDirty(at: date)
+        _playbackPreference.markDirty(at: date)
+        _autoArchiveSettings.markDirty(at: date)
+        _chapterFilter.markDirty(at: date)
     }
 }

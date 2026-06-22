@@ -6,7 +6,9 @@
 // No network or CKSyncEngine; CKRecords are in-memory. When changing
 // CloudKitSync record-name helpers, update both the current namespaced and
 // legacy decode assertions here so the Phase-2 namespace repair remains
-// backward-compatible.
+// backward-compatible. The fresh-record tests protect the data-loss repair:
+// new namespaced records must include clean fields as a full snapshot, while
+// sparse populate still preserves untouched fields on existing records.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -170,7 +172,20 @@ final class CloudKitSyncMappingTests: XCTestCase {
         XCTAssertEqual(decoded.syncKey, syncKey)
     }
 
-    func testCleanFieldsAreNotWritten() {
+    func testFreshEpisodeRecordWritesCleanFields() {
+        let subID = UUID()
+        var ep = episode(guid: "abc"); ep.playedState = .played
+        var state = EpisodeSyncState(episode: ep, subscriptionID: subID)
+        state.markClean()
+
+        let record = CloudKitSync.makeRecord(from: state)
+
+        XCTAssertNotNil(record["playedStateModifiedAt"])
+        XCTAssertNotNil(record["wasCompletedModifiedAt"])
+        XCTAssertNotNil(record["lastPlayedAtModifiedAt"])
+    }
+
+    func testSparseEpisodePopulateCleanFieldsAreNotWritten() {
         let subID = UUID()
         var ep = episode(guid: "abc"); ep.playedState = .played
         var state = EpisodeSyncState(episode: ep, subscriptionID: subID)
@@ -178,7 +193,9 @@ final class CloudKitSyncMappingTests: XCTestCase {
         // Dirty only playedState.
         state.playedState = .archived
 
-        let record = CloudKitSync.makeRecord(from: state)
+        let record = CKRecord(recordType: CloudKitSync.episodeRecordType, recordID: CloudKitSync.episodeRecordID(for: state))
+        CloudKitSync.populate(record, from: state)
+
         XCTAssertNotNil(record["playedState"])              // dirty → written
         XCTAssertNil(record["wasCompletedModifiedAt"])      // clean → preserved/untouched
         XCTAssertNil(record["lastPlayedAtModifiedAt"])

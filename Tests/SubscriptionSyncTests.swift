@@ -5,6 +5,9 @@
 // materialization signal). No CloudKit network. Subscription records carry
 // `subscriptionID` as a field because the current CloudKit record name is
 // prefixed; keep the legacy unprefixed decode path for existing iCloud data.
+// Also covers the namespace data-loss repair: absent remote fields must not wipe
+// local settings, fresh records write full snapshots, and legacy records can
+// restore settings then queue a full namespaced upload.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -47,6 +50,38 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertTrue(merged.$notificationsEnabled.hasPendingChange)
     }
 
+    func testRemoteFieldWithoutStampDoesNotResetCleanLocalSetting() {
+        var sub = makeSubscription()
+        sub.playbackPreference = PlaybackPreference(
+            speed: 1.8,
+            startSkipSeconds: 0,
+            endSkipSeconds: 0,
+            vocalBoostLevel: .strong,
+            trimSilence: .low
+        )
+        var local = SubscriptionSyncState(subscription: sub)
+        local.markClean()
+
+        let remote = SubscriptionSyncState(
+            subscriptionID: sub.id,
+            feedURL: sub.feedURL,
+            subscribed: Synced(wrappedValue: true),
+            title: Synced(wrappedValue: ""),
+            priorityRank: Synced(wrappedValue: 0),
+            notificationsEnabled: Synced(wrappedValue: false),
+            excludeFromAutoFeedRefresh: Synced(wrappedValue: false),
+            playbackPreference: Synced(wrappedValue: .default),
+            autoArchiveSettings: Synced(wrappedValue: .default),
+            chapterFilter: Synced(wrappedValue: ChapterFilter())
+        )
+
+        let merged = local.merged(withRemote: remote)
+
+        XCTAssertEqual(merged.playbackPreference.speed, 1.8)
+        XCTAssertEqual(merged.playbackPreference.trimSilence, .low)
+        XCTAssertEqual(merged.playbackPreference.vocalBoostLevel, .strong)
+    }
+
     // MARK: - CKRecord mapping
 
     func testSubscriptionRecordRoundTrip() {
@@ -65,6 +100,36 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(decoded?.feedURL, sub.feedURL)
         XCTAssertEqual(decoded?.playbackPreference.speed, 1.6)
         XCTAssertEqual(decoded?.notificationsEnabled, true)
+    }
+
+    func testFreshSubscriptionRecordWritesCleanFields() {
+        var sub = makeSubscription(title: "Clean Podcast")
+        sub.playbackPreference.speed = 1.7
+        var state = SubscriptionSyncState(subscription: sub)
+        state.markClean()
+
+        let record = CloudKitSync.makeRecord(from: state)
+
+        XCTAssertNotNil(record["playbackPreference"])
+        XCTAssertNotNil(record["playbackPreferenceModifiedAt"])
+        XCTAssertNotNil(record["autoArchiveSettingsModifiedAt"])
+        XCTAssertNotNil(record["chapterFilterModifiedAt"])
+        XCTAssertEqual(CloudKitSync.subscriptionSyncState(from: record)?.playbackPreference.speed, 1.7)
+    }
+
+    func testSparseSubscriptionPopulateLeavesCleanFieldsUntouched() {
+        let sub = makeSubscription()
+        var state = SubscriptionSyncState(subscription: sub)
+        state.markClean()
+        state.notificationsEnabled = true
+
+        let record = CKRecord(recordType: CloudKitSync.subscriptionRecordType, recordID: CloudKitSync.subscriptionRecordID(id: sub.id))
+        CloudKitSync.populate(record, from: state)
+
+        XCTAssertEqual(record["notificationsEnabled"] as? Int, 1)
+        XCTAssertNil(record["playbackPreferenceModifiedAt"])
+        XCTAssertNil(record["autoArchiveSettingsModifiedAt"])
+        XCTAssertNil(record["chapterFilterModifiedAt"])
     }
 
     func testLegacySubscriptionRecordNameStillDecodes() {
@@ -102,6 +167,85 @@ final class SubscriptionSyncTests: XCTestCase {
         if case .applied = outcome {} else { XCTFail("expected .applied") }
         XCTAssertEqual(store.subscription(id: id)?.title, "New Title")
         XCTAssertEqual(store.subscription(id: id)?.playbackPreference.speed, 2.0)
+    }
+
+    @MainActor
+    func testSparseRemoteRecordDoesNotResetExistingSubscriptionSettings() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let ep = Episode(subscriptionID: id, guid: "g1", title: "Ep", audioURL: URL(string: "https://e.com/a.mp3")!)
+        _ = try store.addSubscription(id: id, feedURL: URL(string: "https://f.com/feed")!, title: "Show", author: nil, artworkURL: nil, latestEpisode: ep)
+        var preference = PlaybackPreference(
+            speed: 1.9,
+            startSkipSeconds: 0,
+            endSkipSeconds: 0,
+            vocalBoostLevel: .strong,
+            trimSilence: .low
+        )
+        preference.startSkipSeconds = 5
+        store.updatePlaybackPreference(subscriptionID: id, preference: preference)
+        await store.flushPendingSaves()
+        let db = try XCTUnwrap(store.database)
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
+
+        let sparseRemote = SubscriptionSyncState(
+            subscriptionID: id,
+            feedURL: URL(string: "https://f.com/feed")!,
+            subscribed: Synced(wrappedValue: true),
+            title: Synced(wrappedValue: ""),
+            priorityRank: Synced(wrappedValue: 0),
+            notificationsEnabled: Synced(wrappedValue: false),
+            excludeFromAutoFeedRefresh: Synced(wrappedValue: false),
+            playbackPreference: Synced(wrappedValue: .default),
+            autoArchiveSettings: Synced(wrappedValue: .default),
+            chapterFilter: Synced(wrappedValue: ChapterFilter())
+        )
+
+        store.applyRemoteSubscriptionState(sparseRemote)
+        await store.flushPendingSaves()
+
+        let result = try XCTUnwrap(store.subscription(id: id)?.playbackPreference)
+        XCTAssertEqual(result.speed, 1.9)
+        XCTAssertEqual(result.startSkipSeconds, 5)
+        XCTAssertEqual(result.trimSilence, .low)
+        XCTAssertEqual(result.vocalBoostLevel, .strong)
+    }
+
+    @MainActor
+    func testLegacySubscriptionRecoveryRestoresSettingsAndQueuesFullUpload() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let ep = Episode(subscriptionID: id, guid: "g1", title: "Ep", audioURL: URL(string: "https://e.com/a.mp3")!)
+        _ = try store.addSubscription(id: id, feedURL: URL(string: "https://f.com/feed")!, title: "Show", author: nil, artworkURL: nil, latestEpisode: ep)
+        await store.flushPendingSaves()
+        let db = try XCTUnwrap(store.database)
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
+
+        var legacySub = try XCTUnwrap(store.subscription(id: id))
+        legacySub.playbackPreference = PlaybackPreference(
+            speed: 1.8,
+            startSkipSeconds: 7,
+            endSkipSeconds: 3,
+            vocalBoostLevel: .strong,
+            trimSilence: .low
+        )
+        let legacy = SubscriptionSyncState(subscription: legacySub, dirtyAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        XCTAssertTrue(store.recoverSettingsFromLegacySubscriptionState(legacy))
+        await store.flushPendingSaves()
+
+        let result = try XCTUnwrap(store.subscription(id: id)?.playbackPreference)
+        XCTAssertEqual(result.speed, 1.8)
+        XCTAssertEqual(result.startSkipSeconds, 7)
+        XCTAssertEqual(result.endSkipSeconds, 3)
+        XCTAssertEqual(result.trimSilence, .low)
+        XCTAssertEqual(result.vocalBoostLevel, .strong)
+
+        let pending = try db.pendingSubscriptionSyncStates()
+        let upload = try XCTUnwrap(pending.first { $0.subscriptionID == id })
+        XCTAssertTrue(upload.$playbackPreference.hasPendingChange)
+        XCTAssertTrue(upload.$autoArchiveSettings.hasPendingChange)
+        XCTAssertTrue(upload.$chapterFilter.hasPendingChange)
     }
 
     @MainActor

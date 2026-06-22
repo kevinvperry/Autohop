@@ -25,6 +25,10 @@ import Foundation
 // Remote episode sync applies by subscription-scoped sync key and protects the
 // currently loaded player episode (active-player-wins); refresh-stat-only writes
 // deliberately persist without publishing so they do not wake views or sync.
+// Remote subscription recovery can restore per-podcast settings from legacy
+// unprefixed CloudKit SubscriptionState records left by the namespace migration;
+// it never creates/removes subscriptions and always marks the repaired state for
+// a full namespaced re-upload.
 // GOTCHA: accessors generally distinguish active subscriptions
 // (browseDate == nil) from browse ones; queue/refresh/UI must not see browse
 // subscriptions except in the search sheet's Recently Viewed list.
@@ -815,6 +819,51 @@ public final class SubscriptionStore: ObservableObject {
         normalizePriorityOrder()
         save()
         return .applied
+    }
+
+    /// Restores settings from a legacy unprefixed CloudKit SubscriptionState
+    /// record left behind by the namespace repair. This never creates or removes
+    /// a subscription; it only repairs settings for a podcast that still exists
+    /// locally, then marks the merged state fully dirty so the namespaced
+    /// `subscription:<id>` record is re-uploaded as a complete snapshot.
+    @discardableResult
+    public func recoverSettingsFromLegacySubscriptionState(_ legacy: SubscriptionSyncState) -> Bool {
+        guard let database,
+              let existingIndex = subscriptions.firstIndex(where: { $0.id == legacy.subscriptionID })
+        else { return false }
+
+        let baseline: SubscriptionSyncState
+        if let localProjection = try? database.subscriptionSyncState(id: legacy.subscriptionID) {
+            baseline = localProjection
+        } else {
+            var seeded = SubscriptionSyncState(subscription: subscriptions[existingIndex], subscribed: true)
+            seeded.markClean()
+            baseline = seeded
+        }
+
+        var legacySettings = legacy
+        // Recovery must not resurrect a removed subscription or process a stale
+        // unsubscribe; membership stays local. Only per-podcast settings are
+        // restored from the legacy record.
+        legacySettings.$subscribed = baseline.$subscribed
+
+        let merged = baseline.merged(withRemote: legacySettings)
+        var upload = merged
+        upload.markAllDirty()
+        try? database.saveSubscriptionSyncState(upload)
+
+        var sub = subscriptions[existingIndex]
+        sub.title = merged.title
+        sub.priorityRank = merged.priorityRank
+        sub.notificationsEnabled = merged.notificationsEnabled
+        sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
+        sub.playbackPreference = merged.playbackPreference
+        sub.autoArchiveSettings = merged.autoArchiveSettings
+        sub.chapterFilter = merged.chapterFilter
+        subscriptions[existingIndex] = sub
+        normalizePriorityOrder()
+        save()
+        return true
     }
 
     private func locateEpisode(subscriptionID: UUID, guid: String) -> (sub: Int, ep: Int)? {

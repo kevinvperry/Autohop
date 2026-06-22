@@ -2,7 +2,9 @@
 // dirty-tracking primitive (@Synced) and the EpisodeSyncState/
 // SubscriptionSyncState projections introduced for cross-device sync
 // (SYNC_DESIGN.md). Includes the subscription-scoped EpisodeSyncState.syncKey.
-// Pure value-type tests — no database.
+// Pure value-type tests — no database. The nil-remote-stamp test protects the
+// namespace repair rule that absent CloudKit fields are "no opinion", not
+// destructive defaults.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -48,6 +50,16 @@ final class SyncStateTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Synced<String>.self, from: data)
         XCTAssertEqual(decoded.value, "b")
         XCTAssertEqual(decoded.modifiedAt, synced.modifiedAt)
+    }
+
+    func testRemoteWithoutStampPreservesLocalValue() {
+        let local = Synced(wrappedValue: 1.6)
+        let remote = Synced(wrappedValue: 1.0)
+
+        let merged = mergedSyncedField(local: local, remote: remote)
+
+        XCTAssertEqual(merged.value, 1.6)
+        XCTAssertNil(merged.modifiedAt)
     }
 
     // MARK: - EpisodeSyncState

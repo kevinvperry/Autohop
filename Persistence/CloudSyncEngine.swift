@@ -26,6 +26,11 @@ import Combine
 // IDs. `isRetiredLegacyPendingSave` intentionally retires only restored legacy
 // `.saveRecord` changes; legacy `.deleteRecord` changes are preserved to avoid
 // dropping unsubscribe/tombstone intent.
+// Namespace data-loss repair: if cached systemFields point at a legacy record
+// name, the engine treats the namespaced record as fresh and asks CloudKitSync to
+// write a full snapshot (not a sparse dirty-field overlay). On first activation
+// it also makes a one-shot query for legacy unprefixed SubscriptionState records
+// and lets SubscriptionStore restore settings for podcasts that still exist.
 //
 // Pull: fetched server records are decoded and merged into the local store via
 // SubscriptionStore.applyRemote*, ListeningHistoryStore, and ListeningStatsStore;
@@ -56,6 +61,9 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private var isStarting = false
     private var cancellables = Set<AnyCancellable>()
     private var quarantinedRecordKeys = Set<QuarantinedRecordKey>()
+
+    private static let legacySubscriptionRecoveryCompletedKey =
+        "com.autohop.sync.legacySubscriptionRecovery.v1.completed"
 
     /// Invoked when a remote subscription record arrives for a podcast not on
     /// this device — the app layer fetches the feed and creates it, then
@@ -138,7 +146,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             "restoredState": "\(restoredState != nil)",
             "device": DeviceIdentity.current
         ])
-        Task { await queuePendingLocalChanges() }
+        Task {
+            await recoverLegacySubscriptionSettingsIfNeeded()
+            await queuePendingLocalChanges()
+        }
     }
 
     func stop() {
@@ -209,6 +220,93 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             "quarantined": "\((episodeChanges + subscriptionChanges + historyChanges + statsChanges).count - changes.count)",
             "device": deviceID
         ])
+    }
+
+    private func recoverLegacySubscriptionSettingsIfNeeded() async {
+        guard !UserDefaults.standard.bool(forKey: Self.legacySubscriptionRecoveryCompletedKey) else { return }
+
+        do {
+            let records = try await fetchLegacySubscriptionRecords()
+            var decoded = 0
+            var recovered = 0
+            var skippedUnknown = 0
+
+            for record in records {
+                guard let state = CloudKitSync.subscriptionSyncState(from: record) else {
+                    logger.warning("sync.legacySubscriptionRecoveryDecodeFailed", "Could not decode legacy subscription record", metadata: [
+                        "name": record.recordID.recordName
+                    ])
+                    continue
+                }
+                decoded += 1
+
+                let didRecover = await MainActor.run {
+                    subscriptionStore.recoverSettingsFromLegacySubscriptionState(state)
+                }
+                if didRecover {
+                    recovered += 1
+                    engine?.state.add(pendingRecordZoneChanges: [
+                        .saveRecord(CloudKitSync.subscriptionRecordID(id: state.subscriptionID))
+                    ])
+                } else {
+                    skippedUnknown += 1
+                }
+            }
+
+            UserDefaults.standard.set(true, forKey: Self.legacySubscriptionRecoveryCompletedKey)
+            logger.warning("sync.legacySubscriptionRecovery", "Legacy subscription settings recovery completed", metadata: [
+                "decoded": "\(decoded)",
+                "recovered": "\(recovered)",
+                "skippedUnknown": "\(skippedUnknown)"
+            ])
+        } catch {
+            logger.error("sync.legacySubscriptionRecoveryFailed", "Failed to recover legacy subscription settings", metadata: [
+                "error": "\(error)"
+            ], alwaysPersist: true)
+        }
+    }
+
+    private func fetchLegacySubscriptionRecords() async throws -> [CKRecord] {
+        let query = CKQuery(recordType: CloudKitSync.subscriptionRecordType, predicate: NSPredicate(value: true))
+        let database = container.privateCloudDatabase
+        var records: [CKRecord] = []
+        var cursor: CKQueryOperation.Cursor?
+
+        repeat {
+            let page: (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?)
+            if let cursor {
+                page = try await database.records(
+                    continuingMatchFrom: cursor,
+                    desiredKeys: nil,
+                    resultsLimit: CKQueryOperation.maximumResults
+                )
+            } else {
+                page = try await database.records(
+                    matching: query,
+                    inZoneWith: CloudKitSync.zoneID,
+                    desiredKeys: nil,
+                    resultsLimit: CKQueryOperation.maximumResults
+                )
+            }
+
+            for (recordID, result) in page.matchResults {
+                switch result {
+                case .success(let record):
+                    if CloudKitSync.isLegacySubscriptionRecordName(record.recordID.recordName) {
+                        records.append(record)
+                    }
+                case .failure(let error):
+                    logger.warning("sync.legacySubscriptionRecoveryRecordFailed", "Could not fetch legacy subscription record", metadata: [
+                        "name": recordID.recordName,
+                        "error": "\(error)"
+                    ])
+                }
+            }
+
+            cursor = page.queryCursor
+        } while cursor != nil
+
+        return records
     }
 
     // MARK: - CKSyncEngineDelegate
@@ -283,42 +381,42 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             // fall back to restored legacy pending names only when unambiguous.
             if let state = try database.episodeSyncState(syncKey: episodeSyncKey)
                 ?? database.legacyEpisodeSyncState(guid: name) {
-                let record = cachedOrNewRecord(
+                let target = cachedOrNewRecord(
                     systemFields: try? database.episodeSystemFields(syncKey: state.syncKey),
                     recordType: CloudKitSync.episodeRecordType, recordID: recordID
                 )
-                CloudKitSync.populate(record, from: state)
-                return record
+                CloudKitSync.populate(target.record, from: state, includeCleanFields: target.requiresFullSnapshot)
+                return target.record
             }
 
             // Subscription? (current recordName == subscription:<subscriptionID>).
             if let id = subscriptionID, let state = try database.subscriptionSyncState(id: id) {
-                let record = cachedOrNewRecord(
+                let target = cachedOrNewRecord(
                     systemFields: try? database.subscriptionSystemFields(id: id),
                     recordType: CloudKitSync.subscriptionRecordType, recordID: recordID
                 )
-                CloudKitSync.populate(record, from: state)
-                return record
+                CloudKitSync.populate(target.record, from: state, includeCleanFields: target.requiresFullSnapshot)
+                return target.record
             }
 
             // History entry? (current recordName == history:<composite history key>).
             if let entry = try database.historyEntry(id: historyID) {
-                let record = cachedOrNewRecord(
+                let target = cachedOrNewRecord(
                     systemFields: try? database.historySystemFields(id: historyID),
                     recordType: CloudKitSync.historyRecordType, recordID: recordID
                 )
-                CloudKitSync.populate(record, from: entry)
-                return record
+                CloudKitSync.populate(target.record, from: entry)
+                return target.record
             }
 
             // Stats partition? (current recordName == stats:<deviceID>:<dayKey>).
             if let dayKey = statsDayKey, let day = try database.statsDay(dayKey: dayKey) {
-                let record = cachedOrNewRecord(
+                let target = cachedOrNewRecord(
                     systemFields: try? database.statsSystemFields(dayKey: dayKey),
                     recordType: CloudKitSync.statsRecordType, recordID: recordID
                 )
-                CloudKitSync.populate(record, deviceID: DeviceIdentity.current, day: day)
-                return record
+                CloudKitSync.populate(target.record, deviceID: DeviceIdentity.current, day: day)
+                return target.record
             }
         } catch {
             logger.error("sync.recordBuildFailed", "Failed to read local state while building a record to push", metadata: [
@@ -337,14 +435,22 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         return nil
     }
 
-    private func cachedOrNewRecord(systemFields: Data?, recordType: String, recordID: CKRecord.ID) -> CKRecord {
+    private struct RecordBuildTarget {
+        var record: CKRecord
+        var requiresFullSnapshot: Bool
+    }
+
+    private func cachedOrNewRecord(systemFields: Data?, recordType: String, recordID: CKRecord.ID) -> RecordBuildTarget {
         if let systemFields,
            let cached = Self.record(fromSystemFields: systemFields),
            cached.recordType == recordType,
            cached.recordID == recordID {
-            return cached
+            return RecordBuildTarget(record: cached, requiresFullSnapshot: false)
         }
-        return CKRecord(recordType: recordType, recordID: recordID)
+        return RecordBuildTarget(
+            record: CKRecord(recordType: recordType, recordID: recordID),
+            requiresFullSnapshot: true
+        )
     }
 
     // MARK: - Pull / apply

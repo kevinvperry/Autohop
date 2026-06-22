@@ -14,7 +14,8 @@ Section 15.1 documents Release Radar's learned scheduling, foreground/background
 caps, deferred backlog draining, cancellation checkpoints, and diagnostic fields.
 Section 7/15.1 documents that feed refresh schedules auto-downloads without
 waiting for media transfer completion. Section 15.7 documents CloudKit
-type-namespaced record IDs and collision containment. Section 15.9 documents
+type-namespaced record IDs, collision containment, full-record namespace
+migration, and legacy subscription settings recovery. Section 15.9 documents
 diagnostic resource snapshots (`footprintMB`) and main-thread hang context.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
@@ -844,7 +845,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys.
 
-**CloudKit identity and repair:** CloudKit record names are type-namespaced (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique across record types inside the shared zone. Legacy unprefixed records still decode for existing iCloud data. A known permanent legacy collision where a `HistoryEntry` record blocks an `EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the hot retry loop, and left dirty locally so the next queue pass can send it under the new `episode:` name. Restored pre-namespace save attempts are dropped before sending; deletes are preserved. Old unprefixed CloudKit records may remain as harmless server-side orphans.
+**CloudKit identity and repair:** CloudKit record names are type-namespaced (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique across record types inside the shared zone. Legacy unprefixed records still decode for existing iCloud data. A known permanent legacy collision where a `HistoryEntry` record blocks an `EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the hot retry loop, and left dirty locally so the next queue pass can send it under the new `episode:` name. Restored pre-namespace save attempts are dropped before sending; deletes are preserved. Fresh namespaced EpisodeState and SubscriptionState records are written as full snapshots so clean local fields are not omitted. Sparse remote fields with no modified timestamp are treated as "no remote opinion" and cannot reset local settings to defaults. A one-shot recovery pass reads legacy unprefixed SubscriptionState records, restores settings only for podcasts that still exist locally, and re-uploads complete `subscription:` records. Old unprefixed CloudKit records may remain as recovery orphans until the namespaced data is verified.
 
 ---
 

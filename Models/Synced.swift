@@ -28,6 +28,9 @@ import Foundation
 // IMPORTANT: this wrapper is used ONLY on the dedicated sync-state projections
 // (EpisodeSyncState / SubscriptionSyncState), never on the domain Episode/
 // Subscription models — those keep their plain Codable shape and on-disk format.
+// MERGE SAFETY: remote `modifiedAt == nil` means a CloudKit field was absent,
+// not that its default value should overwrite local data. This protects the
+// namespace migration from sparse remote records resetting per-podcast settings.
 @propertyWrapper
 public struct Synced<Value: Codable & Equatable>: Codable, Equatable {
     public private(set) var value: Value
@@ -62,11 +65,14 @@ public struct Synced<Value: Codable & Equatable>: Codable, Equatable {
     public mutating func markDirty(at date: Date = Date()) { modifiedAt = date }
 }
 
-/// Field-level last-write-wins merge of one synced field. A non-nil local stamp
-/// wins only if strictly newer than the remote's; otherwise the remote value is
-/// adopted clean (nil stamp = "no local opinion", so the server is authoritative).
+/// Field-level last-write-wins merge of one synced field. A remote field is
+/// authoritative only when it carries a server timestamp; a nil remote stamp
+/// means "field absent / no remote opinion" and must preserve the local value.
+/// A non-nil local stamp wins only if strictly newer than the remote's;
+/// otherwise the remote value is adopted clean.
 public func mergedSyncedField<T>(local: Synced<T>, remote: Synced<T>) -> Synced<T> {
-    if let localStamp = local.modifiedAt, localStamp > (remote.modifiedAt ?? .distantPast) {
+    guard let remoteStamp = remote.modifiedAt else { return local }
+    if let localStamp = local.modifiedAt, localStamp > remoteStamp {
         return local
     }
     return Synced(wrappedValue: remote.value, modifiedAt: nil)

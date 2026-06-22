@@ -46,9 +46,12 @@ public enum DeviceIdentity {
 // that field's authoritative server timestamp — the basis for the field-level
 // last-write-wins merge.
 //
-// OUTBOUND RULE: populate() writes only fields with a pending local change, so
-// pushing a record that changed one field never clobbers the server's value/
-// stamp for the others (the outbound analogue of the inbound merge).
+// OUTBOUND RULE: sparse populate() writes only fields with a pending local
+// change, so pushing a one-field edit never clobbers the server's other values.
+// Fresh records are different: they must be populated with a full snapshot
+// because there are no server fields to preserve. The namespace repair depends
+// on that distinction; otherwise clean local subscription settings become
+// absent CloudKit fields and can be decoded as destructive defaults elsewhere.
 public enum CloudKitSync {
     public static let zoneName = "AutohopSync"
     public static let episodeRecordType = "EpisodeState"
@@ -97,6 +100,11 @@ public enum CloudKitSync {
     public static func subscriptionID(fromRecordName recordName: String) -> UUID? {
         let idString = stripped(recordName, prefix: RecordName.subscriptionPrefix) ?? recordName
         return UUID(uuidString: idString)
+    }
+
+    public static func isLegacySubscriptionRecordName(_ recordName: String) -> Bool {
+        !recordName.hasPrefix(RecordName.subscriptionPrefix)
+            && UUID(uuidString: recordName) != nil
     }
 
     public static func subscriptionRecordID(id: UUID) -> CKRecord.ID {
@@ -155,21 +163,28 @@ public enum CloudKitSync {
         static let lastPlayedAtModifiedAt = "lastPlayedAtModifiedAt"
     }
 
-    /// Overlays the state's *dirty* fields onto an existing (or freshly created)
-    /// CKRecord, preserving any field the state hasn't locally changed.
-    public static func populate(_ record: CKRecord, from state: EpisodeSyncState) {
+    /// Overlays the state's dirty fields onto an existing CKRecord. When
+    /// `includeCleanFields` is true, writes every field and stamps clean ones
+    /// with `authoredAt`; use that only for fresh records that have no server
+    /// baseline to preserve.
+    public static func populate(
+        _ record: CKRecord,
+        from state: EpisodeSyncState,
+        includeCleanFields: Bool = false,
+        authoredAt: Date = Date()
+    ) {
         record[Key.guid] = state.guid
         record[Key.subscriptionID] = state.subscriptionID.uuidString
 
-        if let modifiedAt = state.$playedState.modifiedAt {
+        if let modifiedAt = state.$playedState.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[Key.playedState] = state.playedState.rawValue
             record[Key.playedStateModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$wasCompleted.modifiedAt {
+        if let modifiedAt = state.$wasCompleted.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[Key.wasCompleted] = state.wasCompleted ? 1 : 0
             record[Key.wasCompletedModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$lastPlayedAt.modifiedAt {
+        if let modifiedAt = state.$lastPlayedAt.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             // Only set the date when non-nil; the modifiedAt presence is what
             // marks the field as authored.
             record[Key.lastPlayedAt] = state.lastPlayedAt
@@ -181,7 +196,7 @@ public enum CloudKitSync {
     /// exists yet).
     public static func makeRecord(from state: EpisodeSyncState) -> CKRecord {
         let record = CKRecord(recordType: episodeRecordType, recordID: episodeRecordID(for: state))
-        populate(record, from: state)
+        populate(record, from: state, includeCleanFields: true)
         return record
     }
 
@@ -247,46 +262,57 @@ public enum CloudKitSync {
 
     public static func makeRecord(from state: SubscriptionSyncState) -> CKRecord {
         let record = CKRecord(recordType: subscriptionRecordType, recordID: subscriptionRecordID(id: state.subscriptionID))
-        populate(record, from: state)
+        populate(record, from: state, includeCleanFields: true)
         return record
     }
 
     /// Overlays only the dirty fields onto the record (preserving server values
-    /// for fields unchanged locally). `feedURL` is constant and always written.
-    public static func populate(_ record: CKRecord, from state: SubscriptionSyncState) {
+    /// for fields unchanged locally). When `includeCleanFields` is true, writes
+    /// every field and stamps clean ones with `authoredAt`; use that only for
+    /// fresh records that have no server baseline. `feedURL` is constant and
+    /// always written.
+    public static func populate(
+        _ record: CKRecord,
+        from state: SubscriptionSyncState,
+        includeCleanFields: Bool = false,
+        authoredAt: Date = Date()
+    ) {
         record[SubKey.subscriptionID] = state.subscriptionID.uuidString
         record[SubKey.feedURL] = state.feedURL.absoluteString
 
-        if let modifiedAt = state.$subscribed.modifiedAt {
+        if let modifiedAt = state.$subscribed.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[SubKey.subscribed] = state.subscribed ? 1 : 0
             record[SubKey.subscribedModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$title.modifiedAt {
+        if let modifiedAt = state.$title.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[SubKey.title] = state.title
             record[SubKey.titleModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$priorityRank.modifiedAt {
+        if let modifiedAt = state.$priorityRank.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[SubKey.priorityRank] = state.priorityRank
             record[SubKey.priorityRankModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$notificationsEnabled.modifiedAt {
+        if let modifiedAt = state.$notificationsEnabled.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[SubKey.notificationsEnabled] = state.notificationsEnabled ? 1 : 0
             record[SubKey.notificationsEnabledModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$excludeFromAutoFeedRefresh.modifiedAt {
+        if let modifiedAt = state.$excludeFromAutoFeedRefresh.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
             record[SubKey.excludeFromAutoFeedRefresh] = state.excludeFromAutoFeedRefresh ? 1 : 0
             record[SubKey.excludeFromAutoFeedRefreshModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$playbackPreference.modifiedAt {
-            record[SubKey.playbackPreference] = try? jsonEncoder.encode(state.playbackPreference)
+        if let modifiedAt = state.$playbackPreference.modifiedAt ?? (includeCleanFields ? authoredAt : nil),
+           let data = try? jsonEncoder.encode(state.playbackPreference) {
+            record[SubKey.playbackPreference] = data
             record[SubKey.playbackPreferenceModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$autoArchiveSettings.modifiedAt {
-            record[SubKey.autoArchiveSettings] = try? jsonEncoder.encode(state.autoArchiveSettings)
+        if let modifiedAt = state.$autoArchiveSettings.modifiedAt ?? (includeCleanFields ? authoredAt : nil),
+           let data = try? jsonEncoder.encode(state.autoArchiveSettings) {
+            record[SubKey.autoArchiveSettings] = data
             record[SubKey.autoArchiveSettingsModifiedAt] = modifiedAt
         }
-        if let modifiedAt = state.$chapterFilter.modifiedAt {
-            record[SubKey.chapterFilter] = try? jsonEncoder.encode(state.chapterFilter)
+        if let modifiedAt = state.$chapterFilter.modifiedAt ?? (includeCleanFields ? authoredAt : nil),
+           let data = try? jsonEncoder.encode(state.chapterFilter) {
+            record[SubKey.chapterFilter] = data
             record[SubKey.chapterFilterModifiedAt] = modifiedAt
         }
     }

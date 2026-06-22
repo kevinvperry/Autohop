@@ -11,7 +11,9 @@ Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scope
 across record types inside a zone. Refresh scheduling stats remain local, and
 download/media state never syncs.
 June 2026 diagnostic repair context lives here too: collision quarantine,
-legacy pending-save retirement, and functional self-repair under namespaced IDs.
+legacy pending-save retirement, full-record namespace migration, and recovery
+from legacy unprefixed subscription records after the sparse-record data-loss
+regression.
 -->
 
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
@@ -45,7 +47,9 @@ engine.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
-dirty-tracking; nil stamp = clean. (`Synced` is a port of Pocket Casts'
+dirty-tracking; nil local stamp = clean. A nil **remote** stamp means the field
+was absent from the CloudKit record and is treated as "no remote opinion" rather
+than as an authoritative default. (`Synced` is a port of Pocket Casts'
 `ModifiedDate` wrapper and is **MPL-2.0-covered** — see NOTICE / LICENSE-MPL-2.0.md.)
 Projections (Models/SyncState.swift):
 - `EpisodeSyncState` (key `subscriptionID|guid:<guid>`): playedState,
@@ -74,10 +78,13 @@ EpisodeState save with the same record name. Decoders keep the legacy fallbacks
 so existing iCloud data remains readable.
 
 ## Field-level merge (`merged(withRemote:)`)
-Per field: a non-nil local stamp wins only if strictly newer than the remote's;
-otherwise the remote value is adopted clean (server authoritative). Settings
-sub-structs (playbackPreference/autoArchiveSettings/chapterFilter) merge at
-struct level (deliberate v1 simplification).
+Per field: a remote value is authoritative only when it carries a non-nil
+`<field>ModifiedAt` stamp. A nil remote stamp means "field absent / no remote
+opinion" and preserves the local value. When the remote stamp is present, a
+non-nil local stamp wins only if strictly newer; otherwise the remote value is
+adopted clean. Settings sub-structs
+(playbackPreference/autoArchiveSettings/chapterFilter) merge at struct level
+(deliberate v1 simplification).
 
 ## Build status
 1. ✅ **GRDB store migration** behind the SubscriptionStore facade.
@@ -152,11 +159,20 @@ Current containment and repair behavior:
 - Cached CKRecord system fields are reused only when the cached record type and
   `recordID` exactly match the outgoing namespaced record, avoiding a stale
   change-tag/record-ID mismatch during first post-migration save.
+- When cached system fields are missing or still point at a legacy unprefixed
+  record name, the outgoing namespaced EpisodeState/SubscriptionState record is
+  treated as fresh and written as a full snapshot. Sparse dirty-field overlays
+  are used only when updating an existing matching server record.
+- A one-shot legacy SubscriptionState recovery query reads unprefixed
+  subscription records, repairs settings for subscriptions that still exist
+  locally, and queues complete `subscription:` re-uploads. It never materializes
+  unknown subscriptions or processes stale legacy unsubscribes.
 
-This is functional self-repair, not a server cleanup job. Old unprefixed records
-may remain as harmless CloudKit orphans. A targeted orphan-delete tool can be
-added later if needed; a full zone reset is intentionally avoided because it has
-more cross-device risk than benefit.
+This is functional self-repair and recovery, not a server cleanup job. Old
+unprefixed records may remain as CloudKit orphans and, for subscriptions, are
+kept as recovery sources until the namespaced records are known good. A targeted
+orphan-delete tool can be added later if needed; a full zone reset is
+intentionally avoided because it has more cross-device risk than benefit.
 
 ## CloudKit setup notes
 - Container `iCloud.com.kevinperry.autohop`; CloudKit + Push + Background Modes
@@ -187,7 +203,7 @@ Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
   (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
   `sync.pushQuarantined` (known permanent record-type collision), `sync.legacyPendingDropped`
   (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.
-- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`.
+- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
 - **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
 
 Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
