@@ -435,7 +435,7 @@ struct PodcastsView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         return h > 0 ? "\(h)h \(m)m" : "\(m)m"

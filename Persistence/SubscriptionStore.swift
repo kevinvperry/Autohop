@@ -473,6 +473,7 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func updateEpisodeDuration(subscriptionID: UUID, episodeID: UUID, durationSeconds: TimeInterval) {
+        guard durationSeconds.isFinite, durationSeconds >= 0 else { return }
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.durationSeconds = durationSeconds
         }

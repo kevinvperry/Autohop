@@ -157,7 +157,7 @@ struct MiniPlayerBar: View {
     }
 
     private func formatRemaining(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         let sec = s % 60

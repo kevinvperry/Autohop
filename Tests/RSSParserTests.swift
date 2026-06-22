@@ -83,6 +83,41 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(episode.fileSizeBytes, 2_510_468_263)
     }
 
+    func testIgnoresNonFiniteDurations() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Odd Durations</title>
+            <item>
+              <guid>nan-duration</guid>
+              <title>NaN Duration</title>
+              <enclosure url="https://cdn.example.com/nan.mp3" length="100" type="audio/mpeg"/>
+              <itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">NaN</itunes:duration>
+            </item>
+            <item>
+              <guid>infinite-timecode</guid>
+              <title>Infinite Timecode</title>
+              <enclosure url="https://cdn.example.com/inf.mp3" length="100" type="audio/mpeg"/>
+              <itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">1:inf</itunes:duration>
+            </item>
+            <item>
+              <guid>valid-duration</guid>
+              <title>Valid Duration</title>
+              <enclosure url="https://cdn.example.com/valid.mp3" length="100" type="audio/mpeg"/>
+              <itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">00:30</itunes:duration>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let feed = try RSSParser().parse(data: Data(xml.utf8))
+
+        XCTAssertNil(feed.episodes[0].durationSeconds)
+        XCTAssertNil(feed.episodes[1].durationSeconds)
+        XCTAssertEqual(feed.episodes[2].durationSeconds, 30)
+    }
+
     func testParsesThreeAWBreakfastInlinePSCChapters() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>

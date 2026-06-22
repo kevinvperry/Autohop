@@ -461,9 +461,13 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
 
     private static func parseDuration(_ value: String) -> TimeInterval? {
         if let numeric = TimeInterval(value) {
-            return numeric
+            return validDuration(numeric)
         }
-        return parseTimecode(value)
+        return parseTimecode(value).flatMap(validDuration)
+    }
+
+    private static func validDuration(_ duration: TimeInterval) -> TimeInterval? {
+        duration.isFinite && duration >= 0 ? duration : nil
     }
 
     /// Decodes HTML/XML character entities one pass. XMLParser already decodes a
@@ -532,11 +536,12 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
 
     private static func parseTimecode(_ value: String) -> TimeInterval? {
         let parts = value.split(separator: ":").map(String.init)
-        guard parts.allSatisfy({ Double($0) != nil }) else {
+        let numbers = parts.compactMap(Double.init)
+        guard numbers.count == parts.count,
+              numbers.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
             return nil
         }
 
-        let numbers = parts.compactMap(Double.init)
         switch numbers.count {
         case 3:
             return numbers[0] * 3600 + numbers[1] * 60 + numbers[2]

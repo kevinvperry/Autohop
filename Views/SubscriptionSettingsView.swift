@@ -925,7 +925,7 @@ struct EpisodeDetailView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds)
+        let total = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         if hours > 0 { return "\(hours)h \(minutes)m" }

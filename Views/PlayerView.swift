@@ -929,7 +929,7 @@ struct PlayerView: View {
 
     private var sleepTimerBadge: String? {
         let remaining = appState.sleepTimerService.timeRemaining
-        guard remaining >= 0 else { return nil }
+        guard remaining.isFinite, remaining >= 0 else { return nil }
         let total = Int(remaining)
         let m = total / 60
         let s = total % 60
@@ -1286,7 +1286,7 @@ struct PlayerView: View {
     // MARK: - Formatting helpers
 
     private func formatTime(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(seconds))
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         let sec = s % 60
@@ -1326,14 +1326,14 @@ struct PlayerView: View {
     }
 
     private func formatDurationShort(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         return h > 0 ? "\(h)h \(m)m" : "\(m)m"
     }
 
     private func formatDurationLong(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         if h > 0 { return "\(h) hr \(m) min" }
@@ -1504,6 +1504,9 @@ struct HTMLDescriptionText: View {
 
         // 2. Normalise every font range to San Francisco at the requested size,
         //    preserving bold and italic traits so <b> / <em> still render correctly.
+        //    Collect first: mutating NSMutableAttributedString while enumerating
+        //    attributes can raise an Objective-C exception for some imported HTML.
+        var fontUpdates: [(range: NSRange, font: UIFont)] = []
         nsAttributed.enumerateAttribute(.font, in: fullRange) { value, range, _ in
             guard let old = value as? UIFont else { return }
             let traits = old.fontDescriptor.symbolicTraits
@@ -1521,12 +1524,19 @@ struct HTMLDescriptionText: View {
             } else {
                 newFont = UIFont.systemFont(ofSize: fontSize)
             }
-            nsAttributed.addAttribute(.font, value: newFont, range: range)
+            fontUpdates.append((range: range, font: newFont))
+        }
+        for update in fontUpdates {
+            nsAttributed.addAttribute(.font, value: update.font, range: update.range)
         }
 
         // 3. Re-colour links to purple.
+        var linkRanges: [NSRange] = []
         nsAttributed.enumerateAttribute(.link, in: fullRange) { value, range, _ in
             guard value != nil else { return }
+            linkRanges.append(range)
+        }
+        for range in linkRanges {
             nsAttributed.addAttribute(.foregroundColor, value: UIColor.systemPurple, range: range)
             nsAttributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
         }
@@ -1795,7 +1805,7 @@ private struct UpNextRow: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         let h = s / 3600
         let m = (s % 3600) / 60
         return h > 0 ? "\(h)h \(m)m" : "\(m)m"
@@ -1813,11 +1823,12 @@ private struct SkipIntervalIcon: View {
     let seconds: TimeInterval
 
     var body: some View {
+        let safeSeconds = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
         ZStack {
             Image(systemName: direction == .backward ? "gobackward" : "goforward")
                 .font(.system(size: 36, weight: .regular))
 
-            Text("\(Int(seconds))")
+            Text("\(safeSeconds)")
                 .font(.system(size: textSize, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .offset(y: 3)
@@ -1826,13 +1837,14 @@ private struct SkipIntervalIcon: View {
         .foregroundStyle(Color(white: 0.9))
         .accessibilityLabel(
             direction == .backward
-                ? "Skip back \(Int(seconds)) seconds"
-                : "Skip forward \(Int(seconds)) seconds"
+                ? "Skip back \(safeSeconds) seconds"
+                : "Skip forward \(safeSeconds) seconds"
         )
     }
 
     private var textSize: CGFloat {
-        Int(seconds) >= 100 ? 12 : 15
+        let safeSeconds = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
+        return safeSeconds >= 100 ? 12 : 15
     }
 }
 
