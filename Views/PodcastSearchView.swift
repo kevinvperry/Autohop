@@ -8,7 +8,9 @@ import SwiftUI
 // invisible BROWSE subscription (30-day retention clock resets per visit) so
 // the preview's episode list is fully interactive — play/queue/archive —
 // before subscribing. Opening a result navigates to PodcastDetailView, which
-// renders both the preview and subscribed states (Subscribe⇄Unsubscribe).
+// renders both the preview and subscribed states (Subscribe⇄Unsubscribe);
+// Inactive podcasts are still real subscriptions and route to Settings/manual
+// Refresh instead of the browse preview.
 // Lifecycle rules: PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
 // Search and Recently Viewed rows use 44 pt CachedArtworkImage thumbnails so
 // catalog/browse art participates in the same shared downsampled cache.
@@ -58,10 +60,11 @@ struct PodcastSearchView: View {
                     SheetCloseButton { dismiss() }
                 }
             }
-            // Search result → check for active sub first; otherwise go to preview.
+            // Search result → check for a real subscription first; Inactive
+            // subscriptions are still subscribed and must open with Settings.
             .navigationDestination(for: PodcastSearchResult.self) { result in
                 if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
-                    $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+                    $0.feedURL == result.feedURL && $0.browseDate == nil
                 }) {
                     PodcastDetailView(subscriptionID: activeSub.id)
                 } else {
@@ -71,7 +74,7 @@ struct PodcastSearchView: View {
             // Recently viewed row → subscription ID routes to preview or active view.
             .navigationDestination(for: UUID.self) { subscriptionID in
                 if let sub = appState.subscriptionStore.subscriptions.first(where: { $0.id == subscriptionID }) {
-                    if sub.excludeFromAutoFeedRefresh {
+                    if sub.browseDate != nil {
                         PodcastDetailView(browseSubscription: sub)
                     } else {
                         PodcastDetailView(subscriptionID: subscriptionID)

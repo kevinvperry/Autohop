@@ -2,8 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
-// home page, see PAGES.md). Ranked list of active subscriptions (browse
-// subscriptions filtered out); drag-to-reorder in Reorder mode rewrites
+// home page, see PAGES.md). Ranked list of real subscriptions (browse
+// subscriptions filtered out; Inactive subscriptions remain visible at the
+// bottom with the orange pill); drag-to-reorder in Reorder mode rewrites
 // priorityRank for the whole list. Each row shows artwork, title, and a
 // colour-coded status pill for the podcast's latest episode (pills hide in
 // Reorder mode so they never fight the drag grips). Pill logic: archived

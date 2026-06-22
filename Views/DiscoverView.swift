@@ -16,8 +16,9 @@ import SwiftUI
 // the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
 // results: every entry routes to PodcastDetailView, which renders both the
-// preview (invisible 30-day browse subscription) and subscribed states — see
-// PAGES.md "Browse Subscription Lifecycle"). Chart cards use CachedArtworkImage
+// preview (invisible 30-day browse subscription) and subscribed states. Inactive
+// podcasts are still real subscriptions and route to their owned detail page,
+// not the preview — see PAGES.md "Browse Subscription Lifecycle". Chart cards use CachedArtworkImage
 // with an explicit square target size so the shared artwork cache decodes covers
 // at card scale instead of retaining full-resolution storefront art in memory.
 // FIRST-RUN: while the user has no real subscriptions (appState.realSubscriptionCount
@@ -442,7 +443,7 @@ struct DiscoverView: View {
                 return
             }
             if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
-                $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+                $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)
             } else {
@@ -693,10 +694,10 @@ struct DiscoverView: View {
                 showUnavailableAlert = true
                 return
             }
-            // Same routing rule as search results: active subscriptions go to
+            // Same routing rule as search results: real subscriptions go to
             // their episode page, everything else to the browse preview.
             if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
-                $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+                $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)
             } else {

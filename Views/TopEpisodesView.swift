@@ -13,8 +13,9 @@ import SwiftUI
 // title, show name, and a relative publish label (relativePublishedLabel, e.g.
 // "4 hours ago"). Tapping resolves the parent podcast's feed (reusing
 // viewModel.resolveEpisodePodcast) and pushes PodcastDetailView on the ambient
-// stack via pendingRoute — same routing rule as Discover (active sub → episodes,
-// else browse preview). NavRules: pushed page, brand back chevron top-left,
+// stack via pendingRoute — same routing rule as Discover (real subscription,
+// including Inactive, → episodes; else browse preview). NavRules: pushed page,
+// brand back chevron top-left,
 // MiniPlayerBar docked. Mirrors heroEpisodeCard styling from DiscoverView.swift.
 struct TopEpisodesView: View {
     @ObservedObject var viewModel: DiscoverViewModel
@@ -274,10 +275,10 @@ struct TopEpisodesView: View {
                 showUnavailableAlert = true
                 return
             }
-            // Same routing rule as Discover: active subscriptions open their
+            // Same routing rule as Discover: real subscriptions open their
             // episode page, everything else the browse preview.
             if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
-                $0.feedURL == result.feedURL && !$0.excludeFromAutoFeedRefresh
+                $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)
             } else {

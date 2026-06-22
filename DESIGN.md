@@ -1473,8 +1473,8 @@ A full-screen sheet containing its own `NavigationStack`. Presented from `Podcas
 - **Genre** — `.caption`, `.tertiary`, `lineLimit(1)`
 
 **Navigation destinations:** Both push `PodcastDetailView`, which renders every podcast state itself.
-- `navigationDestination(for: PodcastSearchResult.self)` — checks for an existing active subscription at the tapped feed URL; if found, pushes `PodcastDetailView(subscriptionID:)`; otherwise `PodcastDetailView(result:)`.
-- `navigationDestination(for: UUID.self)` — used by Recently Viewed rows. Pushes `PodcastDetailView(browseSubscription:)` (browse/inactive) or `PodcastDetailView(subscriptionID:)` (active) by subscription ID.
+- `navigationDestination(for: PodcastSearchResult.self)` — checks for an existing real subscription (`browseDate == nil`) at the tapped feed URL; if found, pushes `PodcastDetailView(subscriptionID:)`; otherwise `PodcastDetailView(result:)`.
+- `navigationDestination(for: UUID.self)` — used by Recently Viewed rows. Pushes `PodcastDetailView(browseSubscription:)` for browse subscriptions (`browseDate != nil`) or `PodcastDetailView(subscriptionID:)` for real subscriptions, including Inactive ones.
 
 **Recently Viewed row layout:**
 - **Artwork** — 44×44, `cornerRadius 9`
@@ -1490,14 +1490,14 @@ A full-screen sheet containing its own `NavigationStack`. Presented from `Podcas
 
 **Label: `View-PodcastDetail`**
 
-The single page (`PodcastDetailView`) for a podcast in **every** state — an unsubscribed search/preview, a browse-only preview, or an active subscription. Replaces the former `PodcastPreviewView` and `SubscriptionEpisodesView` (merged June 2026). Pushed from Podcast Search, Discover, Recently Viewed, the Priority Stack, and the Player's show name. A `VStack` layout (not `ScrollView`) — the episode list is a `List` that fills remaining vertical space. `MiniPlayerBar` is always docked at the bottom.
+The single page (`PodcastDetailView`) for a podcast in **every** state — an unsubscribed search/preview, a browse-only preview, an active subscription, or an Inactive subscription whose auto feed refresh is paused. Replaces the former `PodcastPreviewView` and `SubscriptionEpisodesView` (merged June 2026). Pushed from Podcast Search, Discover, Recently Viewed, the Priority Stack, and the Player's show name. A `VStack` layout (not `ScrollView`) — the episode list is a `List` that fills remaining vertical space. `MiniPlayerBar` is always docked at the bottom.
 
 For an unsubscribed preview, a browse subscription is created automatically in the background when the feed finishes loading (`.task`), so the episode list is fully interactive from first load. See FEATURES.md §2.4 for the full browse subscription lifecycle.
 
 **Toolbar:**
 - Back button (`chevron.left.circle.fill`) — leading, always.
 - Share button (`square.and.arrow.up`) — trailing, always.
-- **Refresh Feed** (`arrow.clockwise`) and **Show Settings** (`gearshape` → `SubscriptionSettingsView`, `.primaryAction`) — shown **only when actively subscribed** (`!excludeFromAutoFeedRefresh`); absent on previews and browse pages.
+- **Refresh Feed** (`arrow.clockwise`) and **Show Settings** (`gearshape` → `SubscriptionSettingsView`, `.primaryAction`) — shown for real subscriptions (`browseDate == nil`), including Inactive ones; absent on unsubscribed previews and browse pages.
 
 **Header** — matches `Header-SubscriptionPage` with a Subscribe⇄Unsubscribe button appended:
 1. **Artwork** — 120×120 pt, `cornerRadius 20`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
@@ -1505,7 +1505,7 @@ For an unsubscribed preview, a browse subscription is created automatically in t
 3. **Video / Explicit pills** — `Badge-VideoPillLarge` + `Badge-ExplicitPillLarge`, shown when applicable, centred between title and description
 4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, HTML-stripped. Collapsed to `lineLimit(3)` with a trailing **"…more"** toggle; a hidden measurement probe (`DescriptionTruncationKey` preference) only shows the toggle when the text actually overflows 3 lines, and tapping it expands to the full untruncated description.
 5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
-6. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (height `50 pt`, `.borderedProminent`; not subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`; subscribed: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` → confirmation dialog before removing; `ProgressView` while subscribing) laid out beside a **notification bell** button (`bell.fill`/`bell.slash`, purple-tinted iOS-glass capsule) shown **only when actively subscribed**, toggling `Subscription.notificationsEnabled` in place. See FEATURES.md §2.2/§2.3.
+6. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (height `50 pt`, `.borderedProminent`; not subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`; subscribed or Inactive: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` → confirmation dialog before removing; `ProgressView` while subscribing) laid out beside a **notification bell** button (`bell.fill`/`bell.slash`, purple-tinted iOS-glass capsule) shown for real subscriptions, including Inactive ones, toggling `Subscription.notificationsEnabled` in place. See FEATURES.md §2.2/§2.3.
 
 **Episodes section heading** — `Text("Episodes")` `.title3.weight(.bold)` + `Image(systemName: "waveform")` `.title3.weight(.semibold)` `.secondary`. The heading `HStack` has `.padding(.top, 10)` on top of the VStack's base spacing (12 pt), giving ~22 pt total visual gap between the Subscribe button row and the Episodes heading.
 

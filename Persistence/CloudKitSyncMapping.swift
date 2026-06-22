@@ -14,7 +14,10 @@ import CloudKit
 // CKRecord.IDs by hand elsewhere; use these helpers so legacy unprefixed decode
 // fallbacks and current namespaced IDs stay paired. SubscriptionState also
 // stores `subscriptionID` as a field because the namespaced record name is no
-// longer just the UUID.
+// longer just the UUID. SubscriptionState also carries
+// autoFeedRefreshReturnPriorityRank, the hidden rank used to restore an
+// Inactive podcast to its previous Priority Stack position when auto refresh is
+// re-enabled.
 
 // Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
 // Generated once and persisted in UserDefaults — stats records are keyed by
@@ -252,6 +255,8 @@ public enum CloudKitSync {
         static let notificationsEnabledModifiedAt = "notificationsEnabledModifiedAt"
         static let excludeFromAutoFeedRefresh = "excludeFromAutoFeedRefresh"
         static let excludeFromAutoFeedRefreshModifiedAt = "excludeFromAutoFeedRefreshModifiedAt"
+        static let autoFeedRefreshReturnPriorityRank = "autoFeedRefreshReturnPriorityRank"
+        static let autoFeedRefreshReturnPriorityRankModifiedAt = "autoFeedRefreshReturnPriorityRankModifiedAt"
         static let playbackPreference = "playbackPreference"
         static let playbackPreferenceModifiedAt = "playbackPreferenceModifiedAt"
         static let autoArchiveSettings = "autoArchiveSettings"
@@ -300,6 +305,14 @@ public enum CloudKitSync {
             record[SubKey.excludeFromAutoFeedRefresh] = state.excludeFromAutoFeedRefresh ? 1 : 0
             record[SubKey.excludeFromAutoFeedRefreshModifiedAt] = modifiedAt
         }
+        if let modifiedAt = state.$autoFeedRefreshReturnPriorityRank.modifiedAt ?? (includeCleanFields ? authoredAt : nil) {
+            if let rank = state.autoFeedRefreshReturnPriorityRank {
+                record[SubKey.autoFeedRefreshReturnPriorityRank] = rank
+            } else {
+                record[SubKey.autoFeedRefreshReturnPriorityRank] = nil
+            }
+            record[SubKey.autoFeedRefreshReturnPriorityRankModifiedAt] = modifiedAt
+        }
         if let modifiedAt = state.$playbackPreference.modifiedAt ?? (includeCleanFields ? authoredAt : nil),
            let data = try? jsonEncoder.encode(state.playbackPreference) {
             record[SubKey.playbackPreference] = data
@@ -342,6 +355,8 @@ public enum CloudKitSync {
                                          modifiedAt: record[SubKey.notificationsEnabledModifiedAt] as? Date),
             excludeFromAutoFeedRefresh: Synced(wrappedValue: ((record[SubKey.excludeFromAutoFeedRefresh] as? Int) ?? 0) != 0,
                                                modifiedAt: record[SubKey.excludeFromAutoFeedRefreshModifiedAt] as? Date),
+            autoFeedRefreshReturnPriorityRank: Synced(wrappedValue: record[SubKey.autoFeedRefreshReturnPriorityRank] as? Int,
+                                                       modifiedAt: record[SubKey.autoFeedRefreshReturnPriorityRankModifiedAt] as? Date),
             playbackPreference: Synced(wrappedValue: decodeStruct(SubKey.playbackPreference, default: PlaybackPreference.default),
                                        modifiedAt: record[SubKey.playbackPreferenceModifiedAt] as? Date),
             autoArchiveSettings: Synced(wrappedValue: decodeStruct(SubKey.autoArchiveSettings, default: AutoArchiveSettings.default),

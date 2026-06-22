@@ -134,7 +134,7 @@ enum SupportGuide {
             .paragraph("When an episode finishes, Autohop picks the next episode from the subscription with the highest priority rank that has a downloaded, unplayed episode available. If your top-ranked show has no downloaded episodes, Autohop moves to the next show, and so on."),
             .callout(.tip, "**Example:** If \"Hard Fork\" is ranked #1 and \"Huberman Lab\" is ranked #2, Autohop will always play all available Hard Fork episodes before moving to Huberman Lab — unless you use Play Next / Play Last to override."),
             .heading("Refreshing feeds manually"),
-            .paragraph("Tap the **↺ refresh** button in the toolbar to check all subscriptions for new episodes immediately. A spinner replaces the button while the refresh is in progress."),
+            .paragraph("Tap the **↺ refresh** button in the toolbar to check all non-Inactive subscriptions for new episodes immediately. A spinner replaces the button while the refresh is in progress. Inactive shows can still be refreshed from their own podcast page."),
             .heading("Episode status pills"),
             .paragraph("Each row shows a colour-coded pill indicating the status of the latest episode. An episode you listened to completion keeps its **Played** pill even after it is later archived:"),
             .pills([
@@ -317,7 +317,7 @@ enum SupportGuide {
             .paragraph("**Episode Limit** — keep only the N most recently published episodes; older ones are archived automatically. Options: No Limit, 1 (default), 2, 3, 4, 5, or 10 episodes."),
             .callout(.tip, "**Tip:** The defaults (archive immediately after playing, inactive episodes gone after 1 week, keep 1 episode) are designed for high-volume listeners who want zero maintenance."),
             .heading("Exclude from auto-refresh"),
-            .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed for new episodes. The podcast and all its downloaded episodes stay in your library — you just won't receive new ones automatically. The intended use case is finished or completed shows you want to keep but no longer need updates from."),
+            .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed during automatic/feed-all refreshes. The podcast stays subscribed, moves to the bottom with the Inactive pill, keeps its downloaded episodes and queue eligibility, and can still be manually refreshed from its own podcast page. Turning the setting off restores its saved Priority Stack position."),
             .heading("Notifications"),
             .paragraph("Toggle on to receive a notification when a new episode from this podcast is available. **Off by default** — notifications are opt-in per show, so you only hear about the podcasts you choose. The global notification toggle in Settings must also be on."),
         ]

@@ -12,6 +12,9 @@ import Charts
 // From" section. Everything else is summary-driven so it follows automatically.
 // This toggle is the in-app surface the weekly/monthly/yearly Listening Recap
 // notifications will deep-link into (Phase 2/3).
+// "Shows You're Drifting From" only considers real active subscriptions:
+// browse previews and Inactive podcasts (exclude-from-auto-refresh) are omitted
+// because the user has intentionally paused feed attention for them.
 // All but Lifetime are calendar-anchored and reset at the start of each period:
 // This Week = Monday 00:00 → now (Monday-first, locale-independent); the month
 // pill (dynamic label, e.g. "June") = 1st → now; the year pill ("2026") = Jan 1
@@ -531,17 +534,17 @@ private struct StatsContentView: View {
         // Present-tense signal ("shows you're drifting from") — only meaningful for
         // the current period, so it's hidden in Last mode.
         if !isLast, range.usesHeatmap, let since = range.sinceDate(last: false) {
-            // Only real, active subscriptions qualify. Unsubscribed shows are
-            // excluded (drift from a show you already left is resolved), and so are
-            // invisible browse/preview subscriptions (browseDate != nil) auto-created
-            // when previewing a podcast in search — the user never subscribed to those.
+            // Only real, actively-refreshed subscriptions qualify. Unsubscribed
+            // shows are excluded (drift from a show you already left is resolved),
+            // Inactive shows are intentionally paused, and invisible browse/preview
+            // subscriptions (browseDate != nil) were never explicitly subscribed to.
             let shows = ShowEngagementAnalyzer.strugglingShows(
                 entries: historyStore.entries,
                 since: since,
                 excluding: hiddenDriftShowIDs
             ).filter {
                 guard let sub = appState.subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
-                return sub.browseDate == nil
+                return sub.browseDate == nil && !sub.excludeFromAutoFeedRefresh
             }
 
             if !shows.isEmpty {

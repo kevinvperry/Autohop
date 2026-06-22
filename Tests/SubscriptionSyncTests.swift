@@ -22,6 +22,31 @@ final class SubscriptionSyncTests: XCTestCase {
         Subscription(id: id, feedURL: URL(string: "https://f.com/feed")!, title: title, priorityRank: 1)
     }
 
+    @MainActor
+    private func addSubscription(
+        to store: SubscriptionStore,
+        title: String,
+        feedIndex: Int
+    ) throws -> UUID {
+        let id = UUID()
+        let episode = Episode(
+            subscriptionID: id,
+            guid: "g\(feedIndex)",
+            title: "Episode \(feedIndex)",
+            audioURL: URL(string: "https://e.com/\(feedIndex).mp3")!
+        )
+        _ = try store.addSubscription(
+            id: id,
+            feedURL: URL(string: "https://f.com/\(feedIndex)/feed")!,
+            title: title,
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: episode,
+            insertAtBottom: true
+        )
+        return id
+    }
+
     // MARK: - Merge
 
     func testRemoteUnsubscribeWinsOverCleanLocal() {
@@ -88,6 +113,8 @@ final class SubscriptionSyncTests: XCTestCase {
         var sub = makeSubscription(title: "My Podcast")
         sub.playbackPreference.speed = 1.6
         sub.notificationsEnabled = true
+        sub.excludeFromAutoFeedRefresh = true
+        sub.autoFeedRefreshReturnPriorityRank = 2
         let state = SubscriptionSyncState(subscription: sub)
 
         let record = CloudKitSync.makeRecord(from: state)
@@ -100,6 +127,8 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(decoded?.feedURL, sub.feedURL)
         XCTAssertEqual(decoded?.playbackPreference.speed, 1.6)
         XCTAssertEqual(decoded?.notificationsEnabled, true)
+        XCTAssertEqual(decoded?.excludeFromAutoFeedRefresh, true)
+        XCTAssertEqual(decoded?.autoFeedRefreshReturnPriorityRank, 2)
     }
 
     func testFreshSubscriptionRecordWritesCleanFields() {
@@ -147,6 +176,54 @@ final class SubscriptionSyncTests: XCTestCase {
     }
 
     // MARK: - Apply to local
+
+    @MainActor
+    func testAutoFeedRefreshExclusionMovesToBottomAndRestoresSavedRank() async throws {
+        let store = SubscriptionStore.inMemory()
+        let a = try addSubscription(to: store, title: "A", feedIndex: 1)
+        let b = try addSubscription(to: store, title: "B", feedIndex: 2)
+        let c = try addSubscription(to: store, title: "C", feedIndex: 3)
+        let d = try addSubscription(to: store, title: "D", feedIndex: 4)
+        await store.flushPendingSaves()
+
+        XCTAssertEqual(store.subscriptions.map(\.id), [a, b, c, d])
+
+        var customPreference = try XCTUnwrap(store.subscription(id: b)?.playbackPreference)
+        customPreference.speed = 1.9
+        customPreference.trimSilence = .low
+        store.updatePlaybackPreference(subscriptionID: b, preference: customPreference)
+
+        store.updateExcludeFromAutoFeedRefresh(subscriptionID: b, excluded: true)
+        await store.flushPendingSaves()
+
+        XCTAssertEqual(store.subscriptions.map(\.id), [a, c, d, b])
+        XCTAssertEqual(store.subscription(id: b)?.autoFeedRefreshReturnPriorityRank, 2)
+        XCTAssertTrue(store.subscription(id: b)?.excludeFromAutoFeedRefresh == true)
+
+        store.updateExcludeFromAutoFeedRefresh(subscriptionID: b, excluded: false)
+        await store.flushPendingSaves()
+
+        XCTAssertEqual(store.subscriptions.map(\.id), [a, b, c, d])
+        XCTAssertNil(store.subscription(id: b)?.autoFeedRefreshReturnPriorityRank)
+        XCTAssertEqual(store.subscription(id: b)?.playbackPreference.speed, 1.9)
+        XCTAssertEqual(store.subscription(id: b)?.playbackPreference.trimSilence, .low)
+    }
+
+    @MainActor
+    func testPriorityRankEditIsIgnoredWhileSubscriptionIsInactive() async throws {
+        let store = SubscriptionStore.inMemory()
+        let a = try addSubscription(to: store, title: "A", feedIndex: 1)
+        let b = try addSubscription(to: store, title: "B", feedIndex: 2)
+        let c = try addSubscription(to: store, title: "C", feedIndex: 3)
+        await store.flushPendingSaves()
+
+        store.updateExcludeFromAutoFeedRefresh(subscriptionID: b, excluded: true)
+        store.updatePriorityRank(subscriptionID: b, priorityRank: 1)
+        await store.flushPendingSaves()
+
+        XCTAssertEqual(store.subscriptions.map(\.id), [a, c, b])
+        XCTAssertEqual(store.subscription(id: b)?.autoFeedRefreshReturnPriorityRank, 2)
+    }
 
     @MainActor
     func testApplyUpdatesExistingSubscriptionSettings() async throws {

@@ -3,7 +3,9 @@ import SwiftUI
 // AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
 // gear icon from a podcast's episode list). Per-podcast configuration, all
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
-// (editable title, numeric priority rank, read-only author), Playback (speed
+// (editable title, numeric priority rank, read-only author; rank editing is
+// disabled while a real subscription is Inactive so its hidden return rank can
+// restore cleanly), Playback (speed
 // 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
 // AppState if this podcast is playing; the dark Speed/Trim/Vocal card is the
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
@@ -263,6 +265,13 @@ struct SubscriptionSettingsView: View {
                 }
             }
             .buttonStyle(.plain)
+            .disabled(sub.excludeFromAutoFeedRefresh)
+
+            if sub.excludeFromAutoFeedRefresh {
+                Text("Turn off Exclude from Auto Feed Refresh to restore this podcast to its saved priority position.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if let author = sub.author {
                 LabeledContent {

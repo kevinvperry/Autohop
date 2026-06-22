@@ -17,7 +17,10 @@ import Foundation
 //
 // `markAllDirty` is used by CloudKit namespace repair/recovery when a brand-new
 // namespaced server record must be uploaded as a full snapshot, even if the
-// local fields were previously clean.
+// local fields were previously clean. SubscriptionSyncState also syncs the
+// hidden auto-feed-refresh return rank so an Inactive show can move to the
+// bottom on one device and later restore its old Priority Stack position on
+// another.
 
 // MARK: - Episode
 
@@ -134,6 +137,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
     @Synced public var priorityRank: Int
     @Synced public var notificationsEnabled: Bool
     @Synced public var excludeFromAutoFeedRefresh: Bool
+    @Synced public var autoFeedRefreshReturnPriorityRank: Int?
     @Synced public var playbackPreference: PlaybackPreference
     @Synced public var autoArchiveSettings: AutoArchiveSettings
     @Synced public var chapterFilter: ChapterFilter
@@ -148,6 +152,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _priorityRank = Synced(wrappedValue: subscription.priorityRank, modifiedAt: dirtyAt)
         _notificationsEnabled = Synced(wrappedValue: subscription.notificationsEnabled, modifiedAt: dirtyAt)
         _excludeFromAutoFeedRefresh = Synced(wrappedValue: subscription.excludeFromAutoFeedRefresh, modifiedAt: dirtyAt)
+        _autoFeedRefreshReturnPriorityRank = Synced(wrappedValue: subscription.autoFeedRefreshReturnPriorityRank, modifiedAt: dirtyAt)
         _playbackPreference = Synced(wrappedValue: subscription.playbackPreference, modifiedAt: dirtyAt)
         _autoArchiveSettings = Synced(wrappedValue: subscription.autoArchiveSettings, modifiedAt: dirtyAt)
         _chapterFilter = Synced(wrappedValue: subscription.chapterFilter, modifiedAt: dirtyAt)
@@ -163,6 +168,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         priorityRank: Synced<Int>,
         notificationsEnabled: Synced<Bool>,
         excludeFromAutoFeedRefresh: Synced<Bool>,
+        autoFeedRefreshReturnPriorityRank: Synced<Int?> = Synced(wrappedValue: nil),
         playbackPreference: Synced<PlaybackPreference>,
         autoArchiveSettings: Synced<AutoArchiveSettings>,
         chapterFilter: Synced<ChapterFilter>
@@ -174,6 +180,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _priorityRank = priorityRank
         _notificationsEnabled = notificationsEnabled
         _excludeFromAutoFeedRefresh = excludeFromAutoFeedRefresh
+        _autoFeedRefreshReturnPriorityRank = autoFeedRefreshReturnPriorityRank
         _playbackPreference = playbackPreference
         _autoArchiveSettings = autoArchiveSettings
         _chapterFilter = chapterFilter
@@ -187,6 +194,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         result._priorityRank = mergedSyncedField(local: _priorityRank, remote: remote._priorityRank)
         result._notificationsEnabled = mergedSyncedField(local: _notificationsEnabled, remote: remote._notificationsEnabled)
         result._excludeFromAutoFeedRefresh = mergedSyncedField(local: _excludeFromAutoFeedRefresh, remote: remote._excludeFromAutoFeedRefresh)
+        result._autoFeedRefreshReturnPriorityRank = mergedSyncedField(local: _autoFeedRefreshReturnPriorityRank, remote: remote._autoFeedRefreshReturnPriorityRank)
         result._playbackPreference = mergedSyncedField(local: _playbackPreference, remote: remote._playbackPreference)
         result._autoArchiveSettings = mergedSyncedField(local: _autoArchiveSettings, remote: remote._autoArchiveSettings)
         result._chapterFilter = mergedSyncedField(local: _chapterFilter, remote: remote._chapterFilter)
@@ -200,6 +208,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         priorityRank = subscription.priorityRank
         notificationsEnabled = subscription.notificationsEnabled
         excludeFromAutoFeedRefresh = subscription.excludeFromAutoFeedRefresh
+        autoFeedRefreshReturnPriorityRank = subscription.autoFeedRefreshReturnPriorityRank
         playbackPreference = subscription.playbackPreference
         autoArchiveSettings = subscription.autoArchiveSettings
         chapterFilter = subscription.chapterFilter
@@ -211,6 +220,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
             || _priorityRank.hasPendingChange
             || _notificationsEnabled.hasPendingChange
             || _excludeFromAutoFeedRefresh.hasPendingChange
+            || _autoFeedRefreshReturnPriorityRank.hasPendingChange
             || _playbackPreference.hasPendingChange
             || _autoArchiveSettings.hasPendingChange
             || _chapterFilter.hasPendingChange
@@ -222,6 +232,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _priorityRank.markClean()
         _notificationsEnabled.markClean()
         _excludeFromAutoFeedRefresh.markClean()
+        _autoFeedRefreshReturnPriorityRank.markClean()
         _playbackPreference.markClean()
         _autoArchiveSettings.markClean()
         _chapterFilter.markClean()
@@ -233,6 +244,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _priorityRank.markDirty(at: date)
         _notificationsEnabled.markDirty(at: date)
         _excludeFromAutoFeedRefresh.markDirty(at: date)
+        _autoFeedRefreshReturnPriorityRank.markDirty(at: date)
         _playbackPreference.markDirty(at: date)
         _autoArchiveSettings.markDirty(at: date)
         _chapterFilter.markDirty(at: date)

@@ -144,16 +144,16 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 ### 2.2 Podcast Detail Page
 
-A single page (`PodcastDetailView`) serves every state of a podcast — an unsubscribed preview, a browse-only preview, and an active subscription. Tapping a search result, a Discover chart entry, a Recently Viewed row, a Priority Stack row, or the show name in the Player all open this same page. For a preview, the RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load. The mini-player bar is always docked at the bottom.
+A single page (`PodcastDetailView`) serves every state of a podcast — an unsubscribed preview, a browse-only preview, an active subscription, and an Inactive subscription whose auto feed refresh is paused. Tapping a search result, a Discover chart entry, a Recently Viewed row, a Priority Stack row, or the show name in the Player all open this same page. For a preview, the RSS feed is fetched immediately on open and a **browse subscription** is created automatically (see §2.4). The episode list is fully interactive from first load. The mini-player bar is always docked at the bottom.
 
 **Page structure:**
 1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, show description (truncated to ~3 lines with a "…more" toggle that expands to the full text when long enough), author · categories.
-2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until actively subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown **only when actively subscribed**. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same flag exposed in Podcast Settings and Notification Settings, and still gated by the global notification toggle.
+2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown for real subscriptions, including Inactive ones. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same flag exposed in Podcast Settings and Notification Settings, and still gated by the global notification toggle.
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
 
 **Toolbar:**
 - Back chevron (always) and a Share button (always).
-- **Refresh Feed** and **Show Settings** (gear → Podcast Settings) appear **only when actively subscribed** — never on a preview or browse-only page.
+- **Refresh Feed** and **Show Settings** (gear → Podcast Settings) appear for real subscriptions, including Inactive ones — never on an unsubscribed preview or browse-only page.
 
 **Episode list:**
 - Shows up to 50 most recent episodes on first load.
@@ -175,7 +175,8 @@ The header button toggles between Subscribe and Unsubscribe based on the current
 |---|---|---|
 | No subscription exists | **Subscribe** | Creates a new active subscription, inserts at top of Priority Stack |
 | Browse subscription exists (auto-created, inactive) | **Subscribe** | Activates it, clears browse status, moves to top of Priority Stack |
-| Actively subscribed | **Unsubscribe** | Shows a confirmation dialog; on confirm, removes the subscription. The page stays open with the button flipped back to Subscribe |
+| Active subscription | **Unsubscribe** | Shows a confirmation dialog; on confirm, removes the subscription. The page stays open with the button flipped back to Subscribe |
+| Inactive subscription (`Exclude from Auto Feed Refresh` on) | **Unsubscribe** | Still subscribed: shows the same confirmation dialog. Manual Refresh Feed, Settings, and notification controls remain available. |
 
 Unsubscribing is also still available from the Podcast Settings page (§10.5).
 
@@ -500,7 +501,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 | Setting | Default | Description |
 |---|---|---|
 | New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
-| Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed for new episodes. The podcast and its downloaded episodes remain in the library. Use case: finished/completed shows the user wants to keep but doesn't need updates from. |
+| Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
 
 ---
 
@@ -762,6 +763,8 @@ If the expected episode has not appeared by the end of its learned window, the f
 | Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
 
 **Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
+
+**Individual manual refresh:** An Inactive podcast can still be refreshed from its own Podcast Detail page. If that individual refresh finds a new latest episode, Autohop schedules the normal auto-download and may send a new-episode notification when both notification toggles are enabled.
 
 **Diagnostics:** When diagnostic logging is enabled, timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. `feed.autoDownloadScheduled`, `feed.autoDownloadStart`, and `feed.autoDownloadSkipped` trace the post-refresh media scheduling path. These logs are the primary tuning surface for Release Radar.
 

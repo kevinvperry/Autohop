@@ -28,10 +28,12 @@ import Foundation
 // Remote subscription recovery can restore per-podcast settings from legacy
 // unprefixed CloudKit SubscriptionState records left by the namespace migration;
 // it never creates/removes subscriptions and always marks the repaired state for
-// a full namespaced re-upload.
-// GOTCHA: accessors generally distinguish active subscriptions
-// (browseDate == nil) from browse ones; queue/refresh/UI must not see browse
-// subscriptions except in the search sheet's Recently Viewed list.
+// a full namespaced re-upload. Inactive podcasts (`excludeFromAutoFeedRefresh`)
+// remain real subscriptions: they move to the bottom, keep a hidden return rank,
+// and later restore that rank instead of using the browse-preview activation path.
+// GOTCHA: accessors generally distinguish real subscriptions (browseDate == nil)
+// from browse ones; queue/UI may still include Inactive real subscriptions, but
+// automatic/feed-all refresh must skip `excludeFromAutoFeedRefresh`.
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     public private(set) var subscriptions: [Subscription] = []
@@ -269,7 +271,9 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func updatePriorityRank(subscriptionID: UUID, priorityRank: Int) {
-        guard let currentIndex = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let currentIndex = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              !subscriptions[currentIndex].excludeFromAutoFeedRefresh
+        else { return }
         var subscription = subscriptions.remove(at: currentIndex)
         let clampedRank = max(1, min(priorityRank, subscriptions.count + 1))
         subscription.priorityRank = clampedRank
@@ -343,14 +347,16 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
-    /// Activates an inactive subscription and moves it to the top of the Priority Stack.
-    /// Clears `browseDate` — the subscription is now a full active subscription.
+    /// Activates a browse-only preview and moves it to the top of the Priority Stack.
+    /// Real Inactive subscriptions use `updateExcludeFromAutoFeedRefresh` instead
+    /// so their per-podcast settings and remembered rank are preserved.
     public func activateAndMoveToTop(subscriptionID: UUID) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
-              subscriptions[index].excludeFromAutoFeedRefresh
+              subscriptions[index].browseDate != nil
         else { return }
         var subscription = subscriptions.remove(at: index)
         subscription.excludeFromAutoFeedRefresh = false
+        subscription.autoFeedRefreshReturnPriorityRank = nil
         subscription.browseDate = nil
         // Browse preview becoming a real subscription — start the backlog clock now
         // so the existing catalogue isn't archived out from under the new subscriber.
@@ -374,10 +380,17 @@ public final class SubscriptionStore: ObservableObject {
         subscription.excludeFromAutoFeedRefresh = excluded
 
         if excluded {
+            if subscription.browseDate == nil {
+                subscription.autoFeedRefreshReturnPriorityRank = subscription.priorityRank
+            }
             subscriptions.append(subscription)
         } else {
             let firstInactiveIndex = subscriptions.firstIndex { $0.excludeFromAutoFeedRefresh } ?? subscriptions.endIndex
-            subscriptions.insert(subscription, at: firstInactiveIndex)
+            let returnIndex = subscription.autoFeedRefreshReturnPriorityRank
+                .map { max(0, min($0 - 1, firstInactiveIndex)) }
+                ?? firstInactiveIndex
+            subscription.autoFeedRefreshReturnPriorityRank = nil
+            subscriptions.insert(subscription, at: returnIndex)
         }
 
         reindexPriority()
@@ -812,6 +825,7 @@ public final class SubscriptionStore: ObservableObject {
         sub.priorityRank = merged.priorityRank
         sub.notificationsEnabled = merged.notificationsEnabled
         sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
+        sub.autoFeedRefreshReturnPriorityRank = merged.autoFeedRefreshReturnPriorityRank
         sub.playbackPreference = merged.playbackPreference
         sub.autoArchiveSettings = merged.autoArchiveSettings
         sub.chapterFilter = merged.chapterFilter
@@ -857,6 +871,7 @@ public final class SubscriptionStore: ObservableObject {
         sub.priorityRank = merged.priorityRank
         sub.notificationsEnabled = merged.notificationsEnabled
         sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
+        sub.autoFeedRefreshReturnPriorityRank = merged.autoFeedRefreshReturnPriorityRank
         sub.playbackPreference = merged.playbackPreference
         sub.autoArchiveSettings = merged.autoArchiveSettings
         sub.chapterFilter = merged.chapterFilter

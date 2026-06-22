@@ -5,19 +5,22 @@ import SwiftUI
 // SubscriptionEpisodesView. Works for every podcast state:
 //   • a search result not yet subscribed (init(result:))
 //   • a browse-only preview subscription (init(browseSubscription:))
-//   • an active subscription (init(subscriptionID:))
+//   • a real subscription (init(subscriptionID:)), including Inactive podcasts
+//     whose auto feed refresh is paused
 // Layout: centred Header-SubscriptionPage (artwork · title · VideoPillLarge/
 // ExplicitPillLarge · expandable "…more" description · author/categories) ·
 // subscribeRow (Subscribe⇄Unsubscribe button, plus a per-podcast new-episode
-// notification bell shown beside it only when actively subscribed, bound to
+// notification bell shown beside it for real subscriptions, bound to
 // Subscription.notificationsEnabled)
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
 // Next) and trailing (Archive / Play Last) swipes — NO share swipe. For an
-// active subscription the feed-refresh button sits on the "Episodes" heading row
+// real subscription the feed-refresh button sits on the "Episodes" heading row
 // (small purple circular glass button, matching the Subscriptions page) and the
-// toolbar shows Show Settings; the share button and mini-player bar are always
-// present. Episode rows pass 44 pt target
+// toolbar shows Show Settings. Inactive subscriptions are still real
+// subscriptions: they show Subscribed/Unsubscribe, Settings, notifications, and
+// manual Refresh Feed; only automatic/feed-all refresh skips them. The share
+// button and mini-player bar are always present. Episode rows pass 44 pt target
 // sizes into CachedArtworkImage and lazily prefetch artwork around the visible
 // row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
 // prefetches are cancelled so long feeds with many distinct episode images do
@@ -77,7 +80,7 @@ struct PodcastDetailView: View {
         _viewModel = StateObject(wrappedValue: PodcastPreviewViewModel(feedURL: sub.feedURL))
     }
 
-    /// From an existing subscription ID (active subscription).
+    /// From an existing real subscription ID, including Inactive subscriptions.
     init(subscriptionID: UUID) {
         self.searchResult = nil
         self.directSubscriptionID = subscriptionID
@@ -103,10 +106,11 @@ struct PodcastDetailView: View {
         searchResult?.feedURL ?? snapshot?.feedURL
     }
 
-    /// True only for a real, active subscription (browse previews don't count).
-    private var isActivelySubscribed: Bool {
+    /// True for a real subscription. Inactive/excluded shows still count; only
+    /// browse previews have `browseDate != nil` and behave as not-yet-subscribed.
+    private var isRealSubscription: Bool {
         guard let subscription else { return false }
-        return !subscription.excludeFromAutoFeedRefresh
+        return subscription.browseDate == nil
     }
 
     var body: some View {
@@ -188,7 +192,7 @@ struct PodcastDetailView: View {
             Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
         }
 
-        if isActivelySubscribed {
+        if isRealSubscription {
             // Feed refresh lives above the episode list (see `episodesHeader`), to
             // match the Subscriptions page. The toolbar keeps Share + Settings.
             ToolbarItem(placement: .topBarTrailing) {
@@ -240,9 +244,10 @@ struct PodcastDetailView: View {
                 Spacer()
 
                 // Feed refresh — small purple circular glass button above the
-                // episode list, matching the Subscriptions page. Active
-                // subscriptions only (browse previews aren't refreshed here).
-                if isActivelySubscribed {
+                // episode list, matching the Subscriptions page. Real
+                // subscriptions only, including Inactive; browse previews aren't
+                // refreshed here.
+                if isRealSubscription {
                     refreshButton
                 }
             }
@@ -420,7 +425,7 @@ struct PodcastDetailView: View {
     @ViewBuilder
     private var subscribeButton: some View {
         Button {
-            if isActivelySubscribed {
+            if isRealSubscription {
                 showUnsubscribeConfirm = true
             } else {
                 Task { await subscribe() }
@@ -429,7 +434,7 @@ struct PodcastDetailView: View {
             let content = Group {
                 if isSubscribing {
                     ProgressView().tint(.white)
-                } else if isActivelySubscribed {
+                } else if isRealSubscription {
                     Label("Subscribed", systemImage: "checkmark.circle.fill")
                         .font(.headline)
                 } else {
@@ -478,11 +483,12 @@ struct PodcastDetailView: View {
             .hidden()
     }
 
-    /// New-episode notification toggle, shown beside the Subscribe button for an
-    /// active subscription. Bound to `Subscription.notificationsEnabled`.
+    /// New-episode notification toggle, shown beside the Subscribe button for a
+    /// real subscription, including Inactive shows. Bound to
+    /// `Subscription.notificationsEnabled`.
     @ViewBuilder
     private var bellButton: some View {
-        if let sub = subscription, isActivelySubscribed {
+        if let sub = subscription, isRealSubscription {
             let enabled = sub.notificationsEnabled
             Button {
                 appState.subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: !enabled)
@@ -800,8 +806,8 @@ struct PodcastDetailView: View {
         defer { isSubscribing = false }
         do {
             if let existing = subscription {
-                if existing.excludeFromAutoFeedRefresh {
-                    // Browse / inactive → activate and move to top of Priority Stack.
+                if existing.browseDate != nil {
+                    // Browse preview → activate and move to top of Priority Stack.
                     appState.subscriptionStore.activateAndMoveToTop(subscriptionID: existing.id)
                 }
             } else if let url = feedURL {

@@ -33,9 +33,10 @@ import Foundation
 //    cycles while letting active/pre-window states bypass the foreground cap.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
 //    order), episodes array, playbackPreference, notificationsEnabled
-//    (default false), excludeFromAutoFeedRefresh, and browseDate — non-nil
-//    marks an invisible "browse subscription" auto-created when the user
-//    previews a podcast in search (deleted after 30 days if untouched).
+//    (default false), excludeFromAutoFeedRefresh, remembered return rank for
+//    inactive shows, and browseDate — non-nil marks an invisible "browse
+//    subscription" auto-created when the user previews a podcast in search
+//    (deleted after 30 days if untouched).
 
 // MARK: - AutoArchiveSettings
 
@@ -1707,6 +1708,9 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     public var notificationsEnabled: Bool
     public var autoArchiveSettings: AutoArchiveSettings
     public var excludeFromAutoFeedRefresh: Bool
+    /// Previous active Priority Stack rank captured when the user marks this
+    /// real subscription Inactive. Nil for active shows and browse previews.
+    public var autoFeedRefreshReturnPriorityRank: Int?
     public var categories: [String]
     public var isExplicit: Bool?
     /// Non-nil when this subscription was auto-created by opening a search preview.
@@ -1750,6 +1754,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         self.notificationsEnabled = notificationsEnabled
         self.autoArchiveSettings = autoArchiveSettings
         self.excludeFromAutoFeedRefresh = excludeFromAutoFeedRefresh
+        self.autoFeedRefreshReturnPriorityRank = nil
         self.categories = categories
         self.isExplicit = isExplicit
         self.browseDate = nil
@@ -1774,6 +1779,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         case notificationsEnabled
         case autoArchiveSettings
         case excludeFromAutoFeedRefresh
+        case autoFeedRefreshReturnPriorityRank
         case categories
         case isExplicit
         case browseDate
@@ -1798,6 +1804,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         archivedEpisodeKeys = try container.decodeIfPresent(Set<String>.self, forKey: .archivedEpisodeKeys) ?? []
         notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? false
         excludeFromAutoFeedRefresh = try container.decodeIfPresent(Bool.self, forKey: .excludeFromAutoFeedRefresh) ?? false
+        autoFeedRefreshReturnPriorityRank = try container.decodeIfPresent(Int.self, forKey: .autoFeedRefreshReturnPriorityRank)
         categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
         isExplicit = try container.decodeIfPresent(Bool.self, forKey: .isExplicit)
         browseDate = try container.decodeIfPresent(Date.self, forKey: .browseDate)
