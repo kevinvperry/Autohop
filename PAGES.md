@@ -37,7 +37,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item — dismisses the Menu and pushes the Discover page), Downloads, Listening History, Stats, Sleep Schedule, App Settings, and Support (last item). (Find Podcasts lives behind the + button only.) |
 | **Support** | `SupportView` | Page (inside Menu, last item) | In-app User Guide. A drill-down list of ~16 topic sections (icon + title + summary); tapping one pushes a native dark-themed detail page (`SupportSectionView`) rendering paragraphs, callouts, tables, status pills, and swipe-action cards. Content lives in `SupportContent.swift` and mirrors the website Support page. |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
-| **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback, audio route changes, feed scheduling, downloads, resource snapshots, and main-thread watchdog gaps. Dev/support tool. |
+| **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback, audio route changes, foreground/background feed scheduling, downloads, stats-sync/CloudKit conflicts, resource snapshots, playback tick timing, and main-thread watchdog gaps. Dev/support tool. |
 
 ---
 

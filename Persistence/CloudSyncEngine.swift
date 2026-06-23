@@ -49,7 +49,9 @@ import Combine
 // alwaysPersist:true so they survive even when the Diagnostics toggle is off —
 // since this is a since-launch backup feature, a user reporting "my data didn't
 // sync" must leave a trace. Verbosity is "balanced": batch summaries, not one
-// line per record.
+// line per record. Stats sync conflicts are enriched with device/day identity
+// and tracked per recordName; repeated conflicts produce sync.conflictStorm so
+// DayStats loops are visible without hand-counting log lines.
 final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private let container: CKContainer
     private let subscriptionStore: SubscriptionStore
@@ -61,9 +63,21 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private var isStarting = false
     private var cancellables = Set<AnyCancellable>()
     private var quarantinedRecordKeys = Set<QuarantinedRecordKey>()
+    private var conflictTrackers: [String: ConflictTracker] = [:]
+
+    private let conflictStormThreshold = 5
+    private let conflictStormWindow: TimeInterval = 5 * 60
+    private let conflictStormRelogInterval: TimeInterval = 60
 
     private static let legacySubscriptionRecoveryCompletedKey =
         "com.autohop.sync.legacySubscriptionRecovery.v1.completed"
+
+    private struct ConflictTracker {
+        var firstSeenAt: Date
+        var lastSeenAt: Date
+        var count: Int
+        var lastStormLoggedAt: Date?
+    }
 
     /// Invoked when a remote subscription record arrives for a podcast not on
     /// this device — the app layer fetches the feed and creates it, then
@@ -208,6 +222,12 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let statsChanges = stats.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.statsRecordID(deviceID: deviceID, dayKey: $0.dayKey))
         }
+        let statsDayKeys = stats.map(\.dayKey).sorted()
+        let cachedStatsSystemFieldCount = stats.reduce(into: 0) { count, day in
+            if ((try? database.statsSystemFields(dayKey: day.dayKey)) ?? nil) != nil {
+                count += 1
+            }
+        }
         let changes = (episodeChanges + subscriptionChanges + historyChanges + statsChanges)
             .filter { !isQuarantined($0) }
         guard !changes.isEmpty else { return }
@@ -217,6 +237,9 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             "subscriptions": "\(subscriptionChanges.filter { !isQuarantined($0) }.count)",
             "history": "\(historyChanges.filter { !isQuarantined($0) }.count)",
             "stats": "\(statsChanges.filter { !isQuarantined($0) }.count)",
+            "statsDayKeys": statsDayKeys.joined(separator: ","),
+            "statsSystemFieldsCached": "\(cachedStatsSystemFieldCount)",
+            "statsRecordNames": statsDayKeys.map { CloudKitSync.statsRecordName(deviceID: deviceID, dayKey: $0) }.joined(separator: ","),
             "quarantined": "\((episodeChanges + subscriptionChanges + historyChanges + statsChanges).count - changes.count)",
             "device": deviceID
         ])
@@ -550,6 +573,68 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         }
     }
 
+    private func conflictMetadata(
+        for record: CKRecord,
+        hasServerRecord: Bool,
+        conflictCount: Int,
+        firstSeenAt: Date
+    ) -> [String: String] {
+        var metadata = [
+            "hasServerRecord": "\(hasServerRecord)",
+            "willRetry": "\(hasServerRecord)",
+            "sessionConflictCount": "\(conflictCount)",
+            "firstConflictAt": ISO8601DateFormatter().string(from: firstSeenAt)
+        ]
+
+        if record.recordType == CloudKitSync.statsRecordType,
+           let identity = CloudKitSync.statsIdentity(fromRecordName: record.recordID.recordName) {
+            let localDeviceID = DeviceIdentity.current
+            let hasCachedSystemFields: Bool
+            if let database {
+                hasCachedSystemFields = ((try? database.statsSystemFields(dayKey: identity.dayKey)) ?? nil) != nil
+            } else {
+                hasCachedSystemFields = false
+            }
+            metadata.merge([
+                "statsDeviceID": identity.deviceID,
+                "localDeviceID": localDeviceID,
+                "statsDayKey": identity.dayKey,
+                "isLocalStatsPartition": "\(identity.deviceID == localDeviceID)",
+                "hasCachedSystemFields": "\(hasCachedSystemFields)"
+            ]) { _, new in new }
+        }
+
+        return metadata
+    }
+
+    private func updateConflictTracker(recordName: String) -> (count: Int, firstSeenAt: Date, shouldLogStorm: Bool) {
+        let now = Date()
+        var tracker = conflictTrackers[recordName] ?? ConflictTracker(
+            firstSeenAt: now,
+            lastSeenAt: now,
+            count: 0,
+            lastStormLoggedAt: nil
+        )
+        if now.timeIntervalSince(tracker.firstSeenAt) > conflictStormWindow {
+            tracker = ConflictTracker(
+                firstSeenAt: now,
+                lastSeenAt: now,
+                count: 0,
+                lastStormLoggedAt: nil
+            )
+        }
+
+        tracker.count += 1
+        tracker.lastSeenAt = now
+        let shouldLogStorm = tracker.count >= conflictStormThreshold
+            && (tracker.lastStormLoggedAt.map { now.timeIntervalSince($0) >= conflictStormRelogInterval } ?? true)
+        if shouldLogStorm {
+            tracker.lastStormLoggedAt = now
+        }
+        conflictTrackers[recordName] = tracker
+        return (tracker.count, tracker.firstSeenAt, shouldLogStorm)
+    }
+
     private static func accountStatusLabel(_ status: CKAccountStatus?) -> String {
         switch status {
         case .available: return "available"
@@ -577,11 +662,23 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             switch failure.error.code {
             case .serverRecordChanged:
                 // Field-level merge against the server's copy, then retry.
+                let conflictUpdate = updateConflictTracker(recordName: record.recordID.recordName)
+                let metadata = conflictMetadata(
+                    for: record,
+                    hasServerRecord: failure.error.serverRecord != nil,
+                    conflictCount: conflictUpdate.count,
+                    firstSeenAt: conflictUpdate.firstSeenAt
+                )
                 logger.info("sync.conflict", "Server record changed — merging then retrying", metadata: [
                     "type": record.recordType,
-                    "name": record.recordID.recordName,
-                    "hasServerRecord": "\(failure.error.serverRecord != nil)"
-                ])
+                    "name": record.recordID.recordName
+                ].merging(metadata) { _, new in new })
+                if conflictUpdate.shouldLogStorm {
+                    logger.warning("sync.conflictStorm", "Repeated sync conflicts for the same record", metadata: [
+                        "type": record.recordType,
+                        "name": record.recordID.recordName
+                    ].merging(metadata) { _, new in new })
+                }
                 if let serverRecord = failure.error.serverRecord {
                     await applyRemote(record: serverRecord)
                     engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])

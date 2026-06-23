@@ -1,5 +1,11 @@
 # Autohop — Codebase Assessment (2026-06-17, refreshed 2026-06-19)
 
+> **⚠️ PARTIALLY SUPERSEDED — newer pass available.** A fresh deep scan of branch
+> `version-1.2` was completed **2026-06-23**: see
+> [`DEEP_SCAN_2026-06-23.md`](DEEP_SCAN_2026-06-23.md). Most findings in *this*
+> document are now **resolved**; treat the 2026-06-23 report as the current state and
+> this file as historical context. Re-verify any anchor here against current source.
+
 > **Audience: AI models.** This document is written for machine consumption, not
 > marketing. Each finding has a stable ID, a `file:line` anchor, a severity, an
 > impact statement, and a concrete remediation. Treat `file:line` anchors as

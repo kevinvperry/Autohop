@@ -11,12 +11,13 @@ Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scope
 across record types inside a zone. Refresh scheduling stats remain local, and
 download/media state never syncs.
 June 2026 diagnostic repair context lives here too: collision quarantine,
-legacy pending-save retirement, full-record namespace migration, and recovery
-from legacy unprefixed subscription records after the sparse-record data-loss
-regression. Non-sync diagnostic repairs from the same cycle are summarized in
-`FEATURES.md`: Release Radar protected background refresh slots, rolling
-one-item feed download cleanup, main-thread watchdog inactive-gap
-classification, and AirPods/Speaker route stabilization.
+legacy pending-save retirement, full-record namespace migration, recovery from
+legacy unprefixed subscription records after the sparse-record data-loss
+regression, and enriched DayStats conflict/storm logging. Non-sync diagnostic
+repairs from the same cycle are summarized in `FEATURES.md`: Release Radar
+protected background refresh slots, rolling one-item feed download cleanup,
+foreground/background refresh attribution, playback-tick timing, main-thread
+watchdog inactive-gap classification, and AirPods/Speaker route stabilization.
 -->
 
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
@@ -202,11 +203,12 @@ the primary way to debug sync on-device, since it can't be unit-tested. Grep the
 Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
 
 - **Lifecycle:** `sync.toggle`, `sync.engineActivated` (restoredState), `sync.stopped`, `sync.startAborted`/`sync.accountStatusFailed`, `sync.account*` (signIn/signOut/switch).
-- **Push:** `sync.queued` (per-type counts plus quarantined count), `sync.pushed`
-  (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
+- **Push:** `sync.queued` (per-type counts plus quarantined count; DayStats
+  entries also include day keys, cached system-field state, and record names),
+  `sync.pushed` (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
   `sync.pushQuarantined` (known permanent record-type collision), `sync.legacyPendingDropped`
   (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.
-- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
+- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry; DayStats conflicts include stats device ID, local device ID, day key, partition match, cached system-field state, retry status, and per-session conflict count), `sync.conflictStorm` (same record conflicts repeatedly inside a short window), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
 - **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
 
 Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
@@ -220,7 +222,15 @@ Related diagnostic keys outside CloudKit:
   `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and
   `feed.refreshAll.cancelled` describe Release Radar selection, including
   protected background candidates for pre-window, active-window, and
-  missed-release feeds.
+  missed-release feeds. `background.refreshRequested`, `feed.foregroundPollDue`,
+  `background.nextDue`, `background.schedule`, and `background.scheduleSkipped`
+  distinguish true BGAppRefreshTask wakes, foreground catch-up, requested-vs-
+  effective iOS wake timing, and already-pending background requests.
+- `stats.pendingMarked` and `stats.flush` mark low-frequency DayStats writes into
+  the sync queue, so DayStats CloudKit conflicts can be correlated with local
+  playback/stat updates.
+- `playback.tickSlow` and `playback.tickSummary` report expensive 0.5 s playback
+  ticks and their dominant stage without logging every tick.
 - `feed.cleanupSupersededLatest` records when a rolling one-item feed replaces
   its latest episode and Autohop cancels the stale pending/in-progress download.
 - `ui.mainThreadHang` / `ui.mainThreadHangRecovered` remain visible-scene UI

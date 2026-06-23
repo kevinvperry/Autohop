@@ -143,11 +143,16 @@ All navigation titles use `.inline` display mode.
 
 > Full navigation structure and the three exit patterns → see `PAGES.md`.
 
-**Label: `NavBack-Standard`** — every pushed page's only top-left control:
+**Label: `NavBack-Standard`** — every pushed page's only top-left control. The
+icon-only button carries an explicit `.accessibilityLabel("Back")` so VoiceOver
+announces it — a raw `Image` has no accessibility label of its own (a SwiftUI
+`Label` would derive one, but this control uses `Image`). New pushed pages MUST copy
+this labelled form:
 
 ```swift
 ToolbarItem(placement: .topBarLeading) {
     Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+        .accessibilityLabel("Back")
 }
 ```
 

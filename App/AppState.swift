@@ -28,7 +28,11 @@ import UIKit
 //    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
 //    Application Support/Autohop/queue-pins.json and clear on play/archive.
 //  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
-//    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles;
+//    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles via
+//    isDownloadAllowed(). Before the monitor reports its first path (the launch
+//    window), gating falls back to the WiFi toggle (BG1) so a "WiFi downloads off"
+//    user can't slip a download through; cellular is additionally hard-gated at the
+//    transport layer by URLRequest.allowsCellularAccess in DownloadManager.
 //    reconcileOrphanedDownloads() repairs DB-vs-filesystem mismatches at launch.
 //  - Feed refresh: refreshSubscription fetches feeds conditionally, records
 //    per-episode release observations, merges new episodes, and applies per-feed
@@ -58,14 +62,23 @@ import UIKit
 //    receive a bounded fairness boost on later cycles so long wakes are drained
 //    over multiple runs instead of hammering every overdue feed at once. Manual
 //    refresh still ignores due dates and refreshes every eligible feed.
-//  - Refresh diagnostics: timed/background cycles log a feed.refreshAll.plan
+//  - Refresh diagnostics: every all-feed cycle carries a stable refreshCycleID,
+//    trigger (manualButton / foregroundTimer / BGAppRefreshTask), and
+//    executionContext (manual / foregroundVisible / backgroundRefreshTask /
+//    backgroundAudioAlive). This deliberately avoids inferring background vs
+//    foreground from sceneActive alone: a BG task can join an already-running
+//    foreground poll, and background audio can keep the process alive while the
+//    UI scene is inactive. Timed/background cycles also log a feed.refreshAll.plan
 //    summary plus per-feed score/profile/prediction metadata on
 //    feed.refreshAll.itemStart when the diagnostic log is enabled. Refresh logs
 //    include subscriptionID + a stable feedHash alongside the title so renamed
 //    feeds remain traceable. ResourceMonitor's main-thread watchdog also calls
 //    resourceContext() only after a suspected hang, adding playback, refresh,
-//    queue, scene, and download state to ui.mainThreadHang/recovered logs. These
-//    logs are the intended tuning surface for the learned refresh system.
+//    queue, scene, download state, and the most recent playback-tick timing to
+//    ui.mainThreadHang/recovered logs. playback.tickSlow logs only ticks above
+//    the threshold; playback.tickSummary emits a compact rolling summary. These
+//    logs are the intended tuning surface for the learned refresh system and
+//    main-thread playback pressure.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
@@ -233,9 +246,12 @@ final class AppState: ObservableObject {
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
     private var activeRefreshCycle: Task<Bool, Never>?
+    private var activeRefreshCycleDiagnostics: RefreshCycleDiagnostics?
     private var deferredRefreshBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
     private var suppressUpNextRefresh = false
     private var upNextRefreshTask: Task<Void, Never>?
+    private var lastPlaybackTickDiagnostics: PlaybackTickDiagnostics?
+    private var playbackTickSummary = PlaybackTickSummary()
     private var feedFailureBackoffUntil: [UUID: Date] = [:]
     private var supersededDownloadCancellationIDs = Set<UUID>()
     private var cancellables = Set<AnyCancellable>()
@@ -405,6 +421,118 @@ final class AppState: ObservableObject {
     private let refreshDeferralScoreBoostPerCycle = 12.0
     private let refreshDeferralAgeBoostPerHour = 2.0
     private let refreshDeferralMaxScoreBoost = 40.0
+    private let playbackTickSlowThresholdMs = 120.0
+    private let playbackTickSummarySampleInterval = 120
+
+    private enum FeedRefreshTrigger: String, Sendable {
+        case manualButton
+        case foregroundTimer
+        case backgroundRefreshTask = "BGAppRefreshTask"
+    }
+
+    private enum FeedRefreshExecutionContext: String, Sendable {
+        case manual
+        case foregroundVisible
+        case backgroundRefreshTask
+        case backgroundAudioAlive
+    }
+
+    private struct RefreshCycleDiagnostics: Sendable {
+        var cycleID: String
+        var reason: String
+        var trigger: FeedRefreshTrigger
+        var executionContext: FeedRefreshExecutionContext
+        var startSceneActive: Bool
+        var backgroundTaskIdentifier: String?
+
+        func metadata(currentSceneActive: Bool) -> [String: String] {
+            [
+                "refreshCycleID": cycleID,
+                "refreshReason": reason,
+                "trigger": trigger.rawValue,
+                "executionContext": executionContext.rawValue,
+                "startSceneActive": "\(startSceneActive)",
+                "currentSceneActive": "\(currentSceneActive)",
+                "backgroundTaskIdentifier": backgroundTaskIdentifier ?? "none"
+            ]
+        }
+    }
+
+    private struct PlaybackTickStageTiming {
+        var name: String
+        var durationMs: Double
+    }
+
+    private struct PlaybackTickDiagnostics {
+        var occurredAt: Date
+        var episode: String
+        var podcast: String
+        var currentTime: Int
+        var totalMs: Double
+        var dominantStage: String
+        var dominantStageMs: Double
+        var stages: [PlaybackTickStageTiming]
+        var positionSaved: Bool
+        var statsCredited: Bool
+
+        var stageSummary: String {
+            stages
+                .map { "\($0.name)=\(Int($0.durationMs.rounded()))" }
+                .joined(separator: ",")
+        }
+
+        func metadata() -> [String: String] {
+            [
+                "episode": episode,
+                "podcast": podcast,
+                "currentTime": "\(currentTime)",
+                "totalMs": String(format: "%.1f", totalMs),
+                "dominantStage": dominantStage,
+                "dominantStageMs": String(format: "%.1f", dominantStageMs),
+                "stageMs": stageSummary,
+                "positionSaved": "\(positionSaved)",
+                "statsCredited": "\(statsCredited)"
+            ]
+        }
+    }
+
+    private struct PlaybackTickSummary {
+        var samples = 0
+        var slowSamples = 0
+        var totalMs = 0.0
+        var maxMs = 0.0
+        var maxStage = "none"
+
+        mutating func record(_ diagnostics: PlaybackTickDiagnostics, slowThresholdMs: Double) {
+            samples += 1
+            totalMs += diagnostics.totalMs
+            if diagnostics.totalMs >= slowThresholdMs {
+                slowSamples += 1
+            }
+            if diagnostics.totalMs > maxMs {
+                maxMs = diagnostics.totalMs
+                maxStage = diagnostics.dominantStage
+            }
+        }
+
+        mutating func reset() {
+            samples = 0
+            slowSamples = 0
+            totalMs = 0
+            maxMs = 0
+            maxStage = "none"
+        }
+
+        func metadata() -> [String: String] {
+            [
+                "samples": "\(samples)",
+                "slowSamples": "\(slowSamples)",
+                "averageMs": samples > 0 ? String(format: "%.1f", totalMs / Double(samples)) : "0.0",
+                "maxMs": String(format: "%.1f", maxMs),
+                "maxStage": maxStage
+            ]
+        }
+    }
 
     // MARK: - Init
 
@@ -559,7 +687,16 @@ final class AppState: ObservableObject {
 
     private func isDownloadAllowed() -> Bool {
         let settings = settingsStore.appSettings
-        guard let path = latestNetworkPath, path.status == .satisfied else { return true }
+        // Network path not yet known (NWPathMonitor hasn't reported its first update
+        // at launch, or there is no connectivity). Honour the Wi-Fi toggle here: a
+        // user who has turned OFF Wi-Fi downloads must not have one slip through this
+        // pre-monitor window. Default users (Wi-Fi downloads on) are unaffected, and
+        // cellular is independently enforced at the transport layer via
+        // URLRequest.allowsCellularAccess (DownloadManager.startDownloadTask), so
+        // gating on just the Wi-Fi toggle is sufficient here (BG1).
+        guard let path = latestNetworkPath, path.status == .satisfied else {
+            return settings.downloadOverWifi
+        }
         if path.usesInterfaceType(.wifi) && !settings.downloadOverWifi { return false }
         if path.usesInterfaceType(.cellular) && !settings.downloadOverCellular { return false }
         return true
@@ -589,45 +726,88 @@ final class AppState: ObservableObject {
         playbackEngine.onTimeUpdate = { [weak state] time in
             Task { @MainActor in
                 guard let state else { return }
-                state.currentPlayerTime = time
-                state.sleepTimerService.tick()
+                let tickStartedAt = CFAbsoluteTimeGetCurrent()
+                var stageTimings: [PlaybackTickStageTiming] = []
+                var positionSaved = false
+                var statsCredited = false
+                var tickEpisode: Episode?
+                var tickSubscription: Subscription?
 
-                // Manual Sleep Timer overrides the Sleep Schedule for this session.
-                if state.sleepTimerService.isActive {
-                    state.sleepScheduleService.suspendForSession()
-                }
-                state.sleepScheduleService.tick(isPlaying: state.isPlaying)
-
-                // Update lock-screen position (cheap — just updates two keys)
-                if let ep = state.currentPlayerEpisode,
-                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
-                    NowPlayingService.shared.updateTime(
-                        currentTime: time,
-                        isPlaying: state.isPlaying,
-                        speed: state.effectiveSpeed(for: sub)
-                    )
+                func measure(_ name: String, _ work: () -> Void) {
+                    let startedAt = CFAbsoluteTimeGetCurrent()
+                    work()
+                    let durationMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                    stageTimings.append(PlaybackTickStageTiming(name: name, durationMs: durationMs))
                 }
 
-                // Persist position every ~10 s (every 20th call at 0.5 s interval)
-                state.positionSaveCounter += 1
-                state.recordListeningProgress(at: time)
-                if state.positionSaveCounter % 20 == 0 {
-                    state.savePlaybackPosition()
+                measure("timeState") {
+                    state.currentPlayerTime = time
+                    tickEpisode = state.currentPlayerEpisode
+                    if let ep = tickEpisode {
+                        tickSubscription = state.subscriptionStore.subscription(id: ep.subscriptionID)
+                    }
                 }
 
-                // Accumulate playback stats every tick (0.5 s interval).
-                // tickTime() fires whenever an episode is loaded, including while
-                // paused — only credit listening time when audio is actually playing.
-                if state.isPlaying,
-                   let ep = state.currentPlayerEpisode,
-                   let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
-                    state.listeningStatsStore.addListeningTime(
-                        0.5,
-                        speed: state.effectiveSpeed(for: sub),
-                        subscriptionID: sub.id,
-                        showTitle: sub.title
-                    )
+                measure("sleepTimers") {
+                    state.sleepTimerService.tick()
+
+                    // Manual Sleep Timer overrides the Sleep Schedule for this session.
+                    if state.sleepTimerService.isActive {
+                        state.sleepScheduleService.suspendForSession()
+                    }
+                    state.sleepScheduleService.tick(isPlaying: state.isPlaying)
                 }
+
+                measure("nowPlaying") {
+                    // Update lock-screen position (cheap — just updates two keys)
+                    if let sub = tickSubscription {
+                        NowPlayingService.shared.updateTime(
+                            currentTime: time,
+                            isPlaying: state.isPlaying,
+                            speed: state.effectiveSpeed(for: sub)
+                        )
+                    }
+                }
+
+                measure("historyProgress") {
+                    state.recordListeningProgress(at: time)
+                }
+
+                measure("positionSave") {
+                    // Persist position every ~10 s (every 20th call at 0.5 s interval)
+                    state.positionSaveCounter += 1
+                    if state.positionSaveCounter % 20 == 0 {
+                        state.savePlaybackPosition()
+                        positionSaved = true
+                    }
+                }
+
+                measure("stats") {
+                    // Accumulate playback stats every tick (0.5 s interval).
+                    // tickTime() fires whenever an episode is loaded, including while
+                    // paused — only credit listening time when audio is actually playing.
+                    if state.isPlaying,
+                       tickEpisode != nil,
+                       let sub = tickSubscription {
+                        state.listeningStatsStore.addListeningTime(
+                            0.5,
+                            speed: state.effectiveSpeed(for: sub),
+                            subscriptionID: sub.id,
+                            showTitle: sub.title
+                        )
+                        statsCredited = true
+                    }
+                }
+
+                state.recordPlaybackTickDiagnostics(
+                    startedAt: tickStartedAt,
+                    playbackTime: time,
+                    episode: tickEpisode,
+                    subscription: tickSubscription,
+                    stages: stageTimings,
+                    positionSaved: positionSaved,
+                    statsCredited: statsCredited
+                )
             }
         }
 
@@ -2448,6 +2628,8 @@ final class AppState: ObservableObject {
     func refreshAllSubscriptions(includeBackoffFeeds: Bool = false) async {
         await refreshSubscriptions(
             reason: "manual",
+            trigger: .manualButton,
+            executionContext: .manual,
             maxSubscriptions: nil,
             includeBackoffFeeds: includeBackoffFeeds,
             onlyDueFeeds: false
@@ -2459,6 +2641,8 @@ final class AppState: ObservableObject {
     func refreshDueSubscriptions() async -> Bool {
         await refreshSubscriptions(
             reason: "timed-due",
+            trigger: .foregroundTimer,
+            executionContext: isSceneActive ? .foregroundVisible : .backgroundAudioAlive,
             maxSubscriptions: foregroundRefreshFeedLimit,
             capBypassStates: foregroundRefreshCapBypassStates,
             includeBackoffFeeds: false,
@@ -2467,15 +2651,26 @@ final class AppState: ObservableObject {
     }
 
     @discardableResult
-    func refreshSubscriptionsForBackground() async -> Bool {
+    func refreshSubscriptionsForBackground(
+        taskIdentifier: String = BackgroundTaskCoordinator.feedRefreshIdentifier
+    ) async -> Bool {
+        logger.info("background.refreshRequested", "Background app refresh requested feed refresh cycle", metadata: [
+            "identifier": taskIdentifier,
+            "sceneActive": "\(isSceneActive)",
+            "trigger": FeedRefreshTrigger.backgroundRefreshTask.rawValue,
+            "executionContext": FeedRefreshExecutionContext.backgroundRefreshTask.rawValue
+        ])
         await refreshSubscriptions(
             reason: "background",
+            trigger: .backgroundRefreshTask,
+            executionContext: .backgroundRefreshTask,
             maxSubscriptions: backgroundRefreshFeedLimit,
             protectedStates: backgroundReleaseRadarProtectedStates,
             minimumProtectedSelections: backgroundReleaseRadarReservedSlots,
             includeBackoffFeeds: false,
             onlyDueFeeds: true,
-            joinActiveCycle: true
+            joinActiveCycle: true,
+            backgroundTaskIdentifier: taskIdentifier
         )
     }
 
@@ -2488,7 +2683,12 @@ final class AppState: ObservableObject {
         }
         logger.warning("feed.refreshAll.cancelRequested", "Refresh cycle cancellation requested", metadata: [
             "reason": reason,
-            "backlogCount": "\(deferredRefreshBacklog.count)"
+            "backlogCount": "\(deferredRefreshBacklog.count)",
+            "sceneActive": "\(isSceneActive)",
+            "activeRefreshCycleID": activeRefreshCycleDiagnostics?.cycleID ?? "unknown",
+            "activeReason": activeRefreshCycleDiagnostics?.reason ?? "unknown",
+            "activeTrigger": activeRefreshCycleDiagnostics?.trigger.rawValue ?? "unknown",
+            "activeExecutionContext": activeRefreshCycleDiagnostics?.executionContext.rawValue ?? "unknown"
         ])
         activeRefreshCycle.cancel()
     }
@@ -2496,19 +2696,29 @@ final class AppState: ObservableObject {
     @discardableResult
     private func refreshSubscriptions(
         reason: String,
+        trigger: FeedRefreshTrigger,
+        executionContext: FeedRefreshExecutionContext,
         maxSubscriptions: Int?,
         capBypassStates: Set<FeedRefreshWindowState> = [],
         protectedStates: Set<FeedRefreshWindowState> = [],
         minimumProtectedSelections: Int = 0,
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool,
-        joinActiveCycle: Bool = false
+        joinActiveCycle: Bool = false,
+        backgroundTaskIdentifier: String? = nil
     ) async -> Bool {
         if let active = activeRefreshCycle {
             guard joinActiveCycle else {
                 logger.info("feed.refreshAll.skip", "Refresh-all skipped because another cycle is already running", metadata: [
                     "count": "\(subscriptionStore.subscriptions.count)",
-                    "reason": reason
+                    "reason": reason,
+                    "trigger": trigger.rawValue,
+                    "executionContext": executionContext.rawValue,
+                    "sceneActive": "\(isSceneActive)",
+                    "activeRefreshCycleID": activeRefreshCycleDiagnostics?.cycleID ?? "unknown",
+                    "activeReason": activeRefreshCycleDiagnostics?.reason ?? "unknown",
+                    "activeTrigger": activeRefreshCycleDiagnostics?.trigger.rawValue ?? "unknown",
+                    "activeExecutionContext": activeRefreshCycleDiagnostics?.executionContext.rawValue ?? "unknown"
                 ])
                 return false
             }
@@ -2517,14 +2727,31 @@ final class AppState: ObservableObject {
             // skipping, so the BGTask stays alive until the work is actually done —
             // completing early lets iOS suspend the app mid-request.
             logger.info("feed.refreshAll.join", "Joining refresh cycle already in flight", metadata: [
-                "reason": reason
+                "reason": reason,
+                "trigger": trigger.rawValue,
+                "executionContext": executionContext.rawValue,
+                "sceneActive": "\(isSceneActive)",
+                "backgroundTaskIdentifier": backgroundTaskIdentifier ?? "none",
+                "joinedRefreshCycleID": activeRefreshCycleDiagnostics?.cycleID ?? "unknown",
+                "joinedReason": activeRefreshCycleDiagnostics?.reason ?? "unknown",
+                "joinedTrigger": activeRefreshCycleDiagnostics?.trigger.rawValue ?? "unknown",
+                "joinedExecutionContext": activeRefreshCycleDiagnostics?.executionContext.rawValue ?? "unknown"
             ])
             return await active.value
         }
 
+        let diagnostics = RefreshCycleDiagnostics(
+            cycleID: UUID().uuidString,
+            reason: reason,
+            trigger: trigger,
+            executionContext: executionContext,
+            startSceneActive: isSceneActive,
+            backgroundTaskIdentifier: backgroundTaskIdentifier
+        )
+
         let cycle = Task { @MainActor in
             await self.performRefreshCycle(
-                reason: reason,
+                diagnostics: diagnostics,
                 maxSubscriptions: maxSubscriptions,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
@@ -2534,12 +2761,16 @@ final class AppState: ObservableObject {
             )
         }
         activeRefreshCycle = cycle
-        defer { activeRefreshCycle = nil }
+        activeRefreshCycleDiagnostics = diagnostics
+        defer {
+            activeRefreshCycle = nil
+            activeRefreshCycleDiagnostics = nil
+        }
         return await cycle.value
     }
 
     private func performRefreshCycle(
-        reason: String,
+        diagnostics: RefreshCycleDiagnostics,
         maxSubscriptions: Int?,
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
@@ -2550,12 +2781,17 @@ final class AppState: ObservableObject {
         suppressUpNextRefresh = true
         defer { suppressUpNextRefresh = false }
 
-        resourceMonitor.logSnapshot(reason: "feed.refreshAll.before", context: resourceContext(), force: true)
+        let refreshContext = diagnostics.metadata(currentSceneActive: isSceneActive)
+        resourceMonitor.logSnapshot(
+            reason: "feed.refreshAll.before",
+            context: resourceContext(refreshContext),
+            force: true
+        )
         logger.info("feed.refreshAll", "Refreshing all podcast feeds", metadata: [
             "count": "\(subscriptionStore.subscriptions.count)",
-            "reason": reason,
+            "reason": diagnostics.reason,
             "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all"
-        ])
+        ].merging(refreshContext) { _, new in new })
         let skippedSubscriptions = subscriptionStore.subscriptions.filter(\.excludeFromAutoFeedRefresh)
         let activeSubscriptions = subscriptionStore.subscriptions.filter { !$0.excludeFromAutoFeedRefresh }
         let now = Date()
@@ -2593,7 +2829,7 @@ final class AppState: ObservableObject {
                 selectedCandidates: selectedCandidates,
                 deferredCandidates: deferredCandidates,
                 now: now,
-                reason: reason
+                diagnostics: diagnostics
             )
             logRefreshCycleDecisionSummary(
                 candidates: dueCandidates,
@@ -2607,11 +2843,17 @@ final class AppState: ObservableObject {
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
-                reason: reason
+                diagnostics: diagnostics
             )
         }
         if onlyDueFeeds, selectedCandidates.isEmpty {
             scheduleBackgroundRefreshForNextDueFeed()
+            logger.info("feed.refreshAll.noDue", "No due subscriptions selected for refresh cycle", metadata: [
+                "eligible": "\(eligibleSubscriptions.count)",
+                "due": "\(dueCandidates.count)",
+                "skippedBackoff": "\(backoffSubscriptions.count)",
+                "skippedInactive": "\(skippedSubscriptions.count)"
+            ].merging(refreshContext) { _, new in new })
             return false
         }
         let selectedCandidatesByID = Dictionary(uniqueKeysWithValues: selectedCandidates.map { ($0.subscription.id, $0) })
@@ -2619,13 +2861,13 @@ final class AppState: ObservableObject {
             logger.info("feed.refreshAll.skippedInactive", "Skipped subscriptions excluded from auto feed refresh", metadata: [
                 "count": "\(skippedSubscriptions.count)",
                 "podcasts": skippedSubscriptions.map(\.title).joined(separator: ", ")
-            ])
+            ].merging(refreshContext) { _, new in new })
         }
         if !includeBackoffFeeds, !backoffSubscriptions.isEmpty {
             logger.info("feed.refreshAll.skippedBackoff", "Skipped subscriptions temporarily paused after failed refreshes", metadata: [
                 "count": "\(backoffSubscriptions.count)",
                 "podcasts": backoffSubscriptions.map(\.title).joined(separator: ", ")
-            ])
+            ].merging(refreshContext) { _, new in new })
         }
         var completedSubscriptionIDs = Set<UUID>()
         var wasCancelled = false
@@ -2637,8 +2879,8 @@ final class AppState: ObservableObject {
             var itemStartMetadata = refreshFeedMetadata(for: subscription, extra: [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
-                "reason": reason
-            ])
+                "reason": diagnostics.reason
+            ].merging(refreshContext) { _, new in new })
             if let candidate = selectedCandidatesByID[subscription.id] {
                 itemStartMetadata.merge(refreshDecisionMetadata(for: candidate)) { _, new in new }
             }
@@ -2656,8 +2898,8 @@ final class AppState: ObservableObject {
             logger.info("feed.refreshAll.itemFinished", "Finished subscription in timed cycle", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
                 "index": "\(index + 1)",
                 "total": "\(subscriptions.count)",
-                "reason": reason
-            ]))
+                "reason": diagnostics.reason
+            ].merging(refreshContext) { _, new in new }))
         }
         if wasCancelled {
             let unfinishedCandidates = selectedCandidates.filter { candidate in
@@ -2666,16 +2908,20 @@ final class AppState: ObservableObject {
             restoreUnfinishedRefreshBacklog(
                 candidates: unfinishedCandidates,
                 now: Date(),
-                reason: reason
+                diagnostics: diagnostics
             )
             scheduleBackgroundRefreshForNextDueFeed()
             logger.warning("feed.refreshAll.cancelled", "Refresh cycle stopped before all selected feeds completed", metadata: [
                 "attempted": "\(completedSubscriptionIDs.count)",
                 "unfinished": "\(unfinishedCandidates.count)",
                 "deferredBacklog": "\(deferredRefreshBacklog.count)",
-                "reason": reason
-            ])
-            resourceMonitor.logSnapshot(reason: "feed.refreshAll.cancelled", context: resourceContext(), force: true)
+                "reason": diagnostics.reason
+            ].merging(refreshContext) { _, new in new })
+            resourceMonitor.logSnapshot(
+                reason: "feed.refreshAll.cancelled",
+                context: resourceContext(refreshContext),
+                force: true
+            )
             return !completedSubscriptionIDs.isEmpty
         }
         scheduleBackgroundRefreshForNextDueFeed()
@@ -2686,9 +2932,13 @@ final class AppState: ObservableObject {
             "eligible": "\(eligibleSubscriptions.count)",
             "skippedBackoff": "\(backoffSubscriptions.count)",
             "skippedInactive": "\(skippedSubscriptions.count)",
-            "reason": reason
-        ])
-        resourceMonitor.logSnapshot(reason: "feed.refreshAll.after", context: resourceContext(), force: true)
+            "reason": diagnostics.reason
+        ].merging(refreshContext) { _, new in new })
+        resourceMonitor.logSnapshot(
+            reason: "feed.refreshAll.after",
+            context: resourceContext(refreshContext),
+            force: true
+        )
         return true
     }
 
@@ -2804,11 +3054,11 @@ final class AppState: ObservableObject {
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
-        reason: String
+        diagnostics: RefreshCycleDiagnostics
     ) {
         let protectedSelectedCount = selectedCandidates.filter { protectedStates.contains($0.prediction.state) }.count
         logger.info("feed.refreshAll.plan", "Planned due-feed refresh cycle", metadata: [
-            "reason": reason,
+            "reason": diagnostics.reason,
             "eligible": "\(eligibleCount)",
             "due": "\(candidates.count)",
             "selected": "\(selectedCount)",
@@ -2825,7 +3075,7 @@ final class AppState: ObservableObject {
             "topCandidates": refreshTopCandidateSummary(for: candidates),
             "selectedCandidates": refreshTopCandidateSummary(for: selectedCandidates),
             "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
-        ])
+        ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
     }
 
     private func refreshDecisionMetadata(for candidate: RefreshCycleCandidate) -> [String: String] {
@@ -2913,10 +3163,34 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleBackgroundRefreshForNextDueFeed() {
-        let soonestDue = subscriptionStore.subscriptions
-            .filter { !$0.excludeFromAutoFeedRefresh }
-            .map { nextRefreshDue(for: $0) }
-            .min()
+        let activeSubscriptions = subscriptionStore.subscriptions.filter { !$0.excludeFromAutoFeedRefresh }
+        let nextDue = activeSubscriptions
+            .map { subscription in
+                (subscription: subscription, dueAt: nextRefreshDue(for: subscription))
+            }
+            .min { lhs, rhs in
+                if lhs.dueAt != rhs.dueAt { return lhs.dueAt < rhs.dueAt }
+                return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
+            }
+        if let nextDue {
+            let secondsUntilDue = max(0, Int(nextDue.dueAt.timeIntervalSinceNow.rounded()))
+            logger.info("background.nextDue", "Selected next feed due date for background refresh scheduling", metadata: refreshFeedMetadata(
+                for: nextDue.subscription,
+                includeURL: false,
+                extra: [
+                    "nextDueAt": refreshLogDate(nextDue.dueAt),
+                    "secondsUntilDue": "\(secondsUntilDue)",
+                    "activeSubscriptions": "\(activeSubscriptions.count)",
+                    "skippedInactive": "\(subscriptionStore.subscriptions.count - activeSubscriptions.count)"
+                ]
+            ))
+        } else {
+            logger.info("background.nextDue", "No active subscription available for background refresh scheduling", metadata: [
+                "activeSubscriptions": "0",
+                "skippedInactive": "\(subscriptionStore.subscriptions.count)"
+            ])
+        }
+        let soonestDue = nextDue?.dueAt
         BackgroundTaskCoordinator.scheduleAppRefresh(earliestBeginDate: soonestDue)
     }
 
@@ -2943,7 +3217,7 @@ final class AppState: ObservableObject {
         selectedCandidates: [RefreshCycleCandidate],
         deferredCandidates: [RefreshCycleCandidate],
         now: Date,
-        reason: String
+        diagnostics: RefreshCycleDiagnostics
     ) {
         let previousBacklogCount = deferredRefreshBacklog.count
         let dueIDs = Set(dueCandidates.map(\.subscription.id))
@@ -2958,30 +3232,30 @@ final class AppState: ObservableObject {
 
         if !deferredCandidates.isEmpty || deferredRefreshBacklog.count != previousBacklogCount {
             logger.info("feed.refreshAll.backlog", "Checkpointed deferred due-feed backlog", metadata: [
-                "reason": reason,
+                "reason": diagnostics.reason,
                 "selected": "\(selectedCandidates.count)",
                 "deferred": "\(deferredCandidates.count)",
                 "backlogCount": "\(deferredRefreshBacklog.count)",
                 "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
-            ])
+            ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
         }
     }
 
     private func restoreUnfinishedRefreshBacklog(
         candidates: [RefreshCycleCandidate],
         now: Date,
-        reason: String
+        diagnostics: RefreshCycleDiagnostics
     ) {
         guard !candidates.isEmpty else { return }
         for candidate in candidates {
             recordDeferredRefreshCandidate(candidate, now: now)
         }
         logger.warning("feed.refreshAll.checkpoint", "Checkpointed unfinished selected feeds", metadata: [
-            "reason": reason,
+            "reason": diagnostics.reason,
             "unfinished": "\(candidates.count)",
             "backlogCount": "\(deferredRefreshBacklog.count)",
             "unfinishedCandidates": refreshTopCandidateSummary(for: candidates)
-        ])
+        ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
     }
 
     private func recordDeferredRefreshCandidate(_ candidate: RefreshCycleCandidate, now: Date) {
@@ -3304,6 +3578,49 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Playback position persistence
+
+    private func recordPlaybackTickDiagnostics(
+        startedAt: CFAbsoluteTime,
+        playbackTime: TimeInterval,
+        episode: Episode?,
+        subscription: Subscription?,
+        stages: [PlaybackTickStageTiming],
+        positionSaved: Bool,
+        statsCredited: Bool
+    ) {
+        let totalMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        let dominant = stages.max { lhs, rhs in lhs.durationMs < rhs.durationMs }
+        let diagnostics = PlaybackTickDiagnostics(
+            occurredAt: Date(),
+            episode: episode?.title ?? "none",
+            podcast: subscription?.title ?? "none",
+            currentTime: Int(playbackTime),
+            totalMs: totalMs,
+            dominantStage: dominant?.name ?? "none",
+            dominantStageMs: dominant?.durationMs ?? 0,
+            stages: stages,
+            positionSaved: positionSaved,
+            statsCredited: statsCredited
+        )
+        lastPlaybackTickDiagnostics = diagnostics
+        playbackTickSummary.record(diagnostics, slowThresholdMs: playbackTickSlowThresholdMs)
+
+        if totalMs >= playbackTickSlowThresholdMs {
+            logger.warning("playback.tickSlow", "Playback tick was slow on the main actor", metadata: diagnostics.metadata())
+        }
+
+        if playbackTickSummary.samples >= playbackTickSummarySampleInterval {
+            var metadata = playbackTickSummary.metadata()
+            metadata.merge([
+                "episode": diagnostics.episode,
+                "podcast": diagnostics.podcast,
+                "currentTime": "\(diagnostics.currentTime)",
+                "thresholdMs": String(format: "%.1f", playbackTickSlowThresholdMs)
+            ]) { _, new in new }
+            logger.info("playback.tickSummary", "Playback tick timing summary", metadata: metadata)
+            playbackTickSummary.reset()
+        }
+    }
 
     private func savePlaybackPosition() {
         guard let episode = currentPlayerEpisode,
@@ -3757,11 +4074,17 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 guard self.isSceneActive else { continue }
                 let now = Date()
-                let anyDue = self.subscriptionStore.subscriptions.contains { subscription in
+                let dueCount = self.subscriptionStore.subscriptions.filter { subscription in
                     !subscription.excludeFromAutoFeedRefresh
                         && self.nextRefreshDue(for: subscription) <= now
-                }
-                if anyDue {
+                }.count
+                if dueCount > 0 {
+                    self.logger.info("feed.foregroundPollDue", "Foreground poll found due subscriptions", metadata: [
+                        "due": "\(dueCount)",
+                        "sceneActive": "\(self.isSceneActive)",
+                        "trigger": FeedRefreshTrigger.foregroundTimer.rawValue,
+                        "executionContext": FeedRefreshExecutionContext.foregroundVisible.rawValue
+                    ])
                     await self.refreshDueSubscriptions()
                 }
             }
@@ -3849,6 +4172,20 @@ final class AppState: ObservableObject {
             "pendingDownloads": "\(pendingDownloadQueue.count)",
             "upNext": upNextEpisode?.title ?? "none"
         ]
+        if let activeRefreshCycleDiagnostics {
+            context.merge(activeRefreshCycleDiagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new }
+        }
+        if let lastPlaybackTickDiagnostics {
+            let ageMs = Date().timeIntervalSince(lastPlaybackTickDiagnostics.occurredAt) * 1000
+            context.merge([
+                "lastPlaybackTickAgeMs": String(format: "%.0f", ageMs),
+                "lastPlaybackTickTotalMs": String(format: "%.1f", lastPlaybackTickDiagnostics.totalMs),
+                "lastPlaybackTickDominantStage": lastPlaybackTickDiagnostics.dominantStage,
+                "lastPlaybackTickDominantStageMs": String(format: "%.1f", lastPlaybackTickDiagnostics.dominantStageMs),
+                "lastPlaybackTickPositionSaved": "\(lastPlaybackTickDiagnostics.positionSaved)",
+                "lastPlaybackTickStatsCredited": "\(lastPlaybackTickDiagnostics.statsCredited)"
+            ]) { _, new in new }
+        }
         extra.forEach { context[$0.key] = $0.value }
         return context
     }

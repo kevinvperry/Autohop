@@ -8,6 +8,10 @@ import Foundation
 // started/completed, manual skip count, and bytes/episodes downloaded
 // (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause/background (AutohopApp).
+// Diagnostics: stats.pendingMarked logs the first pending sync mark for a day
+// bucket after each flush, and stats.flush logs coalesced writes into
+// stats_sync_state. These low-frequency breadcrumbs help correlate DayStats
+// CloudKit conflicts and playback tick pressure without logging every 0.5 s tick.
 // Legacy lifetime totals from playback-stats.json are imported once as
 // `legacyBaseline` so pre-daily-bucketing history isn't lost.
 // PERIODS: summary(for: StatsPeriod) aggregates a window; StatsPeriod includes
@@ -327,22 +331,39 @@ public final class ListeningStatsStore: ObservableObject {
 
     private func recordDayPending(_ day: DayStats) {
         guard syncDatabase != nil else { return }
-        pendingStatsDayKeys.insert(day.dayKey)
-        if let last = lastStatsDayWriteAt, Date().timeIntervalSince(last) < statsDayWriteThrottle {
+        let now = Date()
+        let inserted = pendingStatsDayKeys.insert(day.dayKey).inserted
+        let secondsSinceLastFlush = lastStatsDayWriteAt.map { now.timeIntervalSince($0) }
+        let throttled = secondsSinceLastFlush.map { $0 < statsDayWriteThrottle } ?? false
+        if inserted || !throttled {
+            AppLogger.shared.info("stats.pendingMarked", "Marked listening stats day pending for sync", metadata: [
+                "dayKey": day.dayKey,
+                "inserted": "\(inserted)",
+                "pendingDayCount": "\(pendingStatsDayKeys.count)",
+                "throttled": "\(throttled)",
+                "secondsSinceLastFlush": secondsSinceLastFlush.map { String(format: "%.1f", $0) } ?? "none",
+                "wallClockSeconds": "\(Int(day.wallClockSeconds.rounded()))",
+                "showCount": "\(day.perShowSeconds.count)"
+            ])
+        }
+        if throttled {
             return // coalesce — flushed on the throttle window or at a lifecycle checkpoint
         }
-        flushPendingStatsDays()
+        flushPendingStatsDays(reason: "throttle")
     }
 
     /// Writes every coalesced day bucket to the sync database. Called on the write throttle and at
     /// lifecycle checkpoints (pause / background / explicit save) so the sync projection is current
     /// without a write on every playback tick.
-    public func flushPendingStatsDays() {
+    public func flushPendingStatsDays(reason: String = "manual") {
         guard let syncDatabase, !pendingStatsDayKeys.isEmpty else { return }
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        let pendingBefore = pendingStatsDayKeys
+        var writtenKeys: [String] = []
         // Only drop keys that actually wrote. Clearing a key whose write failed
         // would mean that day never gets re-attempted and silently never syncs.
         var failedKeys = Set<String>()
-        for key in pendingStatsDayKeys {
+        for key in pendingBefore {
             guard var day = data.days[key] else { continue } // no bucket to write — drop the key
             // Attach a title snapshot for this day's shows so another device can
             // label them; local buckets don't otherwise carry titles.
@@ -351,6 +372,7 @@ public final class ListeningStatsStore: ObservableObject {
             }
             do {
                 try syncDatabase.recordStatsDay(day)
+                writtenKeys.append(key)
             } catch {
                 failedKeys.insert(key)
                 AppLogger.shared.error("sync.statsMarkerFailed", "Failed to record stats day for sync", metadata: [
@@ -362,6 +384,17 @@ public final class ListeningStatsStore: ObservableObject {
         // Retain only the keys that failed, so the next flush retries them.
         pendingStatsDayKeys = failedKeys
         lastStatsDayWriteAt = Date()
+        let durationMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        AppLogger.shared.info("stats.flush", "Flushed coalesced listening stats days to sync database", metadata: [
+            "reason": reason,
+            "pendingBefore": "\(pendingBefore.count)",
+            "written": "\(writtenKeys.count)",
+            "failed": "\(failedKeys.count)",
+            "remaining": "\(pendingStatsDayKeys.count)",
+            "dayKeys": writtenKeys.sorted().joined(separator: ","),
+            "failedDayKeys": failedKeys.sorted().joined(separator: ","),
+            "durationMs": String(format: "%.1f", durationMs)
+        ])
     }
 
     /// A day counts toward streaks once it has at least this much listening.
@@ -692,7 +725,7 @@ public final class ListeningStatsStore: ObservableObject {
     public func save() {
         // A full save is a real persistence checkpoint (pause / background / shutdown) — make sure
         // any coalesced stats-day writes reach the sync database too.
-        flushPendingStatsDays()
+        flushPendingStatsDays(reason: "save")
         guard let url = fileURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

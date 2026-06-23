@@ -6,9 +6,11 @@ import BackgroundTasks
 // (see AutohopApp.swift). Handles the five things SwiftUI cannot:
 //  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (must happen
 //     before didFinishLaunching returns) and the BGAppRefreshTask handler,
-//     which calls AppState.shared.refreshSubscriptionsForBackground(). Expiration
-//     cancels AppState's active refresh cycle so selected-but-unfinished feeds
-//     are checkpointed back into Release Radar's deferred backlog.
+//     which calls AppState.shared.refreshSubscriptionsForBackground(taskIdentifier:).
+//     Expiration cancels AppState's active refresh cycle so selected-but-unfinished
+//     feeds are checkpointed back into Release Radar's deferred backlog. The task
+//     identifier is forwarded for diagnostics so logs can distinguish a real
+//     BGAppRefreshTask wake from foreground catch-up or background-audio work.
 //  2. Background URLSession wake: stores the system completion handler on
 //     DownloadManager so it fires after urlSessionDidFinishEvents.
 //  3. OPML/.xml file-open events → AppState.importOPML.
@@ -94,7 +96,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BackgroundTaskCoordinator.scheduleAppRefresh()
 
         let work = Task {
-            let didRun = await AppState.shared.refreshSubscriptionsForBackground()
+            let didRun = await AppState.shared.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
             AppLogger.shared.info("background.complete", "Background app refresh completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
