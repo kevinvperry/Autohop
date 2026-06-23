@@ -25,6 +25,10 @@ import SwiftUI
 // == 0) a starterPacksBanner sits above the rails and presents StarterPacksView.
 // TOP EPISODES: the Top Episodes hero header has a "See All" button that pushes
 // TopEpisodesView (the Top-50 child page) via AppRoute-style pendingRoute.
+// TOP PODCASTS: the FIRST "Top Podcasts · <selected country>" hero (the mid-feed
+// podcastHero — NOT the fixed-country spotlight heroes) likewise has a "See All"
+// → TopPodcastsView (Top-50 child page). heroCarousel takes an optional
+// seeAllRoute; only the podcastHero passes one, so spotlights stay link-free.
 // PERF: the feed is a LazyVStack and each genre rail a LazyHStack, so the ~10
 // image-heavy rails + hero carousels build only as they scroll into view
 // (was a plain VStack/HStack, which laid everything out eagerly and stuttered).
@@ -55,6 +59,7 @@ struct DiscoverView: View {
         case preview(PodcastSearchResult)
         case episodes(UUID)
         case topEpisodes
+        case topPodcasts
     }
 
     /// Ordered Discover feed item: a genre rail or one of the two country
@@ -152,6 +157,8 @@ struct DiscoverView: View {
                 PodcastDetailView(subscriptionID: subscriptionID)
             case .topEpisodes:
                 TopEpisodesView(viewModel: viewModel, country: country)
+            case .topPodcasts:
+                TopPodcastsView(viewModel: viewModel, country: country)
             }
         }
         .miniPlayerBar()
@@ -205,7 +212,8 @@ struct DiscoverView: View {
                             heroCarousel(title: "Top Podcasts · \(country.name)",
                                          podcasts: viewModel.heroPodcasts,
                                          index: $podcastHeroIndex,
-                                         resolveCountry: country.code)
+                                         resolveCountry: country.code,
+                                         seeAllRoute: .topPodcasts)
                         case .spotlightA(let spotlight):
                             spotlightHero(spotlight, index: $spotlightAIndex)
                         case .spotlightB(let spotlight):
@@ -464,11 +472,31 @@ struct DiscoverView: View {
     /// Shared paging hero carousel used by both the top hero and the country
     /// spotlights. Each instance keeps its own selection index and auto-advances
     /// on the shared cadence (paused while a tap is resolving a feed).
-    private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String) -> some View {
+    private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String, seeAllRoute: Route? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.title3.weight(.bold))
-                .padding(.horizontal, 20)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                // "See All" only on the first Top Podcasts hero (podcastHero) — the
+                // fixed-country spotlight heroes call this without a route, so they
+                // render the title alone, exactly as before.
+                if let seeAllRoute {
+                    Spacer()
+                    Button {
+                        pendingRoute = seeAllRoute
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("See All")
+                                .font(.subheadline.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                        }
+                        .foregroundStyle(.purple)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
 
             TabView(selection: index) {
                 ForEach(Array(podcasts.enumerated()), id: \.element.id) { idx, podcast in

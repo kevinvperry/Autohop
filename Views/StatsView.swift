@@ -4,6 +4,7 @@ import Charts
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
 // FEATURES.md §12). Period selector — This Week / current month / current year /
 // Lifetime — drives every section, all data from ListeningStatsStore.summary().
+// The page opens in This Week (the `range` @State default; resets to it each open).
 // A "This / Last" toggle (StatsRangeSelector, bound to `showingLast`) switches
 // week/month/year to the previous concluded period (StatsPeriod.previous*); it's
 // disabled for Lifetime. `isLast = showingLast && range.supportsLast`. Last mode
@@ -169,7 +170,10 @@ private struct StatsContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
-    @State private var range: StatsRange = .thisMonth
+    // Stats opens in This Week by default (showingLast = false ⇒ the current week,
+    // not Last Week). Changing this default is the only thing that sets the initial
+    // period — `range` is in-memory @State, so the page resets to it on every open.
+    @State private var range: StatsRange = .thisWeek
     /// This/Last toggle — when true, show the previous concluded period. Ignored
     /// for Lifetime (see `isLast`). Deep-linked from the Listening Recap notifications.
     @State private var showingLast = false

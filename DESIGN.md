@@ -477,6 +477,8 @@ The standard episode row used in the Queue. Five horizontal zones left to right:
 4. **Spacer**
 5. **Trailing metadata** — pin badge (if pinned) + duration
 
+**Expanded state:** tapping the episode title toggles `expandedEpisodeID`, unclamping the title and revealing the full plain-text description (indented to the artwork edge, `lineLimit 15`). A **small purple circular glass gear** (`gearshape`, the `refreshButton` treatment — 30×30, `glassEffect(in: Circle())` with a `.ultraThinMaterial` fallback, `.accessibilityLabel("Podcast settings")`) sits at the **bottom-right** of the expanded area; tapping it opens that podcast's `SubscriptionSettingsView` by dismissing the Queue sheet and presenting Settings in its place ("replace the queue", coordinated in `PlayerView` via the queue sheet's `onDismiss`).
+
 ```swift
 HStack(spacing: 12) {
     // 1. Position indicator
@@ -529,7 +531,7 @@ HStack(spacing: 12) {
 
 **Labels: `Card-TopEpisodeFeature`, `ListRow-TopEpisode`** (`Views/TopEpisodesView.swift`)
 
-The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets).
+The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets). **`Views/TopPodcastsView.swift` (the "Top Podcasts" page) reuses this exact layout and styling** — same `Card-TopEpisodeFeature` / `ListRow-TopEpisode` structure — but for chart *shows*: each entry shows the podcast's artwork, title, author (artist), and category (genreName) in place of the episode's title/show/relative-time, and is reached via the "See All" on the first "Top Podcasts" hero.
 
 **Feature card (`Card-TopEpisodeFeature`)** — mirrors the Discover episode-hero card, sized as a static full-width tile:
 - 232 pt tall, `cornerRadius 22`, `white.opacity(0.08)` hairline stroke
@@ -2039,7 +2041,7 @@ A two-column `LazyVGrid` of key/value **glass** cards shown at the bottom of the
 - **Key** — `size 10, weight .bold`, `.textCase(.uppercase)`, `.tracking(0.5)`, `Color(white: 0.33)`
 - **Value** — `size 13, weight .bold`, white, `lineLimit(2)`
 
-Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. **Published** uses `relativePublishedLabel` — the **shared tiered relative-date formatter** used across every episode list for consistency: "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" / an abbreviated exact date for anything older ("12 Jun", with year only when not the current year). **Released** uses `relativeReleasedLabel` (always-elapsed, e.g. "2 days ago" / "8 months ago"). Both are shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
+Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. The Published and Released cards split a single `publishedAt` into two complementary views: **Published** answers *which day* via `relativePublishedDateLabel` — Today / Yesterday / "N Days Ago" (up to 6 days) / then an abbreviated exact date ("12 Jun", year only when not the current year, e.g. "28 Dec 2024"); **Released** answers *what time* via `relativeReleasedLabel` — relative elapsed time under 24h ("10 minutes ago" / "2 hours ago"), then the actual clock time of release ("6:54 AM") once 24h+ old. (Episode **lists** still use the separate time-tiered `relativePublishedLabel`, so a same-day episode reads "11 hours ago" in a list but "Today" on the Published card.) All are shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
 
 ```swift
 @ViewBuilder

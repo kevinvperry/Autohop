@@ -18,14 +18,15 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Reached only via the Discover page's search shortcut. |
 | **Discover** | `DiscoverView` | Page | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to the Podcast Detail page. The Top Episodes hero header has a **See All** button that pushes the Top Episodes page. |
 | **Top Episodes** | `TopEpisodesView` | Page (child of Discover) | Expanded Top-50 episode chart for the selected Discover country (the full version of the Top-8 episode hero). Editorial layout: a large feature card every 7th entry (ranks 1/8/15/22/29/36/43), the rest are compact ranked rows. Each entry shows episode artwork (placeholder fallback), episode title, show name, and a relative publish label ("4 hours ago"). Tapping resolves the parent podcast and routes to the Podcast Detail page. |
+| **Top Podcasts** | `TopPodcastsView` | Page (child of Discover) | Expanded Top-50 *show* chart for the selected Discover country — the full version of the first "Top Podcasts" hero. Same editorial layout as Top Episodes (a large feature card every 7th entry, the rest compact ranked rows). Each entry shows the show's artwork, title, author/publisher, and category. Tapping resolves the show's feed and routes to the Podcast Detail page. Reached via the "See All" on the first "Top Podcasts · &lt;country&gt;" hero. |
 | **Podcast Detail** | `PodcastDetailView` | Page | A podcast's artwork, description, and full episode list — one page serving unsubscribed previews, browse-only previews, active subscriptions, and Inactive subscriptions. Header has a Subscribe⇄Unsubscribe button (Inactive still shows subscribed/Unsubscribe), a per-podcast new-episode notification bell beside it once subscribed, and an expandable "…more" show description; the Refresh Feed and Show Settings toolbar items appear for real subscriptions, including Inactive ones. Episodes are fully interactive from first load — swipe for Play, Play Next, Archive, and Play Last. |
 | **Add RSS Feed** | `AddFeedView` | Page | Manually enter a podcast RSS URL. Fallback for podcasts not found in the search directory. |
-| **Podcast Settings** | `SubscriptionSettingsView` | Page | Per-podcast configuration — playback speed, trim silence, auto-archive rules, notifications, and feed exclusion from auto-refresh. |
+| **Podcast Settings** | `SubscriptionSettingsView` | Page | Per-podcast configuration — playback speed, trim silence, auto-archive rules, notifications, and feed exclusion from auto-refresh. Also reachable from the gear in an expanded **Queue** row, which closes the Queue and opens this page (presented as a sheet) in its place. |
 | **Episode Detail** | `EpisodeDetailView` | Page | Full detail for a single episode — description, chapters, chapter artwork, playback controls, download and share actions. |
 | **Player** | `PlayerView` | Page (modal overlay) | Full-screen now-playing screen. Shows artwork, title, scrubber, playback controls, chapter list, plus sleep timer, AirPlay, share, and archive actions. A Sleep Schedule indicator pill (bed icon + minutes to the next prompt) appears in the top bar only while inside the active-hours window and pushes the Sleep Schedule page. While a "still listening?" prompt is live a full-screen overlay shows an oversized "Still Listening" confirm button. |
 | **Audio Controls** | `AudioControlsSheetView` | Sheet (from Player) | Expanded audio settings — speed, trim silence, vocal boost — accessible while an episode is playing. |
 | **Episode Share** | `EpisodeShareSheet` | Sheet (from Player) | Previews the rendered episode share card and exports it via the system share sheet together with the episode's audio URL. |
-| **Queue** | `QueueSheetView` | Sheet | The playback queue — Up Next episode plus the priority-ordered list of what plays after. Swipe actions are animated with matched haptics: Play Next/Last glide the row to the top/bottom (directional badge + pop), Archive slides it into an archive box and closes the gap. See DESIGN.md `QueueAction-Animation`. |
+| **Queue** | `QueueSheetView` | Sheet | The playback queue — Up Next episode plus the priority-ordered list of what plays after. Tapping an episode title expands the row to reveal its full description plus a bottom-right gear that opens that podcast's Settings (closing the Queue). Swipe actions are animated with matched haptics: Play Next/Last glide the row to the top/bottom (directional badge + pop), Archive slides it into an archive box and closes the gap. See DESIGN.md `QueueAction-Animation`. |
 | **Sleep Timer** | `SleepTimerSheetView` | Sheet | Set a timer to stop playback after a fixed duration or at the end of the current episode. |
 | **Downloads** | `DownloadsView` | Page | All episodes currently downloaded to the device. Shows file sizes and allows deletion. |
 | **App Settings** | `SettingsView` | Page | Global app configuration — Release Radar (learned feed schedules, protected background refresh slots for expected releases), Auto Archive (run-now plus global default rules seeded into new subscriptions), download behaviour, controls, global Default Playback, notifications, OPML import/export, and opt-in iCloud Sync. |
@@ -45,7 +46,7 @@ Keep this file updated whenever a new page is added or an existing one is rename
 
 ```
 Player (PlayerView — permanent NavigationStack root, never torn down)
-├── [Sheet] Queue (QueueSheetView)
+├── [Sheet] Queue (QueueSheetView)            ← expanded-row gear opens Podcast Settings (replaces this sheet)
 ├── [Sheet] Sleep Timer (SleepTimerSheetView)
 ├── [Sheet] Audio Controls (AudioControlsSheetView)
 ├── [Sheet] Episode Share (EpisodeShareSheet)
@@ -56,6 +57,8 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
     ├── Discover (DiscoverView — pushed page)         ← + button (also top Menu item)
     │   ├── Podcast Detail (PodcastDetailView)
     │   ├── Top Episodes (TopEpisodesView)             ← "See All" on the Top Episodes hero
+    │   │   └── Podcast Detail (PodcastDetailView)
+    │   ├── Top Podcasts (TopPodcastsView)             ← "See All" on the first Top Podcasts hero
     │   │   └── Podcast Detail (PodcastDetailView)
     │   └── [Sheet] Podcast Search (PodcastSearchView) ← only entry point to Search
     │       ├── Podcast Detail (PodcastDetailView)

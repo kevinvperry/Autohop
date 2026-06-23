@@ -17,7 +17,10 @@ import UIKit
 // artwork of any episode newly added to the queue (2.5 s, gated on
 // isPlayerVisible). Hosts the sheets: AudioControlsSheetView
 // (speed/trim/boost), Sleep Timer, Queue, Episode Share, archive
-// confirmation. Video episodes embed the AVPlayer-backed
+// confirmation, and Podcast Settings (SubscriptionSettingsView) — the latter is
+// opened from a Queue row's expanded gear: the Queue sheet dismisses and the
+// Settings sheet opens in its place via the queue sheet's onDismiss. Video
+// episodes embed the AVPlayer-backed
 // NativeVideoPlayerView with full-screen + PiP and landscape unlock via
 // VideoOrientationController. Scrubber uses local sliderValue + isSeeking so
 // engine ticks don't fight the user's drag. Also manages the
@@ -34,11 +37,21 @@ import UIKit
 
 // MARK: - Root player
 
+/// Identifiable wrapper so the Queue's "open Podcast Settings" gear shortcut can
+/// drive a `.sheet(item:)` — a bare `UUID` is not Identifiable.
+private struct PodcastSettingsRoute: Identifiable {
+    let id: UUID
+}
+
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
     @State private var selectedPanel = 0
     @State private var showMenu = false
     @State private var showQueue = false
+    // Staged by the Queue sheet's gear shortcut, consumed on Queue dismissal to
+    // open that podcast's Settings in the Queue's place ("replace the queue").
+    @State private var queueRequestedSettingsID: UUID?
+    @State private var podcastSettingsRoute: PodcastSettingsRoute?
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
     @State private var showAudioControlMenu = false
@@ -138,7 +151,26 @@ struct PlayerView: View {
             }
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
-        .sheet(isPresented: $showQueue) { QueueSheetView() }
+        .sheet(isPresented: $showQueue, onDismiss: {
+            // "Replace the queue": if the gear shortcut was tapped, open that
+            // podcast's Settings only after the Queue sheet has fully dismissed —
+            // presenting during dismissal would be dropped by UIKit.
+            if let id = queueRequestedSettingsID {
+                queueRequestedSettingsID = nil
+                podcastSettingsRoute = PodcastSettingsRoute(id: id)
+            }
+        }) {
+            QueueSheetView(onOpenPodcastSettings: { subscriptionID in
+                queueRequestedSettingsID = subscriptionID
+                showQueue = false
+            })
+        }
+        .sheet(item: $podcastSettingsRoute) { route in
+            NavigationStack {
+                SubscriptionSettingsView(subscriptionID: route.id)
+            }
+            .environmentObject(appState)
+        }
         .background {
             if isVideoEpisode, let videoPlayer = appState.currentVideoPlayer {
                 VideoPictureInPictureHost(player: videoPlayer, startToken: pictureInPictureStartToken)
@@ -1088,7 +1120,7 @@ struct PlayerView: View {
     private func detailsMetaGrid(ep: Episode, sub: Subscription?) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             if let date = ep.publishedAt {
-                metaCard("Published", relativePublishedLabel(date))
+                metaCard("Published", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
             }
             if let dur = ep.durationSeconds {

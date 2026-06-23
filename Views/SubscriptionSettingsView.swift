@@ -866,7 +866,7 @@ struct EpisodeDetailView: View {
     private func metaGridContent(sub: Subscription, ep: Episode) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             if let date = ep.publishedAt {
-                metaCard("Published", relativePublishedLabel(date))
+                metaCard("Published", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
             }
             if let duration = ep.durationSeconds {

@@ -206,8 +206,16 @@ extension View {
 
 // MARK: - Meta card date formatting
 //
-// Shared by the "Published" and "Released Time" meta cards on the Player Details
-// panel and the Episode Detail page, so both grids stay in sync.
+// The Player Details + Podcast Settings meta-card grid splits a single publishedAt
+// into TWO complementary cards:
+//   • "Published" → relativePublishedDateLabel — which DAY (Today / Yesterday /
+//     "N Days Ago" up to 6 / then exact date).
+//   • "Released"  → relativeReleasedLabel — the TIME (relative under 24h, actual
+//     clock time at 24h+).
+// relativePublishedLabel below is a SEPARATE, time-tiered formatter used by every
+// episode LIST (Queue / Discover / Podcast Detail / etc.) for consistency — do NOT
+// conflate it with the meta-card "Published" formatter (that's why a same-day
+// episode reads "11 hours ago" in a list but "Today" on the Published card).
 
 /// Tiered relative publish label used across every episode list for consistency:
 /// "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" / an
@@ -234,9 +242,43 @@ func relativePublishedLabel(_ date: Date) -> String {
         : date.formatted(.dateTime.day().month(.abbreviated).year())
 }
 
-/// Elapsed time since publish: "10 minutes ago", "1 hour ago", "2 days ago", "8 months ago".
+/// Date-bucketed publish label for the "Published" META CARD (Player Details +
+/// Podcast Settings). Distinct from relativePublishedLabel above (the shared
+/// episode-LIST formatter, which is time-tiered and shows "11 hours ago" for a
+/// same-day episode). This answers "which day?": Today / Yesterday / "N Days Ago"
+/// up to 6 days / then an abbreviated exact date (year only when not the current
+/// year, e.g. "12 Jun" / "28 Dec 2024").
+func relativePublishedDateLabel(_ date: Date) -> String {
+    let now = Date()
+    let calendar = Calendar.current
+    if calendar.isDateInToday(date) { return "Today" }
+    if calendar.isDateInYesterday(date) { return "Yesterday" }
+    let days = calendar.dateComponents(
+        [.day],
+        from: calendar.startOfDay(for: date),
+        to: calendar.startOfDay(for: now)
+    ).day ?? 0
+    if (2...6).contains(days) { return "\(days) Days Ago" }
+    let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+    return sameYear
+        ? date.formatted(.dateTime.day().month(.abbreviated))
+        : date.formatted(.dateTime.day().month(.abbreviated).year())
+}
+
+/// Release-TIME label for the "Released" meta card. Under 24h: relative elapsed
+/// time ("Just now" / "10 minutes ago" / "2 hours ago"). 24h or older: the actual
+/// clock time of release ("6:54 AM") — the time-of-day complement to the
+/// date-bucketed "Published" card (relativePublishedDateLabel).
 func relativeReleasedLabel(_ date: Date) -> String {
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .full
-    return formatter.localizedString(for: date, relativeTo: Date())
+    let elapsed = Date().timeIntervalSince(date)
+    if elapsed < 60 { return "Just now" }
+    if elapsed < 3600 {
+        let mins = Int(elapsed / 60)
+        return "\(mins) minute\(mins == 1 ? "" : "s") ago"
+    }
+    if elapsed < 86_400 {
+        let hours = Int(elapsed / 3600)
+        return "\(hours) hour\(hours == 1 ? "" : "s") ago"
+    }
+    return date.formatted(.dateTime.hour().minute())
 }

@@ -2660,7 +2660,7 @@ final class AppState: ObservableObject {
             "trigger": FeedRefreshTrigger.backgroundRefreshTask.rawValue,
             "executionContext": FeedRefreshExecutionContext.backgroundRefreshTask.rawValue
         ])
-        await refreshSubscriptions(
+        return await refreshSubscriptions(
             reason: "background",
             trigger: .backgroundRefreshTask,
             executionContext: .backgroundRefreshTask,

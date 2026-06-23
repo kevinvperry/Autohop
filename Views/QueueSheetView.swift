@@ -7,6 +7,13 @@ import SwiftUI
 // refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
 // leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
 // Play Next (blue) / Play Last (orange) overrides.
+// EXPANDED ROW: tapping an episode title toggles expandedEpisodeID, unclamping
+// the title and revealing the full plain-text description, plus a small purple
+// circular glass gear (gearshape, matching PodcastDetailView.refreshButton) at
+// the bottom-right that opens that podcast's Settings. The gear calls
+// onOpenPodcastSettings(subscriptionID); the presenter (PlayerView) dismisses
+// this Queue sheet and presents SubscriptionSettingsView in its place
+// ("replace the queue").
 // ACTION ANIMATIONS: the List carries `.animation(value: downloadedQueue.map(\.id))`
 // so any order/membership change glides rows to their new slots. performMove
 // (Play Next/Last) fires a light haptic, pops the row + flashes a directional
@@ -36,6 +43,11 @@ struct QueueSheetView: View {
     @State private var moveHapticTrigger = 0
     @State private var archiveHapticTrigger = 0
     @State private var expandedEpisodeID: UUID? = nil
+
+    /// Tapped-gear shortcut from an expanded row. The presenter (PlayerView) uses
+    /// this to dismiss the Queue sheet and open that podcast's Settings in its
+    /// place ("replace the queue"). Optional so previews/other callers still work.
+    var onOpenPodcastSettings: ((UUID) -> Void)? = nil
 
     private let logger = AppLogger.shared
 
@@ -121,18 +133,45 @@ struct QueueSheetView: View {
                                     }
                                 }
 
-                                if isExpanded, let raw = episode.description {
-                                    let plain = HTMLDescriptionText.plainText(from: raw)
-                                    if !plain.isEmpty {
-                                        Text(sentenceParagraphs(plain))
-                                            .font(.caption)
-                                            .fontWeight(.regular)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(15)
-                                            .padding(.top, 8)
-                                            // indent to artwork left edge: index (20) + HStack spacing (12)
-                                            .padding(.leading, 32)
-                                            .transition(.opacity.combined(with: .move(edge: .top)))
+                                if isExpanded {
+                                    if let raw = episode.description {
+                                        let plain = HTMLDescriptionText.plainText(from: raw)
+                                        if !plain.isEmpty {
+                                            Text(sentenceParagraphs(plain))
+                                                .font(.caption)
+                                                .fontWeight(.regular)
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(15)
+                                                .padding(.top, 8)
+                                                // indent to artwork left edge: index (20) + HStack spacing (12)
+                                                .padding(.leading, 32)
+                                                .transition(.opacity.combined(with: .move(edge: .top)))
+                                        }
+                                    }
+                                    // Bottom-right shortcut into this podcast's Settings. Small purple
+                                    // circular glass gear, matching PodcastDetailView.refreshButton.
+                                    // Shown only for a real subscription (queue rows always have one).
+                                    if sub != nil {
+                                        HStack {
+                                            Spacer()
+                                            Button {
+                                                onOpenPodcastSettings?(episode.subscriptionID)
+                                            } label: {
+                                                let gearIcon = Image(systemName: "gearshape")
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundStyle(.purple)
+                                                    .frame(width: 30, height: 30)
+                                                if #available(iOS 26, *) {
+                                                    gearIcon.glassEffect(in: Circle())
+                                                } else {
+                                                    gearIcon.background(.ultraThinMaterial, in: Circle())
+                                                }
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel("Podcast settings")
+                                        }
+                                        .padding(.top, 8)
+                                        .transition(.opacity.combined(with: .move(edge: .top)))
                                     }
                                 }
                             }
