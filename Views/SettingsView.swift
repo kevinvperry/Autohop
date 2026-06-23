@@ -13,8 +13,12 @@ import UniformTypeIdentifiers
 // PlaybackControlsCard + start/end skip steppers; writes
 // AppSettings.defaultPlaybackPreference, never touches existing subs), Subscriptions
 // (manage podcasts, add RSS, OPML import/export — Listening History moved to
-// the Menu sheet, NavRules: one path per page), Storage
-// (downloaded episode count), About (acknowledgements, version — tapping the
+// the Menu sheet, OPML imports consume AppState.OPMLImportSummary so successful
+// imports can show the same count toast as Welcome/Podcasts, NavRules: one path
+// per page), Storage
+// (downloaded episode count; byte total is calculated by SettingsStorageUsage
+// off-main and returned as one Int64 to keep Swift 6 concurrency checks clean),
+// About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
 // All section footer copy here must stay in sync with FEATURES.md §15.
 // Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
@@ -85,7 +89,10 @@ struct SettingsView: View {
             guard let url = (try? result.get())?.first else { return }
             isImporting = true
             Task {
-                await appState.importOPML(from: url)
+                let summary = await appState.importOPML(from: url)
+                if summary.imported > 0 {
+                    appState.onboardingToast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
+                }
                 isImporting = false
             }
         }
@@ -525,30 +532,8 @@ struct SettingsView: View {
         .listRowBackground(cardBackground)
         .onAppear {
             Task.detached(priority: .utility) {
-                let fm = FileManager.default
-                guard let appSupport = try? fm.url(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask,
-                    appropriateFor: nil,
-                    create: false
-                ) else {
-                    await MainActor.run { totalDownloadedBytes = 0 }
-                    return
-                }
-                let downloadsDir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
-                let keys: [URLResourceKey] = [.fileSizeKey, .isRegularFileKey]
-                guard let enumerator = fm.enumerator(at: downloadsDir, includingPropertiesForKeys: keys) else {
-                    await MainActor.run { totalDownloadedBytes = 0 }
-                    return
-                }
-                var total: Int64 = 0
-                for case let fileURL as URL in enumerator {
-                    guard let res = try? fileURL.resourceValues(forKeys: Set(keys)),
-                          res.isRegularFile == true,
-                          let size = res.fileSize else { continue }
-                    total += Int64(size)
-                }
-                await MainActor.run { totalDownloadedBytes = total }
+                let bytes = SettingsStorageUsage.downloadedBytes()
+                await MainActor.run { totalDownloadedBytes = bytes }
             }
         }
     }
@@ -944,6 +929,38 @@ private struct HistoryStatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .glassCard(cornerRadius: 12)
+    }
+}
+
+private enum SettingsStorageUsage {
+    static func downloadedBytes() -> Int64 {
+        let fileManager = FileManager.default
+        guard let appSupport = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            return 0
+        }
+
+        let downloadsDir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey]
+        guard let enumerator = fileManager.enumerator(
+            at: downloadsDir,
+            includingPropertiesForKeys: Array(keys)
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let resources = try? fileURL.resourceValues(forKeys: keys),
+                  resources.isRegularFile == true,
+                  let size = resources.fileSize else { continue }
+            total += Int64(size)
+        }
+        return total
     }
 }
 

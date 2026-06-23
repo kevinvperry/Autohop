@@ -61,6 +61,10 @@ import Foundation
 //  - Plays local files only (download-first); never streams.
 //  - onTimeUpdate ticks ~0.5 s on both paths — AppState derives stats,
 //    history, sleep timer, and position persistence from this single tick.
+//  - Video Vocal Boost stays on AVPlayer via an audioMix; track lookup uses
+//    async `loadTracks(withMediaType:)`, and live setting changes apply only if
+//    the same player item + preference level are still current when loading
+//    finishes.
 //  - Engine-path time is tracked in FILE seconds via .dataRendered callbacks
 //    (engineCurrentFileSeconds); trimmed frames mean engine time ≠ wall time.
 //  - setVolume() is the sleep-timer fade hook on whichever path is active.
@@ -259,7 +263,10 @@ final class PlaybackEngine: PlaybackControlling {
             let asset = AVURLAsset(url: localFileURL)
             let loadedDuration = try await asset.load(.duration).seconds
             let item = AVPlayerItem(asset: asset)
-            applyVocalBoostMix(to: item, asset: asset, level: preference.vocalBoostLevel)
+            let mix = await vocalBoostMix(for: asset, level: preference.vocalBoostLevel)
+            await MainActor.run {
+                item.audioMix = mix
+            }
 
             let newPlayer = AVPlayer(playerItem: item)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
@@ -482,7 +489,16 @@ final class PlaybackEngine: PlaybackControlling {
         } else if let item = player?.currentItem,
                   let asset = item.asset as? AVURLAsset {
             // Video stays on AVPlayer: apply boost as an audioMix gain (no engine chain available).
-            applyVocalBoostMix(to: item, asset: asset, level: level)
+            Task { [weak self, weak item] in
+                guard let self, let item else { return }
+                let mix = await self.vocalBoostMix(for: asset, level: level)
+                await MainActor.run { [weak self, weak item] in
+                    guard let self, let item,
+                          self.player?.currentItem === item,
+                          self.currentPreference?.vocalBoostLevel == level else { return }
+                    item.audioMix = mix
+                }
+            }
         }
         logger.info("playback.vocalBoost", "Vocal Boost preference updated", metadata: [
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
@@ -1057,20 +1073,28 @@ final class PlaybackEngine: PlaybackControlling {
         return AVAudioUnitEffect(audioComponentDescription: desc)
     }
 
-    private func applyVocalBoostMix(to item: AVPlayerItem, asset: AVURLAsset, level: VocalBoostLevel) {
-        guard level.outputGain != 1.0 else {
-            item.audioMix = nil
-            return
+    private func vocalBoostMix(for asset: AVURLAsset, level: VocalBoostLevel) async -> AVAudioMix? {
+        guard level.outputGain != 1.0 else { return nil }
+
+        let audioTracks: [AVAssetTrack]
+        do {
+            audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        } catch {
+            logger.warning("playback.vocalBoostMixFailed", "Could not load video audio tracks for Vocal Boost", metadata: [
+                "level": level.title,
+                "error": String(describing: error)
+            ])
+            return nil
         }
-        let audioTracks = asset.tracks(withMediaType: .audio)
-        guard !audioTracks.isEmpty else { return }
+
+        guard !audioTracks.isEmpty else { return nil }
         let mix = AVMutableAudioMix()
         mix.inputParameters = audioTracks.map { track in
             let params = AVMutableAudioMixInputParameters(track: track)
             params.setVolume(level.outputGain, at: .zero)
             return params
         }
-        item.audioMix = mix
+        return mix
     }
 
     // MARK: - Audio session

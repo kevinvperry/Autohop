@@ -332,7 +332,7 @@ Uses an RMS-based silence detection algorithm ported from Pocket Casts (`Silence
 
 ### 5.3 Vocal Boost
 
-**Per-podcast setting.** Stored in `PlaybackPreference.vocalBoostLevel`. Applied via AVAudioEngine on the engine path. For video or when both Vocal Boost and Trim Silence are off, AVPlayer is used instead (no engine path).
+**Per-podcast setting.** Stored in `PlaybackPreference.vocalBoostLevel`. Audio episodes use the AVAudioEngine processing chain when Vocal Boost is on. Video episodes remain on AVPlayer and apply Vocal Boost as an `AVAudioMix` gain over the loaded audio tracks, so video playback never switches to the engine path.
 
 All non-off levels enable AVAudioSession's spoken audio mode. The processing chain has three stages — high-pass filter, dynamic compressor, peak limiter — each of which is active or bypassed depending on the level.
 
@@ -455,9 +455,9 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Support:** Full audio and video podcast support. `Episode.mediaKind` is either `.audio` or `.video`.
 
-**Playback path:** Video episodes always use AVPlayer (the `VideoPlayer` SwiftUI view requires it). Vocal Boost and Trim Silence are not available for video episodes — the engine path is audio-only.
+**Playback path:** Video episodes always use AVPlayer (the video UI requires it). Vocal Boost can still be applied to video as an AVPlayer `audioMix`; Trim Silence is audio-only because it depends on the AVAudioEngine buffer-processing path.
 
-**Landscape:** Full-screen video unlocks landscape orientation via `VideoOrientationController`.
+**Landscape:** Full-screen video unlocks landscape orientation via `VideoOrientationController`, which uses the iOS scene-geometry orientation APIs.
 
 **Chapters:** Chapter navigation works on video episodes.
 
@@ -834,7 +834,7 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 |---|---|---|
 | Manage podcasts | Button | Closes the Menu sheet to reveal the Priority Stack (PodcastsView) — the home page that always sits beneath the Menu — as a full page, never inside the sheet. Used to reorder, add, or remove subscriptions. |
 | Add RSS Feed | Navigation link | Opens the Add RSS Feed page to subscribe by entering a direct feed URL. |
-| Import OPML | Button | Opens the system file picker to import an OPML file. See [Section 13](#13-opml-import--export). |
+| Import OPML | Button | Opens the system file picker to import an OPML file and reports the imported-show count when new subscriptions are added. See [Section 13](#13-opml-import--export). |
 | Export OPML | Button | Exports the current subscription list as an OPML file. Disabled when the subscription list is empty. |
 
 (Listening History is reached from the Menu, not this section.)

@@ -14,7 +14,9 @@ import Foundation
 // queue's lifetime (lazy appendHandle()) and reused per line instead of paying
 // open+seek+close per entry. It is closed via closeHandle() before rotateIfNeeded
 // moves the file and before clear() removes it, so the next write reopens the
-// fresh log; all handle access stays on `queue`, so no lock is required.
+// fresh log; all handle access stays on `queue`, so no lock is required. If
+// opening succeeds but seek-to-end fails, appendHandle() closes the handle and
+// returns nil rather than risking a write at the wrong offset.
 final class AppLogger: ObservableObject {
     static let shared = AppLogger()
 
@@ -141,7 +143,12 @@ final class AppLogger: ObservableObject {
             fileManager.createFile(atPath: logFileURL.path, contents: nil)
         }
         guard let handle = try? FileHandle(forWritingTo: logFileURL) else { return nil }
-        try? handle.seekToEnd()
+        do {
+            try handle.seekToEnd()
+        } catch {
+            try? handle.close()
+            return nil
+        }
         fileHandle = handle
         return handle
     }

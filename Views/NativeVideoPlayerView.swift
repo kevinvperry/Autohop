@@ -6,7 +6,9 @@ import SwiftUI
 // Picture) around PlaybackEngine's AVPlayer. VideoOrientationController is the
 // global orientation gate — portrait-only app-wide, unlocked to landscape
 // only while full-screen video is active (queried by AppDelegate's
-// supportedInterfaceOrientationsFor).
+// supportedInterfaceOrientationsFor). Orientation changes use the iOS 16+
+// scene geometry API plus setNeedsUpdateOfSupportedInterfaceOrientations() on
+// the active controller; do not reintroduce deprecated static rotation calls.
 enum VideoOrientationController {
     static var supportedOrientations: UIInterfaceOrientationMask = .portrait
 
@@ -21,11 +23,44 @@ enum VideoOrientationController {
     }
 
     private static func requestOrientation(_ orientation: UIInterfaceOrientation) {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        if #available(iOS 16.0, *) {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask(for: orientation)))
+        guard let scene = activeWindowScene else { return }
+        notifySupportedOrientationsChanged(in: scene)
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask(for: orientation))) { error in
+            AppLogger.shared.warning("video.orientationUpdateFailed", "Could not update video orientation", metadata: [
+                "orientation": "\(orientation.rawValue)",
+                "error": String(describing: error)
+            ])
         }
-        UIViewController.attemptRotationToDeviceOrientation()
+    }
+
+    private static var activeWindowScene: UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    }
+
+    private static func notifySupportedOrientationsChanged(in scene: UIWindowScene) {
+        let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController
+            ?? scene.windows.first?.rootViewController
+        root?.setNeedsUpdateOfSupportedInterfaceOrientations()
+
+        if let root,
+           let top = topViewController(from: root),
+           top !== root {
+            top.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+    }
+
+    private static func topViewController(from controller: UIViewController?) -> UIViewController? {
+        if let navigation = controller as? UINavigationController {
+            return topViewController(from: navigation.visibleViewController)
+        }
+        if let tab = controller as? UITabBarController {
+            return topViewController(from: tab.selectedViewController)
+        }
+        if let presented = controller?.presentedViewController {
+            return topViewController(from: presented)
+        }
+        return controller
     }
 
     private static func mask(for orientation: UIInterfaceOrientation) -> UIInterfaceOrientationMask {

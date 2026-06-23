@@ -20,7 +20,9 @@ import SwiftUI
 // toolbar shows Show Settings. Inactive subscriptions are still real
 // subscriptions: they show Subscribed/Unsubscribe, Settings, notifications, and
 // manual Refresh Feed; only automatic/feed-all refresh skips them. The share
-// button and mini-player bar are always present. Episode rows pass 44 pt target
+// button and mini-player bar are always present. First-open search previews
+// create a browse subscription after feed load; failures are logged as
+// podcast.previewCreateFailed instead of being silently swallowed. Episode rows pass 44 pt target
 // sizes into CachedArtworkImage and lazily prefetch artwork around the visible
 // row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
 // prefetches are cancelled so long feeds with many distinct episode images do
@@ -148,10 +150,17 @@ struct PodcastDetailView: View {
                 // First visit to a search result: fetch the feed, create the preview.
                 await viewModel.load()
                 if let feed = viewModel.loadedFeed {
-                    try? appState.subscriptionStore.addPreviewSubscription(
-                        parsedFeed: feed,
-                        feedURL: url
-                    )
+                    do {
+                        try appState.subscriptionStore.addPreviewSubscription(
+                            parsedFeed: feed,
+                            feedURL: url
+                        )
+                    } catch {
+                        AppLogger.shared.warning("podcast.previewCreateFailed", "Could not create podcast preview", metadata: [
+                            "feedURL": url.absoluteString,
+                            "error": String(describing: error)
+                        ])
+                    }
                 }
             }
         }
