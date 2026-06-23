@@ -13,7 +13,10 @@ download/media state never syncs.
 June 2026 diagnostic repair context lives here too: collision quarantine,
 legacy pending-save retirement, full-record namespace migration, and recovery
 from legacy unprefixed subscription records after the sparse-record data-loss
-regression.
+regression. Non-sync diagnostic repairs from the same cycle are summarized in
+`FEATURES.md`: Release Radar protected background refresh slots, rolling
+one-item feed download cleanup, main-thread watchdog inactive-gap
+classification, and AirPods/Speaker route stabilization.
 -->
 
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
@@ -211,3 +214,19 @@ events (`sync.pushFailed`, `sync.pushQuarantined`, `sync.dbWriteFailed`,
 `sync.accountStatusFailed`) use `AppLogger.error(..., alwaysPersist: true)`, so
 they are recorded even when the Diagnostics toggle is off; INFO/WARN remain
 gated. The log file stays capped at ~1 MB with rotation.
+
+Related diagnostic keys outside CloudKit:
+- `feed.refreshAll.plan`, `feed.refreshAll.itemStart`,
+  `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and
+  `feed.refreshAll.cancelled` describe Release Radar selection, including
+  protected background candidates for pre-window, active-window, and
+  missed-release feeds.
+- `feed.cleanupSupersededLatest` records when a rolling one-item feed replaces
+  its latest episode and Autohop cancels the stale pending/in-progress download.
+- `ui.mainThreadHang` / `ui.mainThreadHangRecovered` remain visible-scene UI
+  freeze signals; `ui.watchdogInactiveGap` is used for short watchdog delays
+  while the scene is inactive/backgrounded so those gaps are not mistaken for
+  user-visible freezes.
+- `audio.routeLossPending`, `audio.routeLossCancelled`,
+  `audio.routeLossConfirmed`, `audio.interruptionDeferred`, and
+  `engine.routeRestartScheduled` trace AirPods/Speaker route stabilization.

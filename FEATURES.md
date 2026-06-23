@@ -11,14 +11,17 @@ and lazy image-loading system: source-byte disk cache, downsampled memory
 variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
 Section 15.1 documents Release Radar's learned scheduling, foreground/background
-caps, deferred backlog draining, cancellation checkpoints, and diagnostic fields.
+caps, protected background slots for daily/active/missed release windows,
+deferred backlog draining, cancellation checkpoints, and diagnostic fields.
 Section 7/15.1 documents that feed refresh schedules auto-downloads without
-waiting for media transfer completion. Section 15.7 documents CloudKit
-type-namespaced record IDs, collision containment, full-record namespace
-migration, and legacy subscription settings recovery. Section 15.9 documents
-diagnostic resource snapshots (`footprintMB`) and main-thread hang context.
-These notes are the user/product-facing counterpart to the June 2026 diagnostic
-repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
+waiting for media transfer completion, including stale-download cancellation for
+rolling one-item feeds. Section 15.7 documents CloudKit type-namespaced record
+IDs, collision containment, full-record namespace migration, and legacy
+subscription settings recovery. Section 15.9 documents diagnostic resource
+snapshots (`footprintMB`), watchdog inactive-gap classification, and main-thread
+hang context. Playback route-change stability is covered in §4/§15.9. These
+notes are the user/product-facing counterpart to the June 2026 diagnostic repair
+work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -279,7 +282,7 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 **Audio row (below the transport controls):** Sound Settings · Sleep Timer · AirPlay route picker (shows the current output name) · Share · Archive.
 
-**Audio route changes:** Removing AirPods/headphones still pauses playback and requires deliberate user action to resume. Active output transitions while the AVAudioEngine path is playing (for example AirPods ↔ Speaker route changes that do not represent device removal) proactively restart the engine buffer loop from the current playback position, with a short debounce, so the render watchdog is less likely to be the first recovery path.
+**Audio route changes:** Removing AirPods/headphones still pauses playback and requires deliberate user action to resume, but Autohop waits briefly to confirm the route loss before pausing so AirPods/Speaker transition storms do not immediately stop playback. If a new or non-built-in output appears during that confirmation window, the pending pause is cancelled. Active output transitions on the AVAudioEngine path schedule a short delayed buffer-loop restart from the current playback position, so the route can settle before the engine rebuilds and the render watchdog is less likely to be the first recovery path.
 
 **Share:** Opens `EpisodeShareSheet` — previews a rendered share card (episode artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL.
 
@@ -386,7 +389,7 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Download-first playback:** Autohop only plays files already on the device — no streaming. Background downloads keep the queue stocked automatically as new episodes are fetched.
 
-**Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional.
+**Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional. For rolling one-item feeds, such as hourly news bulletins, a newly discovered latest episode cancels a stale in-progress download for the previous latest episode immediately instead of waiting for app-start orphan cleanup.
 
 **Download states:** `notDownloaded` → `queued` → `downloading` → `downloaded` / `failed`
 
@@ -738,15 +741,15 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 |---|---|---|
 | `hourly` | 3 minutes before the learned minute. | 2 minutes before to 15 minutes after the learned minute. |
 | `burst` | 10 minutes before the learned burst start. | Learned burst start through learned burst end + 30 minutes. |
-| `dailyWeekdays` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 45 minutes. |
-| `weekly` | 20 minutes before the window. | Typical time - 10 minutes through typical time + 120 minutes. |
-| `multiSlot` | 10 minutes before the window. | Typical time - 5 minutes through typical time + 60 minutes. |
+| `dailyWeekdays` | 30 minutes before the learned typical time. | Typical time - 10 minutes through typical time + 75 minutes. |
+| `weekly` | 30 minutes before the learned typical time. | Typical time - 10 minutes through typical time + 120 minutes. |
+| `multiSlot` | 15 minutes before the learned typical time. | Typical time - 5 minutes through typical time + 60 minutes. |
 
-If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence until 12 hours late, then to a 30 minute–2 hour cadence. Missed-release urgency expires after 6 post-window empty checks or 6 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. This prevents one late episode from being missed while avoiding indefinite high-frequency polling.
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. This prevents one late episode from being missed while avoiding indefinite high-frequency polling.
 
 **One-item hourly feeds:** Feeds that publish hourly but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, the feed can be profiled as `hourly` and checked around the learned minute instead of every hour all day. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
-**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly and burst feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed.
+**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly, burst, and daily-weekday feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed. Background cycles protect 6 of their 8 slots for `preWindow`, `activeWindow`, and `missedRelease` candidates before filling remaining slots with ordinary due/backlog work; this is specifically intended to help daily one-episode shows that publish around a known time.
 
 **Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
 
@@ -760,7 +763,7 @@ If the expected episode has not appeared by the end of its learned window, the f
 |---|---|
 | Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. It does not wait for any scheduled auto-download to complete. |
 | Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. Auto-downloads run separately after each successful feed merge. |
-| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
+| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle, with 6 protected slots reserved for Release Radar windows (`preWindow`, `activeWindow`, `missedRelease`) before ordinary due feeds. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
 
 **Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
 
@@ -868,7 +871,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
-| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, and `resources.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory; main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, and download state. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, and download state; watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses and delayed AVAudioEngine restarts. |
 
 ---
 
@@ -1095,10 +1098,11 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | defaultPublishInterval | 6 hours |
 | maxRecheckInterval | 24 hours |
 | windowOpenFraction | 0.75 |
-| missedReleaseEmptyFetchLimit | 6 empty post-window checks |
-| missedReleaseMaxUrgencyAge | 6 hours |
+| missedReleaseEmptyFetchLimit | 10 empty post-window checks |
+| missedReleaseMaxUrgencyAge | 8 hours |
 | foregroundRefreshFeedLimit | 12 due feeds |
 | backgroundRefreshFeedLimit | 8 due feeds |
+| backgroundReleaseRadarReservedSlots | 6 protected slots for pre-window / active-window / missed-release feeds |
 | refreshDeferralMaxScoreBoost | 40 points |
 
 ### `Subscription.init` defaults

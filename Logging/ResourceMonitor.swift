@@ -9,7 +9,13 @@ import Darwin.Mach
 // timer while diagnostics are enabled. The main-thread watchdog reuses the same
 // lightweight context provider only when a hang/recovery is detected, so hang
 // bursts include app state without doing extra work on every 100 ms watchdog
-// tick.
+// tick. The watchdog must keep only one outstanding main-queue ping at a time:
+// queueing a fresh ping while the prior one is blocked creates a backlog that
+// can look like a cluster of repeated UI hangs after the main thread recovers.
+// Short watchdog delays while the app scene is inactive/backgrounded are logged
+// separately from visible UI hangs. The watchdog's timing state lives in the
+// private MainThreadWatchdog helper on its serial queue; ResourceMonitor stays
+// @MainActor for UIKit/device snapshot work.
 //
 // IMPORTANT: `footprintMB` is the real iOS physical footprint
 // (task_vm_info.phys_footprint) and intentionally replaced the old virtual
@@ -47,65 +53,36 @@ struct ResourceSnapshot {
     }
 }
 
-@MainActor
-final class ResourceMonitor {
-    static let shared = ResourceMonitor()
-
-    private let logger = AppLogger.shared
-    private var samplingTask: Task<Void, Never>?
-    private var lastSnapshotTime: Date?
-    private let minimumManualSnapshotInterval: TimeInterval = 8
+private final class MainThreadWatchdog: @unchecked Sendable {
+    private let logger: AppLogger
     private var contextProvider: (@MainActor () -> [String: String])?
 
-    // Watchdog state — accessed only from watchdogQueue
+    // Watchdog state — accessed only from watchdogQueue.
     private let watchdogQueue = DispatchQueue(label: "com.autohop.watchdog", qos: .utility)
     private var watchdogPingTime: Double = 0       // CFAbsoluteTime of last ping sent
     private var watchdogPongTime: Double = 0       // CFAbsoluteTime of last pong received from main
     private var watchdogHanging: Bool = false      // true while a hang is in progress
+    private var watchdogAwaitingPong: Bool = false // true while a main-queue ping is outstanding
+    private var watchdogLastInactiveGapLogTime: Double = 0
     private let watchdogPollInterval: TimeInterval = 0.1
     private let watchdogHangThreshold: TimeInterval = 0.25
+    private let watchdogInactiveGapLogInterval: TimeInterval = 5
     /// Gaps this long are app suspension (background, lock screen), not main-thread
     /// hangs — the watchdog simply wasn't running. Logged as info, not a warning.
     private let watchdogSuspensionThreshold: TimeInterval = 30
 
-    private init() {
-        UIDevice.current.isBatteryMonitoringEnabled = true
+    init(logger: AppLogger) {
+        self.logger = logger
     }
 
-    func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
-        guard samplingTask == nil else { return }
-        contextProvider = context
-        logger.info("resources.monitorStart", "Resource monitor started")
-        samplingTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                self?.logSnapshot(reason: "periodic", context: context(), force: true)
-                try? await Task.sleep(for: .seconds(60))
-            }
-        }
-        startWatchdog()
-    }
-
-    func logSnapshot(reason: String, context: [String: String] = [:], force: Bool = false) {
-        if !force,
-           let lastSnapshotTime,
-           Date().timeIntervalSince(lastSnapshotTime) < minimumManualSnapshotInterval {
-            return
-        }
-
-        lastSnapshotTime = Date()
-        var metadata = snapshot().metadata
-        metadata["reason"] = reason
-        context.forEach { metadata[$0.key] = $0.value }
-        logger.info("resources.snapshot", "Resource snapshot", metadata: metadata)
-    }
-
-    // MARK: - Main Thread Watchdog
-
-    private func startWatchdog() {
+    func start(contextProvider: @escaping @MainActor () -> [String: String]) {
+        self.contextProvider = contextProvider
         let now = CFAbsoluteTimeGetCurrent()
         watchdogQueue.async { [weak self] in
             self?.watchdogPingTime = now
             self?.watchdogPongTime = now
+            self?.watchdogAwaitingPong = false
+            self?.watchdogLastInactiveGapLogTime = 0
         }
         scheduleWatchdogTick()
     }
@@ -117,16 +94,28 @@ final class ResourceMonitor {
     }
 
     private func watchdogTick() {
+        guard !watchdogAwaitingPong else {
+            scheduleWatchdogTick()
+            return
+        }
+
         let pingTime = CFAbsoluteTimeGetCurrent()
         watchdogPingTime = pingTime
+        watchdogAwaitingPong = true
 
         DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
             let elapsed = CFAbsoluteTimeGetCurrent() - pingTime
-            let context = elapsed >= (self?.watchdogHangThreshold ?? 0)
-                ? self?.contextProvider?() ?? [:]
-                : [:]
-            self?.watchdogQueue.async {
-                self?.watchdogPong(pingTime: pingTime, elapsed: elapsed, context: context)
+            let context: [String: String]
+            if elapsed >= self.watchdogHangThreshold {
+                context = MainActor.assumeIsolated {
+                    self.contextProvider?() ?? [:]
+                }
+            } else {
+                context = [:]
+            }
+            self.watchdogQueue.async {
+                self.watchdogPong(pingTime: pingTime, elapsed: elapsed, context: context)
             }
         }
 
@@ -135,13 +124,27 @@ final class ResourceMonitor {
 
     private func watchdogPong(pingTime: Double, elapsed: TimeInterval, context: [String: String]) {
         let pongTime = CFAbsoluteTimeGetCurrent()
+        watchdogAwaitingPong = false
 
         if elapsed >= watchdogSuspensionThreshold {
             var metadata = context
             metadata["durationMs"] = "\(Int((elapsed * 1000).rounded()))"
             logger.info("ui.watchdogSuspensionGap", "Watchdog gap — app was suspended, not hung", metadata: metadata)
+            watchdogHanging = false
         } else if elapsed >= watchdogHangThreshold {
-            if !watchdogHanging {
+            if context["sceneActive"] == "false" {
+                watchdogHanging = false
+                if pongTime - watchdogLastInactiveGapLogTime >= watchdogInactiveGapLogInterval {
+                    watchdogLastInactiveGapLogTime = pongTime
+                    var metadata = context
+                    metadata["durationMs"] = "\(Int((elapsed * 1000).rounded()))"
+                    logger.info(
+                        "ui.watchdogInactiveGap",
+                        "Watchdog gap while app scene was inactive, not a visible UI hang",
+                        metadata: metadata
+                    )
+                }
+            } else if !watchdogHanging {
                 watchdogHanging = true
                 let ms = Int((elapsed * 1000).rounded())
                 var metadata = context
@@ -159,6 +162,47 @@ final class ResourceMonitor {
         }
 
         watchdogPongTime = pongTime
+    }
+}
+
+@MainActor
+final class ResourceMonitor {
+    static let shared = ResourceMonitor()
+
+    private let logger = AppLogger.shared
+    private let watchdog = MainThreadWatchdog(logger: AppLogger.shared)
+    private var samplingTask: Task<Void, Never>?
+    private var lastSnapshotTime: Date?
+    private let minimumManualSnapshotInterval: TimeInterval = 8
+
+    private init() {
+        UIDevice.current.isBatteryMonitoringEnabled = true
+    }
+
+    func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
+        guard samplingTask == nil else { return }
+        logger.info("resources.monitorStart", "Resource monitor started")
+        samplingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.logSnapshot(reason: "periodic", context: context(), force: true)
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        watchdog.start(contextProvider: context)
+    }
+
+    func logSnapshot(reason: String, context: [String: String] = [:], force: Bool = false) {
+        if !force,
+           let lastSnapshotTime,
+           Date().timeIntervalSince(lastSnapshotTime) < minimumManualSnapshotInterval {
+            return
+        }
+
+        lastSnapshotTime = Date()
+        var metadata = snapshot().metadata
+        metadata["reason"] = reason
+        context.forEach { metadata[$0.key] = $0.value }
+        logger.info("resources.snapshot", "Resource snapshot", metadata: metadata)
     }
 
     // MARK: - Device Snapshot

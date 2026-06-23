@@ -44,16 +44,20 @@ import UIKit
 //    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
 //    scheduled media transfer re-validates subscription state, browse previews,
 //    latest-episode staleness, and played/archived status before entering the
-//    bounded download queue.
+//    bounded download queue. Rolling one-item feeds also cancel stale downloads
+//    for the replaced latest item immediately, so the new bulletin/show is not
+//    blocked by a dead transfer until startup reconciliation.
 //    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
 //    Release Radar due-feed polling. They ask Models/Subscription.swift for a
 //    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
 //    only due feeds are considered, then limited foreground/background slots go
-//    to the highest-scoring feeds. Capped-out feeds are checkpointed in
-//    deferredRefreshBacklog and receive a bounded fairness boost on later cycles
-//    so long wakes are drained over multiple runs instead of hammering every
-//    overdue feed at once. Manual refresh still ignores due dates and refreshes
-//    every eligible feed.
+//    to the highest-scoring feeds. Background refresh has 8 total slots and
+//    reserves 6 of them for Release Radar pre-window/active/missed-release
+//    candidates so daily one-episode shows are checked when iOS grants only a
+//    short wake. Capped-out feeds are checkpointed in deferredRefreshBacklog and
+//    receive a bounded fairness boost on later cycles so long wakes are drained
+//    over multiple runs instead of hammering every overdue feed at once. Manual
+//    refresh still ignores due dates and refreshes every eligible feed.
 //  - Refresh diagnostics: timed/background cycles log a feed.refreshAll.plan
 //    summary plus per-feed score/profile/prediction metadata on
 //    feed.refreshAll.itemStart when the diagnostic log is enabled. Refresh logs
@@ -233,6 +237,7 @@ final class AppState: ObservableObject {
     private var suppressUpNextRefresh = false
     private var upNextRefreshTask: Task<Void, Never>?
     private var feedFailureBackoffUntil: [UUID: Date] = [:]
+    private var supersededDownloadCancellationIDs = Set<UUID>()
     private var cancellables = Set<AnyCancellable>()
     private var historyTrackingEpisodeID: UUID?
     private var historyTrackingLastTime: TimeInterval?
@@ -389,6 +394,12 @@ final class AppState: ObservableObject {
     private let defaultFeedEpisodeLimit = 50
     private let feedFailureBackoffInterval: TimeInterval = 30 * 60
     private let backgroundRefreshFeedLimit = 8
+    private let backgroundReleaseRadarReservedSlots = 6
+    private let backgroundReleaseRadarProtectedStates: Set<FeedRefreshWindowState> = [
+        .preWindow,
+        .activeWindow,
+        .missedRelease
+    ]
     private let foregroundRefreshFeedLimit = 12
     private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
     private let refreshDeferralScoreBoostPerCycle = 12.0
@@ -1502,6 +1513,16 @@ final class AppState: ObservableObject {
             ]))
         } catch {
             if let downloadError = error as? DownloadError, downloadError == .paused {
+                if supersededDownloadCancellationIDs.remove(episode.id) != nil {
+                    downloadProgress.removeValue(forKey: episode.id)
+                    downloadActivityStore.remove(episodeID: episode.id)
+                    logger.info("download.pausedSuperseded", "Superseded rolling-feed download pause ignored cleanly", metadata: [
+                        "episode": episode.title,
+                        "podcast": podcastTitle,
+                        "mediaKind": episode.mediaKind.rawValue
+                    ])
+                    return
+                }
                 downloadActivityStore.pause(episodeID: episode.id)
                 downloadMessage = "Paused \(episode.title)."
                 logger.info("download.paused", "Episode download paused", metadata: [
@@ -1512,6 +1533,16 @@ final class AppState: ObservableObject {
                 return
             }
             if let downloadError = error as? DownloadError, downloadError == .cancelled {
+                if supersededDownloadCancellationIDs.remove(episode.id) != nil {
+                    downloadProgress.removeValue(forKey: episode.id)
+                    downloadActivityStore.remove(episodeID: episode.id)
+                    logger.info("download.cancelledSuperseded", "Superseded rolling-feed download cancelled cleanly", metadata: [
+                        "episode": episode.title,
+                        "podcast": podcastTitle,
+                        "mediaKind": episode.mediaKind.rawValue
+                    ])
+                    return
+                }
                 subscriptionStore.markEpisodeDownloadFailed(subscriptionID: subscriptionID, episodeID: episode.id)
                 downloadProgress.removeValue(forKey: episode.id)
                 downloadActivityStore.fail(
@@ -2160,14 +2191,21 @@ final class AppState: ObservableObject {
             let oldLatestWasDownloaded = subscription.latestEpisode?.downloadState == .downloaded
 
             if let old = subscription.latestEpisode,
-               old.localFileURL != nil,
                result.latestEpisode.guid != old.guid,
                currentPlayerEpisode?.id != old.id {
-                logger.info("feed.cleanupOldLatest", "Deleting old latest episode after new feed item", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
-                    "episode": old.title,
-                ]))
-                try? await downloadManager.deleteLocalFile(for: old)
-                subscriptionStore.markEpisodeNotDownloaded(subscriptionID: old.subscriptionID, episodeID: old.id)
+                if old.localFileURL != nil {
+                    logger.info("feed.cleanupOldLatest", "Deleting old latest episode after new feed item", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
+                        "episode": old.title,
+                    ]))
+                    try? await downloadManager.deleteLocalFile(for: old)
+                    subscriptionStore.markEpisodeNotDownloaded(subscriptionID: old.subscriptionID, episodeID: old.id)
+                }
+                await cleanupSupersededRollingLatestDownloadIfNeeded(
+                    oldLatest: old,
+                    newLatest: result.latestEpisode,
+                    feedEpisodeCount: result.episodes.count,
+                    subscription: subscription
+                )
             }
 
             logger.info("feed.refreshMerge", "Merging refreshed feed episodes", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
@@ -2271,6 +2309,49 @@ final class AppState: ObservableObject {
                 force: true
             )
         }
+    }
+
+    private func cleanupSupersededRollingLatestDownloadIfNeeded(
+        oldLatest: Episode,
+        newLatest: Episode,
+        feedEpisodeCount: Int,
+        subscription: Subscription
+    ) async {
+        guard feedEpisodeCount == 1 else { return }
+        guard oldLatest.guid != newLatest.guid else { return }
+
+        let hadPendingQueueEntry = pendingDownloadQueue.contains { $0.episode.id == oldLatest.id }
+        let hadTrackedDownload = downloadActivityStore.activeActivities.contains { $0.episodeID == oldLatest.id }
+        let hadProgress = downloadProgress[oldLatest.id] != nil
+        let shouldCancel = oldLatest.downloadState == .queued
+            || oldLatest.downloadState == .downloading
+            || hadPendingQueueEntry
+            || hadTrackedDownload
+            || hadProgress
+        guard shouldCancel else { return }
+
+        supersededDownloadCancellationIDs.insert(oldLatest.id)
+        downloadManager.cancelDownload(episodeID: oldLatest.id)
+        pendingDownloadQueue.removeAll { $0.episode.id == oldLatest.id }
+        downloadProgress.removeValue(forKey: oldLatest.id)
+        downloadActivityStore.remove(episodeID: oldLatest.id)
+        subscriptionStore.markEpisodeNotDownloaded(
+            subscriptionID: oldLatest.subscriptionID,
+            episodeID: oldLatest.id
+        )
+        refreshDownloadedActivities()
+
+        logger.info("feed.cleanupSupersededLatest", "Cancelled superseded one-item feed download", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
+            "oldEpisode": oldLatest.title,
+            "oldEpisodeID": oldLatest.id.uuidString,
+            "oldDownloadState": oldLatest.downloadState.rawValue,
+            "newEpisode": newLatest.title,
+            "newEpisodeID": newLatest.id.uuidString,
+            "feedEpisodeCount": "\(feedEpisodeCount)",
+            "hadPendingQueueEntry": "\(hadPendingQueueEntry)",
+            "hadTrackedDownload": "\(hadTrackedDownload)",
+            "hadProgress": "\(hadProgress)"
+        ]))
     }
 
     private func scheduleAutoDownloadAfterRefresh(
@@ -2390,6 +2471,8 @@ final class AppState: ObservableObject {
         await refreshSubscriptions(
             reason: "background",
             maxSubscriptions: backgroundRefreshFeedLimit,
+            protectedStates: backgroundReleaseRadarProtectedStates,
+            minimumProtectedSelections: backgroundReleaseRadarReservedSlots,
             includeBackoffFeeds: false,
             onlyDueFeeds: true,
             joinActiveCycle: true
@@ -2415,6 +2498,8 @@ final class AppState: ObservableObject {
         reason: String,
         maxSubscriptions: Int?,
         capBypassStates: Set<FeedRefreshWindowState> = [],
+        protectedStates: Set<FeedRefreshWindowState> = [],
+        minimumProtectedSelections: Int = 0,
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool,
         joinActiveCycle: Bool = false
@@ -2442,6 +2527,8 @@ final class AppState: ObservableObject {
                 reason: reason,
                 maxSubscriptions: maxSubscriptions,
                 capBypassStates: capBypassStates,
+                protectedStates: protectedStates,
+                minimumProtectedSelections: minimumProtectedSelections,
                 includeBackoffFeeds: includeBackoffFeeds,
                 onlyDueFeeds: onlyDueFeeds
             )
@@ -2455,6 +2542,8 @@ final class AppState: ObservableObject {
         reason: String,
         maxSubscriptions: Int?,
         capBypassStates: Set<FeedRefreshWindowState>,
+        protectedStates: Set<FeedRefreshWindowState>,
+        minimumProtectedSelections: Int,
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool
     ) async -> Bool {
@@ -2487,7 +2576,9 @@ final class AppState: ObservableObject {
             candidates: dueCandidates,
             policy: FeedRefreshBudgetPolicy(
                 maxSelections: maxSubscriptions,
-                capBypassStates: capBypassStates
+                capBypassStates: capBypassStates,
+                protectedStates: protectedStates,
+                minimumProtectedSelections: minimumProtectedSelections
             ),
             state: { $0.prediction.state }
         )
@@ -2514,6 +2605,8 @@ final class AppState: ObservableObject {
                 skippedInactiveCount: skippedSubscriptions.count,
                 maxSubscriptions: maxSubscriptions,
                 capBypassStates: capBypassStates,
+                protectedStates: protectedStates,
+                minimumProtectedSelections: minimumProtectedSelections,
                 reason: reason
             )
         }
@@ -2709,8 +2802,11 @@ final class AppState: ObservableObject {
         skippedInactiveCount: Int,
         maxSubscriptions: Int?,
         capBypassStates: Set<FeedRefreshWindowState>,
+        protectedStates: Set<FeedRefreshWindowState>,
+        minimumProtectedSelections: Int,
         reason: String
     ) {
+        let protectedSelectedCount = selectedCandidates.filter { protectedStates.contains($0.prediction.state) }.count
         logger.info("feed.refreshAll.plan", "Planned due-feed refresh cycle", metadata: [
             "reason": reason,
             "eligible": "\(eligibleCount)",
@@ -2719,6 +2815,9 @@ final class AppState: ObservableObject {
             "cappedOut": "\(max(0, candidates.count - selectedCount))",
             "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all",
             "capBypassStates": refreshStateList(capBypassStates),
+            "protectedStates": refreshStateList(protectedStates),
+            "protectedMinimum": "\(minimumProtectedSelections)",
+            "protectedSelected": "\(protectedSelectedCount)",
             "skippedBackoff": "\(skippedBackoffCount)",
             "skippedInactive": "\(skippedInactiveCount)",
             "deferredBacklog": "\(deferredRefreshBacklog.count)",

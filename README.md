@@ -42,8 +42,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Per-podcast playback speed (1.0–2.5x), start skip, and end skip
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
-- Release Radar adaptive feed refresh — learns each podcast's release schedule from its publish history and watches the feed just before a new episode is expected; HTTP conditional requests (ETag/304) keep checks tiny
-- Background feed refresh (BGAppRefreshTask, due-date priority scheduling) and per-podcast exclude-from-refresh
+- Release Radar adaptive feed refresh — learns each podcast's release schedule from its publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
+- Background feed refresh (BGAppRefreshTask, due-date priority scheduling, protected Release Radar slots) and per-podcast exclude-from-refresh
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
@@ -58,7 +58,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
-- Diagnostic logging for feeds, downloads, queue, playback, and resource metrics (hidden developer tool)
+- Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
 
 ## Documentation Map
 

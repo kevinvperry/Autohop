@@ -24,13 +24,17 @@ import Foundation
 //    rotation during active/fresh-missed windows, expire stale missed-release
 //    urgency after repeated empty checks or window age, stand down during quiet
 //    periods, and fall back to the legacy cadence model when the profile is
-//    incomplete.
+//    incomplete. Daily weekday feeds deliberately start checking about 30 min
+//    before the learned release time; missed-release urgency expires after 10
+//    post-window empty checks or 8 hours so a late show does not dominate forever.
 //  - FeedRefreshPrioritizer: scores already-due feeds so AppState's timed and
 //    background cycles spend limited refresh slots on missed releases, active
-//    windows, high-confidence hourly/burst feeds, learning/random feeds, user
-//    priority rank, stale feeds, and overdue feeds before ordinary due work.
+//    windows, high-confidence hourly/burst/daily feeds (daily gets the strongest
+//    release-window kind boost), learning/random feeds, user priority rank,
+//    stale feeds, and overdue feeds before ordinary due work.
 //  - FeedRefreshBudgeting: pure budget selector used by AppState to cap due-feed
-//    cycles while letting active/pre-window states bypass the foreground cap.
+//    cycles while letting active/pre-window states bypass the foreground cap and
+//    protecting Release Radar states in tight background budgets.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
 //    order), episodes array, playbackPreference, notificationsEnabled
 //    (default false), excludeFromAutoFeedRefresh, remembered return rank for
@@ -859,8 +863,8 @@ public enum FeedRefreshScheduling {
     /// Missed-release urgency is deliberately short-lived. After enough post-window
     /// 304/no-new checks, or once the missed window is old, the feed falls back to
     /// low-priority surveillance instead of dominating future capped cycles.
-    public static let missedReleaseEmptyFetchLimit = 6
-    public static let missedReleaseMaxUrgencyAge: TimeInterval = 6 * 60 * 60
+    public static let missedReleaseEmptyFetchLimit = 10
+    public static let missedReleaseMaxUrgencyAge: TimeInterval = 8 * 60 * 60
 
     private struct RefreshSlot {
         var preWindowStart: Date
@@ -983,9 +987,9 @@ public enum FeedRefreshScheduling {
                 profile: profile,
                 slots: dailySlots(
                     activeWeekdays: profile.activeWeekdays,
-                    windowStartMinute: max(0, minute - 5),
-                    windowEndMinute: min(24 * 60 - 1, minute + 45),
-                    preWindowLead: 10 * 60,
+                    windowStartMinute: max(0, minute - 10),
+                    windowEndMinute: min(24 * 60 - 1, minute + 75),
+                    preWindowLead: 20 * 60,
                     now: now,
                     calendar: calendar
                 ),
@@ -1503,13 +1507,22 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
     /// States that should be selected even after the normal budget is full. These
     /// candidates do not consume budget slots.
     public var capBypassStates: Set<FeedRefreshWindowState>
+    /// States that should get the first protected slots when a budget is tight.
+    /// This is intentionally separate from capBypassStates: protected candidates
+    /// still consume budget, but they are tried before ordinary backlog work.
+    public var protectedStates: Set<FeedRefreshWindowState>
+    public var minimumProtectedSelections: Int
 
     public init(
         maxSelections: Int?,
-        capBypassStates: Set<FeedRefreshWindowState> = []
+        capBypassStates: Set<FeedRefreshWindowState> = [],
+        protectedStates: Set<FeedRefreshWindowState> = [],
+        minimumProtectedSelections: Int = 0
     ) {
         self.maxSelections = maxSelections
         self.capBypassStates = capBypassStates
+        self.protectedStates = protectedStates
+        self.minimumProtectedSelections = minimumProtectedSelections
     }
 }
 
@@ -1526,9 +1539,10 @@ public struct FeedRefreshBudgetSelection<Candidate> {
 }
 
 public enum FeedRefreshBudgeting {
-    /// Applies a refresh budget to an already-prioritized candidate list while
-    /// preserving candidate order. Bypass states remain selected even when the
-    /// normal cap has been filled.
+    /// Applies a refresh budget to an already-prioritized candidate list.
+    /// Protected states get a first pass so release-window feeds are attempted
+    /// before ordinary backlog work during short BGAppRefresh wakes. Bypass
+    /// states remain selected even when the normal cap has been filled.
     public static func select<Candidate>(
         candidates: [Candidate],
         policy: FeedRefreshBudgetPolicy,
@@ -1536,6 +1550,15 @@ public enum FeedRefreshBudgeting {
     ) -> FeedRefreshBudgetSelection<Candidate> {
         guard let maxSelections = policy.maxSelections, maxSelections > 0 else {
             return FeedRefreshBudgetSelection(selected: candidates, deferred: [])
+        }
+
+        if !policy.protectedStates.isEmpty, policy.minimumProtectedSelections > 0 {
+            return selectWithProtectedStates(
+                candidates: candidates,
+                maxSelections: maxSelections,
+                policy: policy,
+                state: state
+            )
         }
 
         var remainingBudget = maxSelections
@@ -1555,6 +1578,45 @@ public enum FeedRefreshBudgeting {
         }
 
         return FeedRefreshBudgetSelection(selected: selected, deferred: deferred)
+    }
+
+    private static func selectWithProtectedStates<Candidate>(
+        candidates: [Candidate],
+        maxSelections: Int,
+        policy: FeedRefreshBudgetPolicy,
+        state: (Candidate) -> FeedRefreshWindowState
+    ) -> FeedRefreshBudgetSelection<Candidate> {
+        let indexedCandidates = Array(candidates.enumerated())
+        let protectedLimit = min(
+            maxSelections,
+            max(0, policy.minimumProtectedSelections)
+        )
+        let protectedIndices = indexedCandidates
+            .filter { policy.protectedStates.contains(state($0.element)) }
+            .prefix(protectedLimit)
+            .map { $0.offset }
+        let protectedIndexSet = Set(protectedIndices)
+
+        var remainingBudget = maxSelections - protectedIndices.count
+        var selectedIndices = protectedIndices
+
+        for (index, candidate) in indexedCandidates where !protectedIndexSet.contains(index) {
+            let candidateState = state(candidate)
+            if policy.capBypassStates.contains(candidateState) {
+                selectedIndices.append(index)
+            } else if remainingBudget > 0 {
+                selectedIndices.append(index)
+                remainingBudget -= 1
+            }
+        }
+
+        let selectedIndexSet = Set(selectedIndices)
+        return FeedRefreshBudgetSelection(
+            selected: selectedIndices.map { candidates[$0] },
+            deferred: indexedCandidates
+                .filter { !selectedIndexSet.contains($0.offset) }
+                .map { $0.element }
+        )
     }
 }
 
@@ -1674,10 +1736,12 @@ public enum FeedRefreshPrioritizer {
     ) -> Double {
         switch kind {
         case .hourly:
-            return releaseWindowState ? 12 : 0
+            return releaseWindowState ? 16 : 0
         case .burst:
             return releaseWindowState ? 14 : 0
-        case .dailyWeekdays, .weekly, .multiSlot:
+        case .dailyWeekdays:
+            return releaseWindowState ? 22 : 0
+        case .weekly, .multiSlot:
             return releaseWindowState ? 8 : 0
         case .learning:
             return 8
