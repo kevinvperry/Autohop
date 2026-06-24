@@ -51,7 +51,11 @@ import Combine
 // sync" must leave a trace. Verbosity is "balanced": batch summaries, not one
 // line per record. Stats sync conflicts are enriched with device/day identity
 // and tracked per recordName; repeated conflicts produce sync.conflictStorm so
-// DayStats loops are visible without hand-counting log lines.
+// DayStats loops are visible without hand-counting log lines. For this device's
+// own DayStats partition, a serverRecordChanged response refreshes the cached
+// server system fields/change tag but keeps the local full-day bucket dirty, so
+// the retry updates the current server record instead of fighting the same stale
+// change tag again.
 final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private let container: CKContainer
     private let subscriptionStore: SubscriptionStore
@@ -537,7 +541,19 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 logDecodeFailure(record)
                 return
             }
-            guard deviceID != DeviceIdentity.current else { return } // our own record echoed back
+            if deviceID == DeviceIdentity.current {
+                // This is our own per-device partition, often delivered as the
+                // server side of a serverRecordChanged conflict. Cache the server
+                // change tag, but do not mark the local full-day bucket clean:
+                // the pending local row remains the source of truth for the retry.
+                runDB("storeLocalStatsSystemFields", metadata: [
+                    "device": deviceID,
+                    "dayKey": day.dayKey
+                ]) {
+                    try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: day.dayKey)
+                }
+                return
+            }
             runDB("applyRemoteStatsPartition", metadata: ["device": deviceID]) {
                 try self.database?.applyRemoteStatsPartition(deviceID: deviceID, day: day)
             }
@@ -600,7 +616,10 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 "localDeviceID": localDeviceID,
                 "statsDayKey": identity.dayKey,
                 "isLocalStatsPartition": "\(identity.deviceID == localDeviceID)",
-                "hasCachedSystemFields": "\(hasCachedSystemFields)"
+                "hasCachedSystemFields": "\(hasCachedSystemFields)",
+                "statsConflictResolution": identity.deviceID == localDeviceID
+                    ? "cacheServerFieldsRetryLocalDay"
+                    : "applyRemotePartition"
             ]) { _, new in new }
         }
 

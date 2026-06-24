@@ -13,7 +13,7 @@ download/media state never syncs.
 June 2026 diagnostic repair context lives here too: collision quarantine,
 legacy pending-save retirement, full-record namespace migration, recovery from
 legacy unprefixed subscription records after the sparse-record data-loss
-regression, and enriched DayStats conflict/storm logging. Non-sync diagnostic
+regression, and DayStats conflict convergence/storm logging. Non-sync diagnostic
 repairs from the same cycle are summarized in `FEATURES.md`: Release Radar
 protected background refresh slots, rolling one-item feed download cleanup,
 foreground/background refresh attribution, playback-tick timing, main-thread
@@ -122,9 +122,13 @@ adopted clean. Settings sub-structs
      `stats_sync_state` (this device's pending) + `remote_stats` (other devices)
      tables (migration v6). `DayStats.merged` sums; ListeningStats `combinedDay`
      folds remote partitions into every read path (summary/streaks/per-show/
-     lifetime). Engine skips its own echoed records by deviceID. legacyBaseline
-     sync deferred (kept per-device for v1). Unit-tested incl. cross-device
-     summing; real-device verification pending.
+     lifetime). Engine skips its own echoed records by deviceID, but still caches
+     their server system fields/change tag; on a `serverRecordChanged` conflict
+     for this device's own partition, the local full-day bucket stays dirty and
+     retries with the refreshed change tag instead of repeatedly fighting the
+     same stale server record. legacyBaseline sync deferred (kept per-device for
+     v1). Unit-tested incl. cross-device summing; real-device verification
+     pending.
 
 6. ✅ **Active-player-wins + self-heal guards**
    - Active-player-wins: `SubscriptionStore.nowPlayingEpisodeSyncKeyProvider`
@@ -208,7 +212,7 @@ Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
   `sync.pushed` (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
   `sync.pushQuarantined` (known permanent record-type collision), `sync.legacyPendingDropped`
   (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.
-- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry; DayStats conflicts include stats device ID, local device ID, day key, partition match, cached system-field state, retry status, and per-session conflict count), `sync.conflictStorm` (same record conflicts repeatedly inside a short window), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
+- **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry; DayStats conflicts include stats device ID, local device ID, day key, partition match, cached system-field state, retry status, planned resolution, and per-session conflict count; this device's own DayStats partition caches the server system fields and retries the local full-day bucket), `sync.conflictStorm` (same record conflicts repeatedly inside a short window), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
 - **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
 
 Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
@@ -239,4 +243,6 @@ Related diagnostic keys outside CloudKit:
   user-visible freezes.
 - `audio.routeLossPending`, `audio.routeLossCancelled`,
   `audio.routeLossConfirmed`, `audio.interruptionDeferred`, and
-  `engine.routeRestartScheduled` trace AirPods/Speaker route stabilization.
+  `engine.routeRestartDeferred` / `engine.routeRestartScheduled` trace
+  AirPods/Speaker route stabilization, including previous/new output metadata
+  for iOS `unknown` and `categoryChange` route notifications.

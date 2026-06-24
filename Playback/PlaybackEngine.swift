@@ -41,15 +41,19 @@ import Foundation
 // interruption and route-change handling (AirPod removal must not auto-resume:
 // pausedByRouteChange / wasPlayingBeforeInterruption guards; active engine-path
 // route switches restart the buffer loop from the current position after a
-// brief stabilization delay, before the render watchdog has to recover silence),
+// brief stabilization delay, including messy iOS `unknown` / `categoryChange`
+// AirPods events, before the render watchdog has to recover silence),
 // start/end skip (real file time, fires onAutoSkip), disabled-chapter skipping
 // per ChapterFilter, and a render watchdog that detects a running-but-silent
 // engine and recovers it. Route-change invariant: `.oldDeviceUnavailable`
 // schedules a short confirmation delay before pausing, so AirPods/Speaker route
 // storms do not immediately stop playback; a real built-in-speaker fallback
-// still pauses and prevents auto-resume. `.newDeviceAvailable` and settled
-// non-built-in route changes may restart only the active AVAudioEngine buffer
-// loop, debounced and delayed, from currentPlaybackTime().
+// still pauses and prevents auto-resume. `.newDeviceAvailable`, settled
+// non-built-in route changes, and same-output category/unknown route churn may
+// restart only the active AVAudioEngine buffer loop, debounced and delayed, from
+// currentPlaybackTime(). Route-loss confirmation cancels stale restart timers;
+// if a replacement route appears inside that window, the restart is rescheduled
+// after the replacement route settles.
 // Do not make headphone removal auto-resume while improving route recovery.
 // Chapters present at play() time drive skip filtering immediately; chapters
 // that arrive LATER (external podcast:chapters fetched after playback starts,
@@ -171,8 +175,9 @@ final class PlaybackEngine: PlaybackControlling {
     private var routeLossPauseGeneration = 0
     private var routeRestartGeneration = 0
     private var hasPendingRouteLossPause = false
+    private var routeRestartDeferredByRouteLoss: (reason: String, output: String)?
     private let routeLossPauseDelay: TimeInterval = 0.9
-    private let routeRestartStabilizationDelay: TimeInterval = 0.35
+    private let routeRestartStabilizationDelay: TimeInterval = 0.75
 
     private(set) var currentEpisode: Episode?
     private var currentFilter: ChapterFilter?
@@ -351,6 +356,7 @@ final class PlaybackEngine: PlaybackControlling {
 
     func pause() {
         cancelPendingRouteLossPause(reason: "pause", output: currentOutputPortName())
+        routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
         pausedAtSeconds = currentPlaybackTime()
         if engineUsesEngine {
@@ -370,6 +376,7 @@ final class PlaybackEngine: PlaybackControlling {
     func resume() {
         guard currentEpisode != nil else { return }
         cancelPendingRouteLossPause(reason: "resume", output: currentOutputPortName())
+        routeRestartDeferredByRouteLoss = nil
         pausedByRouteChange = false
         if engineUsesEngine {
             engineReadPaused = false
@@ -554,6 +561,7 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func stop(resetEpisode: Bool) {
         cancelPendingRouteLossPause(reason: "stop", output: currentOutputPortName())
+        routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
         logger.info("playback.stop", "Playback stopped", metadata: [
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
@@ -846,7 +854,7 @@ final class PlaybackEngine: PlaybackControlling {
                         semResult = sem.wait(timeout: .now() + 2.0)
                     }
                     let semWaitMs = Int((CFAbsoluteTimeGetCurrent() - semWaitStart) * 1000)
-                    if semWaitMs > 80, !pausedDuringWait {
+                    if semWaitMs > 80, !pausedDuringWait, !self.hasPendingRouteLossPause {
                         self.logger.warning("engine.bufferStall", "Audio buffer loop stalled waiting for slot", metadata: [
                             "stallMs": "\(semWaitMs)",
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
@@ -1189,37 +1197,66 @@ final class PlaybackEngine: PlaybackControlling {
 
         let session = AVAudioSession.sharedInstance()
         let output = session.currentRoute.outputs.first
+        let previousRoute = info[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+        let previousOutput = previousRoute?.outputs.first
         let newPort = output?.portName ?? "none"
         let newPortType = output?.portType.rawValue ?? "none"
+        let previousPort = previousOutput?.portName ?? "none"
+        let previousPortType = previousOutput?.portType.rawValue ?? "none"
         let reasonLabel = routeChangeReasonLabel(reason)
+        let outputChanged = routeOutputIdentifier(output) != routeOutputIdentifier(previousOutput)
 
         logger.warning("audio.routeChange", "Audio route changed", metadata: [
             "reason": reasonLabel,
             "newOutput": newPort,
             "newOutputType": newPortType,
+            "previousOutput": previousPort,
+            "previousOutputType": previousPortType,
+            "outputChanged": "\(outputChanged)",
+            "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
+            "enginePlaying": "\(engineIsPlaying)",
+            "pendingRouteLoss": "\(hasPendingRouteLossPause)",
             "episode": currentEpisode?.title ?? "none",
             "positionSecs": String(format: "%.1f", currentPlaybackTime())
         ])
 
         switch reason {
         case .oldDeviceUnavailable:
-            scheduleRouteLossPause(reason: reasonLabel, output: newPort)
-        case .newDeviceAvailable:
-            cancelPendingRouteLossPause(reason: reasonLabel, output: newPort)
-            pausedByRouteChange = false
-            scheduleEngineRestartAfterRouteSettles(reason: reasonLabel, output: newPort)
-        case .routeConfigurationChange:
             if let output, routeOutputCanReplaceRemovedDevice(output) {
-                cancelPendingRouteLossPause(reason: reasonLabel, output: newPort)
+                let scheduledDeferredRestart = cancelPendingRouteLossPause(
+                    reason: reasonLabel,
+                    output: newPort,
+                    scheduleDeferredRestart: true
+                )
+                pausedByRouteChange = false
+                if !scheduledDeferredRestart {
+                    scheduleEngineRestartAfterRouteSettles(reason: reasonLabel, output: newPort)
+                }
+            } else {
+                scheduleRouteLossPause(reason: reasonLabel, output: newPort)
+            }
+        case .newDeviceAvailable, .routeConfigurationChange, .categoryChange, .override, .unknown:
+            var scheduledDeferredRestart = false
+            if let output, routeOutputCanReplaceRemovedDevice(output) {
+                scheduledDeferredRestart = cancelPendingRouteLossPause(
+                    reason: reasonLabel,
+                    output: newPort,
+                    scheduleDeferredRestart: true
+                )
                 pausedByRouteChange = false
             }
-            scheduleEngineRestartAfterRouteSettles(reason: reasonLabel, output: newPort)
+            if !scheduledDeferredRestart,
+               outputChanged || reason == .newDeviceAvailable || hasPendingRouteLossPause {
+                scheduleEngineRestartAfterRouteSettles(reason: reasonLabel, output: newPort)
+            }
         default:
             break
         }
     }
 
     private func scheduleRouteLossPause(reason: String, output: String) {
+        cancelPendingRouteRestart()
+        routeRestartDeferredByRouteLoss = nil
         routeLossPauseGeneration += 1
         let generation = routeLossPauseGeneration
         hasPendingRouteLossPause = true
@@ -1230,6 +1267,7 @@ final class PlaybackEngine: PlaybackControlling {
             logger.info("audio.routeLossIdle", "Audio route loss while playback was idle", metadata: [
                 "reason": reason,
                 "newOutput": output,
+                "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
                 "episode": currentEpisode?.title ?? "none"
             ])
             return
@@ -1239,6 +1277,8 @@ final class PlaybackEngine: PlaybackControlling {
             "reason": reason,
             "newOutput": output,
             "episode": currentEpisode?.title ?? "none",
+            "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
+            "enginePlaying": "\(engineIsPlaying)",
             "delayMs": "\(Int(routeLossPauseDelay * 1000))"
         ])
 
@@ -1249,11 +1289,13 @@ final class PlaybackEngine: PlaybackControlling {
             else { return }
 
             self.hasPendingRouteLossPause = false
+            self.routeRestartDeferredByRouteLoss = nil
             guard self.isPlaying else { return }
 
             self.logger.warning("audio.routeLossConfirmed", "Confirmed audio route loss; pausing playback", metadata: [
                 "reason": reason,
                 "newOutput": output,
+                "backend": self.engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
                 "episode": self.currentEpisode?.title ?? "none",
                 "positionSecs": String(format: "%.1f", self.currentPlaybackTime())
             ])
@@ -1262,23 +1304,43 @@ final class PlaybackEngine: PlaybackControlling {
         }
     }
 
-    private func cancelPendingRouteLossPause(reason: String, output: String) {
-        guard hasPendingRouteLossPause else { return }
+    @discardableResult
+    private func cancelPendingRouteLossPause(
+        reason: String,
+        output: String,
+        scheduleDeferredRestart: Bool = false
+    ) -> Bool {
+        guard hasPendingRouteLossPause else { return false }
         hasPendingRouteLossPause = false
         routeLossPauseGeneration += 1
+        let deferredRestart = routeRestartDeferredByRouteLoss
+        routeRestartDeferredByRouteLoss = nil
         logger.info("audio.routeLossCancelled", "Cancelled pending audio route-loss pause", metadata: [
             "reason": reason,
             "newOutput": output,
+            "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
+            "hadDeferredRestart": "\(deferredRestart != nil)",
             "episode": currentEpisode?.title ?? "none"
         ])
+        if scheduleDeferredRestart, let deferredRestart {
+            scheduleEngineRestartAfterRouteSettles(
+                reason: "\(deferredRestart.reason)->\(reason)",
+                output: output
+            )
+            return true
+        }
+        return false
     }
 
     private func scheduleEngineRestartAfterRouteSettles(reason: String, output: String) {
         guard engineUsesEngine, engineIsPlaying, !engineReadFinished else { return }
         guard !hasPendingRouteLossPause else {
+            routeRestartDeferredByRouteLoss = (reason, output)
             logger.info("engine.routeRestartDeferred", "Route restart deferred while route loss is pending", metadata: [
                 "reason": reason,
                 "newOutput": output,
+                "backend": "AVAudioEngine",
+                "delayMs": "\(Int(routeRestartStabilizationDelay * 1000))",
                 "episode": currentEpisode?.title ?? "none"
             ])
             return
@@ -1290,6 +1352,7 @@ final class PlaybackEngine: PlaybackControlling {
             "reason": reason,
             "newOutput": output,
             "episode": currentEpisode?.title ?? "none",
+            "positionSecs": String(format: "%.1f", currentPlaybackTime()),
             "delayMs": "\(Int(routeRestartStabilizationDelay * 1000))"
         ])
 
@@ -1310,6 +1373,11 @@ final class PlaybackEngine: PlaybackControlling {
         default:
             return true
         }
+    }
+
+    private func routeOutputIdentifier(_ output: AVAudioSessionPortDescription?) -> String {
+        guard let output else { return "none" }
+        return "\(output.portType.rawValue)|\(output.uid)|\(output.portName)"
     }
 
     private func currentOutputPortName() -> String {

@@ -2,9 +2,10 @@
 // Release Radar's learned-window scheduler and tight-budget selector. These
 // protect the background-refresh behavior users feel most: one-episode daily
 // shows should be checked roughly 30 minutes before their expected release time,
-// daily windows should outrank random backlog work, and short BGAppRefresh wakes
-// should spend protected slots on pre/active/missed release windows before
-// ordinary random/deferred backlog work.
+// rolling news bulletins should get :00/:30 release windows instead of random
+// surveillance, daily windows should outrank random backlog work, and short
+// BGAppRefresh wakes should spend protected slots on pre/active/missed release
+// windows before ordinary random/deferred backlog work.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -78,6 +79,36 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(prediction.state, .preWindow)
         XCTAssertEqual(prediction.expectedWindowStart, date(2026, 6, 23, 7, 50, calendar: calendar))
         XCTAssertEqual(prediction.expectedWindowEnd, date(2026, 6, 23, 9, 15, calendar: calendar))
+        XCTAssertLessThanOrEqual(prediction.nextDueAt, now)
+    }
+
+    func testRollingBulletinPredictionUsesHalfHourReleaseSlot() {
+        let calendar = utcCalendar()
+        let profile = FeedScheduleProfile(
+            kind: .rollingBulletin,
+            confidence: 0.84,
+            observationCount: 12,
+            reliableDateCount: 12,
+            activeWeekdays: [3],
+            typicalMinuteOfHour: 0,
+            typicalMinutesOfHour: [0, 30],
+            cadenceSeconds: 60 * 60,
+            reason: "test rolling bulletin"
+        )
+        let now = date(2026, 6, 23, 10, 29, calendar: calendar)
+        let prediction = FeedRefreshScheduling.prediction(
+            profile: profile,
+            latestPublishedAt: date(2026, 6, 23, 10, 0, calendar: calendar),
+            publishDates: [],
+            stats: RefreshStats(lastFetchedAt: date(2026, 6, 23, 10, 20, calendar: calendar)),
+            minRecheckInterval: 5 * 60,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(prediction.state, .activeWindow)
+        XCTAssertEqual(prediction.expectedWindowStart, date(2026, 6, 23, 10, 28, calendar: calendar))
+        XCTAssertEqual(prediction.expectedWindowEnd, date(2026, 6, 23, 10, 45, calendar: calendar))
         XCTAssertLessThanOrEqual(prediction.nextDueAt, now)
     }
 

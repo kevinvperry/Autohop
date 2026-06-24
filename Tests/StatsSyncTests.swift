@@ -4,7 +4,9 @@
 // record-name parse compatibility, the database stats accessors, and the key
 // behaviour — summary() sums local + remote partitions (NOT LWW). The
 // namespaced/legacy parse tests protect the Phase-2 CloudKit namespace repair
-// for DayStats without changing the additive sync contract.
+// for DayStats without changing the additive sync contract. The system-fields
+// invariant protects DayStats conflict repair: caching the server change tag for
+// this device's own partition must not mark the full local day bucket synced.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -61,6 +63,23 @@ final class StatsSyncTests: XCTestCase {
 
         try db.applyRemoteStatsPartition(deviceID: "other", day: day("2026-06-14", seconds: 300))
         XCTAssertEqual(try db.remoteStatsByDayKey()["2026-06-14"]?.count, 1)
+    }
+
+    func testStatsSystemFieldRefreshDoesNotClearPendingDay() throws {
+        let db = try AutohopDatabase()
+
+        try db.recordStatsDay(day("2026-06-14", seconds: 600))
+        XCTAssertEqual(try db.pendingStatsDays().map(\.dayKey), ["2026-06-14"])
+
+        let refreshedSystemFields = Data("server-change-tag".utf8)
+        try db.storeStatsSystemFields(refreshedSystemFields, dayKey: "2026-06-14")
+
+        XCTAssertEqual(try db.statsSystemFields(dayKey: "2026-06-14"), refreshedSystemFields)
+        XCTAssertEqual(
+            try db.pendingStatsDays().map(\.dayKey),
+            ["2026-06-14"],
+            "Caching server system fields for a DayStats conflict must keep the local full-day bucket pending"
+        )
     }
 
     @MainActor

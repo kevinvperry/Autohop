@@ -4,8 +4,8 @@
 // Also carries the focused Release Radar regression checks that do not need the
 // full app/dependency graph: RefreshStats legacy decoding and history caps,
 // release-observation persistence, learned schedule classification (hourly,
-// burst, weekday, weekly, unreliable dates), learned-window due prediction,
-// missed-release urgency expiry, learning/random cadence decay, and
+// rolling-bulletin, burst, weekday, weekly, unreliable dates), learned-window
+// due prediction, missed-release urgency expiry, learning/random cadence decay, and
 // FeedRefreshPrioritizer ordering for missed, active, learning, ranked, stale,
 // and random due feeds, plus pure refresh-budget selection.
 import Foundation
@@ -261,6 +261,30 @@ let hourlyProfile = FeedScheduleProfiler.profile(from: hourlyObservations, calen
 require(hourlyProfile.kind == .hourly, "Expected hourly :15 feed profile")
 require(hourlyProfile.typicalMinuteOfHour == 15, "Expected hourly profile to learn minute 15")
 
+let rollingBulletinDates = [
+    makeDate(2026, 1, 5, 6, 0),
+    makeDate(2026, 1, 5, 6, 30),
+    makeDate(2026, 1, 5, 7, 0),
+    makeDate(2026, 1, 5, 7, 30),
+    makeDate(2026, 1, 5, 8, 0),
+    makeDate(2026, 1, 5, 8, 30),
+    makeDate(2026, 1, 5, 9, 0),
+    makeDate(2026, 1, 5, 10, 0),
+    makeDate(2026, 1, 5, 11, 0),
+    makeDate(2026, 1, 5, 12, 0),
+    makeDate(2026, 1, 5, 13, 0),
+    makeDate(2026, 1, 5, 14, 0)
+]
+let rollingBulletinObservations = rollingBulletinDates.enumerated().map {
+    observation("rolling-bulletin-\($0.offset)", publishedAt: $0.element)
+}
+let rollingBulletinProfile = FeedScheduleProfiler.profile(from: rollingBulletinObservations, calendar: utcCalendar)
+require(rollingBulletinProfile.kind == .rollingBulletin, "Expected mixed half-hour/hourly news feed profile")
+require(
+    rollingBulletinProfile.typicalMinutesOfHour == [0, 30],
+    "Expected rolling bulletin profile to learn :00 and :30 minute slots"
+)
+
 let burstObservations = (0..<4).flatMap { dayOffset in
     [
         observation("burst-\(dayOffset)-a", publishedAt: makeDate(2026, 1, 5 + dayOffset, 8, 3)),
@@ -327,6 +351,34 @@ let hourlyQuiet = FeedRefreshScheduling.prediction(
 require(hourlyQuiet.state == .quiet, "Expected hourly feed to stand down after current-hour episode arrives")
 require(hourlyQuiet.nextDueAt == makeDate(2026, 1, 5, 11, 12), "Expected next hourly pre-window at :12")
 
+let rollingBulletinActive = FeedRefreshScheduling.prediction(
+    profile: rollingBulletinProfile,
+    latestPublishedAt: makeDate(2026, 1, 5, 10, 0),
+    publishDates: rollingBulletinObservations.compactMap(\.publishedAt),
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 5, 10, 20)),
+    minRecheckInterval: fiveMinutes,
+    now: makeDate(2026, 1, 5, 10, 29),
+    calendar: utcCalendar
+)
+require(rollingBulletinActive.state == .activeWindow, "Expected rolling bulletin feed to be active near :30")
+require(
+    rollingBulletinActive.expectedWindowStart == makeDate(2026, 1, 5, 10, 28),
+    "Expected rolling bulletin active window to target the learned :30 slot"
+)
+require(rollingBulletinActive.nextDueAt <= makeDate(2026, 1, 5, 10, 29), "Expected rolling bulletin check due inside active window")
+
+let rollingBulletinQuiet = FeedRefreshScheduling.prediction(
+    profile: rollingBulletinProfile,
+    latestPublishedAt: makeDate(2026, 1, 5, 10, 30),
+    publishDates: rollingBulletinObservations.compactMap(\.publishedAt),
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 5, 10, 31)),
+    minRecheckInterval: fiveMinutes,
+    now: makeDate(2026, 1, 5, 10, 35),
+    calendar: utcCalendar
+)
+require(rollingBulletinQuiet.state == .quiet, "Expected rolling bulletin feed to stand down after the current slot arrives")
+require(rollingBulletinQuiet.nextDueAt == makeDate(2026, 1, 5, 10, 57), "Expected next rolling bulletin pre-window before :00")
+
 let burstActive = FeedRefreshScheduling.prediction(
     profile: burstProfile,
     latestPublishedAt: makeDate(2026, 1, 8, 8, 3),
@@ -348,30 +400,30 @@ let weekdayWeekendQuiet = FeedRefreshScheduling.prediction(
     calendar: utcCalendar
 )
 require(weekdayWeekendQuiet.state == .quiet, "Expected weekday feed to stay quiet on Saturday")
-require(weekdayWeekendQuiet.nextDueAt == makeDate(2026, 1, 12, 9, 15), "Expected next weekday pre-window on Monday")
+require(weekdayWeekendQuiet.nextDueAt == makeDate(2026, 1, 12, 9, 0), "Expected next weekday pre-window on Monday")
 
 let weekdayMissed = FeedRefreshScheduling.prediction(
     profile: weekdayProfile,
     latestPublishedAt: makeDate(2026, 1, 9, 9, 32),
     publishDates: weekdayObservations.compactMap(\.publishedAt),
-    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 12, 10, 0)),
+    stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 12, 10, 40)),
     minRecheckInterval: fiveMinutes,
-    now: makeDate(2026, 1, 12, 10, 30),
+    now: makeDate(2026, 1, 12, 10, 50),
     calendar: utcCalendar
 )
 require(weekdayMissed.state == .missedRelease, "Expected missing Monday episode to enter missed-release checks")
-require(weekdayMissed.nextDueAt <= makeDate(2026, 1, 12, 10, 30), "Expected missed-release feed to remain due")
+require(weekdayMissed.nextDueAt <= makeDate(2026, 1, 12, 10, 50), "Expected missed-release feed to remain due")
 
 let weekdayMissedExpiredByEmptyChecks = FeedRefreshScheduling.prediction(
     profile: weekdayProfile,
     latestPublishedAt: makeDate(2026, 1, 9, 9, 32),
     publishDates: weekdayObservations.compactMap(\.publishedAt),
     stats: RefreshStats(
-        lastFetchedAt: makeDate(2026, 1, 12, 10, 40),
+        lastFetchedAt: makeDate(2026, 1, 12, 10, 46),
         consecutiveEmptyFetches: FeedRefreshScheduling.missedReleaseEmptyFetchLimit
     ),
     minRecheckInterval: fiveMinutes,
-    now: makeDate(2026, 1, 12, 10, 45),
+    now: makeDate(2026, 1, 12, 10, 51),
     calendar: utcCalendar
 )
 require(
@@ -383,7 +435,7 @@ require(
     "Expected expired missed-release surveillance to use a low-frequency cadence"
 )
 require(
-    weekdayMissedExpiredByEmptyChecks.nextDueAt > makeDate(2026, 1, 12, 10, 45),
+    weekdayMissedExpiredByEmptyChecks.nextDueAt > makeDate(2026, 1, 12, 10, 51),
     "Expected expired missed-release feed not to remain immediately due after a recent empty check"
 )
 
@@ -405,7 +457,7 @@ let weeklyMissedExpiredByAge = FeedRefreshScheduling.prediction(
     publishDates: weeklyObservations.compactMap(\.publishedAt),
     stats: RefreshStats(lastFetchedAt: makeDate(2026, 1, 14, 15, 0)),
     minRecheckInterval: fiveMinutes,
-    now: makeDate(2026, 1, 14, 16, 0),
+    now: makeDate(2026, 1, 14, 17, 5),
     calendar: utcCalendar
 )
 require(
@@ -413,7 +465,7 @@ require(
     "Expected old missed-release windows to expire even without enough empty checks"
 )
 require(
-    weeklyMissedExpiredByAge.nextDueAt <= makeDate(2026, 1, 14, 16, 0),
+    weeklyMissedExpiredByAge.nextDueAt <= makeDate(2026, 1, 14, 17, 5),
     "Expected aged-out missed-release feed to be eligible only as low-priority fallback work"
 )
 
@@ -547,8 +599,8 @@ let missedPriority = FeedRefreshPrioritizer.priority(
     prediction: weekdayMissed,
     profile: weekdayProfile,
     priorityRank: 5,
-    lastFetchedAt: makeDate(2026, 1, 12, 10, 0),
-    now: makeDate(2026, 1, 12, 10, 30)
+    lastFetchedAt: makeDate(2026, 1, 12, 10, 40),
+    now: makeDate(2026, 1, 12, 10, 50)
 )
 require(missedPriority.score > activePriority.score, "Expected missed release to outrank active release window")
 
@@ -557,7 +609,7 @@ let expiredMissedPriority = FeedRefreshPrioritizer.priority(
     profile: weeklyProfile,
     priorityRank: 5,
     lastFetchedAt: makeDate(2026, 1, 14, 15, 0),
-    now: makeDate(2026, 1, 14, 16, 0)
+    now: makeDate(2026, 1, 14, 17, 5)
 )
 require(
     expiredMissedPriority.score < activePriority.score,

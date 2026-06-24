@@ -16,9 +16,10 @@ import Foundation
 //    and whether it was new when first observed; AppState/SubscriptionStore keep
 //    this updated so one-item feeds can still accumulate schedule history.
 //  - FeedScheduleProfiler: classifies observations into learning, unreliable
-//    dates, hourly, burst, weekday-daily, weekly, multi-slot, or random profiles.
-//    It learns active weekdays, typical minutes, burst windows, cadence, and
-//    confidence without touching app state or network code.
+//    dates, hourly, rolling-bulletin, burst, weekday-daily, weekly, multi-slot,
+//    or random profiles. It learns active weekdays, typical minutes, mixed
+//    half-hour/hourly bulletin slots, burst windows, cadence, and confidence
+//    without touching app state or network code.
 //  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
 //    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
 //    rotation during active/fresh-missed windows, expire stale missed-release
@@ -29,9 +30,9 @@ import Foundation
 //    post-window empty checks or 8 hours so a late show does not dominate forever.
 //  - FeedRefreshPrioritizer: scores already-due feeds so AppState's timed and
 //    background cycles spend limited refresh slots on missed releases, active
-//    windows, high-confidence hourly/burst/daily feeds (daily gets the strongest
-//    release-window kind boost), learning/random feeds, user priority rank,
-//    stale feeds, and overdue feeds before ordinary due work.
+//    windows, high-confidence hourly/rolling-bulletin/burst/daily feeds (daily
+//    gets the strongest release-window kind boost), learning/random feeds, user
+//    priority rank, stale feeds, and overdue feeds before ordinary due work.
 //  - FeedRefreshBudgeting: pure budget selector used by AppState to cap due-feed
 //    cycles while letting active/pre-window states bypass the foreground cap and
 //    protecting Release Radar states in tight background budgets.
@@ -229,8 +230,9 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     /// Fetches since the last new episode. Drives hiatus decay.
     public var consecutiveEmptyFetches: Int
     /// Publish dates of recently discovered latest episodes (newest last, capped).
-    /// Feeds that expose only one item at a time (hourly news bulletins) carry too
-    /// few dates to derive a cadence from the feed alone — this history fills the gap.
+    /// Feeds that expose only one item at a time (hourly or mixed-cadence news
+    /// bulletins) carry too few dates to derive a cadence from the feed alone —
+    /// this history fills the gap.
     public var recentPublishDates: [Date]
     /// Longer per-episode observation history for schedule learning. Current
     /// refresh scheduling intentionally does not read this yet.
@@ -367,6 +369,7 @@ public enum FeedScheduleKind: String, Codable, Sendable {
     case learning
     case unreliableDates
     case hourly
+    case rollingBulletin
     case burst
     case dailyWeekdays
     case weekly
@@ -407,6 +410,9 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     public var activeWeekdays: [Int]
     public var typicalMinuteOfDay: Int?
     public var typicalMinuteOfHour: Int?
+    /// Multiple minute-of-hour slots for rolling bulletin feeds that mix hourly
+    /// and half-hourly releases, for example :00 and :30.
+    public var typicalMinutesOfHour: [Int]?
     public var cadenceSeconds: TimeInterval?
     public var burstWindow: FeedScheduleWindow?
     public var reason: String
@@ -419,6 +425,7 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         activeWeekdays: [Int],
         typicalMinuteOfDay: Int? = nil,
         typicalMinuteOfHour: Int? = nil,
+        typicalMinutesOfHour: [Int]? = nil,
         cadenceSeconds: TimeInterval? = nil,
         burstWindow: FeedScheduleWindow? = nil,
         reason: String
@@ -430,6 +437,7 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         self.activeWeekdays = activeWeekdays
         self.typicalMinuteOfDay = typicalMinuteOfDay
         self.typicalMinuteOfHour = typicalMinuteOfHour
+        self.typicalMinutesOfHour = typicalMinutesOfHour
         self.cadenceSeconds = cadenceSeconds
         self.burstWindow = burstWindow
         self.reason = reason
@@ -506,6 +514,18 @@ public enum FeedScheduleProfiler {
             return profile
         }
 
+        if let profile = rollingBulletinProfile(
+            dates: dates,
+            calendar: calendar,
+            intervals: intervals,
+            medianInterval: medianInterval,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays
+        ) {
+            return profile
+        }
+
         if let profile = burstProfile(
             dates: dates,
             calendar: calendar,
@@ -559,7 +579,7 @@ public enum FeedScheduleProfiler {
             activeWeekdays: activeWeekdays,
             typicalMinuteOfDay: minuteOfDayCluster.center,
             cadenceSeconds: medianInterval,
-            reason: "Reliable dates exist, but they do not form a stable hourly, burst, daily, weekly, or multi-slot pattern."
+            reason: "Reliable dates exist, but they do not form a stable hourly, rolling-bulletin, burst, daily, weekly, or multi-slot pattern."
         )
     }
 
@@ -589,6 +609,53 @@ public enum FeedScheduleProfiler {
             typicalMinuteOfHour: minuteOfHourCluster.center,
             cadenceSeconds: medianInterval,
             reason: "Episodes arrive at a near-hourly cadence around the same minute of the hour."
+        )
+    }
+
+    private static func rollingBulletinProfile(
+        dates: [Date],
+        calendar: Calendar,
+        intervals: [TimeInterval],
+        medianInterval: TimeInterval?,
+        observationCount: Int,
+        reliableDateCount: Int,
+        activeWeekdays: [Int]
+    ) -> FeedScheduleProfile? {
+        guard reliableDateCount >= hourlyMinimumDates + 2,
+              intervals.count >= hourlyMinimumDates,
+              let medianInterval,
+              (25 * 60)...(75 * 60) ~= medianInterval
+        else { return nil }
+
+        let cadenceMatches = intervals.filter(isRollingBulletinInterval).count
+        let cadenceRatio = Double(cadenceMatches) / Double(max(intervals.count, 1))
+        guard cadenceRatio >= 0.65 else { return nil }
+
+        let minuteBuckets = dominantMinuteOfHourBuckets(dates: dates, calendar: calendar)
+        guard (2...4).contains(minuteBuckets.count) else { return nil }
+
+        let bucketSet = Set(minuteBuckets)
+        let coveredDates = dates.filter { date in
+            let bucket = roundedMinuteOfHour(calendar.component(.minute, from: date))
+            return bucketSet.contains(bucket)
+        }.count
+        let coverageRatio = Double(coveredDates) / Double(max(dates.count, 1))
+        guard coverageRatio >= 0.75 else { return nil }
+
+        let confidence = 0.58
+            + min(0.16, Double(reliableDateCount - hourlyMinimumDates) * 0.015)
+            + min(0.16, cadenceRatio * 0.16)
+            + min(0.1, coverageRatio * 0.1)
+        return FeedScheduleProfile(
+            kind: .rollingBulletin,
+            confidence: confidence,
+            observationCount: observationCount,
+            reliableDateCount: reliableDateCount,
+            activeWeekdays: activeWeekdays,
+            typicalMinuteOfHour: minuteBuckets.first,
+            typicalMinutesOfHour: minuteBuckets,
+            cadenceSeconds: medianInterval,
+            reason: "Rolling bulletin feed with predictable minute marks and mixed half-hour/hourly cadence."
         )
     }
 
@@ -785,6 +852,30 @@ public enum FeedScheduleProfiler {
         return ((start + spread / 2) % modulo, spread)
     }
 
+    private static func dominantMinuteOfHourBuckets(dates: [Date], calendar: Calendar) -> [Int] {
+        var counts: [Int: Int] = [:]
+        for date in dates {
+            let bucket = roundedMinuteOfHour(calendar.component(.minute, from: date))
+            counts[bucket, default: 0] += 1
+        }
+
+        let minimumBucketCount = max(2, Int(ceil(Double(dates.count) * 0.12)))
+        return counts
+            .filter { $0.value >= minimumBucketCount }
+            .sorted { $0.key < $1.key }
+            .map(\.key)
+    }
+
+    private static func roundedMinuteOfHour(_ minute: Int) -> Int {
+        let granularity = 5
+        let normalized = ((minute % 60) + 60) % 60
+        return ((normalized + granularity / 2) / granularity * granularity) % 60
+    }
+
+    private static func isRollingBulletinInterval(_ interval: TimeInterval) -> Bool {
+        (25 * 60)...(40 * 60) ~= interval || (50 * 60)...(70 * 60) ~= interval
+    }
+
     private static func median(_ values: [TimeInterval]) -> TimeInterval? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
@@ -934,6 +1025,30 @@ public enum FeedRefreshScheduling {
             return hourlyPrediction(
                 profile: profile,
                 targetMinute: minute,
+                latestPublishedAt: latestPublishedAt,
+                stats: stats,
+                baseRecheck: baseRecheck,
+                now: now,
+                calendar: calendar
+            )
+
+        case .rollingBulletin:
+            let targetMinutes = profile.typicalMinutesOfHour
+                ?? profile.typicalMinuteOfHour.map { [$0] }
+                ?? []
+            guard !targetMinutes.isEmpty else {
+                return fallbackPrediction(
+                    profile: profile,
+                    latestPublishedAt: latestPublishedAt,
+                    publishDates: publishDates,
+                    stats: stats,
+                    minRecheckInterval: minRecheckInterval,
+                    now: now
+                )
+            }
+            return rollingBulletinPrediction(
+                profile: profile,
+                targetMinutes: targetMinutes,
                 latestPublishedAt: latestPublishedAt,
                 stats: stats,
                 baseRecheck: baseRecheck,
@@ -1197,6 +1312,62 @@ public enum FeedRefreshScheduling {
             continueCheckingAfterPublishUntilWindowEnd: false,
             activeReason: "Learned hourly release minute is near.",
             quietReason: "Expected hourly episode appears to have arrived; wait for the next hour."
+        )
+    }
+
+    private static func rollingBulletinPrediction(
+        profile: FeedScheduleProfile,
+        targetMinutes: [Int],
+        latestPublishedAt: Date?,
+        stats: RefreshStats,
+        baseRecheck: TimeInterval,
+        now: Date,
+        calendar: Calendar
+    ) -> FeedRefreshPrediction {
+        guard let hourStart = calendar.dateInterval(of: .hour, for: now)?.start else {
+            return regularPrediction(
+                profile: profile,
+                state: .fallback,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "Could not resolve the current hour; using regular checks."
+            )
+        }
+        let clampedMinutes = Array(Set(targetMinutes.map { max(0, min(59, $0)) })).sorted()
+        guard !clampedMinutes.isEmpty else {
+            return regularPrediction(
+                profile: profile,
+                state: .fallback,
+                stats: stats,
+                recheckInterval: baseRecheck,
+                now: now,
+                reason: "Rolling bulletin profile has no minute slots; using regular checks."
+            )
+        }
+
+        let slots = (-2...3).flatMap { offset -> [RefreshSlot] in
+            guard let targetHour = calendar.date(byAdding: .hour, value: offset, to: hourStart) else { return [] }
+            return clampedMinutes.map { minute in
+                let target = targetHour.addingTimeInterval(TimeInterval(minute * 60))
+                return RefreshSlot(
+                    preWindowStart: target.addingTimeInterval(-3 * 60),
+                    windowStart: target.addingTimeInterval(-2 * 60),
+                    windowEnd: target.addingTimeInterval(15 * 60)
+                )
+            }
+        }
+        return windowedPrediction(
+            profile: profile,
+            slots: slots,
+            latestPublishedAt: latestPublishedAt,
+            stats: stats,
+            baseRecheck: min(baseRecheck, 5 * 60),
+            missedRecheck: { _, base in min(base, 10 * 60) },
+            now: now,
+            continueCheckingAfterPublishUntilWindowEnd: false,
+            activeReason: "Rolling bulletin release minute is near.",
+            quietReason: "Expected rolling bulletin appears to have arrived; wait for the next bulletin slot."
         )
     }
 
@@ -1737,6 +1908,8 @@ public enum FeedRefreshPrioritizer {
         switch kind {
         case .hourly:
             return releaseWindowState ? 16 : 0
+        case .rollingBulletin:
+            return releaseWindowState ? 18 : 0
         case .burst:
             return releaseWindowState ? 14 : 0
         case .dailyWeekdays:
