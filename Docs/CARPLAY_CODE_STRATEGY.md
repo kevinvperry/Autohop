@@ -8,6 +8,7 @@ Related documents:
 
 - `Docs/CARPLAY_IMPLEMENTATION_STRATEGY.md` - product and behavior strategy.
 - `Docs/CARPLAY_ENTITLEMENT_APPLICATION.md` - entitlement background and Apple-facing framing.
+- `Docs/CARPLAY_PHASE9_QA.md` - Phase 9 verification status and remaining manual CarPlay checks.
 
 ## North Star
 

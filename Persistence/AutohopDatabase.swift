@@ -7,7 +7,9 @@ import GRDB
 // with one row per subscription and one row per episode, written incrementally
 // inside a single transaction. This is a like-for-like backend swap:
 // SubscriptionStore keeps its identical [Subscription] facade and public API;
-// only persistence moved here.
+// only persistence moved here. The SQLite store is marked available-after-first-
+// unlock so CarPlay can read downloaded queue rows and apply archive/play-next
+// mutations after the phone locks in the car.
 //
 // WRITE PATH (`persist(current:previous:)` → `write(_:previous:into:)`): diffs
 // against the prior snapshot so only genuinely-changed rows touch disk
@@ -37,6 +39,7 @@ final class AutohopDatabase: @unchecked Sendable {
     private let dbQueue: DatabaseQueue
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let storeURL: URL?
 
     /// Test seam: when set, the next `persist(current:previous:)` throws instead of
     /// writing, simulating a disk-full / locked-database failure so tests can verify
@@ -50,14 +53,29 @@ final class AutohopDatabase: @unchecked Sendable {
     var _testEpisodeRowPayloadWrites = 0
 
     init(path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try LockedDeviceFileAccess.createDirectory(url.deletingLastPathComponent())
+        storeURL = url
         dbQueue = try DatabaseQueue(path: path)
         try Self.migrator.migrate(dbQueue)
+        hardenStoreFiles()
     }
 
     /// In-memory database for tests.
     init() throws {
+        storeURL = nil
         dbQueue = try DatabaseQueue()
         try Self.migrator.migrate(dbQueue)
+    }
+
+    private func hardenStoreFiles() {
+        guard let storeURL else { return }
+        LockedDeviceFileAccess.applyToSQLiteStore(at: storeURL)
+    }
+
+    private func writeAndHarden(_ updates: (Database) throws -> Void) throws {
+        try dbQueue.write(updates)
+        hardenStoreFiles()
     }
 
     // MARK: - Schema
@@ -294,7 +312,7 @@ final class AutohopDatabase: @unchecked Sendable {
             _testFailNextPersist = false
             throw _TestPersistError.injectedFailure
         }
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let currentIDs = Set(current.map(\.id))
 
             for removedID in previous.keys where !currentIDs.contains(removedID) {
@@ -313,7 +331,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     /// Bulk replace — used by the one-time JSON import.
     func replaceAll(with subscriptions: [Subscription]) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             try EpisodeRow.deleteAll(db)
             try SubscriptionRow.deleteAll(db)
             for subscription in subscriptions {
@@ -329,7 +347,7 @@ final class AutohopDatabase: @unchecked Sendable {
     /// is re-seeded so it pushes; undecodable episode rows are likewise repaired.
     /// A no-op once everything decodes.
     func reseedUndecodableSyncState(for subscriptions: [Subscription]) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             for subscription in subscriptions {
                 let subRow = try SubscriptionSyncRow.fetchOne(db, key: subscription.id.uuidString)
                 let subDecodes = subRow.flatMap { try? decoder.decode(SubscriptionSyncState.self, from: $0.payload) } != nil
@@ -545,7 +563,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     /// Clears the dirty stamps on the given projections after a successful push.
     func markSynced(episodeSyncKeys: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             for syncKey in episodeSyncKeys {
                 guard let row = try EpisodeSyncRow.fetchOne(db, key: syncKey),
                       var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) else { continue }
@@ -599,7 +617,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     /// Upsert a projection directly (used when applying a merged remote change).
     func saveEpisodeSyncState(_ state: EpisodeSyncState) throws {
-        try dbQueue.write { db in try save(episodeState: state, into: db) }
+        try writeAndHarden { db in try save(episodeState: state, into: db) }
     }
 
     /// Cached CKRecord system fields for an episode, if we've seen its server record.
@@ -612,7 +630,7 @@ final class AutohopDatabase: @unchecked Sendable {
     /// Store CKRecord system fields for an episode (no-op if the projection row
     /// doesn't exist yet).
     func storeEpisodeSystemFields(_ data: Data?, syncKey: String) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             guard var row = try EpisodeSyncRow.fetchOne(db, key: syncKey) else { return }
             row.systemFields = data
             try row.save(db)
@@ -629,7 +647,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     func saveSubscriptionSyncState(_ state: SubscriptionSyncState) throws {
-        try dbQueue.write { db in try save(subscriptionState: state, into: db) }
+        try writeAndHarden { db in try save(subscriptionState: state, into: db) }
     }
 
     func subscriptionSystemFields(id: UUID) throws -> Data? {
@@ -639,7 +657,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     func storeSubscriptionSystemFields(_ data: Data?, id: UUID) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             guard var row = try SubscriptionSyncRow.fetchOne(db, key: id.uuidString) else { return }
             row.systemFields = data
             try row.save(db)
@@ -651,7 +669,7 @@ final class AutohopDatabase: @unchecked Sendable {
     /// Records a locally-changed history entry as pending (preserving any cached
     /// system fields). Called from ListeningHistoryStore on every mutation.
     func recordHistoryEntry(_ entry: ListeningHistoryEntry) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let existing = try HistorySyncRow.fetchOne(db, key: entry.id)?.systemFields
             let row = HistorySyncRow(
                 id: entry.id,
@@ -666,7 +684,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     /// Upserts a history entry already reconciled with the server (clean — not re-pushed).
     func saveSyncedHistoryEntry(_ entry: ListeningHistoryEntry) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let existing = try HistorySyncRow.fetchOne(db, key: entry.id)?.systemFields
             let row = HistorySyncRow(
                 id: entry.id,
@@ -702,7 +720,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     func storeHistorySystemFields(_ data: Data?, id: String) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             guard var row = try HistorySyncRow.fetchOne(db, key: id) else { return }
             row.systemFields = data
             try row.save(db)
@@ -718,7 +736,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     func recordStatsDay(_ day: DayStats) throws {
         _testStatsDayWriteCount += 1
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)?.systemFields
             let row = StatsSyncRow(
                 dayKey: day.dayKey,
@@ -753,7 +771,7 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     func storeStatsSystemFields(_ data: Data?, dayKey: String) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             guard var row = try StatsSyncRow.fetchOne(db, key: dayKey) else { return }
             row.systemFields = data
             try row.save(db)
@@ -765,7 +783,7 @@ final class AutohopDatabase: @unchecked Sendable {
     /// Test seam: writes an undecodable subscription sync payload, simulating a
     /// row left by an older projection shape (the bug this guards against).
     func _testWriteCorruptSubscriptionSyncRow(id: UUID) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let row = SubscriptionSyncRow(
                 subscriptionID: id.uuidString,
                 payload: Data("not-decodable".utf8),
@@ -778,7 +796,7 @@ final class AutohopDatabase: @unchecked Sendable {
 
     /// Upserts another device's day partition (for summing on read).
     func applyRemoteStatsPartition(deviceID: String, day: DayStats) throws {
-        try dbQueue.write { db in
+        try writeAndHarden { db in
             let row = RemoteStatsRow(
                 id: "\(deviceID):\(day.dayKey)",
                 dayKey: day.dayKey,

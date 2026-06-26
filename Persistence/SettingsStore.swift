@@ -2,10 +2,11 @@ import Foundation
 
 // AI CONTEXT — Persistence/SettingsStore.swift
 // Trivial persistence wrapper for the global AppSettings value: every didSet
-// writes settings.json atomically to Application Support/Autohop/. Injected
-// into AppState as SettingsStoring (protocol exists for test substitution).
-// Per-podcast settings do NOT live here — they're on Subscription in
-// SubscriptionStore.
+// writes settings.json atomically to Application Support/Autohop/ with
+// available-after-first-unlock protection so CarPlay can read Shared Listening
+// state while the phone is locked. Injected into AppState as SettingsStoring
+// (protocol exists for test substitution). Per-podcast settings do NOT live here
+// — they're on Subscription in SubscriptionStore.
 protocol SettingsStoring: AnyObject {
     var appSettings: AppSettings { get set }
 }
@@ -30,16 +31,15 @@ final class SettingsStore: ObservableObject, SettingsStoring {
               let stored = try? JSONDecoder().decode(Stored.self, from: data)
         else { return }
 
+        LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: url)
         appSettings = stored.appSettings
     }
 
     private func save() {
         guard let url = fileURL else { return }
         do {
-            let directory = url.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(Stored(appSettings: appSettings))
-            try data.write(to: url, options: [.atomic])
+            try LockedDeviceFileAccess.writeDataAtomically(data, to: url)
         } catch {
             // In-memory state remains usable, but the change won't survive a
             // relaunch — log so a setting that silently reverts (e.g. iCloud sync

@@ -25,6 +25,11 @@ classification, main-thread hang context, playback tick timing, and stats-sync
 flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
+Section 19 documents CarPlay support. Keep it aligned with the approved audio
+entitlement scope: Now Playing, Up Next, Queue, downloaded-only playback, Play,
+Play Next, Archive, playback speed, and Shared Listening. CarPlay must not grow
+search, browsing, downloads, feed refresh, settings, sleep controls, stats, OPML,
+notifications, or other non-driving workflows.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -84,6 +89,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 16. [Support (In-App User Guide)](#16-support-in-app-user-guide)
 17. [Artwork Cache & Lazy Image Loading](#17-artwork-cache--lazy-image-loading)
 18. [First-Run Experience (New User Onboarding)](#18-first-run-experience-new-user-onboarding)
+19. [CarPlay](#19-carplay)
 
 ---
 
@@ -911,7 +917,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 **What it is:** A native, dark-themed in-app User Guide that **mirrors the website Support page** (`kevmarl-site/support.html`). The two are kept in sync by hand — any change to support information is applied in both places.
 
-**Structure:** Drill-down navigation. Support opens to a scannable list of ~16 topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Queue, Player, Audio Controls, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, Listening History, Stats, App Settings.
+**Structure:** Drill-down navigation. Support opens to a scannable list of topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Queue, Player, Audio Controls, CarPlay, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, iCloud Sync, Listening History, Stats, App Settings.
 
 **Content blocks (native renderers):** paragraphs with inline Markdown bold, headings, bullet and numbered lists, tinted callouts (tip / note / warning), key-value and labelled tables (as cards), colour-coded status pills, and Queue-style swipe-action cards. The website's SVG diagrams are intentionally omitted — the surrounding text and tables carry the same information on a phone screen. See DESIGN.md `ListRow-SupportSection` and `Blocks-Support`.
 
@@ -1144,3 +1150,32 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | downloadFilterSettings | DownloadFilterSettings.default (all filter groups off; match mode All; no rules) |
 | playbackPreference | PlaybackPreference.default |
 | browseDate | nil (nil = real subscription; non-nil = auto-created browse subscription) |
+
+---
+
+## 19. CarPlay
+
+**What it is:** A native CarPlay Audio App surface for Autohop's existing downloaded playback queue. CarPlay is another UI over the same `AppState`, queue, playback engine, archive behavior, speed preferences, and Shared Listening state used by the iPhone app.
+
+**Entry behavior:**
+- If an episode is currently loaded, CarPlay opens to **Now Playing**.
+- If no episode is currently loaded, CarPlay opens to **Up Next**.
+- During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Up Next.
+
+**Screens:**
+- **Now Playing** — current episode metadata, artwork when available, system playback controls, Archive, speed cycling, Shared Listening toggle, and Shared Listening speed picker.
+- **Up Next** — a compact list of downloaded queue episodes. Tapping a row starts that episode immediately.
+- **Queue** — the same downloaded queue with an action sheet for Play, Play Next, and Archive.
+
+**Downloaded-only rule:** CarPlay reads from `AppState.downloadedQueue` only. It does not search, browse podcasts, refresh feeds, start downloads, stream episodes, or expose subscription management.
+
+**Actions:**
+- **Play** starts the selected downloaded episode immediately.
+- **Play Next** moves the selected episode directly after the currently playing episode, matching iPhone behavior. If there is no current episode, Play Next behaves as Play.
+- **Archive** removes the selected episode from the queue. Archiving the current episode advances to the next downloaded queue item when one exists; otherwise Now Playing is cleared and the empty queue state is shown.
+- **Playback Speed** cycles through Autohop's existing preset speeds, using the current episode's podcast settings as the base.
+- **Shared Listening** controls the same global temporary override as iPhone. Disconnecting CarPlay does not change the Shared Listening state.
+
+**Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.
+
+**Explicitly excluded from CarPlay v1:** Search, Discover, RSS entry, podcast settings, feed refresh, downloads, streaming, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, diagnostics, sharing, and long-form episode browsing.

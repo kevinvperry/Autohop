@@ -16,6 +16,10 @@ import UIKit
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
 //    playNextEpisode), seek, chapter navigation, per-podcast audio settings
 //    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
+//    CarPlay is deliberately just another UI surface over these same methods:
+//    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
+//    and cyclePlaybackSpeedForCurrentEpisode() exist to keep CarPlay action
+//    routing thin while preserving one shared playback/queue/settings model.
 //    External `podcast:chapters` are fetched AFTER play() begins (P7):
 //    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
 //    ephemeral session) so a slow endpoint never delays the first audio frame,
@@ -27,6 +31,8 @@ import UIKit
 //    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
 //    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
 //    Application Support/Autohop/queue-pins.json and clear on play/archive.
+//    Queue pins and playback-position.json are marked available-after-first-unlock
+//    so CarPlay can render queue/progress and archive/play-next while locked.
 //  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
 //    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles via
 //    isDownloadAllowed(). Before the monitor reports its first path (the launch
@@ -378,6 +384,14 @@ final class AppState: ObservableObject {
 
     func isQueuePinnedLast(_ episode: Episode) -> Bool {
         queueDemotedEpisodeIDs.contains(episode.id)
+    }
+
+    func episodeIsCurrent(_ episode: Episode) -> Bool {
+        currentPlayerEpisode?.id == episode.id
+    }
+
+    func podcastTitle(for episode: Episode) -> String? {
+        subscriptionStore.subscription(id: episode.subscriptionID)?.title
     }
 
     /// Returns the current playback position for an episode: live time if it's playing now,
@@ -1556,6 +1570,11 @@ final class AppState: ObservableObject {
         }
     }
 
+    func archiveCurrentEpisodeAndPlayNext() async {
+        guard let episode = currentPlayerEpisode else { return }
+        await archiveEpisodeAndPlayNext(episode)
+    }
+
     func unarchiveEpisode(_ episode: Episode) {
         subscriptionStore.markEpisodeUnarchived(subscriptionID: episode.subscriptionID, episodeID: episode.id)
         logger.info("episode.unarchive", "Unarchived episode", metadata: ["episode": episode.title])
@@ -1964,6 +1983,23 @@ final class AppState: ObservableObject {
                 speed: speed
             )
         }
+    }
+
+    func cyclePlaybackSpeedForCurrentEpisode() {
+        guard !sharedListeningActive,
+              let episode = currentPlayerEpisode,
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
+              !PlaybackPreference.speedOptions.isEmpty
+        else { return }
+
+        let currentSpeed = subscription.playbackPreference.speed
+        let currentIndex = PlaybackPreference.speedOptions.firstIndex { abs($0 - currentSpeed) < 0.01 }
+            ?? PlaybackPreference.speedOptions.startIndex
+        let nextIndex = PlaybackPreference.speedOptions.index(after: currentIndex)
+        let nextSpeed = nextIndex == PlaybackPreference.speedOptions.endIndex
+            ? PlaybackPreference.speedOptions[PlaybackPreference.speedOptions.startIndex]
+            : PlaybackPreference.speedOptions[nextIndex]
+        updatePlaybackSpeed(for: subscription.id, speed: nextSpeed)
     }
 
     func updateVocalBoost(for subscriptionID: UUID, level: VocalBoostLevel) {
@@ -3810,8 +3846,7 @@ final class AppState: ObservableObject {
         guard let url = Self.queuePinsFileURL else { return }
         let pins = SavedQueuePins(overrideIDs: queueOverrideEpisodeIDs, demotedIDs: queueDemotedEpisodeIDs)
         guard let data = try? JSONEncoder().encode(pins) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: [.atomic])
+        try? LockedDeviceFileAccess.writeDataAtomically(data, to: url)
     }
 
     private func loadQueuePins() {
@@ -3819,6 +3854,7 @@ final class AppState: ObservableObject {
               let data = try? Data(contentsOf: url),
               let pins = try? JSONDecoder().decode(SavedQueuePins.self, from: data)
         else { return }
+        LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: url)
         queueOverrideEpisodeIDs = pins.overrideIDs
         queueDemotedEpisodeIDs = pins.demotedIDs
         logger.info("queue.pinsLoaded", "Queue pins restored", metadata: [
@@ -3898,6 +3934,7 @@ final class AppState: ObservableObject {
               let data = try? Data(contentsOf: url)
         else { return [:] }
 
+        LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: url)
         if let positions = try? JSONDecoder().decode(SavedPositions.self, from: data) {
             return positions
         }
@@ -3922,9 +3959,8 @@ final class AppState: ObservableObject {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(positions) else { return }
-        try? data.write(to: url, options: [.atomic])
+        try? LockedDeviceFileAccess.writeDataAtomically(data, to: url)
     }
 
     private func clearPlaybackPosition(for episodeID: UUID) {

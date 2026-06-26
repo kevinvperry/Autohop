@@ -18,10 +18,11 @@ import Foundation
 // was killed and iOS relaunched it to deliver a finished download — there is
 // no live continuation in that case); file storage under the app's Downloads
 // directory with deterministic names (expectedLocalFileURL). The Downloads
-// directory is marked isExcludedFromBackup (ASSESSMENT N1) so re-downloadable
-// media is NOT swept into iCloud/device backups; it deliberately stays in
-// Application Support (NOT Caches) so iOS never purges it out from under the
-// download-first queue.
+// directory is marked isExcludedFromBackup (ASSESSMENT N1) and the directory plus
+// completed media files are marked available-after-first-unlock so CarPlay can
+// start downloaded playback after the phone locks in the car. Media deliberately
+// stays in Application Support (NOT Caches) so iOS never purges it out from under
+// the download-first queue.
 // CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
 // ENFORCED HERE — AppState gates calls to download().
 public protocol DownloadManaging: AnyObject {
@@ -306,6 +307,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         }
         do {
             try fileManager.moveItem(at: sourceURL, to: destination)
+            LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: destination, fileManager: fileManager)
             logger.info("download.fileStored", "Downloaded file stored", metadata: [
                 "episodeID": episode.id.uuidString,
                 "file": destination.lastPathComponent
@@ -354,7 +356,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     private func downloadsDirectory() throws -> URL {
         if let override = downloadDirectoryOverride {
-            try fileManager.createDirectory(at: override, withIntermediateDirectories: true)
+            try LockedDeviceFileAccess.createDirectory(override, fileManager: fileManager)
             return override
         }
         let appSupport = try fileManager.url(
@@ -364,7 +366,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             create: true
         )
         let dir = appSupport.appendingPathComponent("Autohop/Downloads", isDirectory: true)
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        try LockedDeviceFileAccess.createDirectory(dir, fileManager: fileManager)
         // N1: keep re-downloadable media out of iCloud/device backups. Idempotent
         // and cheap (skips the write once the flag is already set), so it's safe to
         // re-apply on every resolve — and it self-heals if a restore ever clears it.

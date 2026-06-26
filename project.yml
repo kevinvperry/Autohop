@@ -171,6 +171,18 @@ targets:
         # ── App Store ──────────────────────────────────────────────────────
         ITSAppUsesNonExemptEncryption: false
 
+        # ── CarPlay ────────────────────────────────────────────────────────
+        # CarPlay Audio App entitlement approved June 2026. The CarPlay scene
+        # uses Apple's template application scene and is implemented in Phase 1
+        # by CarPlaySceneDelegate.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneConfigurationName: CarPlay
+                UISceneClassName: CPTemplateApplicationScene
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).CarPlaySceneDelegate
+
     # ── Entitlements ───────────────────────────────────────────────────────
     # Time Sensitive Notifications: lets the Sleep Schedule "Are you still
     # listening?" prompt (NotificationService.postSleepSchedulePrompt) break
@@ -186,6 +198,10 @@ targets:
           - iCloud.com.kevinperry.autohop
         com.apple.developer.icloud-services:
           - CloudKit
+        # CarPlay Audio App (CarPlay framework). Approved by Apple Developer
+        # Relations in June 2026; keep in XcodeGen so regenerated projects
+        # preserve the managed capability.
+        com.apple.developer.carplay-audio: true
         # Push entitlement for CKSyncEngine silent change pushes. "development"
         # is correct for debug/sandbox; Xcode rewrites it to "production" when
         # archiving for distribution.
@@ -196,6 +212,7 @@ targets:
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: AVKit.framework
+      - sdk: CarPlay.framework
       - sdk: MediaPlayer.framework
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
@@ -224,6 +241,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.autohop.app.tests
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: Autohop
         embed: false

@@ -58,6 +58,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
+- CarPlay audio support: Now Playing, compact Up Next, simplified Queue actions, downloaded-only playback, Archive, playback speed cycling, and Shared Listening controls
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
 
@@ -69,6 +70,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
 | [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference). |
 | [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
+| [`Docs/CARPLAY_CODE_STRATEGY.md`](Docs/CARPLAY_CODE_STRATEGY.md) | CarPlay implementation plan, phase gates, and release sequencing. |
+| [`Docs/CARPLAY_PHASE9_QA.md`](Docs/CARPLAY_PHASE9_QA.md) | CarPlay simulator/hardware QA status and manual checklist. |
 | [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
 | [`ASSESSMENT.md`](ASSESSMENT.md) | Machine-oriented code/feature/security assessment: performance, bugs, stale code, and security findings with `file:line` anchors and severities. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |

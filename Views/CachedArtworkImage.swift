@@ -9,11 +9,14 @@ import ImageIO
 // The cache stores original source bytes once on disk, keeps downsampled display
 // variants in an 80 MB NSCache, validates remote responses (2xx image/*, <=5 MB),
 // negative-caches failures for 5 minutes, and prunes disk metadata/files at
-// 250 MB or 90 days LRU. Callers should pass targetSize for fixed artwork so
-// ImageIO can decode near display size instead of holding full podcast covers
-// in memory. Priority levels are visible/prefetch/background: visible requests
-// can cancel lower-priority prefetch work; PodcastDetailView prefetches the next
-// few episode row thumbnails and cancels stale off-screen prefetches.
+// 250 MB or 90 days LRU. Disk cache files are marked available-after-first-unlock
+// so CarPlay can render cached artwork while locked; CarPlay callers still use a
+// placeholder if disk/network/decode work is unavailable. Callers should pass
+// targetSize for fixed artwork so ImageIO can decode near display size instead of
+// holding full podcast covers in memory. Priority levels are visible/prefetch/
+// background: visible requests can cancel lower-priority prefetch work;
+// PodcastDetailView prefetches the next few episode row thumbnails and cancels
+// stale off-screen prefetches.
 struct CachedArtworkImage<Placeholder: View>: View {
     let url: URL?
     var contentMode: ContentMode = .fill
@@ -158,7 +161,7 @@ actor ArtworkImageCache {
         .appendingPathComponent("Autohop/Artwork", isDirectory: true)
 
         if let cacheDirectory {
-            try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try? LockedDeviceFileAccess.createDirectory(cacheDirectory, fileManager: fileManager)
         }
 
         let config = URLSessionConfiguration.default
@@ -212,6 +215,7 @@ actor ArtworkImageCache {
 
             guard !Task.isCancelled else { return nil }
             if let data {
+                LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: fileURL)
                 recordDiskAccess(url: url)
                 failedUntil.removeValue(forKey: url)
                 return data
@@ -353,7 +357,7 @@ actor ArtworkImageCache {
 
             if let fileURL = fileURL(for: url) {
                 let didWrite = await Task.detached(priority: .background) {
-                    (try? data.write(to: fileURL, options: [.atomic])) != nil
+                    (try? LockedDeviceFileAccess.writeDataAtomically(data, to: fileURL)) != nil
                 }.value
                 if didWrite {
                     recordDiskWrite(url: url, byteSize: data.count)
@@ -501,7 +505,7 @@ actor ArtworkImageCache {
         guard let metadataURL = metadataURL() else { return }
         do {
             let data = try JSONEncoder().encode(diskMetadata)
-            try data.write(to: metadataURL, options: [.atomic])
+            try LockedDeviceFileAccess.writeDataAtomically(data, to: metadataURL)
         } catch {
             // Cache metadata is best-effort; stale entries self-heal on later access/prune.
         }

@@ -86,6 +86,7 @@ let package = Package(
                 "Feeds/OPMLService.swift",
                 "Persistence/SubscriptionStore.swift",
                 "Persistence/AutohopDatabase.swift",
+                "Persistence/LockedDeviceFileAccess.swift",
                 "Persistence/CloudKitSyncMapping.swift",
                 "Persistence/CloudSyncEngine.swift",
                 "Persistence/ListeningStatsStore.swift",

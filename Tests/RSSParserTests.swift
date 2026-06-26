@@ -2,7 +2,8 @@
 // against bundled XML fixtures. Runs in BOTH the SwiftPM `AutohopCoreTests`
 // target (`swift test`) and the Xcode test bundle — so it imports the shared
 // AutohopCore library module (RSSParser, ParsedFeed, Episode, Chapter all live
-// there), not the app module.
+// there), not the app module. Fixture lookup must use Bundle.module only under
+// SwiftPM; Xcode's app test target gets fixtures as test-bundle resources.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore   // `swift test` (SwiftPM AutohopCoreTests target)
@@ -303,6 +304,7 @@ final class RSSParserTests: XCTestCase {
     }
 
     private func fixtureData(named name: String, extension fileExtension: String) throws -> Data {
+        #if AUTOHOP_SPM
         let url = try XCTUnwrap(
             Bundle.module.url(
                 forResource: name,
@@ -310,6 +312,13 @@ final class RSSParserTests: XCTestCase {
                 subdirectory: "Fixtures"
             )
         )
+        #else
+        let bundle = Bundle(for: Self.self)
+        let url = try XCTUnwrap(
+            bundle.url(forResource: name, withExtension: fileExtension, subdirectory: "Fixtures")
+                ?? bundle.url(forResource: name, withExtension: fileExtension)
+        )
+        #endif
         return try Data(contentsOf: url)
     }
 }

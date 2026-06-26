@@ -1,13 +1,16 @@
 import Foundation
 
 // AI CONTEXT — Persistence/SubscriptionStore.swift
-// The single persistent store for ALL subscription + episode data. JSON file
-// at Application Support/Autohop/subscriptions.json; saves are coalesced on a
-// utility queue so a 70-feed refresh cycle produces one disk write, written
-// atomically. @MainActor: all mutation happens on the main actor and views
-// observe `subscriptions` through AppState's subscriptionStore.objectWillChange
-// bridge. The array is not @Published on purpose: save() is the single publisher,
-// which lets refresh-stat-only writes persist quietly without waking UI/sync.
+// The single persistent store for ALL subscription + episode data. The current
+// app store is Application Support/Autohop/autohop.sqlite; legacy JSON at
+// subscriptions.json is imported once. The SQLite directory/store is marked
+// available-after-first-unlock so CarPlay can read downloadedQueue and persist
+// archive/play-next changes while locked. Saves are coalesced on a utility queue
+// so a 70-feed refresh cycle produces one disk write. @MainActor: all mutation
+// happens on the main actor and views observe `subscriptions` through AppState's
+// subscriptionStore.objectWillChange bridge. The array is not @Published on
+// purpose: save() is the single publisher, which lets refresh-stat-only writes
+// persist quietly without waking UI/sync.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted — the merge also reconstructs wasCompleted from
@@ -1149,10 +1152,7 @@ public final class SubscriptionStore: ObservableObject {
         guard let url = appSupportURL()?.appendingPathComponent("Autohop/autohop.sqlite") else {
             return NSTemporaryDirectory() + "autohop.sqlite"
         }
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        try? LockedDeviceFileAccess.createDirectory(url.deletingLastPathComponent())
         return url.path
     }
 

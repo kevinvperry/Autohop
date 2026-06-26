@@ -2,8 +2,8 @@
 
 **Status legend:** ✅ done · 🔄 in progress · ⬜ not started · 🧍 needs you (Apple account / device / asset / decision)
 **Owner:** **[Me]** = doable in-repo by the assistant · **[You]** = requires your Apple account, hardware, or a manual store action.
-**Last updated:** 2026-06-20
-**STATUS: v1.0 (build 1) APPROVED & LIVE 2026-06-17 (apps.apple.com/au/app/autohop/id6777946512). Now preparing v1.1 (build 2) — a large feature update (iCloud Sync, Release Radar, iOS 26 Liquid Glass redesign, OPML import/export, first-run onboarding) plus a full App Store SEO/ASO overhaul (see Appendix 1). `project.yml` bumped to 1.1/2 (2026-06-20).**
+**Last updated:** 2026-06-26
+**STATUS: v1.0 (build 1) APPROVED & LIVE 2026-06-17 (apps.apple.com/au/app/autohop/id6777946512). Now preparing the next feature release: v1.1 work remains captured below, and CarPlay Audio App entitlement approval has been granted for the account. CarPlay release preparation notes, review copy, and remaining simulator/hardware gates are captured in Appendix 5.**
 
 > **v1.1 submission steps:** ✅ **Step 0 — version bump (1.1/build 2) + `xcodegen generate`** done & verified in pbxproj (2026-06-21). · ✅ **Step 1 — CloudKit schema live in Production** (`iCloud.com.kevinperry.autohop`): EpisodeState, SubscriptionState, HistoryEntry, DayStats all present in Production; no pending deploy (verified 2026-06-21) · ✅ **Step 2 — build 1.1 (2) archived, validated & uploaded** to ASC (Processing in TestFlight, 2026-06-21 8:49 AM) · ✅ **Step 3 — ASC metadata/ASO done**: name `Autohop: Podcast Player`, subtitle `Auto-queue, sync & sleep`, promo text, What's New, updated description, and per-storefront keyword fields for English (U.S./U.K./Australia) (2026-06-21) · ✅ **Step 4 — screenshots updated** (6.9" refreshed for Liquid Glass + new iCloud Sync shot, across US/UK/AU localizations) (2026-06-21) · ✅ **Step 5 — build 1.1 (2) attached, review notes pasted (incl. CloudKit paragraph), App Privacy confirmed "Data Not Collected"** (2026-06-21) · ✅ **Step 6 — SUBMITTED, "Waiting for Review"** (manual release chosen) (2026-06-21). **ALL STEPS COMPLETE.** Remaining: click "Release This Version" once Apple approves. ✅ listing copy, What's New, review notes drafted in-repo (Appendices 1–4).
 
@@ -36,10 +36,13 @@
 | E17 | MPL-2.0 source availability (link/offer) | P0 | Me/You | ✅ public repo + in-app/NOTICE links |
 | E18 | Apple charts/API terms comfort check | P1 | You | ⬜ |
 | E19 | App Review notes | P0 | Me | ✅ draft (Appendix 2) |
+| E20 | CarPlay App Review notes | P0 | Me | ✅ draft (Appendix 5) |
 | F20 | TestFlight beta pass | P1 | You | ⬜ |
 | F21 | On-device validation of new features | P1 | You | ✅ on iPhone 17 Pro Max |
 | F22 | Accessibility pass | P1 | Me/You | ✅ (labels added) · 🧍 on-device VoiceOver check |
 | F23 | Fix `swift test` target import | P2 | Me | ✅ (+ fixed a real parser bug; 4/4 pass) |
+| F24 | CarPlay simulator + hardware QA | P0 | You | 🧍 pending; checklist in `Docs/CARPLAY_PHASE9_QA.md` |
+| F25 | Production CarPlay signing/archive entitlement check | P0 | You | 🧍 confirm production profile and archived app include `com.apple.developer.carplay-audio` |
 | G24 | Real App Store CTA link on website | P1 | Me | 🔄 (badge fixed; link pending approval) |
 
 ---
@@ -210,6 +213,9 @@ The optional "Sleep Schedule" feature posts a local, time-sensitive notification
 ICLOUD SYNC (new in 1.1)
 Autohop can sync a user's subscriptions, priority order, queue, listening history, stats, and playback position across their own devices using CloudKit and the user's PRIVATE iCloud database (CKSyncEngine). No Autohop-operated server is involved and the developer cannot access this data; it is the user's own iCloud. Sync is optional. No account or login is added — it uses the device's existing iCloud account.
 
+CARPLAY AUDIO APP
+Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing, Up Next, and a simplified Queue for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
+
 PRIVACY
 Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only, and — when the user enables iCloud Sync — in their own private iCloud (CloudKit private database), never on any developer server. See the privacy manifest and https://kevmarl.com/autohop/privacy.
 
@@ -246,4 +252,45 @@ Ordering is benefit-first: Player → Priority → iCloud Sync → Sleep Schedul
 ## Appendix 4 — App Privacy answers (App Store Connect)
 
 Answer **"No, we do not collect data from this app."** This matches `PrivacyInfo.xcprivacy` (`NSPrivacyCollectedDataTypes` empty, `NSPrivacyTracking` false) and the privacy policy. No data types, no tracking, no third-party SDKs. Network calls are only to user-chosen feeds/media and Apple's public podcast directory/charts; nothing the user generates is transmitted.
+
+---
+
+## Appendix 5 — CarPlay Release Preparation
+
+Status: CarPlay Audio App entitlement has been approved for the Apple Developer account. The app source now declares the CarPlay Audio App entitlement, `CarPlay.framework`, and the CarPlay scene through `project.yml`, with generated `Autohop.entitlements`, `Info.plist`, and Xcode project output preserved by XcodeGen.
+
+Codex verification completed 2026-06-26:
+
+- `Autohop.entitlements` contains `com.apple.developer.carplay-audio = true`.
+- Release build settings use `CODE_SIGN_ENTITLEMENTS = Autohop.entitlements`.
+- Full Xcode app tests pass after the CarPlay support/release-prep documentation updates.
+- Simulator-signed debug builds may show an empty entitlement blob; the release gate is the production archive signed with the refreshed production provisioning profile.
+
+App Review note to paste with a CarPlay build:
+
 ```
+Autohop includes CarPlay support under the CarPlay Audio App entitlement.
+
+The CarPlay interface is audio-only and limited to safe playback controls for already downloaded podcast episodes:
+- Now Playing for the current episode.
+- Up Next for quick selection from the downloaded queue.
+- Queue actions: Play, Play Next, and Archive.
+- Playback speed cycling using Autohop's existing presets.
+- Shared Listening toggle and Shared Listening speed picker.
+
+CarPlay uses the same queue, playback, archive, speed, and Shared Listening state as the iPhone app. It does not create a separate CarPlay queue or separate playback system.
+
+CarPlay does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, subscription management, settings, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, sharing, diagnostics, or text entry.
+
+If there are no downloaded queue episodes, CarPlay shows a simple "No downloaded episodes" state.
+```
+
+Pre-submission checks:
+
+- Confirm the production App ID has the CarPlay Audio App managed capability enabled.
+- Regenerate or refresh the production provisioning profile after enabling the capability.
+- Confirm Xcode signing for the archive uses a profile containing `com.apple.developer.carplay-audio`.
+- Archive the release candidate and inspect the archived app entitlements for `com.apple.developer.carplay-audio = true`.
+- Run the full iPhone regression pass: launch, background audio, lock-screen controls, Control Centre controls, Sleep Schedule notifications, queue pin persistence, archive behavior, and normal download/refresh behavior.
+- Run the CarPlay simulator and hardware checklist in `Docs/CARPLAY_PHASE9_QA.md`.
+- Confirm no CarPlay route starts feed refresh, search, browsing, streaming, or downloads.
