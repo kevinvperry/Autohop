@@ -4,7 +4,8 @@ import SwiftUI
 // episode rows/detail, all with iOS 26 glass + iOS 17–25 fallbacks:
 //   • Video/Explicit pills (small + large)
 //   • EpisodeStatusKind + EpisodeStatusPill (colour-coded state capsule; each
-//     page supplies its own statusKind(for:) resolver)
+//     page supplies its own statusKind(for:) resolver; includes Skipped for
+//     not-downloaded episodes currently excluded by Download Filters)
 //   • glassCard(cornerRadius:) View modifier (glass content-card surface)
 // Pure presentation; shared across episode lists, preview, queue, and detail pages.
 
@@ -116,7 +117,7 @@ struct ExplicitPillSmall: View {
 // `.inactive` is used on the Priority page only.
 
 enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
+    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive, skipped
 
     var label: String {
         switch self {
@@ -127,6 +128,7 @@ enum EpisodeStatusKind {
         case .played:          return "Played"
         case .archived:        return "Archived"
         case .inactive:        return "Inactive"
+        case .skipped:         return "Skipped"
         }
     }
 
@@ -139,6 +141,7 @@ enum EpisodeStatusKind {
         case .played:          return Color.blue
         case .archived:        return Color.purple
         case .inactive:        return Color.orange
+        case .skipped:         return Color(white: 0.42)
         }
     }
 }

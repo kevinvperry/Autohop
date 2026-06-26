@@ -46,7 +46,7 @@
 
 ## A. Blocking technical fixes (config)
 
-- ✅ **A1 — Removed `processing` from `UIBackgroundModes`** (`project.yml`). Only `audio` + `fetch` remain — both are actually used. Avoids Guideline 2.5.4 rejection.
+- ✅ **A1 — `processing` background mode** (`project.yml`). Removed for v1.0 (no handler then). **Re-added in v1.2** alongside a real `BGProcessingTask` handler (`com.autohop.feedprocessing`, registered in `AppDelegate`) for a charging+Wi-Fi overnight feed catch-up, so it now has a genuine use (Guideline 2.5.4 satisfied). `audio` + `fetch` + `processing` + `remote-notification` are all declared and used.
 - ✅ **A2 — ATS finalized** (`project.yml`). `NSAllowsArbitraryLoads: true`, **no granular sub-keys**. This is required and defensible: feeds/enclosures/artwork are fetched via `URLSession` from unbounded, user-supplied third-party hosts (many HTTP-only); Autohop runs no first-party server. Per-domain `NSExceptionDomains` cannot enumerate an open-ended host set, so domain-scoping is not viable for a general podcast client. **Gotcha avoided:** an earlier attempt added `…InWebContent`/`…ForMedia` sub-keys — but on iOS 10+ the presence of any granular key makes the system *ignore* `NSAllowsArbitraryLoads`, which would have **blocked** our HTTP `URLSession` loads. Those sub-keys were removed. Justification is in Appendix 2 (paste into App Review notes 🧍). NOTE: a stale generated `./Info.plist` on disk still shows the old TODO comment — it is a build artifact and is reconciled on the next `xcodegen generate`.
 - ✅ **A6 — Notification permission deferred to user opt-in.** Removed the launch-time `requestPermission()` from `AppState` bootstrap. `NotificationService.configure()` (delegate + categories) still runs at launch but no longer prompts; `requestPermission()` now only fires from user opt-ins: the notification toggles (`NotificationSettingsView`) and enabling Sleep Schedule (`SleepScheduleView`). Better polish + opt-in rates.
 - ✅ **A7 — Required-reason API audit.** Confirmed the privacy manifest is complete: no system-boot-time or volume disk-space APIs are used (SettingsView reads per-file `.fileSizeKey` only, which is not the regulated category); file-timestamp (AppLogger) and UserDefaults are both declared. Stale comment corrected (see A4).
@@ -197,7 +197,9 @@ Autohop is a download-first podcast player. Users subscribe to public RSS podcas
 
 BACKGROUND MODES
 - audio: AVAudioSession keeps podcast playback alive when the screen locks.
-- fetch (BGAppRefreshTask "com.autohop.feedrefresh"): periodically checks subscribed feeds for new episodes. No other background modes are declared.
+- fetch (BGAppRefreshTask "com.autohop.feedrefresh"): periodically checks subscribed feeds for new episodes.
+- processing (BGProcessingTask "com.autohop.feedprocessing"): a longer feed catch-up that runs only while charging and on Wi-Fi (typically overnight), to refresh feeds and download new episodes when the app hasn't been opened in a while. No user data is collected or transmitted beyond fetching the user's own podcast feeds.
+- remote-notification: receives CloudKit (CKSyncEngine) silent change pushes for the optional iCloud Sync feature (see below).
 
 APP TRANSPORT SECURITY
 NSAllowsArbitraryLoads is enabled because podcast feeds, episode audio/video enclosures, and artwork are served from arbitrary third-party hosts chosen by the user (and by Apple's public chart feeds). Many podcast hosts still serve plain HTTP, and the set of hosts is unbounded and unknown at build time, so per-domain exceptions are not possible. Autohop adds no first-party HTTP endpoints and operates no server of its own.

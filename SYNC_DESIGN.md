@@ -9,7 +9,9 @@ Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scope
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
 (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique
 across record types inside a zone. Refresh scheduling stats remain local, and
-download/media state never syncs.
+download/media state never syncs. DownloadFilterSettings is also intentionally
+local/backup-only in v1 and must not be added to SubscriptionSyncState without a
+deliberate product decision.
 June 2026 diagnostic repair context lives here too: collision quarantine,
 legacy pending-save retirement, full-record namespace migration, recovery from
 legacy unprefixed subscription records after the sparse-record data-loss
@@ -47,7 +49,8 @@ the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
 Release Radar refresh stats are persisted locally on the subscription row but are
 not part of the CloudKit sync projection; refresh-stat-only saves publish no
 `objectWillChange`, so routine polling evidence does not wake the UI or sync
-engine.
+engine. DownloadFilterSettings is persisted on the local Subscription payload but
+is also outside the sync projection in v1.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
@@ -60,7 +63,8 @@ Projections (Models/SyncState.swift):
   wasCompleted, lastPlayedAt.
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
   notificationsEnabled, excludeFromAutoFeedRefresh, playbackPreference,
-  autoArchiveSettings, chapterFilter, + constant `feedURL`.
+  autoArchiveSettings, chapterFilter, + constant `feedURL`. It deliberately
+  excludes DownloadFilterSettings for v1.
 
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
@@ -104,8 +108,9 @@ adopted clean. Settings sub-structs
    iCloud account.
 4. ✅ **Subscription + per-podcast settings over CloudKit** — `SubscriptionState`
    record type (current recordName = `subscription:<subscriptionID>`), all
-   settings + `feedURL` + stored `subscriptionID`; engine handles both record
-   types; `applyRemoteSubscriptionState` updates settings /
+   synced settings + `feedURL` + stored `subscriptionID`; engine handles both
+   record types; DownloadFilterSettings is intentionally not synced in v1;
+   `applyRemoteSubscriptionState` updates settings /
    processes unsubscribe / signals `.needsMaterialization`;
    `AppState.materializeRemoteSubscription` fetches the feed via FeedService and
    creates the podcast, then applies settings. Migration v4 caches subscription

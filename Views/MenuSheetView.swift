@@ -3,9 +3,9 @@ import SwiftUI
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
 // Discover (top item — dismisses the Menu, then posts .autohopOpenDiscover so
-// RootView pushes DiscoverView as a full page on the main stack), Downloads, Listening
-// History, Stats, Sleep Schedule, App Settings, and Support (last item — the
-// in-app User Guide, SupportView, which mirrors the website Support page).
+// RootView pushes DiscoverView as a full page on the main stack), Stats, Sleep
+// Schedule, Listening History, Downloads, App Settings, and Support (last item —
+// the in-app User Guide, SupportView, which mirrors the website Support page).
 // NavRules: one path per page; Find Podcasts lives behind + only; OPML import
 // lives in Settings → Subscriptions.
 struct MenuSheetView: View {
@@ -39,9 +39,16 @@ struct MenuSheetView: View {
                 .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
-                    DownloadsView()
+                    StatsView()
                 } label: {
-                    Label("Downloads", systemImage: "arrow.down.circle")
+                    Label("Stats", systemImage: "chart.bar")
+                }
+                .listRowBackground(Color.white.opacity(0.07))
+
+                NavigationLink {
+                    SleepScheduleView()
+                } label: {
+                    Label("Sleep Schedule", systemImage: "moon.zzz")
                 }
                 .listRowBackground(Color.white.opacity(0.07))
 
@@ -53,16 +60,9 @@ struct MenuSheetView: View {
                 .listRowBackground(Color.white.opacity(0.07))
 
                 NavigationLink {
-                    StatsView()
+                    DownloadsView()
                 } label: {
-                    Label("Stats", systemImage: "chart.bar")
-                }
-                .listRowBackground(Color.white.opacity(0.07))
-
-                NavigationLink {
-                    SleepScheduleView()
-                } label: {
-                    Label("Sleep Schedule", systemImage: "moon.zzz")
+                    Label("Downloads", systemImage: "arrow.down.circle")
                 }
                 .listRowBackground(Color.white.opacity(0.07))
 

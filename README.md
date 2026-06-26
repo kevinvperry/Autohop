@@ -42,10 +42,11 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Per-podcast playback speed (1.0–2.5x), start skip, and end skip
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
-- Release Radar adaptive feed refresh — learns each podcast's release schedule from its publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
+- Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
 - Background feed refresh (BGAppRefreshTask, due-date priority scheduling, protected Release Radar slots) and per-podcast exclude-from-refresh
+- Per-podcast Download Filters for automatic RSS downloads by episode duration, title, and description
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
-- Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive
+- Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive / Skipped
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
 - Stats page: time listened, time saved, episodes finished, and streaks over calendar-anchored This Week / this month / this year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume

@@ -15,7 +15,9 @@ import SwiftUI
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
 // Next) and trailing (Archive / Play Last) swipes — NO share swipe. For an
-// real subscription the feed-refresh button sits on the "Episodes" heading row
+// real subscription, not-downloaded rows that Download Filters currently exclude
+// show the grey Skipped status pill while swipe/manual actions still work. The
+// feed-refresh button sits on the "Episodes" heading row
 // (small purple circular glass button, matching the Subscriptions page) and the
 // toolbar shows Show Settings. Inactive subscriptions are still real
 // subscriptions: they show Subscribed/Unsubscribe, Settings, notifications, and
@@ -663,7 +665,7 @@ struct PodcastDetailView: View {
                                 .monospacedDigit().lineLimit(1)
                         }
                         Spacer(minLength: 8)
-                        EpisodeStatusPill(kind: statusKind(for: episode))
+                        EpisodeStatusPill(kind: statusKind(for: episode, sub: sub))
                     }
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -836,7 +838,7 @@ struct PodcastDetailView: View {
 
     // MARK: - Helpers
 
-    private func statusKind(for episode: Episode) -> EpisodeStatusKind {
+    private func statusKind(for episode: Episode, sub: Subscription) -> EpisodeStatusKind {
         switch episode.playedState {
         case .playing:
             return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
@@ -845,6 +847,10 @@ struct PodcastDetailView: View {
         case .unplayed:
             let position = appState.effectivePlaybackTime(for: episode)
             if position > 0 { return .partiallyPlayed }
+            if episode.downloadState == .notDownloaded,
+               sub.downloadFilterSettings.evaluation(for: episode).isIncluded == false {
+                return .skipped
+            }
             return episode.downloadState == .downloaded ? .queued : .unplayed
         }
     }

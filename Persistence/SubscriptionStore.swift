@@ -31,6 +31,9 @@ import Foundation
 // a full namespaced re-upload. Inactive podcasts (`excludeFromAutoFeedRefresh`)
 // remain real subscriptions: they move to the bottom, keep a hidden return rank,
 // and later restore that rank instead of using the browse-preview activation path.
+// DownloadFilterSettings is persisted on the local Subscription payload and
+// updated via updateDownloadFilterSettings; it is intentionally not projected
+// into SubscriptionSyncState for v1, so filters are backup/local-only.
 // GOTCHA: accessors generally distinguish real subscriptions (browseDate == nil)
 // from browse ones; queue/UI may still include Inactive real subscriptions, but
 // automatic/feed-all refresh must skip `excludeFromAutoFeedRefresh`.
@@ -661,6 +664,12 @@ public final class SubscriptionStore: ObservableObject {
     public func updatePlaybackPreference(subscriptionID: UUID, preference: PlaybackPreference) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
         subscriptions[index].playbackPreference = preference
+        save()
+    }
+
+    public func updateDownloadFilterSettings(subscriptionID: UUID, settings: DownloadFilterSettings) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        subscriptions[index].downloadFilterSettings = settings
         save()
     }
 

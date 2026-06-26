@@ -37,7 +37,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 | `Text-MetadataRow` | Date + duration/remaining on one line, separated by `•`, caption, secondary |
 | `Text-MetadataAdaptive` | Duration shows "Xm left remaining" when partially played, full duration otherwise |
 | `Text-Duration` | Total duration: `.caption`, `.secondary`, `.monospacedDigit()` |
-| `EpisodeStatusPill` | Colour-coded capsule pill showing episode state — 7 states, each a unique colour |
+| `EpisodeStatusPill` | Colour-coded capsule pill showing episode state — 8 states, each a unique colour |
 | `Badge-VideoPillSmall` | Small clear glass TV-icon pill — used in episode list rows via `.overlay(alignment: .topTrailing)` |
 | `Badge-VideoPillLarge` | Large clear glass "Video" text pill — used in detail page headers alongside `Badge-ExplicitPillLarge` |
 | `Badge-ExplicitPillLarge` | Large clear glass "Explicit" text pill — used in detail page headers alongside `Badge-VideoPillLarge` |
@@ -692,7 +692,7 @@ The `Header-SubscriptionPage` placeholder uses a larger icon size (`size: 36`).
 
 **Label: `EpisodeStatusPill`**
 
-A colour-coded capsule pill shown on the Priority page, Individual Subscription page, and any other page listing episodes. Communicates episode state at a glance. Seven states, each a unique colour. White foreground on all.
+A colour-coded capsule pill shown on the Priority page, Individual Subscription page, and any other page listing episodes. Communicates episode state at a glance. Eight states, each a unique colour. White foreground on all.
 
 > **Shared component.** `EpisodeStatusKind` and `EpisodeStatusPill` live once in `Views/EpisodeBadges.swift` (alongside the Video/Explicit badges). Each page keeps its own `statusKind(for:)` resolver but renders the shared pill — do not re-declare these per file.
 
@@ -705,12 +705,15 @@ A colour-coded capsule pill shown on the Priority page, Individual Subscription 
 | `played` | Played | Blue | `playedState == .played` |
 | `archived` | Archived | Purple | `playedState == .archived` |
 | `inactive` | Inactive | Orange | `subscription.excludeFromAutoFeedRefresh == true` (Priority page only) |
+| `skipped` | Skipped | Muted gray | `downloadState == .notDownloaded` and the subscription's active `DownloadFilterSettings` currently exclude the episode |
 
 Priority order for the pill decision (check top to bottom):
 1. `excludeFromAutoFeedRefresh` → **Inactive** (Priority page only)
 2. `playedState == .archived` → **Archived**
 3. `playedState == .played` → **Played**
-4. `statusKind(for: episode)` → **Unplayed**, **Queued**, **Paused**, or **Playing**
+4. saved playback position / active player state → **Paused** or **Playing**
+5. active Download Filters exclude a not-downloaded episode → **Skipped**
+6. `statusKind(for: episode)` → **Unplayed** or **Queued**
 
 **Glass pill pattern (applies to all pills):**
 - **iOS 26+:** colour-tinted liquid glass — a semi-transparent colour layer underneath `.glassEffect(in: Capsule())` lets the tint show through the frosted material
@@ -719,7 +722,7 @@ Priority order for the pill decision (check top to bottom):
 ```swift
 // Views/EpisodeBadges.swift — shared, not per-page.
 enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive
+    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive, skipped
 
     var label: String {
         switch self {
@@ -730,6 +733,7 @@ enum EpisodeStatusKind {
         case .played:          return "Played"
         case .archived:        return "Archived"
         case .inactive:        return "Inactive"
+        case .skipped:         return "Skipped"
         }
     }
 
@@ -742,6 +746,7 @@ enum EpisodeStatusKind {
         case .played:          return Color.blue
         case .archived:        return Color.purple
         case .inactive:        return Color.orange
+        case .skipped:         return Color(white: 0.42)
         }
     }
 }
@@ -917,7 +922,7 @@ Pages covered (list rows): Priority (PodcastsView), Queue (QueueSheetView), Indi
 
 **Label: `Button-DownloadInline`**
 
-When an episode has never been downloaded (and is not archived/played), show a bordered "Download" button inline in the metadata row — in the same trailing position as `EpisodeStatusPill`.
+When an episode has never been downloaded (and is not archived/played/skipped by Download Filters), show a bordered "Download" button inline in the metadata row — in the same trailing position as `EpisodeStatusPill`.
 
 ```swift
 Button("Download") {
@@ -2324,7 +2329,7 @@ Empty navigation title (`.navigationTitle("")`) — the episode title is shown i
 
 `Views/StatsView.swift`, reached via Menu → Stats. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`. Every section card uses the shared `Glass-Card` modifier (`.glassCard(cornerRadius: 16)` — iOS 26 glass, `.ultraThinMaterial` fallback) rather than a flat `white.opacity(0.08)` fill. Card-internal dividers, axis grid lines, progress-bar tracks, and the nested expanded-show card stay on `white.opacity(…)` insets. All sections respond to the period selector.
 
-Sections stack in a `VStack(spacing: 32)`: period selector · Hero · Heatmap/Trend · Listening Clock · Top Shows · Drifting Shows · **Data Downloaded** · Time Saved By · Privacy Footer.
+Sections stack in a `VStack(spacing: 32)`: period selector · Hero · Top Shows · Drifting Shows · Heatmap/Trend · Listening Clock · **Data Downloaded** · Time Saved By · Privacy Footer.
 
 ## Stats Page — Period Selector
 
@@ -2371,7 +2376,7 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank
 
 ## Stats Page — Privacy Footer
 
-Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats never leave this device."
+Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats are private — kept on your device and your own iCloud, never sent to Autohop."
 
 ## Completion Bar
 
@@ -2434,7 +2439,7 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 
 **Label: `Form-SettingsDark`**
 
-All settings pages (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) use a two-tier recipe:
+All settings pages (`SettingsView` / App Settings, `SubscriptionSettingsView` / Podcast Settings, `DownloadFiltersView`, `NotificationSettingsView`, `AddFeedView`, `DiagnosticLogView`, `AcknowledgementsView`) use a two-tier recipe:
 
 **iOS 26 — native Liquid Glass Form sections:**
 ```swift

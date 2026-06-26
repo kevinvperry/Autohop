@@ -125,20 +125,24 @@ targets:
 
         # ── Background modes ───────────────────────────────────────────────
         # audio      → AVAudioSession keeps playback alive when screen locks
-        # fetch      → BGAppRefreshTask for periodic feed polling
-        # NOTE: only modes the app actually uses are declared (App Review
-        # guideline 2.5.4). "processing" was removed — no BGProcessingTask is
-        # registered. Re-add it only alongside a real BGProcessingTask handler.
+        # fetch      → BGAppRefreshTask for short periodic feed polling
+        # processing → BGProcessingTask for a longer charging+Wi-Fi feed catch-up
+        #              (drains the due-feed backlog, e.g. overnight)
+        # remote-notification → CloudKit (CKSyncEngine) silent change pushes
+        # Only modes the app actually uses are declared (App Review guideline 2.5.4);
+        # each has a registered handler in AppDelegate.
         UIBackgroundModes:
           - audio
           - fetch
+          - processing
           # CKSyncEngine receives remote record changes via silent push (step 3).
           - remote-notification
 
         # ── Background task identifiers ────────────────────────────────────
-        # Must match BackgroundTaskCoordinator.feedRefreshIdentifier exactly.
+        # Must match BackgroundTaskCoordinator.{feedRefreshIdentifier,feedProcessingIdentifier}.
         BGTaskSchedulerPermittedIdentifiers:
           - com.autohop.feedrefresh
+          - com.autohop.feedprocessing
 
         # ── Network (App Transport Security) ───────────────────────────────
         # NSAllowsArbitraryLoads is required and is the standard, defensible

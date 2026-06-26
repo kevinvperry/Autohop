@@ -4,13 +4,18 @@ import BackgroundTasks
 // AI CONTEXT — App/AppDelegate.swift
 // UIKit delegate bridged into the SwiftUI app via @UIApplicationDelegateAdaptor
 // (see AutohopApp.swift). Handles the five things SwiftUI cannot:
-//  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (must happen
-//     before didFinishLaunching returns) and the BGAppRefreshTask handler,
-//     which calls AppState.shared.refreshSubscriptionsForBackground(taskIdentifier:).
-//     Expiration cancels AppState's active refresh cycle so selected-but-unfinished
-//     feeds are checkpointed back into Release Radar's deferred backlog. The task
-//     identifier is forwarded for diagnostics so logs can distinguish a real
-//     BGAppRefreshTask wake from foreground catch-up or background-audio work.
+//  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (BGAppRefreshTask,
+//     short ~30 s wake) AND "com.autohop.feedprocessing" (BGProcessingTask, a longer
+//     charging+Wi-Fi catch-up) — both registered before didFinishLaunching returns.
+//     The refresh handler calls refreshSubscriptionsForBackground(taskIdentifier:);
+//     the processing handler calls refreshSubscriptionsForProcessing(taskIdentifier:)
+//     for a fuller, uncapped due-feed sweep that drains the backlog (e.g. overnight).
+//     On expiration, cancelRefreshCycleIfBackgroundOnly cancels the active refresh
+//     cycle ONLY when no live foreground/audio context owns it (otherwise it detaches
+//     and lets that context finish) — a real cancel checkpoints selected-but-unfinished
+//     feeds into Release Radar's deferred backlog. Task
+//     identifiers are forwarded for diagnostics so logs can distinguish each wake
+//     source (BGAppRefreshTask / BGProcessingTask / foreground / background-audio).
 //  2. Background URLSession wake: stores the system completion handler on
 //     DownloadManager so it fires after urlSessionDidFinishEvents.
 //  3. OPML/.xml file-open events → AppState.importOPML.
@@ -86,7 +91,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             "identifier": BackgroundTaskCoordinator.feedRefreshIdentifier,
             "registered": "\(registered)"
         ])
+
+        let processingRegistered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: BackgroundTaskCoordinator.feedProcessingIdentifier,
+            using: nil
+        ) { task in
+            guard let task = task as? BGProcessingTask else { return }
+            AppDelegate.handleFeedProcessing(task)
+        }
+        AppLogger.shared.info("background.register", "Registered background processing task", metadata: [
+            "identifier": BackgroundTaskCoordinator.feedProcessingIdentifier,
+            "registered": "\(processingRegistered)"
+        ])
+
         BackgroundTaskCoordinator.scheduleAppRefreshIfNeeded()
+        BackgroundTaskCoordinator.scheduleProcessingIfNeeded()
     }
 
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
@@ -111,7 +130,34 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 "identifier": task.identifier
             ])
             Task { @MainActor in
-                AppState.shared.cancelActiveRefreshCycle(reason: "background.expired")
+                AppState.shared.cancelRefreshCycleIfBackgroundOnly(reason: "background.expired")
+            }
+            work.cancel()
+            task.setTaskCompleted(success: false)
+        }
+    }
+
+    private static func handleFeedProcessing(_ task: BGProcessingTask) {
+        AppLogger.shared.info("background.processingLaunch", "Background processing task started", metadata: [
+            "identifier": task.identifier
+        ])
+        BackgroundTaskCoordinator.scheduleProcessing()
+
+        let work = Task {
+            let didRun = await AppState.shared.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
+            AppLogger.shared.info("background.processingComplete", "Background processing completed", metadata: [
+                "identifier": task.identifier,
+                "didRun": "\(didRun)"
+            ])
+            task.setTaskCompleted(success: true)
+        }
+
+        task.expirationHandler = {
+            AppLogger.shared.warning("background.processingExpired", "Background processing expired before finishing", metadata: [
+                "identifier": task.identifier
+            ])
+            Task { @MainActor in
+                AppState.shared.cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
             }
             work.cancel()
             task.setTaskCompleted(success: false)

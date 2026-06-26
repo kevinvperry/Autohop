@@ -7,19 +7,45 @@ import Foundation
 //  - AutoArchiveSettings: three independent rules (AfterPlayed delay,
 //    AfterInactive timeout, EpisodeLimit keep-N). Defaults: afterPlaying /
 //    1 week / keep 1. Enforced by AppState.runAutoArchive every ≤30 min.
+//  - DownloadFilterSettings: local/backup-only per-subscription auto-download
+//    filters. Duration/title/description groups can be toggled independently;
+//    include/exclude rules combine via All/Any, exclude wins, simple text
+//    matching is case-insensitive, and missing duration fails active duration
+//    rules. Used only for automatic download eligibility — manual episode
+//    actions still bypass it.
 //  - ChapterFilter: set of DISABLED chapter position indices; position-based
 //    so a disabled slot skips that chapter in every future episode.
 //  - RefreshStats: Release Radar state — ETag/Last-Modified for HTTP
 //    conditional GETs, last fetch/new-episode timing, legacy recentPublishDates,
 //    and capped releaseObservations. releaseObservations persist each episode's
 //    GUID/title/audio URL, RSS publishedAt, first/last seen time, date quality,
-//    and whether it was new when first observed; AppState/SubscriptionStore keep
-//    this updated so one-item feeds can still accumulate schedule history.
+//    duration/description filter metadata, and whether it was new when first
+//    observed; AppState/SubscriptionStore keep this updated so one-item feeds can
+//    still accumulate schedule history. Download Filters are applied before
+//    observations feed Release Radar schedules, so skipped episodes do not train
+//    future refresh windows.
 //  - FeedScheduleProfiler: classifies observations into learning, unreliable
-//    dates, hourly, rolling-bulletin, burst, weekday-daily, weekly, multi-slot,
-//    or random profiles. It learns active weekdays, typical minutes, mixed
-//    half-hour/hourly bulletin slots, burst windows, cadence, and confidence
-//    without touching app state or network code.
+//    dates, hourly, rolling-bulletin, burst, daily/weekday, weekly, several-times-
+//    a-week (multiSlot), or random profiles. Hourly/rolling-bulletin/burst are
+//    detected first and unchanged. Everything else goes through Release Radar v2
+//    (regularCadenceProfile): a feed is classified on its CADENCE + ACTIVE-DAY
+//    pattern only — publish TIME never gates classification, it only sizes the
+//    window. It computes a RECENCY-WEIGHTED per-weekday publish probability (weeks
+//    weighted by weekdayRecencyHalfLifeWeeks, so a stale/biased capture or a schedule
+//    change is corrected by current behaviour, not diluted across the full span; see
+//    weekdayPublishProbabilities) and the active set is the days above
+//    `activeDayThreshold`. Shape → kind: 1 active day + weekly gap → .weekly; 2–4 days
+//    → .multiSlot; 5+ days → .dailyWeekdays (the kind is shared by Mon–Fri and 7-day
+//    feeds — FeedScheduleProfile.categoryLabel reads the active set to print "Weekdays"
+//    vs "Daily"). FALLBACK: if no day clears the active bar but one weekday holds
+//    ≥`weeklyDominantShareThreshold` of all episodes on a ~weekly cadence, it's .weekly
+//    by episode share (so a weekly show that skips the odd week still classifies).
+//    activeWeekdays drives scheduling, so a Mon–Fri feed never opens weekend slots.
+//    Every classified feed carries a
+//    releaseWindow sized (Stage 2) to the DENSEST publish-time mode, recency-weighted
+//    (recencyHalfLifeWeeks) — a bimodal feed gets a tight window on its main cluster,
+//    not the full range; stragglers are caught by the missed-release soft tail. No
+//    clear day+cadence ⇒ random. weekdayProbabilities feeds Stage-2 watch tiers.
 //  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
 //    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
 //    rotation during active/fresh-missed windows, expire stale missed-release
@@ -28,6 +54,13 @@ import Foundation
 //    incomplete. Daily weekday feeds deliberately start checking about 30 min
 //    before the learned release time; missed-release urgency expires after 10
 //    post-window empty checks or 8 hours so a late show does not dominate forever.
+//    Weekly feeds use the profile's learned releaseWindow (densest-mode) and close
+//    the window the moment that week's episode lands, standing down until next week.
+//    Stage-2 watch tiers (releaseSlots): high-probability weekdays get the full window
+//    on high rotation; medium-probability days (lightTier..fullTier) get lighter slots
+//    (longer recheck, no pre-window, no missed-release escalation); low days are
+//    skipped — so an occasional-Saturday show still gets a light Saturday check while a
+//    strict Mon–Fri show spends nothing on the weekend.
 //  - FeedRefreshPrioritizer: scores already-due feeds so AppState's timed and
 //    background cycles spend limited refresh slots on missed releases, active
 //    windows, high-confidence hourly/rolling-bulletin/burst/daily feeds (daily
@@ -37,11 +70,11 @@ import Foundation
 //    cycles while letting active/pre-window states bypass the foreground cap and
 //    protecting Release Radar states in tight background budgets.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
-//    order), episodes array, playbackPreference, notificationsEnabled
-//    (default false), excludeFromAutoFeedRefresh, remembered return rank for
-//    inactive shows, and browseDate — non-nil marks an invisible "browse
-//    subscription" auto-created when the user previews a podcast in search
-//    (deleted after 30 days if untouched).
+//    order), episodes array, playbackPreference, downloadFilterSettings,
+//    notificationsEnabled (default false), excludeFromAutoFeedRefresh,
+//    remembered return rank for inactive shows, and browseDate — non-nil marks
+//    an invisible "browse subscription" auto-created when the user previews a
+//    podcast in search (deleted after 30 days if untouched).
 
 // MARK: - AutoArchiveSettings
 
@@ -183,6 +216,8 @@ public struct FeedReleaseObservation: Equatable, Codable, Sendable {
     public var episodeKey: String
     public var guid: String
     public var title: String
+    public var description: String?
+    public var durationSeconds: TimeInterval?
     public var audioURL: URL?
     public var publishedAt: Date?
     public var firstSeenAt: Date
@@ -196,6 +231,8 @@ public struct FeedReleaseObservation: Equatable, Codable, Sendable {
         episodeKey: String,
         guid: String,
         title: String,
+        description: String? = nil,
+        durationSeconds: TimeInterval? = nil,
         audioURL: URL?,
         publishedAt: Date?,
         firstSeenAt: Date,
@@ -206,6 +243,8 @@ public struct FeedReleaseObservation: Equatable, Codable, Sendable {
         self.episodeKey = episodeKey
         self.guid = guid
         self.title = title
+        self.description = description
+        self.durationSeconds = durationSeconds
         self.audioURL = audioURL
         self.publishedAt = publishedAt
         self.firstSeenAt = firstSeenAt
@@ -291,6 +330,7 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     public mutating func recordEpisodeObservations(
         _ episodes: [Episode],
         previouslyKnownEpisodeKeys: Set<String>,
+        downloadFilterSettings: DownloadFilterSettings = .default,
         at date: Date = Date()
     ) -> Int {
         guard !episodes.isEmpty else { return 0 }
@@ -304,10 +344,13 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         for episode in episodes {
             let key = Self.releaseObservationKey(for: episode)
             let dateQuality = Self.releaseDateQuality(for: episode.publishedAt, observedAt: date)
+            let isEligibleForLearning = downloadFilterSettings.evaluation(for: episode).isIncluded
 
             if let index = observationsByKey[key] {
                 releaseObservations[index].guid = episode.guid
                 releaseObservations[index].title = episode.title
+                releaseObservations[index].description = episode.description
+                releaseObservations[index].durationSeconds = episode.durationSeconds
                 releaseObservations[index].audioURL = episode.audioURL
                 releaseObservations[index].publishedAt = episode.publishedAt
                 releaseObservations[index].lastSeenAt = date
@@ -317,6 +360,8 @@ public struct RefreshStats: Equatable, Codable, Sendable {
                     episodeKey: key,
                     guid: episode.guid,
                     title: episode.title,
+                    description: episode.description,
+                    durationSeconds: episode.durationSeconds,
                     audioURL: episode.audioURL,
                     publishedAt: episode.publishedAt,
                     firstSeenAt: date,
@@ -326,7 +371,9 @@ public struct RefreshStats: Equatable, Codable, Sendable {
                 )
                 releaseObservations.append(observation)
                 observationsByKey[key] = releaseObservations.count - 1
-                newlyRecorded += 1
+                if isEligibleForLearning {
+                    newlyRecorded += 1
+                }
             }
         }
 
@@ -360,6 +407,31 @@ public struct RefreshStats: Equatable, Codable, Sendable {
 
     public func scheduleProfile(calendar: Calendar = .current) -> FeedScheduleProfile {
         FeedScheduleProfiler.profile(from: releaseObservations, calendar: calendar)
+    }
+
+    public func scheduleProfile(
+        downloadFilterSettings: DownloadFilterSettings,
+        calendar: Calendar = .current
+    ) -> FeedScheduleProfile {
+        FeedScheduleProfiler.profile(from: releaseObservations(includedBy: downloadFilterSettings), calendar: calendar)
+    }
+
+    /// Full diagnostic snapshot (inputs + daily/weekly gate outcomes) for the
+    /// per-subscription Release Radar diagnostic screen.
+    public func releaseRadarDiagnostics(calendar: Calendar = .current) -> FeedScheduleDiagnostics {
+        FeedScheduleProfiler.diagnostics(from: releaseObservations, calendar: calendar)
+    }
+
+    public func releaseRadarDiagnostics(
+        downloadFilterSettings: DownloadFilterSettings,
+        calendar: Calendar = .current
+    ) -> FeedScheduleDiagnostics {
+        FeedScheduleProfiler.diagnostics(from: releaseObservations(includedBy: downloadFilterSettings), calendar: calendar)
+    }
+
+    public func releaseObservations(includedBy downloadFilterSettings: DownloadFilterSettings) -> [FeedReleaseObservation] {
+        guard downloadFilterSettings.hasActiveFilters else { return releaseObservations }
+        return releaseObservations.filter { downloadFilterSettings.evaluation(for: $0).isIncluded }
     }
 }
 
@@ -415,6 +487,17 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     public var typicalMinutesOfHour: [Int]?
     public var cadenceSeconds: TimeInterval?
     public var burstWindow: FeedScheduleWindow?
+    /// Learned time-of-day window for single-slot feeds (currently weekly). Sized
+    /// from the observed (outlier-trimmed) publish-time range so produced shows
+    /// whose publish time drifts week to week still get a right-sized window rather
+    /// than the old fixed band. `nil` for feeds the profiler hasn't windowed.
+    public var releaseWindow: FeedScheduleWindow?
+    /// Release Radar v2 (Stage 1): per-weekday publish likelihood — the fraction of
+    /// observed weeks the feed published on each Calendar weekday (1 = Sun … 7 = Sat).
+    /// This, plus cadence, is what classifies daily/weekdays/weekly/several-times-a-week
+    /// feeds — publish *time* no longer gates classification, only window sizing. `nil`
+    /// for feeds classified by the hourly/rolling-bulletin/burst detectors.
+    public var weekdayProbabilities: [Int: Double]?
     public var reason: String
 
     public init(
@@ -428,6 +511,8 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         typicalMinutesOfHour: [Int]? = nil,
         cadenceSeconds: TimeInterval? = nil,
         burstWindow: FeedScheduleWindow? = nil,
+        releaseWindow: FeedScheduleWindow? = nil,
+        weekdayProbabilities: [Int: Double]? = nil,
         reason: String
     ) {
         self.kind = kind
@@ -440,14 +525,118 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         self.typicalMinutesOfHour = typicalMinutesOfHour
         self.cadenceSeconds = cadenceSeconds
         self.burstWindow = burstWindow
+        self.releaseWindow = releaseWindow
+        self.weekdayProbabilities = weekdayProbabilities
         self.reason = reason
     }
+
+    /// User-facing schedule label. Derived from `kind` + the learned active-day set so
+    /// "Weekdays" (Mon–Fri) and "Daily" (includes the weekend) read differently even
+    /// though they share the `.dailyWeekdays` kind. Used by the diagnostic pages/export.
+    public var categoryLabel: String {
+        switch kind {
+        case .learning:        return "Still learning"
+        case .unreliableDates: return "Unreliable dates"
+        case .hourly:          return "Hourly"
+        case .rollingBulletin: return "Rolling bulletin"
+        case .burst:           return "Burst"
+        case .weekly:          return "Weekly"
+        case .multiSlot:       return "Several times a week"
+        case .random:          return "Random / no pattern"
+        case .dailyWeekdays:
+            // weekday 1 = Sunday, 7 = Saturday.
+            return Set(activeWeekdays).isDisjoint(with: [1, 7]) ? "Weekdays" : "Daily"
+        }
+    }
+}
+
+/// Read-only snapshot of everything Release Radar derives from a subscription's
+/// release observations — surfaced by the per-subscription diagnostic screen so the
+/// inputs to (and blockers against) classification are visible at a glance. Built by
+/// `FeedScheduleProfiler.diagnostics(from:)`; never persisted.
+public struct FeedScheduleDiagnostics: Sendable, Equatable {
+    /// One classifier guard, evaluated against this feed's data with the real threshold.
+    public struct GateCheck: Sendable, Equatable {
+        public var label: String
+        public var passed: Bool
+        public var detail: String
+    }
+
+    public var observationCount: Int
+    public var reliableDateCount: Int
+    /// Count of observations per `FeedReleaseDateQuality.rawValue` (e.g. "plausible").
+    public var qualityBreakdown: [String: Int]
+    /// Reliable-date count per Calendar weekday (1 = Sun … 7 = Sat).
+    public var weekdayHistogram: [Int: Int]
+    /// Per-weekday publish probability (fraction of observed weeks each weekday
+    /// published). Maps to a watch tier via `FeedRefreshScheduling.watchTier(forProbability:)`.
+    public var weekdayProbabilities: [Int: Double]
+    public var dominantWeekday: Int?
+    public var dominantWeekdayRatio: Double
+    public var distinctWeekdays: Int
+    public var distinctBusinessWeekdays: Int
+    public var businessWeekdayRatio: Double
+    public var timeOfDayCenterMinute: Int?
+    public var timeOfDaySpreadMinutes: Int?
+    public var medianIntervalSeconds: TimeInterval?
+    public var firstObservedAt: Date?
+    public var lastObservedAt: Date?
+    /// The authoritative classification (same call Release Radar uses).
+    public var profile: FeedScheduleProfile
+    /// Why the feed does / doesn't qualify as daily-weekdays and weekly — the two
+    /// behaviours users most expect. Each entry mirrors a real profiler guard.
+    public var dailyChecks: [GateCheck]
+    public var weeklyChecks: [GateCheck]
 }
 
 public enum FeedScheduleProfiler {
     private static let minimumReliableDates = 4
     private static let hourlyMinimumDates = 6
     private static let burstMinimumDays = 3
+    /// Weekly window tuning. A weekly feed's publish time-of-day may drift this far
+    /// (trimmed range, in minutes) and still count as "roughly the same time each
+    /// week" — produced shows slip with post-production rather than publishing at a
+    /// fixed minute. Beyond this the time really is unpredictable and the feed falls
+    /// through to random surveillance.
+    private static let weeklyMaxObservedSpreadMinutes = 360
+    /// Padding added on each side of the observed publish-time range so episodes at
+    /// the edges of the learned window aren't missed.
+    private static let weeklyWindowMarginMinutes = 20
+    /// Floor for the learned weekly window half-width so a razor-tight feed still
+    /// gets a sensible pre/post buffer (never narrower than a 1-hour window).
+    private static let weeklyMinHalfWidthMinutes = 30
+
+    // Release Radar v2 — Stage 1 (cadence + active-day classification, no time gate).
+    /// Need at least this many reliable dates before committing to any cadence pattern.
+    private static let regularMinimumReliableDates = 4
+    /// Need at least this many distinct weeks of history so per-weekday probabilities
+    /// are stable rather than reading a one-week burst as a pattern.
+    private static let regularMinimumWeeks = 3
+    /// A weekday counts as "active" if the feed publishes on it in at least this
+    /// fraction of observed weeks. 0.6 keeps one-off specials and biweekly noise out
+    /// while tolerating the occasional skipped/holiday day.
+    private static let activeDayThreshold = 0.6
+    /// Daily/weekdays/several-times patterns need at least this many reliable dates
+    /// (weekly is allowed fewer — see `regularMinimumReliableDates`).
+    private static let multiDayMinimumReliableDates = 6
+    /// Recency half-life (weeks) for the per-weekday publish probabilities. Recent weeks
+    /// dominate so a stale or biased capture (old data skewed to one day) can't override
+    /// the feed's current pattern, and a feed that changed its schedule self-corrects.
+    private static let weekdayRecencyHalfLifeWeeks = 8.0
+    /// Episode-share weekly threshold: if one weekday holds at least this fraction of ALL
+    /// episodes on a ~weekly cadence, classify as weekly even when that day's per-week
+    /// probability dips below `activeDayThreshold` because the show skips the odd week.
+    private static let weeklyDominantShareThreshold = 0.65
+
+    // Release Radar v2 — Stage 2 (densest-mode window + recency + watch-intensity tiers).
+    /// Half-width (minutes) of the search window used to locate the densest publish-time
+    /// mode. Episodes within this of the densest centre form the tight primary window;
+    /// the rest are caught by the lighter missed-release "soft tail".
+    private static let modeSearchHalfWidthMinutes = 75
+    /// Recency half-life in weeks for weighting publish times when sizing the window, so
+    /// a feed that shifts its publish time retunes within a few weeks without discarding
+    /// older history.
+    private static let recencyHalfLifeWeeks = 10.0
 
     public static func profile(
         from observations: [FeedReleaseObservation],
@@ -501,7 +690,6 @@ public enum FeedScheduleProfiler {
         )
         let intervals = zip(dates, dates.dropFirst()).map { $1.timeIntervalSince($0) }.filter { $0 > 0 }
         let medianInterval = median(intervals)
-        let weekdayCounts = countsByWeekday(dates, calendar: calendar)
 
         if let profile = hourlyProfile(
             dates: dates,
@@ -536,37 +724,12 @@ public enum FeedScheduleProfiler {
             return profile
         }
 
-        if let profile = dailyWeekdaysProfile(
+        if let profile = regularCadenceProfile(
             dates: dates,
-            minuteOfDayCluster: minuteOfDayCluster,
-            weekdayCounts: weekdayCounts,
+            calendar: calendar,
             medianInterval: medianInterval,
             observationCount: observationCount,
-            reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays
-        ) {
-            return profile
-        }
-
-        if let profile = weeklyProfile(
-            dates: dates,
-            minuteOfDayCluster: minuteOfDayCluster,
-            weekdayCounts: weekdayCounts,
-            medianInterval: medianInterval,
-            observationCount: observationCount,
-            reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays
-        ) {
-            return profile
-        }
-
-        if let profile = multiSlotProfile(
-            dates: dates,
-            minuteOfDayCluster: minuteOfDayCluster,
-            weekdayCounts: weekdayCounts,
-            observationCount: observationCount,
-            reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays
+            reliableDateCount: reliableDateCount
         ) {
             return profile
         }
@@ -581,6 +744,85 @@ public enum FeedScheduleProfiler {
             cadenceSeconds: medianInterval,
             reason: "Reliable dates exist, but they do not form a stable hourly, rolling-bulletin, burst, daily, weekly, or multi-slot pattern."
         )
+    }
+
+    /// Surfaces the inputs and gate outcomes behind `profile(from:)` for the
+    /// per-subscription diagnostic screen. Reuses the same private helpers the
+    /// classifier uses, so the numbers shown match exactly what Release Radar acts on.
+    public static func diagnostics(
+        from observations: [FeedReleaseObservation],
+        calendar: Calendar = .current
+    ) -> FeedScheduleDiagnostics {
+        var qualityBreakdown: [String: Int] = [:]
+        for observation in observations {
+            qualityBreakdown[observation.dateQuality.rawValue, default: 0] += 1
+        }
+
+        let reliable = observations
+            .filter { $0.dateQuality == .plausible }
+            .compactMap(\.publishedAt)
+            .sorted()
+        let reliableDateCount = reliable.count
+
+        let weekdayHistogram = countsByWeekday(reliable, calendar: calendar)
+        let dominant = weekdayHistogram.max { $0.value < $1.value }
+        let dominantRatio = dominant.map { Double($0.value) / Double(max(reliableDateCount, 1)) } ?? 0
+        let businessWeekdayTotal = weekdayHistogram
+            .filter { isBusinessWeekday($0.key) }
+            .map(\.value)
+            .reduce(0, +)
+        let businessWeekdayRatio = Double(businessWeekdayTotal) / Double(max(reliableDateCount, 1))
+
+        let cluster = reliable.isEmpty
+            ? nil
+            : circularCluster(minutes: reliable.map { minuteOfDay(for: $0, calendar: calendar) }, modulo: 24 * 60)
+        let intervals = zip(reliable, reliable.dropFirst()).map { $1.timeIntervalSince($0) }.filter { $0 > 0 }
+        let medianIntervalSeconds = median(intervals)
+        let medianDays = medianIntervalSeconds.map { $0 / 86_400 }
+
+        // Release Radar v2 gate checks: classification is cadence + active-day pattern,
+        // NOT publish time. (Publish-time spread still shows under "Learning signal" —
+        // it sizes the window now, it doesn't gate the class.)
+        let (probabilities, weeksObserved) = weekdayPublishProbabilities(reliable, calendar: calendar)
+        let activeDayCount = probabilities.filter { $0.value >= activeDayThreshold }.count
+
+        let dailyChecks: [FeedScheduleDiagnostics.GateCheck] = [
+            .init(label: "≥ 6 reliable dates", passed: reliableDateCount >= multiDayMinimumReliableDates, detail: "\(reliableDateCount) / 6"),
+            .init(label: "≥ 3 weeks of history", passed: weeksObserved >= regularMinimumWeeks, detail: "\(weeksObserved) wk"),
+            .init(label: "5+ active days/week", passed: activeDayCount >= 5, detail: "\(activeDayCount) active"),
+            .init(label: "Median gap ≤ 2 days", passed: (medianDays ?? .greatestFiniteMagnitude) <= 2, detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
+        ]
+        let weeklyChecks: [FeedScheduleDiagnostics.GateCheck] = [
+            .init(label: "≥ 4 reliable dates", passed: reliableDateCount >= regularMinimumReliableDates, detail: "\(reliableDateCount) / 4"),
+            .init(label: "≥ 3 weeks of history", passed: weeksObserved >= regularMinimumWeeks, detail: "\(weeksObserved) wk"),
+            .init(label: "1 active day or ≥65% on one weekday", passed: activeDayCount == 1 || dominantRatio >= weeklyDominantShareThreshold, detail: "\(activeDayCount) active · \(Int((dominantRatio * 100).rounded()))%"),
+            .init(label: "Median gap 4–11 days", passed: (4.0...11.0).contains(medianDays ?? -1), detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
+        ]
+
+        return FeedScheduleDiagnostics(
+            observationCount: observations.count,
+            reliableDateCount: reliableDateCount,
+            qualityBreakdown: qualityBreakdown,
+            weekdayHistogram: weekdayHistogram,
+            weekdayProbabilities: probabilities,
+            dominantWeekday: dominant?.key,
+            dominantWeekdayRatio: dominantRatio,
+            distinctWeekdays: weekdayHistogram.keys.count,
+            distinctBusinessWeekdays: distinctBusinessWeekdays(weekdayHistogram),
+            businessWeekdayRatio: businessWeekdayRatio,
+            timeOfDayCenterMinute: cluster?.center,
+            timeOfDaySpreadMinutes: cluster?.spread,
+            medianIntervalSeconds: medianIntervalSeconds,
+            firstObservedAt: reliable.first,
+            lastObservedAt: reliable.last,
+            profile: profile(from: observations, calendar: calendar),
+            dailyChecks: dailyChecks,
+            weeklyChecks: weeklyChecks
+        )
+    }
+
+    private static func distinctBusinessWeekdays(_ histogram: [Int: Int]) -> Int {
+        histogram.keys.filter(isBusinessWeekday).count
     }
 
     private static func hourlyProfile(
@@ -707,107 +949,210 @@ public enum FeedScheduleProfiler {
         )
     }
 
-    private static func dailyWeekdaysProfile(
+    /// Release Radar v2 — Stage 1. Classifies a feed by cadence + active-day pattern
+    /// WITHOUT gating on publish time (publish time only sizes the window, below). This
+    /// replaces the old time-gated dailyWeekdays/weekly/multiSlot detectors, which
+    /// dropped variable-time feeds to random surveillance. Runs after the hourly/
+    /// rolling-bulletin/burst detectors, so it only sees feeds that publish at most
+    /// ~once per active day. Active days drive scheduling, so a Mon–Fri feed simply
+    /// never opens weekend slots.
+    private static func regularCadenceProfile(
         dates: [Date],
-        minuteOfDayCluster: (center: Int, spread: Int),
-        weekdayCounts: [Int: Int],
+        calendar: Calendar,
         medianInterval: TimeInterval?,
         observationCount: Int,
-        reliableDateCount: Int,
-        activeWeekdays: [Int]
+        reliableDateCount: Int
     ) -> FeedScheduleProfile? {
-        let weekdayTotal = weekdayCounts
-            .filter { isBusinessWeekday($0.key) }
-            .map(\.value)
-            .reduce(0, +)
-        let weekdayRatio = Double(weekdayTotal) / Double(max(dates.count, 1))
-        let distinctBusinessWeekdays = Set(activeWeekdays.filter(isBusinessWeekday)).count
-        guard reliableDateCount >= 6,
-              distinctBusinessWeekdays >= 3,
-              weekdayRatio >= 0.85,
-              minuteOfDayCluster.spread <= 90,
-              (medianInterval ?? 24 * 60 * 60) <= 3 * 24 * 60 * 60
-        else { return nil }
+        guard reliableDateCount >= regularMinimumReliableDates else { return nil }
 
-        let confidence = 0.62
-            + min(0.16, Double(distinctBusinessWeekdays) * 0.025)
-            + min(0.12, Double(reliableDateCount - 6) * 0.015)
-            + max(0, 0.1 - Double(minuteOfDayCluster.spread) / 900.0)
+        let (probabilities, weeksObserved) = weekdayPublishProbabilities(dates, calendar: calendar)
+        guard weeksObserved >= regularMinimumWeeks else { return nil }
+
+        // Active days = weekdays the feed reliably publishes on (recency-weighted, so a
+        // stale capture or a schedule change is corrected by current behaviour). One-off
+        // specials and skipped holidays fall below the bar.
+        let activeDays = probabilities
+            .filter { $0.value >= activeDayThreshold }
+            .keys
+            .sorted()
+        let medianGapDays = (medianInterval ?? .greatestFiniteMagnitude) / 86_400
+
+        // Episode-SHARE dominant weekday — robust to a weekly show that skips the odd
+        // week (holidays/hiatus), whose per-week probability would dip below the active
+        // bar even though one weekday holds the clear majority of its episodes.
+        let weekdayCounts = countsByWeekday(dates, calendar: calendar)
+        let dominant = weekdayCounts.max { $0.value < $1.value }
+        let dominantShare = dominant.map { Double($0.value) / Double(max(dates.count, 1)) } ?? 0
+
+        let kind: FeedScheduleKind
+        let reason: String
+        let resolvedActiveDays: [Int]
+
+        if activeDays.count == 1, (4.0...11.0).contains(medianGapDays) {
+            kind = .weekly
+            reason = "Publishes about once a week on a consistent day."
+            resolvedActiveDays = activeDays
+        } else if (2...4).contains(activeDays.count), reliableDateCount >= multiDayMinimumReliableDates, medianGapDays <= 6 {
+            kind = .multiSlot
+            reason = "Publishes on a small, consistent set of days each week."
+            resolvedActiveDays = activeDays
+        } else if activeDays.count >= 5, reliableDateCount >= multiDayMinimumReliableDates, medianGapDays <= 2 {
+            let hasWeekend = !Set(activeDays).isDisjoint(with: [1, 7]) // 1 = Sun, 7 = Sat
+            kind = .dailyWeekdays
+            reason = hasWeekend ? "Publishes most days of the week." : "Publishes on weekdays (Mon–Fri)."
+            resolvedActiveDays = activeDays
+        } else if let dominantKey = dominant?.key,
+                  dominantShare >= weeklyDominantShareThreshold,
+                  (4.0...11.0).contains(medianGapDays) {
+            // (a) Episode-share weekly: one weekday holds the clear majority of episodes
+            // on a weekly cadence, even though its per-week probability is below the
+            // active bar (the show skips the odd week).
+            kind = .weekly
+            reason = "Publishes about once a week on a consistent day (with occasional skipped weeks)."
+            resolvedActiveDays = [dominantKey]
+        } else {
+            return nil
+        }
+
+        let window = releaseTimeWindow(dates: dates, activeWeekdays: resolvedActiveDays, calendar: calendar)
+        let confidence = regularCadenceConfidence(
+            reliableDateCount: reliableDateCount,
+            activeDays: resolvedActiveDays,
+            probabilities: probabilities
+        )
         return FeedScheduleProfile(
-            kind: .dailyWeekdays,
+            kind: kind,
             confidence: confidence,
             observationCount: observationCount,
             reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays,
-            typicalMinuteOfDay: minuteOfDayCluster.center,
+            activeWeekdays: resolvedActiveDays,
+            typicalMinuteOfDay: window.typicalMinuteOfDay,
             cadenceSeconds: medianInterval,
-            reason: "Episodes cluster around one time of day on business weekdays."
+            releaseWindow: window,
+            weekdayProbabilities: probabilities,
+            reason: reason
         )
     }
 
-    private static func weeklyProfile(
-        dates: [Date],
-        minuteOfDayCluster: (center: Int, spread: Int),
-        weekdayCounts: [Int: Int],
-        medianInterval: TimeInterval?,
-        observationCount: Int,
-        reliableDateCount: Int,
-        activeWeekdays: [Int]
-    ) -> FeedScheduleProfile? {
-        guard let dominant = weekdayCounts.max(by: { $0.value < $1.value }) else { return nil }
-        let dominantRatio = Double(dominant.value) / Double(max(dates.count, 1))
-        guard reliableDateCount >= 4,
-              dominantRatio >= 0.7,
-              minuteOfDayCluster.spread <= 120,
-              let medianInterval,
-              (5 * 24 * 60 * 60)...(9 * 24 * 60 * 60) ~= medianInterval
-        else { return nil }
+    /// Per-weekday publish likelihood, RECENCY-WEIGHTED: for each Calendar weekday
+    /// (1 = Sun … 7 = Sat), the recency-weighted fraction of observed weeks the feed
+    /// published on that weekday. Recent weeks count for more (weekdayRecencyHalfLifeWeeks),
+    /// so a stale/biased capture or a schedule change is corrected by current behaviour
+    /// rather than diluted across the full span (which permanently sank, e.g., a daily
+    /// show whose older history was only captured as a weekly special). `weeksObserved`
+    /// stays the raw span — used for the "enough history" guard and the diagnostics.
+    private static func weekdayPublishProbabilities(
+        _ dates: [Date],
+        calendar: Calendar
+    ) -> (probabilities: [Int: Double], weeksObserved: Int) {
+        guard let first = dates.first, let last = dates.last else { return ([:], 0) }
+        func weekIndex(_ date: Date) -> Int { Int(date.timeIntervalSince(first) / (7 * 86_400)) }
+        let lastWeek = weekIndex(last)
+        let weeksObserved = max(lastWeek + 1, 1)
 
-        let confidence = 0.6
-            + min(0.16, Double(reliableDateCount - 4) * 0.025)
-            + min(0.12, dominantRatio * 0.12)
-            + max(0, 0.1 - Double(minuteOfDayCluster.spread) / 1200.0)
-        return FeedScheduleProfile(
-            kind: .weekly,
-            confidence: confidence,
-            observationCount: observationCount,
-            reliableDateCount: reliableDateCount,
-            activeWeekdays: [dominant.key],
-            typicalMinuteOfDay: minuteOfDayCluster.center,
-            cadenceSeconds: medianInterval,
-            reason: "Episodes repeatedly land on the same weekday around the same time."
+        var weekdaysByWeek: [Int: Set<Int>] = [:]
+        for date in dates {
+            weekdaysByWeek[weekIndex(date), default: []].insert(calendar.component(.weekday, from: date))
+        }
+
+        var weightedTotal = 0.0
+        var weightedByWeekday: [Int: Double] = [:]
+        for week in 0...lastWeek {
+            let weight = pow(0.5, Double(lastWeek - week) / weekdayRecencyHalfLifeWeeks)
+            weightedTotal += weight
+            for weekday in weekdaysByWeek[week] ?? [] {
+                weightedByWeekday[weekday, default: 0] += weight
+            }
+        }
+        guard weightedTotal > 0 else { return ([:], weeksObserved) }
+        let probabilities = weightedByWeekday.mapValues { min(1.0, $0 / weightedTotal) }
+        return (probabilities, weeksObserved)
+    }
+
+    /// Release Radar v2 — Stage 2. Sizes a tight watch window around the DENSEST publish-
+    /// time mode (recency-weighted), not the full observed range. A bimodal feed (most
+    /// episodes 4–5am, some 9–11am) gets a tight 4–5am window; the stragglers are caught
+    /// by the lighter missed-release "soft tail" rather than holding a wide window open on
+    /// high rotation every day. Recent episodes are weighted more (recencyHalfLifeWeeks)
+    /// so a feed that shifts its publish time retunes within a few weeks.
+    private static func releaseTimeWindow(
+        dates: [Date],
+        activeWeekdays: [Int],
+        calendar: Calendar
+    ) -> FeedScheduleWindow {
+        let activeSet = Set(activeWeekdays)
+        let activeDates = dates.filter { activeSet.contains(calendar.component(.weekday, from: $0)) }
+        let source = activeDates.isEmpty ? dates : activeDates
+        guard let mostRecent = source.last else {
+            return FeedScheduleWindow(
+                activeWeekdays: activeWeekdays,
+                startMinuteOfDay: 0,
+                endMinuteOfDay: 24 * 60 - 1,
+                typicalMinuteOfDay: 0,
+                observedEpisodeCount: 0
+            )
+        }
+
+        let weighted: [(minute: Int, weight: Double)] = source.map { date in
+            let ageWeeks = max(0, mostRecent.timeIntervalSince(date) / (7 * 86_400))
+            return (minuteOfDay(for: date, calendar: calendar), pow(0.5, ageWeeks / recencyHalfLifeWeeks))
+        }
+
+        // Densest mode = the observed minute maximising the summed recency weight of
+        // points within the search half-width.
+        var bestCenter = weighted[0].minute
+        var bestWeight = -1.0
+        for candidate in weighted {
+            let summed = weighted.reduce(0.0) { running, point in
+                circularDistance(point.minute, candidate.minute, modulo: 24 * 60) <= modeSearchHalfWidthMinutes
+                    ? running + point.weight
+                    : running
+            }
+            if summed > bestWeight {
+                bestWeight = summed
+                bestCenter = candidate.minute
+            }
+        }
+
+        // Tight window over just the mode members (+margin, 1-hour floor).
+        let memberMinutes = weighted
+            .map(\.minute)
+            .filter { circularDistance($0, bestCenter, modulo: 24 * 60) <= modeSearchHalfWidthMinutes }
+        let center = circularCluster(minutes: memberMinutes, modulo: 24 * 60).center
+        let range = trimmedOffsetRange(memberMinutes, around: center, modulo: 24 * 60)
+        let startMinute = max(0, min(center + range.low - weeklyWindowMarginMinutes,
+                                     center - weeklyMinHalfWidthMinutes))
+        let endMinute = min(24 * 60 - 1, max(center + range.high + weeklyWindowMarginMinutes,
+                                             center + weeklyMinHalfWidthMinutes))
+        return FeedScheduleWindow(
+            activeWeekdays: activeWeekdays,
+            startMinuteOfDay: startMinute,
+            endMinuteOfDay: endMinute,
+            typicalMinuteOfDay: center,
+            observedEpisodeCount: source.count
         )
     }
 
-    private static func multiSlotProfile(
-        dates: [Date],
-        minuteOfDayCluster: (center: Int, spread: Int),
-        weekdayCounts: [Int: Int],
-        observationCount: Int,
+    /// Smallest circular distance between two values modulo `modulo`.
+    private static func circularDistance(_ a: Int, _ b: Int, modulo: Int) -> Int {
+        let raw = (((a - b) % modulo) + modulo) % modulo
+        return min(raw, modulo - raw)
+    }
+
+    /// Confidence rises with how reliably the active days publish and how much history
+    /// backs the pattern.
+    private static func regularCadenceConfidence(
         reliableDateCount: Int,
-        activeWeekdays: [Int]
-    ) -> FeedScheduleProfile? {
-        let distinctWeekdays = Set(activeWeekdays)
-        guard reliableDateCount >= 6,
-              (2...4).contains(distinctWeekdays.count),
-              minuteOfDayCluster.spread <= 90
-        else { return nil }
-
-        let dominantRatio = Double(weekdayCounts.values.max() ?? 0) / Double(max(dates.count, 1))
-        guard dominantRatio < 0.7 else { return nil }
-
-        let confidence = 0.54
-            + min(0.16, Double(reliableDateCount - 6) * 0.02)
-            + max(0, 0.12 - Double(minuteOfDayCluster.spread) / 900.0)
-        return FeedScheduleProfile(
-            kind: .multiSlot,
-            confidence: confidence,
-            observationCount: observationCount,
-            reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays,
-            typicalMinuteOfDay: minuteOfDayCluster.center,
-            reason: "Episodes recur on a small set of weekdays around the same time."
-        )
+        activeDays: [Int],
+        probabilities: [Int: Double]
+    ) -> Double {
+        let activeProbabilities = activeDays.map { probabilities[$0] ?? 0 }
+        let meanActive = activeProbabilities.isEmpty
+            ? 0
+            : activeProbabilities.reduce(0, +) / Double(activeProbabilities.count)
+        return min(0.97, 0.55
+            + 0.25 * meanActive
+            + min(0.15, Double(reliableDateCount) / 200.0))
     }
 
     private static func countsByWeekday(_ dates: [Date], calendar: Calendar) -> [Int: Int] {
@@ -850,6 +1195,25 @@ public enum FeedScheduleProfiler {
         let start = normalized[startIndex]
         let spread = max(0, modulo - largestGap)
         return ((start + spread / 2) % modulo, spread)
+    }
+
+    /// Signed minute offsets (relative to `center`, in roughly `[-modulo/2, modulo/2]`)
+    /// covering the bulk of `minutes`, trimming the most extreme ~5% on each side so a
+    /// few stray publish times (a re-release, a special) don't stretch a learned
+    /// window. With only a handful of points this collapses to the full min/max range.
+    private static func trimmedOffsetRange(
+        _ minutes: [Int],
+        around center: Int,
+        modulo: Int
+    ) -> (low: Int, high: Int) {
+        guard !minutes.isEmpty else { return (0, 0) }
+        let offsets = minutes.map { value -> Int in
+            let raw = (((value - center) % modulo) + modulo) % modulo
+            return raw <= modulo / 2 ? raw : raw - modulo
+        }.sorted()
+        let lowIndex = min(offsets.count - 1, Int((Double(offsets.count - 1) * 0.05).rounded()))
+        let highIndex = min(offsets.count - 1, Int((Double(offsets.count - 1) * 0.95).rounded()))
+        return (offsets[lowIndex], offsets[highIndex])
     }
 
     private static func dominantMinuteOfHourBuckets(dates: [Date], calendar: Calendar) -> [Int] {
@@ -910,6 +1274,15 @@ public enum FeedRefreshWindowState: String, CaseIterable, Codable, Sendable, Has
     case fallback
 }
 
+/// Release Radar v2 — Stage 2 per-weekday watch intensity, derived from a feed's
+/// per-weekday publish probability. `full` = watched closely in the learned window,
+/// `light` = an occasional check, `skip` = not watched at all.
+public enum FeedWatchTier: String, Sendable, Equatable {
+    case full
+    case light
+    case skip
+}
+
 public struct FeedRefreshPrediction: Equatable, Codable, Sendable {
     public var nextDueAt: Date
     public var state: FeedRefreshWindowState
@@ -957,10 +1330,48 @@ public enum FeedRefreshScheduling {
     public static let missedReleaseEmptyFetchLimit = 10
     public static let missedReleaseMaxUrgencyAge: TimeInterval = 8 * 60 * 60
 
+    // Release Radar v2 — Stage 2 watch-intensity tiers (read from weekdayProbabilities).
+    /// At/above this probability a weekday is "active": full window, high rotation.
+    private static let fullTierThreshold = 0.6
+    /// Between `lightTierThreshold` and `fullTierThreshold` a weekday occasionally
+    /// publishes — checked lightly during its window. Below it, the day is skipped.
+    private static let lightTierThreshold = 0.25
+    /// Recheck multiplier applied to a light-tier day's window (a fraction of the
+    /// full-rotation cadence).
+    private static let lightTierRecheckMultiplier = 4.0
+
+    /// The watch tier a weekday gets for a given per-week publish probability. The single
+    /// source of truth for the tier thresholds (used by scheduling and the diagnostics).
+    public static func watchTier(forProbability probability: Double) -> FeedWatchTier {
+        if probability >= fullTierThreshold { return .full }
+        if probability >= lightTierThreshold { return .light }
+        return .skip
+    }
+
+    /// The watch tier shown for a weekday on a feed, given that weekday's publish
+    /// probability. The active-weekday → full shortcut applies only to the day-windowed
+    /// kinds (weekly / daily-weekdays / multi-slot), where `activeWeekdays` is the resolved
+    /// watch set — e.g. a weekly day classified by episode share, whose raw probability
+    /// sits below the full bar. For other kinds `activeWeekdays` is merely the observed
+    /// days (not a watch set), so the tier follows the probability.
+    public static func watchTier(forProbability probability: Double, onWeekday weekday: Int, in profile: FeedScheduleProfile) -> FeedWatchTier {
+        let dayWindowed: Bool
+        switch profile.kind {
+        case .weekly, .dailyWeekdays, .multiSlot: dayWindowed = true
+        default: dayWindowed = false
+        }
+        if dayWindowed, profile.activeWeekdays.contains(weekday) { return .full }
+        return watchTier(forProbability: probability)
+    }
+
     private struct RefreshSlot {
         var preWindowStart: Date
         var windowStart: Date
         var windowEnd: Date
+        /// Stage-2 watch tier. A light slot is a medium-probability day (occasionally
+        /// publishes): it's checked at a lighter cadence during the window and does not
+        /// escalate to missed-release surveillance afterwards.
+        var isLight: Bool = false
     }
 
     /// Median gap between recent episode publish dates (newest ~10), clamped.
@@ -1100,11 +1511,11 @@ public enum FeedRefreshScheduling {
             }
             return windowedPrediction(
                 profile: profile,
-                slots: dailySlots(
-                    activeWeekdays: profile.activeWeekdays,
-                    windowStartMinute: max(0, minute - 10),
-                    windowEndMinute: min(24 * 60 - 1, minute + 75),
-                    preWindowLead: 20 * 60,
+                slots: releaseSlots(
+                    profile: profile,
+                    windowStartMinute: profile.releaseWindow?.startMinuteOfDay ?? max(0, minute - 10),
+                    windowEndMinute: profile.releaseWindow?.endMinuteOfDay ?? min(24 * 60 - 1, minute + 75),
+                    fullPreWindowLead: 20 * 60,
                     now: now,
                     calendar: calendar
                 ),
@@ -1131,11 +1542,11 @@ public enum FeedRefreshScheduling {
             }
             return windowedPrediction(
                 profile: profile,
-                slots: dailySlots(
-                    activeWeekdays: profile.activeWeekdays,
-                    windowStartMinute: max(0, minute - 10),
-                    windowEndMinute: min(24 * 60 - 1, minute + 120),
-                    preWindowLead: 20 * 60,
+                slots: releaseSlots(
+                    profile: profile,
+                    windowStartMinute: profile.releaseWindow?.startMinuteOfDay ?? max(0, minute - 10),
+                    windowEndMinute: profile.releaseWindow?.endMinuteOfDay ?? min(24 * 60 - 1, minute + 120),
+                    fullPreWindowLead: 20 * 60,
                     now: now,
                     calendar: calendar
                 ),
@@ -1162,11 +1573,11 @@ public enum FeedRefreshScheduling {
             }
             return windowedPrediction(
                 profile: profile,
-                slots: dailySlots(
-                    activeWeekdays: profile.activeWeekdays,
-                    windowStartMinute: max(0, minute - 5),
-                    windowEndMinute: min(24 * 60 - 1, minute + 60),
-                    preWindowLead: 10 * 60,
+                slots: releaseSlots(
+                    profile: profile,
+                    windowStartMinute: profile.releaseWindow?.startMinuteOfDay ?? max(0, minute - 5),
+                    windowEndMinute: profile.releaseWindow?.endMinuteOfDay ?? min(24 * 60 - 1, minute + 60),
+                    fullPreWindowLead: 10 * 60,
                     now: now,
                     calendar: calendar
                 ),
@@ -1436,14 +1847,29 @@ public enum FeedRefreshScheduling {
         }
 
         if now <= slot.windowEnd {
+            let recheck = slot.isLight ? baseRecheck * lightTierRecheckMultiplier : baseRecheck
             return FeedRefreshPrediction(
-                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: baseRecheck, now: now),
+                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: recheck, now: now),
                 state: .activeWindow,
                 profileKind: profile.kind,
                 expectedWindowStart: slot.windowStart,
                 expectedWindowEnd: slot.windowEnd,
-                recheckInterval: baseRecheck,
-                reason: activeReason
+                recheckInterval: recheck,
+                reason: slot.isLight ? "Light check on an occasionally-active day." : activeReason
+            )
+        }
+
+        if slot.isLight {
+            // A light (medium-probability) day usually has no episode — don't escalate to
+            // missed-release surveillance; stand down until the next learned window.
+            let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
+            return FeedRefreshPrediction(
+                nextDueAt: nextDue,
+                state: .quiet,
+                profileKind: profile.kind,
+                expectedWindowStart: nextSlot?.windowStart,
+                expectedWindowEnd: nextSlot?.windowEnd,
+                reason: "Light-tier day window passed; wait for the next learned window."
             )
         }
 
@@ -1513,6 +1939,52 @@ public enum FeedRefreshScheduling {
                 windowEnd: windowEnd
             )
         }
+    }
+
+    /// Release Radar v2 — Stage 2 watch-intensity tiers. Builds full-rotation slots for
+    /// the profile's active (high-probability) weekdays, plus lighter slots for any
+    /// medium-probability weekday (`lightTierThreshold` ≤ p < `fullTierThreshold`) that
+    /// occasionally publishes but isn't reliable enough to be "active". Days below
+    /// `lightTierThreshold` get no slots at all (skipped — e.g. weekends for a Mon–Fri
+    /// show). Profiles without learned probabilities (manually constructed) fall back to
+    /// the active set only, so existing behaviour is unchanged.
+    private static func releaseSlots(
+        profile: FeedScheduleProfile,
+        windowStartMinute: Int,
+        windowEndMinute: Int,
+        fullPreWindowLead: TimeInterval,
+        now: Date,
+        calendar: Calendar
+    ) -> [RefreshSlot] {
+        var slots = dailySlots(
+            activeWeekdays: profile.activeWeekdays,
+            windowStartMinute: windowStartMinute,
+            windowEndMinute: windowEndMinute,
+            preWindowLead: fullPreWindowLead,
+            now: now,
+            calendar: calendar
+        )
+
+        let fullSet = Set(profile.activeWeekdays)
+        let lightDays = (profile.weekdayProbabilities ?? [:])
+            .filter { $0.value >= lightTierThreshold && $0.value < fullTierThreshold && !fullSet.contains($0.key) }
+            .keys
+            .sorted()
+        if !lightDays.isEmpty {
+            slots += dailySlots(
+                activeWeekdays: lightDays,
+                windowStartMinute: windowStartMinute,
+                windowEndMinute: windowEndMinute,
+                preWindowLead: 0,
+                now: now,
+                calendar: calendar
+            ).map { slot in
+                var light = slot
+                light.isLight = true
+                return light
+            }
+        }
+        return slots
     }
 
     private static func regularPrediction(
@@ -1944,6 +2416,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     public var archivedEpisodeKeys: Set<String>
     public var notificationsEnabled: Bool
     public var autoArchiveSettings: AutoArchiveSettings
+    public var downloadFilterSettings: DownloadFilterSettings
     public var excludeFromAutoFeedRefresh: Bool
     /// Previous active Priority Stack rank captured when the user marks this
     /// real subscription Inactive. Nil for active shows and browse previews.
@@ -1990,6 +2463,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         self.archivedEpisodeKeys = []
         self.notificationsEnabled = notificationsEnabled
         self.autoArchiveSettings = autoArchiveSettings
+        self.downloadFilterSettings = .default
         self.excludeFromAutoFeedRefresh = excludeFromAutoFeedRefresh
         self.autoFeedRefreshReturnPriorityRank = nil
         self.categories = categories
@@ -2015,6 +2489,7 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         case archivedEpisodeKeys
         case notificationsEnabled
         case autoArchiveSettings
+        case downloadFilterSettings
         case excludeFromAutoFeedRefresh
         case autoFeedRefreshReturnPriorityRank
         case categories
@@ -2049,5 +2524,263 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
         refreshStats = try container.decodeIfPresent(RefreshStats.self, forKey: .refreshStats) ?? RefreshStats()
 
         autoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .autoArchiveSettings) ?? .default
+        downloadFilterSettings = try container.decodeIfPresent(DownloadFilterSettings.self, forKey: .downloadFilterSettings) ?? .default
+    }
+}
+
+public struct DownloadFilterSettings: Equatable, Codable, Sendable {
+    public var durationEnabled: Bool
+    public var titleEnabled: Bool
+    public var descriptionEnabled: Bool
+    public var matchMode: MatchMode
+    public var durationRules: [DurationRule]
+    public var titleRules: [TextRule]
+    public var descriptionRules: [TextRule]
+
+    public static let `default` = DownloadFilterSettings(
+        durationEnabled: false,
+        titleEnabled: false,
+        descriptionEnabled: false,
+        matchMode: .all,
+        durationRules: [],
+        titleRules: [],
+        descriptionRules: []
+    )
+
+    public var hasActiveFilters: Bool {
+        !activeRules.isEmpty
+    }
+
+    public init(
+        durationEnabled: Bool,
+        titleEnabled: Bool,
+        descriptionEnabled: Bool,
+        matchMode: MatchMode,
+        durationRules: [DurationRule],
+        titleRules: [TextRule],
+        descriptionRules: [TextRule]
+    ) {
+        self.durationEnabled = durationEnabled
+        self.titleEnabled = titleEnabled
+        self.descriptionEnabled = descriptionEnabled
+        self.matchMode = matchMode
+        self.durationRules = durationRules
+        self.titleRules = titleRules
+        self.descriptionRules = descriptionRules
+    }
+
+    public func evaluation(for episode: Episode) -> DownloadFilterEvaluation {
+        let rules = activeRules
+        guard !rules.isEmpty else { return .included }
+
+        let excludeMatch = rules.first { rule in
+            rule.behavior == .exclude && rule.matches(episode)
+        }
+        if let excludeMatch {
+            return .skipped(reason: excludeMatch.reason)
+        }
+
+        let includeRules = rules.filter { $0.behavior == .include }
+        guard !includeRules.isEmpty else { return .included }
+
+        switch matchMode {
+        case .all:
+            if let failedRule = includeRules.first(where: { !$0.matches(episode) }) {
+                return .skipped(reason: failedRule.failureReason)
+            }
+            return .included
+        case .any:
+            if includeRules.contains(where: { $0.matches(episode) }) {
+                return .included
+            }
+            return .skipped(reason: "No include rule matched")
+        }
+    }
+
+    public func evaluation(for observation: FeedReleaseObservation) -> DownloadFilterEvaluation {
+        var episode = Episode(
+            subscriptionID: Self.observationSubscriptionID,
+            guid: observation.guid,
+            title: observation.title,
+            audioURL: observation.audioURL ?? Self.observationAudioURL
+        )
+        episode.description = observation.description
+        episode.durationSeconds = observation.durationSeconds
+        return evaluation(for: episode)
+    }
+
+    private var activeRules: [AnyDownloadFilterRule] {
+        var rules: [AnyDownloadFilterRule] = []
+        if durationEnabled {
+            rules += durationRules.map { .duration($0) }
+        }
+        if titleEnabled {
+            rules += titleRules
+                .filter { !$0.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { .title($0) }
+        }
+        if descriptionEnabled {
+            rules += descriptionRules
+                .filter { !$0.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { .description($0) }
+        }
+        return rules
+    }
+
+    private static let observationSubscriptionID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    private static let observationAudioURL = URL(string: "https://autohop.local/release-observation")!
+
+    public enum MatchMode: String, CaseIterable, Codable, Sendable {
+        case all
+        case any
+
+        public var title: String {
+            switch self {
+            case .all: return "All"
+            case .any: return "Any"
+            }
+        }
+    }
+
+    public enum RuleBehavior: String, CaseIterable, Codable, Sendable {
+        case include
+        case exclude
+
+        public var title: String {
+            switch self {
+            case .include: return "Include"
+            case .exclude: return "Exclude"
+            }
+        }
+    }
+
+    public struct DurationRule: Identifiable, Equatable, Codable, Sendable {
+        public var id: UUID
+        public var behavior: RuleBehavior
+        public var comparison: Comparison
+        public var minutes: Int
+
+        public init(id: UUID = UUID(), behavior: RuleBehavior = .include, comparison: Comparison = .longerThan, minutes: Int = 40) {
+            self.id = id
+            self.behavior = behavior
+            self.comparison = comparison
+            self.minutes = min(300, max(1, minutes))
+        }
+
+        public enum Comparison: String, CaseIterable, Codable, Sendable {
+            case longerThan
+            case shorterThan
+
+            public var title: String {
+                switch self {
+                case .longerThan: return "Longer than"
+                case .shorterThan: return "Shorter than"
+                }
+            }
+        }
+    }
+
+    public struct TextRule: Identifiable, Equatable, Codable, Sendable {
+        public var id: UUID
+        public var behavior: RuleBehavior
+        public var operation: Operation
+        public var term: String
+
+        public init(id: UUID = UUID(), behavior: RuleBehavior = .include, operation: Operation = .contains, term: String = "") {
+            self.id = id
+            self.behavior = behavior
+            self.operation = operation
+            self.term = term
+        }
+
+        public enum Operation: String, CaseIterable, Codable, Sendable {
+            case contains
+            case doesNotContain
+
+            public var title: String {
+                switch self {
+                case .contains: return "Contains"
+                case .doesNotContain: return "Does not contain"
+                }
+            }
+        }
+    }
+}
+
+public enum DownloadFilterEvaluation: Equatable, Sendable {
+    case included
+    case skipped(reason: String)
+
+    public var isIncluded: Bool {
+        if case .included = self { return true }
+        return false
+    }
+
+    public var skipReason: String? {
+        if case .skipped(let reason) = self { return reason }
+        return nil
+    }
+}
+
+private enum AnyDownloadFilterRule {
+    case duration(DownloadFilterSettings.DurationRule)
+    case title(DownloadFilterSettings.TextRule)
+    case description(DownloadFilterSettings.TextRule)
+
+    var behavior: DownloadFilterSettings.RuleBehavior {
+        switch self {
+        case .duration(let rule): return rule.behavior
+        case .title(let rule): return rule.behavior
+        case .description(let rule): return rule.behavior
+        }
+    }
+
+    var reason: String {
+        switch self {
+        case .duration(let rule):
+            return "Duration \(rule.comparison.title.lowercased()) \(rule.minutes) min"
+        case .title(let rule):
+            return "Title \(rule.operation.title.lowercased()) \"\(rule.term)\""
+        case .description(let rule):
+            return "Description \(rule.operation.title.lowercased()) \"\(rule.term)\""
+        }
+    }
+
+    var failureReason: String {
+        switch self {
+        case .duration(let rule):
+            return "Not \(rule.comparison.title.lowercased()) \(rule.minutes) min"
+        case .title(let rule):
+            return "Title does not match \"\(rule.term)\""
+        case .description(let rule):
+            return "Description does not match \"\(rule.term)\""
+        }
+    }
+
+    func matches(_ episode: Episode) -> Bool {
+        switch self {
+        case .duration(let rule):
+            guard let seconds = episode.durationSeconds else { return false }
+            let minutes = seconds / 60
+            switch rule.comparison {
+            case .longerThan: return minutes > Double(rule.minutes)
+            case .shorterThan: return minutes < Double(rule.minutes)
+            }
+        case .title(let rule):
+            return matchesText(episode.title, rule: rule)
+        case .description(let rule):
+            return matchesText(episode.description ?? "", rule: rule)
+        }
+    }
+
+    private func matchesText(_ value: String, rule: DownloadFilterSettings.TextRule) -> Bool {
+        let haystack = value.localizedLowercase
+        let needle = rule.term.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        guard !needle.isEmpty else { return true }
+        let contains = haystack.contains(needle)
+        switch rule.operation {
+        case .contains: return contains
+        case .doesNotContain: return !contains
+        }
     }
 }

@@ -12,8 +12,14 @@ import SwiftUI
 // Default Playback panel), Automation (per-podcast notifications,
 // exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
 // (only when latest episode has chapters; position-based), Feed (read-only
-// URL), Danger (unsubscribe with confirmation). Footer copy must stay in sync
-// with FEATURES.md §10. Visual style matches App Settings: dark page
+// URL + Download Filters link + "Release Radar Data" link →
+// SubscriptionRadarDiagnosticsView, a read-only screen showing the raw data and
+// daily/weekly gate outcomes behind this feed's Radar classification),
+// Danger (unsubscribe with confirmation). This
+// file also hosts DownloadFiltersView, a pushed per-subscription page for local
+// auto-download eligibility rules (duration/title/description, include/exclude,
+// All/Any, live read-only 50-episode feed preview with greyed skipped rows).
+// Footer copy must stay in sync with FEATURES.md §10. Visual style matches App Settings: dark page
 // (scrollContentBackground hidden over black), white.opacity(0.08) section
 // cards, .tint(.purple), and purple SettingsRowLabel glyphs on control rows; the
 // Playback card is passed fill: white.opacity(0.08) to match.
@@ -445,6 +451,18 @@ struct SubscriptionSettingsView: View {
     @ViewBuilder
     private func feedSection(_ sub: Subscription) -> some View {
         Section("Feed") {
+            NavigationLink {
+                DownloadFiltersView(subscriptionID: sub.id)
+            } label: {
+                SettingsRowLabel(title: "Download Filters", systemImage: "line.3.horizontal.decrease.circle")
+            }
+
+            NavigationLink {
+                SubscriptionRadarDiagnosticsView(subscriptionID: sub.id)
+            } label: {
+                SettingsRowLabel(title: "Release Radar Data", systemImage: "stethoscope")
+            }
+
             LabeledContent {
                 Text(sub.feedURL.absoluteString)
                     .foregroundStyle(.secondary)
@@ -616,6 +634,333 @@ private struct EditPrioritySheet: View {
         }
         .tint(.purple)
         .preferredColorScheme(.dark)
+    }
+}
+
+struct DownloadFiltersView: View {
+    let subscriptionID: UUID
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var previewState: PreviewState = .idle
+
+    private var subscription: Subscription? {
+        appState.subscriptionStore.subscription(id: subscriptionID)
+    }
+
+    var body: some View {
+        Group {
+            if let sub = subscription {
+                Form {
+                    summarySection(sub)
+                    durationSection(sub)
+                    titleSection(sub)
+                    descriptionSection(sub)
+                    previewSection(sub)
+                }
+            } else {
+                ContentUnavailableView("Subscription Not Found", systemImage: "dot.radiowaves.left.and.right")
+            }
+        }
+        .listSectionSpacing(36)
+        .scrollContentBackground(.hidden)
+        .background(Color.black.ignoresSafeArea())
+        .tint(.purple)
+        .preferredColorScheme(.dark)
+        .navigationTitle("Download Filters")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                    .accessibilityLabel("Back")
+            }
+        }
+        .miniPlayerBar()
+    }
+
+    @ViewBuilder
+    private func summarySection(_ sub: Subscription) -> some View {
+        Section {
+            Picker(selection: settingsBinding(sub).matchMode) {
+                ForEach(DownloadFilterSettings.MatchMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            } label: {
+                SettingsRowLabel(title: "Match", systemImage: "switch.2")
+            }
+            .pickerStyle(.segmented)
+
+            Text(summaryText(sub.downloadFilterSettings))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Rules")
+        }
+        .listRowBackground(sectionBackground)
+    }
+
+    @ViewBuilder
+    private func durationSection(_ sub: Subscription) -> some View {
+        let binding = settingsBinding(sub)
+        Section {
+            Toggle(isOn: binding.durationEnabled) {
+                SettingsRowLabel(title: "Duration filters", systemImage: "clock")
+            }
+            ForEach(binding.durationRules) { $rule in
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("Behavior", selection: $rule.behavior) {
+                        ForEach(DownloadFilterSettings.RuleBehavior.allCases, id: \.self) { behavior in
+                            Text(behavior.title).tag(behavior)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack(spacing: 10) {
+                        Picker("Comparison", selection: $rule.comparison) {
+                            ForEach(DownloadFilterSettings.DurationRule.Comparison.allCases, id: \.self) { comparison in
+                                Text(comparison.title).tag(comparison)
+                            }
+                        }
+                        Stepper(value: $rule.minutes, in: 1...300, step: 1) {
+                            Text("\(rule.minutes) min")
+                                .monospacedDigit()
+                        }
+                    }
+                }
+            }
+            .onDelete { offsets in
+                var settings = sub.downloadFilterSettings
+                settings.durationRules.remove(atOffsets: offsets)
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            }
+            addRuleButton("Add Duration Rule", systemImage: "plus.circle") {
+                var settings = sub.downloadFilterSettings
+                settings.durationEnabled = true
+                settings.durationRules.append(.init())
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            }
+        }
+        .listRowBackground(sectionBackground)
+    }
+
+    @ViewBuilder
+    private func titleSection(_ sub: Subscription) -> some View {
+        textRuleSection(
+            title: "Title",
+            icon: "textformat",
+            enabled: settingsBinding(sub).titleEnabled,
+            rules: settingsBinding(sub).titleRules,
+            add: {
+                var settings = sub.downloadFilterSettings
+                settings.titleEnabled = true
+                settings.titleRules.append(.init(behavior: .include))
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            },
+            delete: { offsets in
+                var settings = sub.downloadFilterSettings
+                settings.titleRules.remove(atOffsets: offsets)
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func descriptionSection(_ sub: Subscription) -> some View {
+        textRuleSection(
+            title: "Description",
+            icon: "text.alignleft",
+            enabled: settingsBinding(sub).descriptionEnabled,
+            rules: settingsBinding(sub).descriptionRules,
+            add: {
+                var settings = sub.downloadFilterSettings
+                settings.descriptionEnabled = true
+                settings.descriptionRules.append(.init(behavior: .exclude))
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            },
+            delete: { offsets in
+                var settings = sub.downloadFilterSettings
+                settings.descriptionRules.remove(atOffsets: offsets)
+                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func textRuleSection(
+        title: String,
+        icon: String,
+        enabled: Binding<Bool>,
+        rules: Binding<[DownloadFilterSettings.TextRule]>,
+        add: @escaping () -> Void,
+        delete: @escaping (IndexSet) -> Void
+    ) -> some View {
+        Section {
+            Toggle(isOn: enabled) {
+                SettingsRowLabel(title: "\(title) filters", systemImage: icon)
+            }
+            ForEach(rules) { $rule in
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("Behavior", selection: $rule.behavior) {
+                        ForEach(DownloadFilterSettings.RuleBehavior.allCases, id: \.self) { behavior in
+                            Text(behavior.title).tag(behavior)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("Match", selection: $rule.operation) {
+                        ForEach(DownloadFilterSettings.TextRule.Operation.allCases, id: \.self) { operation in
+                            Text(operation.title).tag(operation)
+                        }
+                    }
+                    TextField("Text", text: $rule.term)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            .onDelete(perform: delete)
+            addRuleButton("Add \(title) Rule", systemImage: "plus.circle", action: add)
+        }
+        .listRowBackground(sectionBackground)
+    }
+
+    @ViewBuilder
+    private func previewSection(_ sub: Subscription) -> some View {
+        Section {
+            Button {
+                Task { await loadPreview(sub) }
+            } label: {
+                HStack {
+                    Label("Preview Matches", systemImage: "eye")
+                    Spacer()
+                    if previewState.isLoading { ProgressView() }
+                }
+            }
+            .disabled(previewState.isLoading)
+
+            switch previewState {
+            case .idle:
+                EmptyView()
+            case .loading:
+                Text("Fetching latest feed...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .failed:
+                Text("Could not fetch the feed. Try again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .loaded(let rows):
+                ForEach(rows) { row in
+                    previewRow(row)
+                }
+            }
+        } header: {
+            Text("Preview")
+        }
+        .listRowBackground(sectionBackground)
+    }
+
+    private func previewRow(_ row: PreviewRow) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(row.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(row.skipReason == nil ? .primary : .secondary)
+                .lineLimit(2)
+            HStack(spacing: 5) {
+                if let publishedAt = row.publishedAt {
+                    Text(relativePublishedLabel(publishedAt))
+                }
+                if let duration = row.durationSeconds {
+                    if row.publishedAt != nil { Text("•") }
+                    Text(formatDuration(duration)).monospacedDigit()
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            if let reason = row.skipReason {
+                Text(reason)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color(white: 0.36).opacity(0.7), in: Capsule())
+            }
+        }
+        .opacity(row.skipReason == nil ? 1 : 0.45)
+    }
+
+    private func addRuleButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    private func settingsBinding(_ sub: Subscription) -> Binding<DownloadFilterSettings> {
+        Binding(
+            get: { appState.subscriptionStore.subscription(id: sub.id)?.downloadFilterSettings ?? sub.downloadFilterSettings },
+            set: { appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: $0) }
+        )
+    }
+
+    private func summaryText(_ settings: DownloadFilterSettings) -> String {
+        guard settings.hasActiveFilters else {
+            return "All filter groups are off, so Autohop downloads the next available episode."
+        }
+        return "Download episodes when \(settings.matchMode == .all ? "all" : "any") enabled include rules match. Exclude rules always skip matching episodes."
+    }
+
+    private func loadPreview(_ sub: Subscription) async {
+        previewState = .loading
+        do {
+            let feed = try await EpisodeFeedLoader().fetch(feedURL: sub.feedURL, limit: 50)
+            let rows = feed.episodes.compactMap { parsed -> PreviewRow? in
+                guard let audioURL = parsed.audioURL else { return nil }
+                var episode = Episode(subscriptionID: sub.id, guid: parsed.guid, title: parsed.title, audioURL: audioURL, mediaKind: parsed.mediaKind)
+                episode.description = parsed.description
+                episode.publishedAt = parsed.publishedAt
+                episode.durationSeconds = parsed.durationSeconds
+                let evaluation = sub.downloadFilterSettings.evaluation(for: episode)
+                return PreviewRow(
+                    title: parsed.title,
+                    publishedAt: parsed.publishedAt,
+                    durationSeconds: parsed.durationSeconds,
+                    skipReason: evaluation.skipReason
+                )
+            }
+            previewState = .loaded(rows)
+        } catch {
+            previewState = .failed
+        }
+    }
+
+    private var sectionBackground: Color {
+        if #available(iOS 26, *) { return Color.white.opacity(0.05) }
+        return Color.white.opacity(0.08)
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    }
+
+    private enum PreviewState {
+        case idle
+        case loading
+        case loaded([PreviewRow])
+        case failed
+
+        var isLoading: Bool {
+            if case .loading = self { return true }
+            return false
+        }
+    }
+
+    private struct PreviewRow: Identifiable {
+        let id = UUID()
+        var title: String
+        var publishedAt: Date?
+        var durationSeconds: TimeInterval?
+        var skipReason: String?
     }
 }
 

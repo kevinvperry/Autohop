@@ -2,8 +2,11 @@ import Foundation
 import BackgroundTasks
 
 // AI CONTEXT — App/BackgroundTaskCoordinator.swift
-// Stateless helper owning the BGAppRefreshTask identifier and submit logic for
-// Release Radar background feed refresh. Called from AppDelegate (registration/
+// Stateless helper owning the BGAppRefreshTask + BGProcessingTask identifiers and
+// submit logic for Release Radar background feed refresh. BGAppRefreshTask is the
+// short opportunistic wake (~30 s); BGProcessingTask is a longer charging+Wi-Fi
+// catch-up (several minutes) that drains the due-feed backlog (e.g. overnight).
+// Called from AppDelegate (registration/
 // initial schedule) and AppState (re-schedule with the next feed due date after
 // each refresh cycle). 15-minute floor on earliestBeginDate; identifier must
 // stay in sync with Info.plist BGTaskSchedulerPermittedIdentifiers. Diagnostics
@@ -19,6 +22,7 @@ import BackgroundTasks
 struct BackgroundTaskCoordinator {
 
     static let feedRefreshIdentifier = "com.autohop.feedrefresh"
+    static let feedProcessingIdentifier = "com.autohop.feedprocessing"
 
     /// Schedules a refresh only when no request is already pending, preventing
     /// every app launch from resetting the earliestBeginDate clock.
@@ -65,6 +69,41 @@ struct BackgroundTaskCoordinator {
         } catch {
             AppLogger.shared.error("background.scheduleFailed", "Background app refresh could not be scheduled", metadata: [
                 "identifier": feedRefreshIdentifier,
+                "error": String(describing: error)
+            ])
+        }
+    }
+
+    /// Schedules a processing catch-up only when none is pending, so launches don't
+    /// reset the clock.
+    static func scheduleProcessingIfNeeded() {
+        BGTaskScheduler.shared.getPendingTaskRequests { requests in
+            guard !requests.contains(where: { $0.identifier == feedProcessingIdentifier }) else { return }
+            scheduleProcessing()
+        }
+    }
+
+    /// Submits a `BGProcessingTaskRequest` gated on external power + network for a
+    /// longer feed catch-up than BGAppRefreshTask allows. No earliestBeginDate floor:
+    /// iOS picks the ideal charging-idle window (typically overnight). Identifier must
+    /// also appear in Info.plist `BGTaskSchedulerPermittedIdentifiers`.
+    static func scheduleProcessing() {
+        let request = BGProcessingTaskRequest(identifier: feedProcessingIdentifier)
+        request.requiresExternalPower = true
+        request.requiresNetworkConnectivity = true
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            AppLogger.shared.info("background.scheduleProcessing", "Scheduled background processing catch-up", metadata: [
+                "identifier": feedProcessingIdentifier
+            ])
+        } catch BGTaskScheduler.Error.notPermitted {
+            AppLogger.shared.error("background.scheduleProcessingFailed", "Background processing was not permitted", metadata: [
+                "identifier": feedProcessingIdentifier,
+                "reason": "notPermitted"
+            ])
+        } catch {
+            AppLogger.shared.error("background.scheduleProcessingFailed", "Background processing could not be scheduled", metadata: [
+                "identifier": feedProcessingIdentifier,
                 "error": String(describing: error)
             ])
         }

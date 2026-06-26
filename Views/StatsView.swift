@@ -19,14 +19,15 @@ import Charts
 // All but Lifetime are calendar-anchored and reset at the start of each period:
 // This Week = Monday 00:00 → now (Monday-first, locale-independent); the month
 // pill (dynamic label, e.g. "June") = 1st → now; the year pill ("2026") = Jan 1
-// → now. Sections: hero card (time listened, time saved, episodes finished,
-// streak), listening heatmap (This Week + current month, Monday-aligned columns)
-// or monthly Swift Charts trend (year/Lifetime), 24-hour listening clock (Canvas
-// rose chart), Top Shows (+ Show All page with rank-movement badges vs. the
-// previous comparable period — prior week / calendar month / calendar year),
-// "Shows You're Drifting From" (ShowEngagementAnalyzer, heatmap ranges only,
-// omitted when empty), time-saved breakdown, data-downloaded card (total bytes
-// + episode count / average size, forward-only from June 2026), privacy footer.
+// → now. Sections (top to bottom): hero card (time listened, time saved,
+// episodes finished, streak), Top Shows (+ Show All page with rank-movement
+// badges vs. the previous comparable period — prior week / calendar month /
+// calendar year), "Shows You're Drifting From" (ShowEngagementAnalyzer, heatmap
+// ranges only, omitted when empty), listening heatmap (This Week + current month,
+// Monday-aligned columns) or monthly Swift Charts trend (year/Lifetime), 24-hour
+// listening clock (Canvas rose chart), data-downloaded card (total bytes +
+// episode count / average size, forward-only from June 2026), time-saved
+// breakdown, privacy footer.
 // Tapping a Top Shows or
 // drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
 // All on-device data only. Show rows use 44 pt CachedArtworkImage thumbnails so
@@ -203,6 +204,9 @@ private struct StatsContentView: View {
 
                 heroCard(summary)
 
+                topShowsSection(summary)
+                driftingShowsSection(summary)
+
                 if range.usesHeatmap {
                     heatmapSection(summary)
                 } else {
@@ -210,8 +214,6 @@ private struct StatsContentView: View {
                 }
 
                 clockSection(summary)
-                topShowsSection(summary)
-                driftingShowsSection(summary)
                 dataDownloadedSection(summary)
                 timeSavedSection(summary)
 
@@ -867,7 +869,7 @@ private struct StatsContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "lock.shield")
                 .font(.caption)
-            Text("Your listening stats never leave this device.")
+            Text("Your listening stats are private — kept on your device and your own iCloud, never sent to Autohop.")
                 .font(.caption)
         }
         .foregroundStyle(.tertiary)

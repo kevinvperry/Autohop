@@ -6,7 +6,11 @@ import UniformTypeIdentifiers
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
 // cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (sensitivity stepper +
 // Notification Settings link — the global notifications toggle now lives on
-// NotificationSettingsView as the master switch), Auto Archive (run-now button + global default pickers for Played/Inactive/EpisodeLimit applied to new subscriptions only), Downloading
+// NotificationSettingsView as the master switch — plus a warning row + "Open iOS
+// Settings" deep link shown when UIApplication.backgroundRefreshStatus != .available,
+// since iOS then grants no off-app feed checks; re-checked on scenePhase) and a Feed
+// Refresh Schedule link (FeedRefreshScheduleView — a per-active-subscription table of
+// when/why Release Radar watches each feed), Auto Archive (run-now button + global default pickers for Played/Inactive/EpisodeLimit applied to new subscriptions only), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
@@ -51,6 +55,11 @@ struct SettingsView: View {
     @State private var developerModeUnlocked = false
     @State private var totalDownloadedBytes: Int64? = nil
 
+    // Background App Refresh status warning (research Tier 1 #2) — surfaced in the
+    // Release Radar section when iOS won't let Autohop check feeds in the background.
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var backgroundRefreshOff = false
+
     var body: some View {
         Form {
             startupSection
@@ -68,6 +77,10 @@ struct SettingsView: View {
             acknowledgementsSection
         }
         .listSectionSpacing(36)
+        .onAppear { refreshBackgroundRefreshStatus() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshBackgroundRefreshStatus() }
+        }
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
@@ -115,6 +128,13 @@ struct SettingsView: View {
             .presentationDetents([.height(300)])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    /// Reads the system Background App Refresh authorisation. `.denied` (user turned
+    /// it off) or `.restricted` (Screen Time / MDM) both mean iOS won't grant
+    /// off-app feed checks, so the Release Radar warning is shown.
+    private func refreshBackgroundRefreshStatus() {
+        backgroundRefreshOff = UIApplication.shared.backgroundRefreshStatus != .available
     }
 
     // MARK: - Section styling
@@ -170,6 +190,23 @@ struct SettingsView: View {
     @ViewBuilder
     private var pollingSection: some View {
         Section {
+            if backgroundRefreshOff {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Background App Refresh is off", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("With it off, Autohop can only catch new episodes while you're listening or when you open the app — not on its own in the background. Turn it on so feeds keep updating. (Swiping Autohop closed in the App Switcher also stops background checks.)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
+                .padding(.vertical, 4)
+            }
             Stepper(value: pollBinding, in: 1...60, step: 1) {
                 LabeledContent {
                     Text("\(appState.settingsStore.appSettings.podcastPollMinutes) min")
@@ -182,6 +219,11 @@ struct SettingsView: View {
                 NotificationSettingsView()
             } label: {
                 rowLabel("Notification Settings", systemImage: "bell.badge")
+            }
+            NavigationLink {
+                FeedRefreshScheduleView()
+            } label: {
+                rowLabel("Feed Refresh Schedule", systemImage: "calendar.badge.clock")
             }
         } header: {
             Text("Release Radar")

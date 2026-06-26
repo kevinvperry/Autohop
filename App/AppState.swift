@@ -47,10 +47,14 @@ import UIKit
 //    not put `await downloadEpisode` back inside the feed-refresh success path.
 //    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
 //    scheduled media transfer re-validates subscription state, browse previews,
-//    latest-episode staleness, and played/archived status before entering the
-//    bounded download queue. Rolling one-item feeds also cancel stale downloads
-//    for the replaced latest item immediately, so the new bulletin/show is not
-//    blocked by a dead transfer until startup reconciliation.
+//    current DownloadFilterSettings eligibility, scheduled-episode staleness,
+//    and played/archived status before entering the bounded download queue.
+//    Filters look back through the merged feed and choose the newest eligible
+//    episode; skipped episodes are also excluded from Release Radar observation
+//    learning and schedule prediction. Manual download/play paths bypass filters.
+//    Rolling one-item feeds also cancel stale downloads for the replaced latest
+//    item immediately, so the new bulletin/show is not blocked by a dead transfer
+//    until startup reconciliation.
 //    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
 //    Release Radar due-feed polling. They ask Models/Subscription.swift for a
 //    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
@@ -63,9 +67,9 @@ import UIKit
 //    over multiple runs instead of hammering every overdue feed at once. Manual
 //    refresh still ignores due dates and refreshes every eligible feed.
 //  - Refresh diagnostics: every all-feed cycle carries a stable refreshCycleID,
-//    trigger (manualButton / foregroundTimer / BGAppRefreshTask), and
-//    executionContext (manual / foregroundVisible / backgroundRefreshTask /
-//    backgroundAudioAlive). This deliberately avoids inferring background vs
+//    trigger (manualButton / foregroundTimer / BGAppRefreshTask / BGProcessingTask),
+//    and executionContext (manual / foregroundVisible / backgroundRefreshTask /
+//    backgroundAudioAlive / backgroundProcessingTask). This deliberately avoids inferring background vs
 //    foreground from sceneActive alone: a BG task can join an already-running
 //    foreground poll, and background audio can keep the process alive while the
 //    UI scene is inactive. Timed/background cycles also log a feed.refreshAll.plan
@@ -84,7 +88,9 @@ import UIKit
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
 //    The inactive/limit passes skip a subscription's pre-existing back-catalogue
 //    (episodes published on/before Subscription.subscribedAt) so subscribing to a
-//    show never archives its whole backlog on day one.
+//    show never archives its whole backlog on day one. Episode Limit only counts
+//    episodes that have actually entered the download lifecycle, so
+//    notDownloaded episodes skipped by Download Filters do not consume the limit.
 //  - Persistence side: playback positions held in an authoritative in-memory
 //    cache (savedPositionsCache, P2) loaded once and mutated through the
 //    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
@@ -428,6 +434,7 @@ final class AppState: ObservableObject {
         case manualButton
         case foregroundTimer
         case backgroundRefreshTask = "BGAppRefreshTask"
+        case backgroundProcessingTask = "BGProcessingTask"
     }
 
     private enum FeedRefreshExecutionContext: String, Sendable {
@@ -435,6 +442,7 @@ final class AppState: ObservableObject {
         case foregroundVisible
         case backgroundRefreshTask
         case backgroundAudioAlive
+        case backgroundProcessingTask
     }
 
     private struct RefreshCycleDiagnostics: Sendable {
@@ -2359,13 +2367,20 @@ final class AppState: ObservableObject {
             var stats = subscription.refreshStats
             stats.etag = newValidators.etag
             stats.lastModified = newValidators.lastModified
+            let currentFilterSettings = subscriptionStore.subscription(id: subscription.id)?.downloadFilterSettings
+                ?? subscription.downloadFilterSettings
             let newlyObservedEpisodes = stats.recordEpisodeObservations(
                 result.episodes,
-                previouslyKnownEpisodeKeys: previouslyKnownEpisodeKeys
+                previouslyKnownEpisodeKeys: previouslyKnownEpisodeKeys,
+                downloadFilterSettings: currentFilterSettings
             )
+            let newEligibleEpisode = result.episodes.first { episode in
+                !previouslyKnownEpisodeKeys.contains(RefreshStats.releaseObservationKey(for: episode))
+                    && currentFilterSettings.evaluation(for: episode).isIncluded
+            }
             stats.recordFetch(
-                foundNewEpisode: result.latestEpisode.guid != oldLatestGUID,
-                publishedAt: result.latestEpisode.publishedAt
+                foundNewEpisode: newEligibleEpisode != nil,
+                publishedAt: newEligibleEpisode?.publishedAt
             )
             subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
             let oldLatestWasDownloaded = subscription.latestEpisode?.downloadState == .downloaded
@@ -2423,13 +2438,11 @@ final class AppState: ObservableObject {
             if refreshUpNextAfterMerge {
                 scheduleUpNextRefresh(reason: "feed.refresh.\(subscription.title)")
             }
-            guard let latestPlayedState = subscriptionStore.subscription(id: subscription.id)?.latestEpisode?.playedState,
-                  latestPlayedState != .played,
-                  latestPlayedState != .archived
-            else {
+            let updatedSubscription = subscriptionStore.subscription(id: subscription.id)
+            guard let autoDownloadEpisode = updatedSubscription.flatMap({ newestAutoDownloadCandidate(in: $0) }) else {
                 logger.info(
                     "feed.refresh",
-                    "Latest episode is already played or archived",
+                    "No eligible episode found for auto-download",
                     metadata: refreshFeedMetadata(for: subscription, includeURL: false)
                 )
                 return
@@ -2443,7 +2456,7 @@ final class AppState: ObservableObject {
                 return
             }
             scheduleAutoDownloadAfterRefresh(
-                episode: subscriptionStore.subscription(id: subscription.id)?.latestEpisode ?? result.latestEpisode,
+                episode: autoDownloadEpisode,
                 subscriptionID: subscription.id,
                 podcastTitle: result.subscriptionTitle,
                 refreshUpNextAfterMerge: refreshUpNextAfterMerge
@@ -2577,42 +2590,25 @@ final class AppState: ObservableObject {
             ])
             return
         }
-        guard let latestEpisode = subscription.latestEpisode else {
-            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because subscription has no latest episode", metadata: [
-                "podcast": subscription.title,
-                "subscriptionID": subscriptionID.uuidString
-            ])
-            return
-        }
-        guard latestEpisode.guid == episode.guid else {
-            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because a newer feed item replaced it", metadata: [
+        guard let candidateEpisode = newestAutoDownloadCandidate(in: subscription),
+              candidateEpisode.guid == episode.guid
+        else {
+            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because the scheduled episode is no longer eligible", metadata: [
                 "podcast": subscription.title,
                 "scheduledEpisode": episode.title,
-                "latestEpisode": latestEpisode.title,
-                "scheduledEpisodeID": episode.id.uuidString,
-                "latestEpisodeID": latestEpisode.id.uuidString
-            ])
-            return
-        }
-        guard latestEpisode.playedState != .played,
-              latestEpisode.playedState != .archived
-        else {
-            logger.info("feed.autoDownloadSkipped", "Auto-download skipped because latest episode is already resolved", metadata: [
-                "podcast": subscription.title,
-                "episode": latestEpisode.title,
-                "episodeID": latestEpisode.id.uuidString,
-                "playedState": latestEpisode.playedState.rawValue
+                "scheduledEpisodeID": episode.id.uuidString
             ])
             return
         }
 
         logger.info("feed.autoDownloadStart", "Starting auto-download after feed refresh", metadata: [
             "podcast": subscription.title,
-            "episode": latestEpisode.title,
-            "episodeID": latestEpisode.id.uuidString
+            "episode": candidateEpisode.title,
+            "episodeID": candidateEpisode.id.uuidString
         ])
         await enforceEpisodeLimitBeforeDownload(subscriptionID: subscriptionID)
-        let targetEpisode = subscriptionStore.subscription(id: subscriptionID)?.latestEpisode ?? latestEpisode
+        let targetEpisode = subscriptionStore.subscription(id: subscriptionID)
+            .flatMap { newestAutoDownloadCandidate(in: $0) } ?? candidateEpisode
         await downloadEpisode(
             targetEpisode,
             subscriptionID: subscriptionID,
@@ -2622,6 +2618,31 @@ final class AppState: ObservableObject {
         if refreshUpNextAfterMerge {
             scheduleUpNextRefresh(reason: "feed.download.\(podcastTitle)")
         }
+    }
+
+    private func newestAutoDownloadCandidate(in subscription: Subscription) -> Episode? {
+        subscription.episodes
+            .filter { episode in
+                episode.playedState != .played
+                    && episode.playedState != .archived
+                    && episode.downloadState != .downloaded
+                    && episode.downloadState != .queued
+                    && episode.downloadState != .downloading
+                    && subscription.downloadFilterSettings.evaluation(for: episode).isIncluded
+            }
+            .sorted {
+                ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
+            }
+            .first
+    }
+
+    private func newestReleaseRadarEligibleEpisode(in subscription: Subscription) -> Episode? {
+        subscription.episodes
+            .filter { subscription.downloadFilterSettings.evaluation(for: $0).isIncluded }
+            .sorted {
+                ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
+            }
+            .first
     }
 
     /// Manual refresh (pull-to-refresh): every feed, ignoring due dates.
@@ -2642,7 +2663,7 @@ final class AppState: ObservableObject {
         await refreshSubscriptions(
             reason: "timed-due",
             trigger: .foregroundTimer,
-            executionContext: isSceneActive ? .foregroundVisible : .backgroundAudioAlive,
+            executionContext: isAppForeground ? .foregroundVisible : .backgroundAudioAlive,
             maxSubscriptions: foregroundRefreshFeedLimit,
             capBypassStates: foregroundRefreshCapBypassStates,
             includeBackoffFeeds: false,
@@ -2672,6 +2693,55 @@ final class AppState: ObservableObject {
             joinActiveCycle: true,
             backgroundTaskIdentifier: taskIdentifier
         )
+    }
+
+    /// Longer catch-up run from a BGProcessingTask (charging + network, several
+    /// minutes of runtime — far more than BGAppRefreshTask's ~30 s). Refreshes ALL
+    /// due feeds with no cap and retries backed-off feeds, draining the deferred
+    /// backlog, so a user who hasn't listened for a long stretch (e.g. overnight)
+    /// wakes up to fully-refreshed feeds and downloaded episodes. Joins an in-flight
+    /// cycle if one is already running. See BACKGROUND_REFRESH_RESEARCH.md (Tier 2).
+    @discardableResult
+    func refreshSubscriptionsForProcessing(
+        taskIdentifier: String = BackgroundTaskCoordinator.feedProcessingIdentifier
+    ) async -> Bool {
+        logger.info("background.processingRequested", "Background processing requested feed catch-up", metadata: [
+            "identifier": taskIdentifier,
+            "sceneActive": "\(isSceneActive)",
+            "trigger": FeedRefreshTrigger.backgroundProcessingTask.rawValue,
+            "executionContext": FeedRefreshExecutionContext.backgroundProcessingTask.rawValue
+        ])
+        return await refreshSubscriptions(
+            reason: "processing",
+            trigger: .backgroundProcessingTask,
+            executionContext: .backgroundProcessingTask,
+            maxSubscriptions: nil,
+            includeBackoffFeeds: true,
+            onlyDueFeeds: true,
+            joinActiveCycle: true,
+            backgroundTaskIdentifier: taskIdentifier
+        )
+    }
+
+    /// Called from a BGTask expiration handler. Cancels the active refresh cycle
+    /// ONLY when no live foreground/audio context is driving it. If the app is
+    /// genuinely foreground (`isAppForeground`) or audio is playing, that context
+    /// will finish the cycle, so an expiring BGTask that merely *joined* it must
+    /// detach rather than abort shared work. Uses the real UIApplication state, not
+    /// the cached `isSceneActive`. Otherwise falls through to cancel + checkpoint.
+    func cancelRefreshCycleIfBackgroundOnly(reason: String) {
+        if isAppForeground || isPlaying {
+            logger.info("feed.refreshAll.expirationDetached", "BGTask expired but a live foreground/audio context owns the refresh cycle — detaching, not cancelling", metadata: [
+                "reason": reason,
+                "appForeground": "\(isAppForeground)",
+                "isPlaying": "\(isPlaying)",
+                "activeRefreshCycleID": activeRefreshCycleDiagnostics?.cycleID ?? "none",
+                "activeTrigger": activeRefreshCycleDiagnostics?.trigger.rawValue ?? "none",
+                "activeExecutionContext": activeRefreshCycleDiagnostics?.executionContext.rawValue ?? "none"
+            ])
+            return
+        }
+        cancelActiveRefreshCycle(reason: reason)
     }
 
     func cancelActiveRefreshCycle(reason: String) {
@@ -2949,12 +3019,88 @@ final class AppState: ObservableObject {
         refreshPrediction(for: subscription).nextDueAt
     }
 
+    /// Snapshot for the Feed Refresh Schedule diagnostics page
+    /// (Views/FeedRefreshScheduleView): the learned schedule profile + next-window
+    /// prediction for one subscription — the same FeedScheduleProfile /
+    /// FeedRefreshPrediction the refresh scheduler itself uses.
+    func releaseRadarSchedule(for subscription: Subscription, now: Date = Date()) -> (profile: FeedScheduleProfile, prediction: FeedRefreshPrediction) {
+        let profile = releaseRadarProfile(for: subscription)
+        return (profile, refreshPrediction(for: subscription, profile: profile, now: now))
+    }
+
+    /// Learning-only "Rebuild Prediction" (Feed Refresh Schedule page button): fetches
+    /// up to `episodeLimit` recent episodes from the feed and records their publish
+    /// dates into the Release Radar learner (`RefreshStats.releaseObservations`) to
+    /// bootstrap a stronger schedule profile — WITHOUT merging the episodes into the
+    /// library/queue, running auto-download/auto-archive, or disturbing the normal
+    /// refresh cadence (lastFetchedAt is left untouched). All fetched episodes are
+    /// marked already-known so they're recorded as *history*, not false real-time
+    /// "new release" signals. Returns the episode count whose dates were recorded, or
+    /// nil on failure.
+    @discardableResult
+    func rebuildReleasePrediction(for subscription: Subscription, episodeLimit: Int = 100) async -> Int? {
+        logger.info("feed.rebuildPrediction", "Rebuilding Release Radar prediction from feed history", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
+            "episodeLimit": "\(episodeLimit)"
+        ]))
+        do {
+            let result = try await feedService.refresh(
+                feedURL: subscription.feedURL,
+                subscriptionID: subscription.id,
+                episodeLimit: episodeLimit
+            )
+            let currentSubscription = subscriptionStore.subscription(id: subscription.id) ?? subscription
+            let filterSettings = currentSubscription.downloadFilterSettings
+            let eligibleForLearning = result.episodes.filter { filterSettings.evaluation(for: $0).isIncluded }
+            let historicalKeys = Set(result.episodes.map(RefreshStats.releaseObservationKey(for:)))
+            var stats = currentSubscription.refreshStats
+            let newlyRecorded = stats.recordEpisodeObservations(
+                result.episodes,
+                previouslyKnownEpisodeKeys: historicalKeys,
+                downloadFilterSettings: filterSettings
+            )
+            subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
+            // Report the classification the rebuilt history produced so the result can
+            // be confirmed on-device (e.g. a weekly show should now read kind=weekly
+            // with a learned window rather than falling through to random).
+            let profile = stats.scheduleProfile(downloadFilterSettings: filterSettings)
+            let windowText: String
+            if let window = profile.releaseWindow {
+                windowText = String(format: "%02d:%02d-%02d:%02d",
+                                    window.startMinuteOfDay / 60, window.startMinuteOfDay % 60,
+                                    window.endMinuteOfDay / 60, window.endMinuteOfDay % 60)
+            } else {
+                windowText = "none"
+            }
+            logger.info("feed.rebuildPrediction", "Rebuilt Release Radar prediction", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
+                "fetched": "\(result.episodes.count)",
+                "eligibleForLearning": "\(eligibleForLearning.count)",
+                "newlyRecorded": "\(newlyRecorded)",
+                "totalObservations": "\(stats.releaseObservations(includedBy: filterSettings).count)",
+                "kind": String(describing: profile.kind),
+                "confidence": String(format: "%.2f", profile.confidence),
+                "reliableDates": "\(profile.reliableDateCount)",
+                "window": windowText
+            ]))
+            return eligibleForLearning.count
+        } catch {
+            if isCancellationError(error) { return nil }
+            logger.error("feed.rebuildPredictionFailed", "Could not rebuild Release Radar prediction", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
+                "error": String(describing: error)
+            ]))
+            return nil
+        }
+    }
+
     private func refreshPrediction(for subscription: Subscription, now: Date = Date()) -> FeedRefreshPrediction {
         refreshPrediction(
             for: subscription,
-            profile: subscription.refreshStats.scheduleProfile(),
+            profile: releaseRadarProfile(for: subscription),
             now: now
         )
+    }
+
+    private func releaseRadarProfile(for subscription: Subscription) -> FeedScheduleProfile {
+        subscription.refreshStats.scheduleProfile(downloadFilterSettings: subscription.downloadFilterSettings)
     }
 
     private func refreshPrediction(
@@ -2964,11 +3110,20 @@ final class AppState: ObservableObject {
     ) -> FeedRefreshPrediction {
         // Single-item feeds (hourly news bulletins) carry too few dates to derive a
         // cadence from the feed alone — fold in the persisted publish-date history.
-        let publishDates = Set(subscription.episodes.compactMap(\.publishedAt))
-            .union(subscription.refreshStats.recentPublishDates)
+        let filterSettings = subscription.downloadFilterSettings
+        let eligibleEpisodeDates = subscription.episodes
+            .filter { filterSettings.evaluation(for: $0).isIncluded }
+            .compactMap(\.publishedAt)
+        let learnedEligibleDates = subscription.refreshStats
+            .releaseObservations(includedBy: filterSettings)
+            .compactMap(\.publishedAt)
+        let fallbackDates = filterSettings.hasActiveFilters
+            ? learnedEligibleDates
+            : subscription.refreshStats.recentPublishDates
+        let publishDates = Set(eligibleEpisodeDates).union(fallbackDates)
         return FeedRefreshScheduling.prediction(
             profile: profile,
-            latestPublishedAt: subscription.latestEpisode?.publishedAt,
+            latestPublishedAt: newestReleaseRadarEligibleEpisode(in: subscription)?.publishedAt,
             publishDates: Array(publishDates),
             stats: subscription.refreshStats,
             minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60,
@@ -3006,7 +3161,7 @@ final class AppState: ObservableObject {
     ) -> [RefreshCycleCandidate] {
         subscriptions
             .compactMap { subscription -> RefreshCycleCandidate? in
-                let profile = subscription.refreshStats.scheduleProfile()
+                let profile = releaseRadarProfile(for: subscription)
                 let prediction = refreshPrediction(for: subscription, profile: profile, now: now)
                 guard prediction.nextDueAt <= now else { return nil }
                 let priority = FeedRefreshPrioritizer.priority(
@@ -3427,7 +3582,7 @@ final class AppState: ObservableObject {
             if limit > 0 {
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .downloading && !isPreSubscriptionBacklog($0) }
+                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .notDownloaded && $0.downloadState != .downloading && !isPreSubscriptionBacklog($0) }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }
@@ -4046,11 +4201,22 @@ final class AppState: ObservableObject {
 
     // MARK: - Foreground polling
 
-    /// Whether the app's scene is currently active (foreground). Updated from the
-    /// SwiftUI scenePhase observer. Gates the foreground poller so it stands down
-    /// when the app is only kept alive in the background by audio playback — see
-    /// `startForegroundPolling()`. Background feed refresh is BGAppRefreshTask's job.
+    /// Cached SwiftUI scenePhase belief (foreground == .active), kept for the
+    /// `sceneActive=` diagnostic field. It can be **stale-true on a background
+    /// relaunch**: iOS launches the app for a BGTask with no `.active` scenePhase
+    /// event, so this default `true` is never reset. **Behavioural decisions must
+    /// use `isAppForeground`** (the real UIApplication state) instead — relying on
+    /// this caused a spurious "foreground" poll during a background BGTask wake that
+    /// a later BGTask expiration then cancelled (see BACKGROUND_REFRESH_RESEARCH.md).
     var isSceneActive: Bool = true
+
+    /// The true foreground state, read live from UIApplication rather than the cached
+    /// `isSceneActive` (which can be stale on a background relaunch). Gates the
+    /// due-feed poller and decides whether a BGTask expiration cancels the shared
+    /// refresh cycle.
+    var isAppForeground: Bool {
+        UIApplication.shared.applicationState == .active
+    }
 
     /// Called by the scenePhase observer so foreground polling can pause/resume
     /// in step with the app being foregrounded.
@@ -4058,32 +4224,43 @@ final class AppState: ObservableObject {
         isSceneActive = active
     }
 
-    /// Foreground scheduler: ticks every 30 seconds and refreshes only the feeds
-    /// whose adaptive due date has arrived. Conditional requests (304s) make each
-    /// check nearly free, so an hourly news feed is picked up within a minute or
-    /// two of publish while a weekly show is fetched roughly once a day.
+    /// Due-feed poller: ticks every 30 seconds and refreshes only the feeds whose
+    /// adaptive due date has arrived. Conditional requests (304s) make each check
+    /// nearly free, so an hourly news feed is picked up within a minute or two of
+    /// publish while a weekly show is fetched roughly once a day.
     ///
-    /// Despite the "foreground" name this Task is never cancelled, so without a
-    /// guard it would keep polling whenever background audio keeps the process
-    /// alive. The `isSceneActive` check makes it stand down in the background;
-    /// background refresh is handled separately by BGAppRefreshTask.
+    /// The loop Task is never cancelled, so it keeps ticking whenever the process is
+    /// alive — in the foreground AND while background audio playback keeps the app
+    /// running. It therefore guards on `isSceneActive || isPlaying`: active
+    /// listening is a fully-reliable, unthrottled refresh window for a podcast app
+    /// (unlike best-effort BGAppRefreshTask), so new episodes are caught and queued
+    /// for download while the user listens with the screen off. When the process is
+    /// truly idle (no audio) iOS suspends it and this loop pauses until the next
+    /// foreground/audio wake; BGAppRefreshTask covers that not-listening case (see
+    /// BACKGROUND_REFRESH_RESEARCH.md). The work label flips to `backgroundAudioAlive`
+    /// when the scene is inactive but audio is playing.
     func startForegroundPolling() {
         Task { @MainActor [weak self] in
             while true {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
-                guard self.isSceneActive else { continue }
+                // Run when visible, or when background audio playback is keeping the
+                // process alive (active listening). Skip only when truly idle.
+                guard self.isAppForeground || self.isPlaying else { continue }
                 let now = Date()
                 let dueCount = self.subscriptionStore.subscriptions.filter { subscription in
                     !subscription.excludeFromAutoFeedRefresh
                         && self.nextRefreshDue(for: subscription) <= now
                 }.count
                 if dueCount > 0 {
-                    self.logger.info("feed.foregroundPollDue", "Foreground poll found due subscriptions", metadata: [
+                    let executionContext: FeedRefreshExecutionContext = self.isAppForeground ? .foregroundVisible : .backgroundAudioAlive
+                    self.logger.info("feed.pollDue", "Due-feed poll found due subscriptions", metadata: [
                         "due": "\(dueCount)",
+                        "appForeground": "\(self.isAppForeground)",
                         "sceneActive": "\(self.isSceneActive)",
+                        "isPlaying": "\(self.isPlaying)",
                         "trigger": FeedRefreshTrigger.foregroundTimer.rawValue,
-                        "executionContext": FeedRefreshExecutionContext.foregroundVisible.rawValue
+                        "executionContext": executionContext.rawValue
                     ])
                     await self.refreshDueSubscriptions()
                 }

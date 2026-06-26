@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
 // colour-coded status pill for the podcast's latest episode (pills hide in
 // Reorder mode so they never fight the drag grips). Pill logic: archived
 // episodes show Played (not Archived) when Episode.wasCompleted is true, so
-// auto-archive doesn't erase the "you finished this" signal. Toolbar: hamburger menu
+// auto-archive doesn't erase the "you finished this" signal; not-downloaded
+// latest episodes excluded by Download Filters show the grey Skipped pill
+// instead of the inline Download button. Toolbar: hamburger menu
 // (MenuSheetView) leading, + (pushes DiscoverView as a full page via
 // navigationDestination — parent of Podcast Search) trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
@@ -359,6 +361,8 @@ struct PodcastsView: View {
                                 // Completed episodes keep Played even after
                                 // auto-archive removes them from the queue.
                                 EpisodeStatusPill(kind: episode.wasCompleted ? .played : .archived)
+                            } else if statusKind(for: episode, sub: sub) == .skipped {
+                                EpisodeStatusPill(kind: .skipped)
                             } else if episode.downloadState == .notDownloaded || episode.downloadState == .failed {
                                 Button("Download") {
                                     Task { await appState.downloadLatestEpisode(for: sub) }
@@ -367,7 +371,7 @@ struct PodcastsView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             } else {
-                                EpisodeStatusPill(kind: statusKind(for: episode))
+                                EpisodeStatusPill(kind: statusKind(for: episode, sub: sub))
                             }
                         }
                     }
@@ -403,7 +407,7 @@ struct PodcastsView: View {
         }
     }
 
-    private func statusKind(for episode: Episode) -> EpisodeStatusKind {
+    private func statusKind(for episode: Episode, sub: Subscription) -> EpisodeStatusKind {
         switch episode.playedState {
         case .playing:
             // Only the episode actively loaded in the player is "Now Playing".
@@ -414,6 +418,10 @@ struct PodcastsView: View {
         case .unplayed:
             let position = appState.effectivePlaybackTime(for: episode)
             if position > 0 { return .partiallyPlayed }
+            if episode.downloadState == .notDownloaded,
+               sub.downloadFilterSettings.evaluation(for: episode).isIncluded == false {
+                return .skipped
+            }
             return episode.downloadState == .downloaded ? .queued : .unplayed
         }
     }
