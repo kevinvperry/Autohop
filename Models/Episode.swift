@@ -16,6 +16,10 @@ import Foundation
 //    lists keep showing a Played pill on completed-then-archived episodes
 //    (set/cleared by SubscriptionStore mark* methods; decode defaults it to
 //    playedState == .played for stores written before the flag existed).
+//  - downloadedAt records the first time the file landed on device. Set by
+//    markEpisodeDownloaded; nil for never-downloaded episodes. Used as the
+//    inactivity clock for Auto Archive "After Inactive": only episodes with
+//    a non-nil downloadedAt are eligible, and the clock runs from this date.
 //  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
 //  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
 //    (PodcastIndex JSON chapters) by AppState.
@@ -50,6 +54,11 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
     /// "Played" on completed episodes that were archived afterwards. Cleared
     /// only when the episode returns to unplayed.
     public var wasCompleted: Bool
+    /// When the episode file first landed on device. Set by markEpisodeDownloaded;
+    /// nil for episodes that have never been downloaded. Used as the inactivity
+    /// clock for the Auto Archive "After Inactive" rule — only downloaded episodes
+    /// are eligible, and the clock runs from this date (not publish date).
+    public var downloadedAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -109,6 +118,7 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
         case externalChaptersURL
         case lastPlayedAt
         case wasCompleted
+        case downloadedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -139,6 +149,7 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
         // .played state are completed by definition.
         wasCompleted = try container.decodeIfPresent(Bool.self, forKey: .wasCompleted)
             ?? (playedState == .played)
+        downloadedAt = try container.decodeIfPresent(Date.self, forKey: .downloadedAt)
     }
 }
 

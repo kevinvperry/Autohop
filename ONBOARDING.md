@@ -13,7 +13,13 @@ website support page. Power-feature intros referenced here that aren't yet built
 belong in FUTURE_VERSIONS.md.
 -->
 
-**Status:** Strategy / not yet implemented. Drafted 2026-06-19.
+**Status:** ✅ **IMPLEMENTED** (built 2026-06-19; verified against code 2026-06-26). This
+file is the original *strategy/rationale*; the as-built implementation and its phase
+breakdown live in `ONBOARDING_PLAN.md`, and the canonical feature description is
+**FEATURES.md §18** (Welcome carousel, launch routing, Starter Packs, Getting-Started
+checklist, "You're all set" first-subscribe card, coach marks, empty states). Visual specs
+are in DESIGN.md "Onboarding — First-Run Components"; screens are registered in PAGES.md.
+Drafted 2026-06-19.
 
 ---
 

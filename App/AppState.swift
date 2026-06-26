@@ -94,9 +94,16 @@ import UIKit
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
 //    The inactive/limit passes skip a subscription's pre-existing back-catalogue
 //    (episodes published on/before Subscription.subscribedAt) so subscribing to a
-//    show never archives its whole backlog on day one. Episode Limit only counts
-//    episodes that have actually entered the download lifecycle, so
-//    notDownloaded episodes skipped by Download Filters do not consume the limit.
+//    show never archives its whole backlog on day one.
+//    INACTIVE EPISODES (Pass 2): only episodes with a non-nil Episode.downloadedAt
+//    are eligible — episodes that have never been downloaded are fully exempt.
+//    The inactivity clock runs from downloadedAt (when the file landed on device)
+//    and resets if lastPlayedAt is more recent. publishedAt is NOT used as the
+//    clock; an old episode downloaded today gets a fresh inactivity window.
+//    EPISODE LIMIT (Pass 3): candidates are episodes in .queued or .downloaded
+//    state only — .failed and .notDownloaded states do not consume a slot.
+//    This prevents a failed download from causing a working downloaded episode
+//    to be archived behind it.
 //  - Persistence side: playback positions held in an authoritative in-memory
 //    cache (savedPositionsCache, P2) loaded once and mutated through the
 //    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
@@ -3596,11 +3603,17 @@ final class AppState: ObservableObject {
                           !isPreSubscriptionBacklog(episode)
                     else { continue }
 
-                    // An episode is inactive if nothing has touched it recently.
-                    // "Last activity" = the most recent of: publish date, download date, play date.
-                    let publishAge = episode.publishedAt.map { now.timeIntervalSince($0) } ?? interval
-                    let playAge   = episode.lastPlayedAt.map { now.timeIntervalSince($0) }
-                    let lastActivityAge = [publishAge, playAge].compactMap { $0 }.min() ?? publishAge
+                    // Only downloaded episodes are eligible — an episode that has
+                    // never been downloaded has never been "touched" and should not
+                    // be archived by this rule.
+                    guard let downloadedAt = episode.downloadedAt else { continue }
+
+                    // "Last activity" = the most recent of: download date, play date.
+                    // The clock starts when the file lands on device, and resets any
+                    // time the user starts playing the episode.
+                    let downloadAge = now.timeIntervalSince(downloadedAt)
+                    let playAge     = episode.lastPlayedAt.map { now.timeIntervalSince($0) }
+                    let lastActivityAge = [downloadAge, playAge].compactMap { $0 }.min() ?? downloadAge
 
                     if lastActivityAge >= interval {
                         await archiveEpisode(episode, completionKind: .autoArchived)
@@ -3618,7 +3631,7 @@ final class AppState: ObservableObject {
             if limit > 0 {
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && $0.downloadState != .notDownloaded && $0.downloadState != .downloading && !isPreSubscriptionBacklog($0) }
+                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && ($0.downloadState == .queued || $0.downloadState == .downloaded) && !isPreSubscriptionBacklog($0) }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }

@@ -53,7 +53,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
 - Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned
-- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history, and stats in step across your devices over your private CloudKit database; downloads stay per-device
+- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history (including your resume position), and stats in step across your devices over your private CloudKit database; downloads, global app settings, and per-podcast Download Filters stay per-device
 - OPML import and export for subscription portability
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options

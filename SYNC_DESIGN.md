@@ -38,6 +38,30 @@ applied on top of CloudKit.
 5. **Pick the conflict strategy per domain.** Most fields are field-level
    last-write-wins; stats (a later step) are additive and partition per device.
 
+## Sync coverage at a glance (what roams vs. what stays on-device)
+Verified against `Models/SyncState.swift`, `Persistence/CloudKitSyncMapping.swift`
+(record types: `EpisodeState`, `SubscriptionState`, `HistoryEntry`, `DayStats` — and
+**no settings record type**), and `Models/{Subscription,AppSettings}.swift`.
+
+| Domain | Roams via CloudKit? | Record / projection | Notes |
+|---|---|---|---|
+| **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`AppState.materializeRemoteSubscription`); unsubscribe leaves a `subscribed=false` tombstone. |
+| **Per-episode user state** (playedState, wasCompleted, lastPlayedAt) | ✅ Yes | `EpisodeState` | Field-level LWW + active-player-wins + self-heal. |
+| **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Whole-entry record-level LWW by `lastListenedAt`. This is also how **playback position** roams. |
+| **Individual subscription settings** | ⚠️ Mostly | `SubscriptionState` | Synced: priority rank (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title. **NOT synced:** Download Filters, Release Radar `refreshStats` (see below). |
+| **Stats page data** | ✅ Yes | `DayStats` | Additive per-device partition `(deviceID, dayKey)`; the Stats page sums across devices on read. Pre-tracking lifetime baseline stays per-device (deferred). |
+| **Overall system settings** (`AppSettings`: poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags, …) | ❌ **No** | — (no record type) | Local `UserDefaults` only; roams **only** via iCloud/device backup-restore, not live CloudKit sync. A fresh install starts from defaults until restored. |
+| **Per-podcast Download Filters** (`DownloadFilterSettings`) | ❌ No | — | On the local `Subscription` payload; backup/local-only in v1 by deliberate decision. |
+| **Release Radar learned schedule** (`refreshStats` / `releaseObservations`) | ❌ No | — | Per-device learning; relearns from the feed on each device. |
+| **Downloaded media / download state / files** | ❌ No | — | Per-device by design — re-downloadable from the feed. |
+| **Catalog content** (episode/show title, description, artwork, categories) | ❌ No | — | Re-hydrates from the RSS feed; never synced. |
+
+> **Headline for a reviewer:** the four user-state domains the question asks about —
+> subscriptions, listening history, per-podcast settings, and stats — are all covered.
+> The two intentional gaps to be aware of are **global app settings** and **per-podcast
+> Download Filters** (plus the per-device Release Radar learning), which do **not** roam
+> in v1. See FUTURE_VERSIONS.md if any of these should become a roaming setting.
+
 ## Transport: `CKSyncEngine` (not `NSPersistentCloudKitContainer`)
 The container does record-level LWW with no merge hook — it would lose concurrent
 edits to different fields. `CKSyncEngine` exposes serverRecord/clientRecord so we
@@ -62,9 +86,10 @@ Projections (Models/SyncState.swift):
 - `EpisodeSyncState` (key `subscriptionID|guid:<guid>`): playedState,
   wasCompleted, lastPlayedAt.
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
-  notificationsEnabled, excludeFromAutoFeedRefresh, playbackPreference,
-  autoArchiveSettings, chapterFilter, + constant `feedURL`. It deliberately
-  excludes DownloadFilterSettings for v1.
+  autoFeedRefreshReturnPriorityRank (the hidden Inactive return rank), notificationsEnabled,
+  excludeFromAutoFeedRefresh, playbackPreference, autoArchiveSettings, chapterFilter,
+  + constant `feedURL`. It deliberately excludes DownloadFilterSettings and
+  refreshStats (Release Radar learning) for v1.
 
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe

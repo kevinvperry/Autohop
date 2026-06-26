@@ -19,7 +19,12 @@ import SwiftUI
 // file also hosts DownloadFiltersView, a pushed per-subscription page for local
 // auto-download eligibility rules (duration/title/description, include/exclude,
 // All/Any, live read-only 50-episode feed preview with greyed skipped rows).
-// Footer copy must stay in sync with FEATURES.md §10. Visual style matches App Settings: dark page
+// AUTO ARCHIVE RULES: Inactive Episodes (Rule 2) only archives episodes with a
+// non-nil Episode.downloadedAt — episodes never downloaded are fully exempt.
+// The footer copy describes download-date-based inactivity, not publish-date.
+// Episode Limit (Rule 3) counts only .queued/.downloaded episodes — .failed
+// episodes do not consume a slot. Keep footer copy in sync with FEATURES.md §10.
+// Visual style matches App Settings: dark page
 // (scrollContentBackground hidden over black), white.opacity(0.08) section
 // cards, .tint(.purple), and purple SettingsRowLabel glyphs on control rows; the
 // Playback card is passed fill: white.opacity(0.08) to match.
@@ -400,7 +405,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }

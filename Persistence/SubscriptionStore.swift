@@ -13,7 +13,7 @@ import Foundation
 // persist quietly without waking UI/sync.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
-// wasCompleted — the merge also reconstructs wasCompleted from
+// wasCompleted/downloadedAt — the merge also reconstructs wasCompleted from
 // playedEpisodeKeys when a finished episode was archived between refreshes),
 // feed metadata maintenance (updateAuthor / updateArtworkURL are used by
 // AppState.refreshSubscription so show art and author changes from RSS refreshes
@@ -40,6 +40,10 @@ import Foundation
 // GOTCHA: accessors generally distinguish real subscriptions (browseDate == nil)
 // from browse ones; queue/UI may still include Inactive real subscriptions, but
 // automatic/feed-all refresh must skip `excludeFromAutoFeedRefresh`.
+// DOWNLOAD TIMESTAMPS: markEpisodeDownloaded sets Episode.downloadedAt to now
+// if not already set (preserves the original date on re-download). This is the
+// clock used by Auto Archive "After Inactive" — do not clear downloadedAt when
+// a file is deleted or an episode is re-queued; it records first arrival only.
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     public private(set) var subscriptions: [Subscription] = []
@@ -482,6 +486,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.downloadState = .downloaded
             $0.localFileURL = localFileURL
             $0.localFileName = localFileURL.lastPathComponent
+            if $0.downloadedAt == nil { $0.downloadedAt = Date() }
         }
     }
 
@@ -492,6 +497,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileName = localFileURL.lastPathComponent
             $0.playedState = .unplayed
             $0.wasCompleted = false
+            if $0.downloadedAt == nil { $0.downloadedAt = Date() }
         }
     }
 

@@ -13,7 +13,9 @@ Keep this file updated whenever a new page is added or an existing one is rename
 
 | Label | Code Name | Type | Purpose |
 |---|---|---|---|
-| **Welcome** | `WelcomeView` | Sheet (fullScreenCover) | First-run value-prop screen, shown once to a brand-new user (no real subscriptions and `hasCompletedWelcome == false`). Presented by RootView over the launch splash. Teaches the core model and offers three paths: Find shows (→ Discover), Import from another app (in-place OPML import → Subscriptions), or skip (→ Subscriptions). Sets `hasCompletedWelcome` on exit so it never reappears. See ONBOARDING_PLAN.md. |
+| **Welcome** | `WelcomeView` | Sheet (fullScreenCover) | First-run value-prop screen, shown once to a brand-new user (no real subscriptions and `hasCompletedWelcome == false`). Presented by RootView over the launch splash. A 3-panel paged carousel (the model · "Listen your way" · "Made for real life") over three CTAs: Find shows (→ Discover), Import from another app (in-place OPML import → Subscriptions), or "I'll explore on my own" (→ Subscriptions). Sets `hasCompletedWelcome` on exit so it never reappears. See ONBOARDING_PLAN.md / FEATURES.md §18. |
+| **Starter Packs** | `StarterPacksView` | Sheet | First-run "not sure where to start?" helper. Each pack is a genre's current Top-6 from Apple's public charts, scoped to the user's storefront; "Add these shows" subscribes to all via `AppState.subscribeToFeedURLs`. Presented from the empty Subscriptions state and the Discover first-run banner (both shown only while `realSubscriptionCount == 0`). |
+| **You're All Set** | `FirstSubscribeCard` | Sheet | First-run "aha" card, presented by RootView on `.autohopFirstSubscription` (the user's first ever *single* deliberate subscribe; bulk OPML import is excluded). Ensures the show's latest episode is downloading, shows live progress, and turns **Play latest** into one tap — playing immediately if ready, or arming a wait that auto-starts the instant the download lands. Includes the one-time download-first education note. See FEATURES.md §18. |
 | **Subscriptions** | `PodcastsView` | Full page | Your subscribed podcasts in priority order — the home page. Centered "Subscriptions" heading; action row below holds Reorder (mode toggle: status pills hide, drag grips show) and refresh-all. Tap a podcast to see its episodes. |
 | **Podcast Search** | `PodcastSearchView` | Sheet | Search the podcast directory by name, author, or keyword. Also shows Recently Viewed history. Reached only via the Discover page's search shortcut. |
 | **Discover** | `DiscoverView` | Page | Browse Apple Podcasts charts — Top-8 hero paging cards plus per-genre rails. Two extra "Top Podcasts · <Country>" spotlight heroes are woven into the rails (one before Health & Fitness, one at the end) for fixed US/UK/AU storefronts that never duplicate the user's selected country. Country picker (defaults to device region) switches storefronts. Search shortcut opens Podcast Search; tapping a chart entry routes to the Podcast Detail page. The Top Episodes hero header has a **See All** button that pushes the Top Episodes page. |
@@ -82,6 +84,17 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
         └── Support (SupportView)                     ← last menu item; in-app User Guide
             └── Support Section detail (SupportSectionView)
 ```
+
+### First-run onboarding chrome (not in the tree above)
+
+These appear only for a brand-new user and layer over the normal navigation rather than living in the page tree (see FEATURES.md §18, DESIGN.md "Onboarding — First-Run Components"):
+
+- **Welcome** (`WelcomeView`) — full-screen cover over the launch splash on first run.
+- **Starter Packs** (`StarterPacksView`) — sheet from the empty Subscriptions state / Discover first-run banner.
+- **You're All Set** (`FirstSubscribeCard`) — sheet on the first deliberate subscribe.
+- **Getting-Started checklist** (`GettingStartedChecklist`) — dismissible card pinned at the top of the Subscriptions (Priority Stack) page.
+- **Coach marks** (`CoachMarkOverlay`) — one-at-a-time bottom tip cards floating above pages, below sheets (priorityStack, swipeActions, playerPanels, speed, sleepSchedule).
+- **Onboarding toast** — transient confirmation capsule above the mini-player (e.g. after OPML import).
 
 ### Navigation rules (NavRules)
 

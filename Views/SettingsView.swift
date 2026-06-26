@@ -10,7 +10,10 @@ import UniformTypeIdentifiers
 // Settings" deep link shown when UIApplication.backgroundRefreshStatus != .available,
 // since iOS then grants no off-app feed checks; re-checked on scenePhase) and a Feed
 // Refresh Schedule link (FeedRefreshScheduleView — a per-active-subscription table of
-// when/why Release Radar watches each feed), Auto Archive (run-now button + global default pickers for Played/Inactive/EpisodeLimit applied to new subscriptions only), Downloading
+// when/why Release Radar watches each feed), Auto Archive (run-now button +
+// global default pickers for Played/Inactive/EpisodeLimit applied to new
+// subscriptions only — Inactive uses download-date clock, not publish date;
+// Episode Limit counts only .queued/.downloaded episodes, not .failed), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
@@ -284,7 +287,7 @@ struct SettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives unplayed episodes that haven't been touched in the set time. Episode Limit keeps only the most recently published episodes.")
+            Text("Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes.")
         }
         .listRowBackground(cardBackground)
     }
