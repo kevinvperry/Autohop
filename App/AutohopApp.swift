@@ -1,8 +1,8 @@
 import SwiftUI
 
 // AI CONTEXT — App/AutohopApp.swift
-// SwiftUI entry point. Bootstraps the AppState singleton, injects it as an
-// EnvironmentObject under RootView, and wires scene-phase transitions:
+// SwiftUI entry point. Reuses or bootstraps the AppState singleton, injects it
+// as an EnvironmentObject under RootView, and wires scene-phase transitions:
 //  - on launch: resume playback position if an episode was mid-play
 //    (startPlaybackOnLaunchIfNeeded)
 //  - on foreground: run the auto-archive pass if 30 min have elapsed
@@ -15,7 +15,7 @@ struct AutohopApp: App {
     @StateObject private var appState: AppState
 
     init() {
-        let state = AppState.bootstrap()
+        let state = AppState.sharedOrBootstrap()
         _appState = StateObject(wrappedValue: state)
         appDelegate.appState = state
     }

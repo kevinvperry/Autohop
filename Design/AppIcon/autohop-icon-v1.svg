@@ -3,28 +3,53 @@
   <title>Autohop App Icon</title>
   <desc>Autohop podcast player app icon - waveform split design for prioritized audio and video podcast playback.</desc>
 
-  <rect width="1024" height="1024" fill="#2D2680"/>
-  <rect width="1024" height="1024" fill="none" stroke="#ffffff" stroke-width="6" opacity="0.08"/>
+  <!--
+    AI CONTEXT — Design/AppIcon/autohop-icon-v1.svg
+    Master vector source for the iOS app icon. The generated PNGs in
+    Assets.xcassets/AppIcon.appiconset must be regenerated whenever this file
+    changes. The mark is tuned for the iOS 26 Liquid Glass home-screen treatment:
+    vivid medium-purple glass-ready background, high-contrast lavender/white
+    podcast bars on the left, bright Spotify-green fallback bars on the right,
+    and a strong white skip-forward chevron centred between the two waveforms.
+    Keep the asset square, unmasked, and opaque when rasterizing for App Store
+    and Xcode app icon slots; iOS applies the rounded mask itself.
+  -->
 
-  <rect x="102" y="426" width="72" height="222" rx="36" fill="#A89EE8"/>
-  <rect x="204" y="290" width="72" height="494" rx="36" fill="#C4BDEF"/>
-  <rect x="306" y="366" width="72" height="340" rx="36" fill="#B0A8EC"/>
-  <rect x="408" y="468" width="72" height="154" rx="36" fill="#9890E2"/>
+  <defs>
+    <linearGradient id="glassReadyPurple" x1="128" y1="72" x2="896" y2="952" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7C61FF"/>
+      <stop offset="0.48" stop-color="#5B3FD6"/>
+      <stop offset="1" stop-color="#4930B8"/>
+    </linearGradient>
+    <radialGradient id="softTopGlow" cx="34%" cy="21%" r="56%">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#glassReadyPurple)"/>
+  <rect width="1024" height="1024" fill="url(#softTopGlow)"/>
+  <rect width="1024" height="1024" fill="none" stroke="#ffffff" stroke-width="6" opacity="0.16"/>
+
+  <rect x="56" y="414" width="80" height="246" rx="40" fill="#F8F4FF"/>
+  <rect x="168" y="270" width="80" height="532" rx="40" fill="#FFFFFF"/>
+  <rect x="280" y="350" width="80" height="376" rx="40" fill="#E9E1FF"/>
+  <rect x="392" y="456" width="80" height="184" rx="40" fill="#D8CCFF"/>
 
   <path
-    d="M530 340 L600 512 L530 684"
+    d="M486 326 L564 512 L486 698"
     fill="none"
     stroke="#ffffff"
-    stroke-width="18"
+    stroke-width="26"
     stroke-linecap="round"
     stroke-linejoin="round"
-    opacity="0.22"
+    opacity="0.92"
   />
 
-  <rect x="632" y="452" width="72" height="188" rx="36" fill="#1DB954"/>
-  <rect x="734" y="298" width="72" height="494" rx="36" fill="#25D062"/>
-  <rect x="836" y="384" width="72" height="306" rx="36" fill="#1DB954"/>
-  <rect x="938" y="486" width="56" height="120" rx="28" fill="#18A84A" opacity="0.7"/>
+  <rect x="596" y="438" width="80" height="216" rx="40" fill="#1DB954"/>
+  <rect x="708" y="270" width="80" height="532" rx="40" fill="#2EEB73"/>
+  <rect x="820" y="366" width="80" height="344" rx="40" fill="#1DB954"/>
+  <rect x="924" y="474" width="60" height="148" rx="30" fill="#18A84A" opacity="0.78"/>
 
-  <line x1="80" y1="800" x2="944" y2="800" stroke="#1a1260" stroke-width="4" opacity="0.6"/>
+  <line x1="64" y1="816" x2="960" y2="816" stroke="#3C27A5" stroke-width="4" opacity="0.42"/>
 </svg>

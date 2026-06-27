@@ -11,8 +11,8 @@ import SwiftUI
 // The website's SVG diagrams are intentionally omitted here — the surrounding
 // text and tables carry the same information on a phone screen.
 // CarPlay support copy intentionally describes only the approved audio scope:
-// Now Playing, Up Next, Queue actions, downloaded-only playback, playback speed,
-// Shared Listening, and Archive. Do not add search, browsing, downloads, settings,
+// Now Playing, Queue actions, downloaded-only playback, playback speed, Shared
+// Listening, and Archive. Do not add search, browsing, downloads, settings,
 // sleep controls, notifications, or feed-refresh workflows to the CarPlay guide.
 
 // MARK: - Block model
@@ -259,25 +259,25 @@ enum SupportGuide {
 
     private static let carPlay = SupportSection(
         id: "carplay", icon: "car.fill", title: "CarPlay",
-        summary: "Now Playing, Up Next, and Queue in the car",
+        summary: "Now Playing and Queue in the car",
         blocks: [
             .paragraph("Autohop supports CarPlay as a focused audio playback surface. It shows what is already ready to listen to, using the same playback, queue, speed, archive, and Shared Listening state as the iPhone app."),
             .heading("What appears in CarPlay"),
             .table(headers: ["Screen", "What it does"], rows: [
                 ["Now Playing", "Shows the current episode with artwork when available, system playback controls, Archive, speed, and Shared Listening controls."],
-                ["Up Next", "Shows a compact list of downloaded queue episodes. Tapping an episode starts it immediately."],
-                ["Queue", "Shows the same downloaded queue with Play, Play Next, and Archive actions."],
+                ["Queue", "Shows downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions."],
             ]),
             .heading("Downloaded queue only"),
             .paragraph("CarPlay only uses episodes that are already downloaded and already in Autohop's queue. It does not search, browse podcasts, refresh feeds, stream episodes, or start downloads from the car interface."),
             .heading("Queue actions"),
             .bullets([
-                "**Play** — starts the selected downloaded episode immediately.",
+                "**Play Now** — starts the selected downloaded episode immediately.",
                 "**Play Next** — moves the episode directly after the currently playing episode. If nothing is currently playing, Play Next starts the episode.",
+                "**Play Last** — moves the episode to the end of the queue.",
                 "**Archive** — removes the episode from the queue. Archiving the current episode advances to the next downloaded queue item when one is available.",
             ]),
             .heading("Speed and Shared Listening"),
-            .paragraph("The speed button cycles through Autohop's existing preset speeds. Shared Listening controls the same global temporary override as the iPhone app, so turning it on or off in CarPlay updates the iPhone state too."),
+            .paragraph("The speed button opens a simple control with slower and faster actions using Autohop's existing preset speeds. Shared Listening controls the same global temporary override as the iPhone app, so turning it on or off in CarPlay updates the iPhone state too."),
             .callout(.note, "**Designed for driving:** CarPlay does not include Search, Discover, podcast settings, Sleep Schedule setup, notifications, Stats, OPML, or long-form episode browsing."),
         ]
     )

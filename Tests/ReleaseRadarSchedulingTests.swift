@@ -323,6 +323,52 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(profile.categoryLabel, "Several times a week")
     }
 
+    /// DST: a feed stamped at a fixed UTC instant (02:00 UTC every Thursday) spans the
+    /// April DST change — 02:00 UTC reads 1pm AEDT (summer) but 12pm AEST (winter). The
+    /// window must NOT drift to the winter time; with "now" in summer it reads 1pm.
+    func testFixedUtcFeedWindowDoesNotDriftAcrossDST() {
+        var melbourne = Calendar(identifier: .gregorian)
+        melbourne.timeZone = TimeZone(identifier: "Australia/Melbourne")!
+        let utc = utcCalendar()
+        let firstThursday = date(2024, 1, 4, 2, 0, calendar: utc) // Thu 4 Jan 2024, 02:00 UTC
+        let observations = (0..<30).map { week -> FeedReleaseObservation in
+            let published = utc.date(byAdding: .day, value: 7 * week, to: firstThursday)!
+            return FeedReleaseObservation(
+                episodeKey: "u-\(week)", guid: "ug-\(week)", title: "Ep \(week)",
+                audioURL: nil, publishedAt: published, firstSeenAt: published, lastSeenAt: published,
+                dateQuality: .plausible, wasNewWhenFirstSeen: true)
+        }
+        let nowSummer = date(2024, 12, 1, 0, 0, calendar: utc) // AEDT
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: melbourne, now: nowSummer)
+
+        XCTAssertEqual(profile.kind, .weekly)
+        XCTAssertEqual(profile.releaseWindow?.typicalMinuteOfDay, 13 * 60, "02:00 UTC must read 1pm AEDT, not the winter 12pm")
+    }
+
+    /// DST: a feed stamped at a fixed LOCAL time (1pm Melbourne every Thursday) across the
+    /// same boundary keeps its wall-clock time — the window must stay at 1pm (not anchor
+    /// to UTC and drift).
+    func testFixedLocalFeedWindowStaysAtLocalTimeAcrossDST() {
+        var melbourne = Calendar(identifier: .gregorian)
+        melbourne.timeZone = TimeZone(identifier: "Australia/Melbourne")!
+        let baseThursday = date(2024, 1, 4, 0, 0, calendar: melbourne)
+        let observations = (0..<30).map { week -> FeedReleaseObservation in
+            let day = melbourne.date(byAdding: .day, value: 7 * week, to: baseThursday)!
+            let published = melbourne.date(bySettingHour: 13, minute: 0, second: 0, of: day)!
+            return FeedReleaseObservation(
+                episodeKey: "l-\(week)", guid: "lg-\(week)", title: "Ep \(week)",
+                audioURL: nil, publishedAt: published, firstSeenAt: published, lastSeenAt: published,
+                dateQuality: .plausible, wasNewWhenFirstSeen: true)
+        }
+        let nowSummer = date(2024, 12, 1, 0, 0, calendar: melbourne)
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: melbourne, now: nowSummer)
+
+        XCTAssertEqual(profile.kind, .weekly)
+        XCTAssertEqual(profile.releaseWindow?.typicalMinuteOfDay, 13 * 60, "Fixed local 1pm must stay 1pm across DST")
+    }
+
     /// (a) Episode-share weekly: one weekday holds ~all the episodes on a ~weekly cadence,
     /// but a hiatus drops its per-week probability below the active bar. It must still
     /// classify as weekly (via episode share), not Random.
@@ -362,6 +408,63 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(profile.kind, .dailyWeekdays, "Recent Mon–Fri must override stale Sunday-only history")
         XCTAssertEqual(Set(profile.activeWeekdays), [2, 3, 4, 5, 6])
         XCTAssertFalse(Set(profile.activeWeekdays).contains(1), "Stale Sunday is no longer active")
+    }
+
+    /// Multiple episodes per day on MOST days → "Daily – Multiple Episodes" (burst kind).
+    func testMultipleEpisodesPerDayMostDaysIsDailyMultiple() {
+        let calendar = utcCalendar()
+        let sunday = date(2024, 1, 7, 0, 0, calendar: calendar)
+        let observations = burstObservations(weeks: 4, weekdays: [2, 3, 4, 5, 6], perDay: 3, startSunday: sunday, calendar: calendar)
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: calendar)
+
+        XCTAssertEqual(profile.kind, .burst)
+        XCTAssertEqual(profile.categoryLabel, "Daily – Multiple Episodes")
+    }
+
+    /// Multiple episodes per day but on only ONE weekday → a weekly show split into
+    /// segments, so it must classify as Weekly (not Daily – Multiple).
+    func testMultipleEpisodesOnOneWeekdayIsWeekly() {
+        let calendar = utcCalendar()
+        let sunday = date(2024, 1, 7, 0, 0, calendar: calendar)
+        let observations = burstObservations(weeks: 6, weekdays: [3], perDay: 3, startSunday: sunday, calendar: calendar) // Tuesdays only
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: calendar)
+
+        XCTAssertEqual(profile.kind, .weekly)
+    }
+
+    /// The burst window must cover the full daily spread, including days that run LATER
+    /// than the median — the old median-first/median-last range left late episodes
+    /// outside the window.
+    func testBurstWindowCoversLateRunningDays() {
+        let calendar = utcCalendar()
+        let sunday = date(2024, 1, 7, 0, 0, calendar: calendar)
+        var observations: [FeedReleaseObservation] = []
+        var index = 0
+        for week in 0..<8 {
+            for weekday in [2, 3, 4, 5, 6] {
+                let dayOffset = 7 * week + (weekday - 1)
+                let day = calendar.date(byAdding: .day, value: dayOffset, to: sunday)!
+                // Every day starts 9:00; Thu/Fri run late to 11:00, the rest end 9:30.
+                let secondTime = (weekday == 5 || weekday == 6) ? (11, 0) : (9, 30)
+                for time in [(9, 0), secondTime] {
+                    let published = calendar.date(bySettingHour: time.0, minute: time.1, second: 0, of: day)!
+                    observations.append(FeedReleaseObservation(
+                        episodeKey: "e-\(index)", guid: "g-\(index)", title: "E\(index)",
+                        audioURL: nil, publishedAt: published, firstSeenAt: published, lastSeenAt: published,
+                        dateQuality: .plausible, wasNewWhenFirstSeen: true))
+                    index += 1
+                }
+            }
+        }
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: calendar)
+
+        XCTAssertEqual(profile.kind, .burst)
+        guard let window = profile.burstWindow else { return XCTFail("expected a burst window") }
+        XCTAssertGreaterThanOrEqual(window.endMinuteOfDay, 11 * 60, "Window must reach the late (11:00) episodes")
+        XCTAssertLessThanOrEqual(window.startMinuteOfDay, 9 * 60, "Window should start by the 9:00 first episode")
     }
 
     /// No consistent active day → stays Random (the genuine no-pattern case).
@@ -582,6 +685,41 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
                     wasNewWhenFirstSeen: true
                 ))
                 index += 1
+            }
+        }
+        return result
+    }
+
+    /// Builds `weeks` weeks of observations with `perDay` episodes at the same time (a
+    /// tight daily burst) on each of `weekdays`. For "Daily – Multiple Episodes" tests.
+    private func burstObservations(
+        weeks: Int,
+        weekdays: [Int],
+        perDay: Int,
+        startSunday: Date,
+        calendar: Calendar
+    ) -> [FeedReleaseObservation] {
+        var result: [FeedReleaseObservation] = []
+        var index = 0
+        for week in 0..<weeks {
+            for weekday in weekdays.sorted() {
+                let dayOffset = 7 * week + (weekday - 1)
+                let day = calendar.date(byAdding: .day, value: dayOffset, to: startSunday)!
+                let published = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day)!
+                for _ in 0..<perDay {
+                    result.append(FeedReleaseObservation(
+                        episodeKey: "b-\(index)",
+                        guid: "b-guid-\(index)",
+                        title: "Episode \(index)",
+                        audioURL: nil,
+                        publishedAt: published,
+                        firstSeenAt: published,
+                        lastSeenAt: published,
+                        dateQuality: .plausible,
+                        wasNewWhenFirstSeen: true
+                    ))
+                    index += 1
+                }
             }
         }
         return result

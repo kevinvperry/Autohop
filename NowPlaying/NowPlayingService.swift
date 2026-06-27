@@ -6,16 +6,17 @@ import UIKit
 // Singleton bridge to MPNowPlayingInfoCenter + MPRemoteCommandCenter: lock
 // screen / Control Centre card (title, artwork cached per URL, elapsed time,
 // rate) and remote commands (play/pause, skip ±N using the user's configured
-// intervals, next track, scrubbing — seek command is enabled/disabled live by
-// the Lock Screen Scrubbing setting). AppState.bootstrap() wires the handlers
-// once and pushes state updates on every tick/transition. Artwork loads through
+// intervals, next track, scrubbing, and playback-rate changes from system
+// surfaces such as CarPlay — seek command is enabled/disabled live by the Lock
+// Screen Scrubbing setting). AppState.bootstrap() wires the handlers once and
+// pushes state updates on every tick/transition. Artwork loads through
 // ArtworkImageCache at a 512 pt target and is guarded by currentArtworkURL so a
 // late image fetch cannot patch the lock-screen card for the wrong episode.
 
 /// Manages the lock-screen / Control Centre Now Playing card and remote controls.
 ///
-/// Call `configure(onPlayPause:onSeek:onSkipForward:onSkipBackward:onNextTrack:)` once
-/// from `AppState.bootstrap()` to register the hardware/AirPods command handlers.
+/// Call `configure(...)` once from `AppState.bootstrap()` to register the
+/// hardware, AirPods, lock-screen, Control Centre, and CarPlay command handlers.
 @MainActor
 final class NowPlayingService {
 
@@ -25,6 +26,7 @@ final class NowPlayingService {
     private var currentArtworkURL: URL?
     private var commandsRegistered = false
     private var onSeek: ((TimeInterval) -> Void)?
+    private var onPlaybackRateChange: ((Double) -> Void)?
 
     private init() {}
 
@@ -35,11 +37,13 @@ final class NowPlayingService {
         onSeek: @escaping (TimeInterval) -> Void,
         onSkipForward: @escaping (TimeInterval) -> Void,
         onSkipBackward: @escaping (TimeInterval) -> Void,
-        onNextTrack: @escaping () -> Void
+        onNextTrack: @escaping () -> Void,
+        onPlaybackRateChange: @escaping (Double) -> Void
     ) {
         guard !commandsRegistered else { return }
         commandsRegistered = true
         self.onSeek = onSeek
+        self.onPlaybackRateChange = onPlaybackRateChange
 
         let center = MPRemoteCommandCenter.shared()
 
@@ -66,6 +70,19 @@ final class NowPlayingService {
 
         // Previous track — not meaningful for a podcast queue, keep disabled
         center.previousTrackCommand.isEnabled = false
+
+        center.changePlaybackRateCommand.isEnabled = true
+        center.changePlaybackRateCommand.supportedPlaybackRates = PlaybackPreference.speedOptions.map(NSNumber.init(value:))
+        center.changePlaybackRateCommand.addTarget { [weak self] event in
+            guard let self,
+                  let event = event as? MPChangePlaybackRateCommandEvent
+            else { return .commandFailed }
+
+            Task { @MainActor in
+                self.onPlaybackRateChange?(Double(event.playbackRate))
+            }
+            return .success
+        }
 
         // Scrubber — registered separately so it can be toggled at runtime
         refreshScrubbingCommand(enabled: true)
@@ -130,6 +147,7 @@ final class NowPlayingService {
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         info[MPNowPlayingInfoPropertyPlaybackRate]        = isPlaying ? speed : 0.0
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = speed
         MPNowPlayingInfoCenter.default().nowPlayingInfo   = info
     }
 

@@ -25,9 +25,12 @@ import Foundation
 //    observations feed Release Radar schedules, so skipped episodes do not train
 //    future refresh windows.
 //  - FeedScheduleProfiler: classifies observations into learning, unreliable
-//    dates, hourly, rolling-bulletin, burst, daily/weekday, weekly, several-times-
-//    a-week (multiSlot), or random profiles. Hourly/rolling-bulletin/burst are
-//    detected first and unchanged. Everything else goes through Release Radar v2
+//    dates, hourly, rolling-bulletin, burst ("Daily – Multiple Episodes" — multiple
+//    episodes/day on MOST days; ≤2 active weekdays falls through to weekly; its window
+//    covers the RECENT episodes' outlier-trimmed range so late-running days aren't
+//    missed), daily/weekday, weekly, several-times-a-week (multiSlot), or random profiles.
+//    Hourly/rolling-bulletin/burst are detected first. Everything else goes through
+//    Release Radar v2
 //    (regularCadenceProfile): a feed is classified on its CADENCE + ACTIVE-DAY
 //    pattern only — publish TIME never gates classification, it only sizes the
 //    window. It computes a RECENCY-WEIGHTED per-weekday publish probability (weeks
@@ -44,8 +47,10 @@ import Foundation
 //    Every classified feed carries a
 //    releaseWindow sized (Stage 2) to the DENSEST publish-time mode, recency-weighted
 //    (recencyHalfLifeWeeks) — a bimodal feed gets a tight window on its main cluster,
-//    not the full range; stragglers are caught by the missed-release soft tail. No
-//    clear day+cadence ⇒ random. weekdayProbabilities feeds Stage-2 watch tiers.
+//    not the full range; stragglers are caught by the missed-release soft tail. Window
+//    times are DST-stable (dstStableMinutes): a UTC-stamped feed doesn't drift ±1h across
+//    daylight-saving boundaries. No clear day+cadence ⇒ random. weekdayProbabilities
+//    feeds Stage-2 watch tiers.
 //  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
 //    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
 //    rotation during active/fresh-missed windows, expire stale missed-release
@@ -539,7 +544,7 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         case .unreliableDates: return "Unreliable dates"
         case .hourly:          return "Hourly"
         case .rollingBulletin: return "Rolling bulletin"
-        case .burst:           return "Burst"
+        case .burst:           return "Daily – Multiple Episodes"
         case .weekly:          return "Weekly"
         case .multiSlot:       return "Several times a week"
         case .random:          return "Random / no pattern"
@@ -593,6 +598,13 @@ public enum FeedScheduleProfiler {
     private static let minimumReliableDates = 4
     private static let hourlyMinimumDates = 6
     private static let burstMinimumDays = 3
+    /// "Daily – Multiple Episodes" (the burst kind) requires the multi-episode-per-day
+    /// pattern on MOST days of the week. A burst on only one or two weekdays (a weekly
+    /// show split into segments) falls through to the regular classifier → weekly.
+    private static let burstMinimumActiveWeekdays = 5
+    /// How many of the most recent episodes size the burst window — recent enough to
+    /// follow a feed that shifted its posting time, large enough to be stable.
+    private static let burstWindowSampleSize = 40
     /// Weekly window tuning. A weekly feed's publish time-of-day may drift this far
     /// (trimmed range, in minutes) and still count as "roughly the same time each
     /// week" — produced shows slip with post-production rather than publishing at a
@@ -640,7 +652,8 @@ public enum FeedScheduleProfiler {
 
     public static func profile(
         from observations: [FeedReleaseObservation],
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        now: Date = Date()
     ) -> FeedScheduleProfile {
         let observationCount = observations.count
         let reliableObservations = observations
@@ -719,7 +732,8 @@ public enum FeedScheduleProfiler {
             calendar: calendar,
             observationCount: observationCount,
             reliableDateCount: reliableDateCount,
-            activeWeekdays: activeWeekdays
+            activeWeekdays: activeWeekdays,
+            now: now
         ) {
             return profile
         }
@@ -729,7 +743,8 @@ public enum FeedScheduleProfiler {
             calendar: calendar,
             medianInterval: medianInterval,
             observationCount: observationCount,
-            reliableDateCount: reliableDateCount
+            reliableDateCount: reliableDateCount,
+            now: now
         ) {
             return profile
         }
@@ -906,7 +921,8 @@ public enum FeedScheduleProfiler {
         calendar: Calendar,
         observationCount: Int,
         reliableDateCount: Int,
-        activeWeekdays: [Int]
+        activeWeekdays: [Int],
+        now: Date
     ) -> FeedScheduleProfile? {
         let groupedByDay = Dictionary(grouping: dates) { calendar.startOfDay(for: $0) }
         let burstDays = groupedByDay.values.compactMap { dayDates -> (start: Int, end: Int, center: Int, count: Int)? in
@@ -918,13 +934,27 @@ public enum FeedScheduleProfiler {
             return (first, last, first + span / 2, dayDates.count)
         }
         guard burstDays.count >= burstMinimumDays else { return nil }
+        // Must post multiple episodes per day on MOST days of the week to count as
+        // "Daily – Multiple Episodes". A burst on one/two weekdays (e.g. a weekly show
+        // split into segments) falls through to the regular classifier, which — by its
+        // dominant-weekday share — treats it as weekly.
+        guard activeWeekdays.count >= burstMinimumActiveWeekdays else { return nil }
 
         let centers = burstDays.map(\.center)
         let centerCluster = circularCluster(minutes: centers, modulo: 24 * 60)
         guard centerCluster.spread <= 90 else { return nil }
 
-        let start = median(burstDays.map(\.start)) ?? max(0, centerCluster.center - centerCluster.spread / 2)
-        let end = median(burstDays.map(\.end)) ?? min(24 * 60 - 1, centerCluster.center + centerCluster.spread / 2)
+        // Window spans the full daily burst from the RECENT episodes' outlier-trimmed
+        // publish-time range (+ margin), so late-running days aren't missed and the
+        // window follows a feed that shifted its posting time. The old median-first /
+        // median-last range left the back half of slower days outside the window.
+        let recentMinutes = dstStableMinutes(Array(dates.suffix(burstWindowSampleSize)), calendar: calendar, now: now)
+        let windowCenter = circularCluster(minutes: recentMinutes, modulo: 24 * 60).center
+        let range = trimmedOffsetRange(recentMinutes, around: windowCenter, modulo: 24 * 60)
+        let start = max(0, min(windowCenter + range.low - weeklyWindowMarginMinutes,
+                               windowCenter - weeklyMinHalfWidthMinutes))
+        let end = min(24 * 60 - 1, max(windowCenter + range.high + weeklyWindowMarginMinutes,
+                                       windowCenter + weeklyMinHalfWidthMinutes))
         let averageEpisodesPerBurst = Double(burstDays.map(\.count).reduce(0, +)) / Double(burstDays.count)
         let confidence = 0.58
             + min(0.2, Double(burstDays.count - burstMinimumDays) * 0.04)
@@ -937,15 +967,15 @@ public enum FeedScheduleProfiler {
             observationCount: observationCount,
             reliableDateCount: reliableDateCount,
             activeWeekdays: activeWeekdays,
-            typicalMinuteOfDay: centerCluster.center,
+            typicalMinuteOfDay: windowCenter,
             burstWindow: FeedScheduleWindow(
                 activeWeekdays: activeWeekdays,
                 startMinuteOfDay: start,
                 endMinuteOfDay: end,
-                typicalMinuteOfDay: centerCluster.center,
+                typicalMinuteOfDay: windowCenter,
                 observedEpisodeCount: burstDays.map(\.count).reduce(0, +)
             ),
-            reason: "Multiple episodes repeatedly appear within a short daily window, followed by quiet time."
+            reason: "Publishes multiple episodes per day on most days of the week."
         )
     }
 
@@ -961,7 +991,8 @@ public enum FeedScheduleProfiler {
         calendar: Calendar,
         medianInterval: TimeInterval?,
         observationCount: Int,
-        reliableDateCount: Int
+        reliableDateCount: Int,
+        now: Date
     ) -> FeedScheduleProfile? {
         guard reliableDateCount >= regularMinimumReliableDates else { return nil }
 
@@ -1014,7 +1045,7 @@ public enum FeedScheduleProfiler {
             return nil
         }
 
-        let window = releaseTimeWindow(dates: dates, activeWeekdays: resolvedActiveDays, calendar: calendar)
+        let window = releaseTimeWindow(dates: dates, activeWeekdays: resolvedActiveDays, calendar: calendar, now: now)
         let confidence = regularCadenceConfidence(
             reliableDateCount: reliableDateCount,
             activeDays: resolvedActiveDays,
@@ -1069,16 +1100,38 @@ public enum FeedScheduleProfiler {
         return (probabilities, weeksObserved)
     }
 
+    /// Each episode's minute-of-day in whichever representation — wall-clock LOCAL vs
+    /// DST-ANCHORED to the current offset — clusters more tightly, so the learned window
+    /// is stable across daylight-saving changes. A feed stamped in fixed local time keeps
+    /// its wall-clock time (local clusters tight); a feed stamped in fixed UTC keeps a
+    /// stable instant (anchored clusters tight, expressed in the CURRENT season's local
+    /// time) — removing the ±1 h drift a UTC-stamped feed otherwise suffers at each DST
+    /// boundary. Degenerates to plain local minutes for a zone with no DST (e.g. UTC tests).
+    private static func dstStableMinutes(_ dates: [Date], calendar: Calendar, now: Date) -> [Int] {
+        let zone = calendar.timeZone
+        let local = dates.map { minuteOfDay(for: $0, calendar: calendar) }
+        let currentDST = Int(zone.daylightSavingTimeOffset(for: now) / 60)
+        let anchored = zip(dates, local).map { date, minute -> Int in
+            let episodeDST = Int(zone.daylightSavingTimeOffset(for: date) / 60)
+            return (((minute + currentDST - episodeDST) % (24 * 60)) + 24 * 60) % (24 * 60)
+        }
+        let localSpread = circularCluster(minutes: local, modulo: 24 * 60).spread
+        let anchoredSpread = circularCluster(minutes: anchored, modulo: 24 * 60).spread
+        return anchoredSpread < localSpread ? anchored : local
+    }
+
     /// Release Radar v2 — Stage 2. Sizes a tight watch window around the DENSEST publish-
     /// time mode (recency-weighted), not the full observed range. A bimodal feed (most
     /// episodes 4–5am, some 9–11am) gets a tight 4–5am window; the stragglers are caught
     /// by the lighter missed-release "soft tail" rather than holding a wide window open on
     /// high rotation every day. Recent episodes are weighted more (recencyHalfLifeWeeks)
-    /// so a feed that shifts its publish time retunes within a few weeks.
+    /// so a feed that shifts its publish time retunes within a few weeks. Episode times use
+    /// `dstStableMinutes` so a UTC-stamped feed doesn't drift ±1 h across DST.
     private static func releaseTimeWindow(
         dates: [Date],
         activeWeekdays: [Int],
-        calendar: Calendar
+        calendar: Calendar,
+        now: Date
     ) -> FeedScheduleWindow {
         let activeSet = Set(activeWeekdays)
         let activeDates = dates.filter { activeSet.contains(calendar.component(.weekday, from: $0)) }
@@ -1093,9 +1146,10 @@ public enum FeedScheduleProfiler {
             )
         }
 
-        let weighted: [(minute: Int, weight: Double)] = source.map { date in
+        let stableMinutes = dstStableMinutes(source, calendar: calendar, now: now)
+        let weighted: [(minute: Int, weight: Double)] = zip(source, stableMinutes).map { date, minute in
             let ageWeeks = max(0, mostRecent.timeIntervalSince(date) / (7 * 86_400))
-            return (minuteOfDay(for: date, calendar: calendar), pow(0.5, ageWeeks / recencyHalfLifeWeeks))
+            return (minute, pow(0.5, ageWeeks / recencyHalfLifeWeeks))
         }
 
         // Densest mode = the observed minute maximising the summed recency weight of

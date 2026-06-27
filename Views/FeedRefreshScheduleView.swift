@@ -9,8 +9,9 @@ import SwiftUI
 // expected window (+ countdown), the in-window recheck interval, and a plain note on
 // when it WON'T actively watch. Data comes from AppState.releaseRadarSchedule(for:)
 // — the same FeedScheduleProfile + FeedRefreshPrediction the scheduler itself uses.
-// Rows are grouped by behaviour (Watching now / soon / Hourly / Daily / Weekly /
-// Still learning); within each group they're sorted ALPHABETICALLY by title so a feed
+// Rows are grouped by behaviour, by publish frequency (Watching now / soon / Hourly /
+// Daily – Multiple Episodes / Daily / Several Times a Week / Weekly / Still learning);
+// within each group they're sorted ALPHABETICALLY by title so a feed
 // is easy to find. Section headers use the DESIGN.md `Section-Heading` (bold title3 +
 // secondary count) with extra `.listSectionSpacing` between groups. Computed once on
 // appear (and on pull-to-refresh) into @State so the body stays cheap. Each row has a
@@ -50,27 +51,31 @@ struct FeedRefreshScheduleView: View {
     }
 
     private enum Behaviour: Int, CaseIterable {
-        case watchingNow, watchingSoon, hourly, daily, weekly, learning
+        case watchingNow, watchingSoon, hourly, dailyMultiple, daily, severalTimesWeek, weekly, learning
 
         var title: String {
             switch self {
-            case .watchingNow:  return "Watching Now"
-            case .watchingSoon: return "Watching Soon"
-            case .hourly:       return "Hourly & Bulletins"
-            case .daily:        return "Daily"
-            case .weekly:       return "Weekly"
-            case .learning:     return "Still Learning"
+            case .watchingNow:      return "Watching Now"
+            case .watchingSoon:     return "Watching Soon"
+            case .hourly:           return "Hourly"
+            case .dailyMultiple:    return "Daily – Multiple Episodes"
+            case .daily:            return "Daily"
+            case .severalTimesWeek: return "Several Times a Week"
+            case .weekly:           return "Weekly"
+            case .learning:         return "Still Learning"
             }
         }
 
         var footer: String {
             switch self {
-            case .watchingNow:  return "Inside (or just past) the expected release window — checked frequently right now."
-            case .watchingSoon: return "The expected window is approaching — Radar will start checking frequently shortly."
-            case .hourly:       return "Publishes on the hour or half-hour. Watched around each learned minute mark; only sparse checks between."
-            case .daily:        return "Publishes on a daily schedule. Watched around the learned time of day; about once a day otherwise."
-            case .weekly:       return "Publishes weekly. Watched around the learned day and time; about once a day otherwise."
-            case .learning:     return "Not enough data yet to predict a window — checked on a light fallback cadence until a pattern emerges."
+            case .watchingNow:      return "Inside (or just past) the expected release window — checked frequently right now."
+            case .watchingSoon:     return "The expected window is approaching — Radar will start checking frequently shortly."
+            case .hourly:           return "Publishes near-hourly. Watched around each learned minute mark; only sparse checks between."
+            case .dailyMultiple:    return "Publishes several episodes per day on most days. Watched through the daily release window."
+            case .daily:            return "Publishes about one episode per day. Watched around the learned time of day; about once a day otherwise."
+            case .severalTimesWeek: return "Publishes one episode on a few set days each week. Watched around those days; a light check otherwise."
+            case .weekly:           return "Publishes weekly. Watched around the learned day and time; about once a day otherwise."
+            case .learning:         return "Not enough data yet to predict a window — checked on a light fallback cadence until a pattern emerges."
             }
         }
     }
@@ -269,13 +274,13 @@ struct FeedRefreshScheduleView: View {
         case .hourly:
             if let m = p.typicalMinuteOfHour { return "Every hour around :\(pad(m))" }
             return "Roughly every hour"
-        case .rollingBulletin, .multiSlot:
+        case .rollingBulletin:
             if let mins = p.typicalMinutesOfHour, !mins.isEmpty {
                 return "Every hour at " + mins.sorted().map { ":\(pad($0))" }.joined(separator: ", ")
             }
             if let m = p.typicalMinuteOfHour { return "Every hour around :\(pad(m))" }
             return "Several times an hour"
-        case .dailyWeekdays:
+        case .dailyWeekdays, .multiSlot:
             if let t = p.typicalMinuteOfDay { return "\(weekdaysLabel(p.activeWeekdays)) around \(timeLabel(t))" }
             return weekdaysLabel(p.activeWeekdays)
         case .weekly:
@@ -291,16 +296,23 @@ struct FeedRefreshScheduleView: View {
         }
     }
 
-    /// The next concrete expected window (+ countdown), or the next check when there's no window.
+    /// The next concrete expected window (+ countdown), or the next check when there's no
+    /// window. A passed window (missedRelease/fallback) reads "… — missed; next check …"
+    /// rather than a misleading "(now)".
     private func nextWindowLabel(_ entry: Entry) -> String {
         let pr = entry.prediction
-        if let start = pr.expectedWindowStart {
-            if let end = pr.expectedWindowEnd {
-                return "\(relativeDayTime(start))–\(end.formatted(.dateTime.hour().minute())) (\(countdown(to: start)))"
-            }
-            return "\(relativeDayTime(start)) (\(countdown(to: start)))"
+        guard let start = pr.expectedWindowStart else {
+            return "Next check \(countdown(to: pr.nextDueAt))"
         }
-        return "Next check \(countdown(to: pr.nextDueAt))"
+        let window = pr.expectedWindowEnd
+            .map { "\(relativeDayTime(start))–\($0.formatted(.dateTime.hour().minute()))" }
+            ?? relativeDayTime(start)
+        // missedRelease / fallback windows are in the PAST — don't show "(now)"; surface
+        // that the expected episode is late and when Radar next checks.
+        if pr.state == .missedRelease || pr.state == .fallback {
+            return "\(window) — missed; next check \(countdown(to: pr.nextDueAt))"
+        }
+        return "\(window) (\(countdown(to: start)))"
     }
 
     private func recheckLabel(_ entry: Entry) -> String {
@@ -410,7 +422,9 @@ struct FeedRefreshScheduleView: View {
         default:                            break
         }
         switch profile.kind {
-        case .hourly, .rollingBulletin, .multiSlot, .burst: return .hourly
+        case .hourly, .rollingBulletin:                     return .hourly
+        case .burst:                                        return .dailyMultiple
+        case .multiSlot:                                    return .severalTimesWeek
         case .dailyWeekdays:                                return .daily
         case .weekly:                                       return .weekly
         case .learning, .unreliableDates, .random:          return .learning

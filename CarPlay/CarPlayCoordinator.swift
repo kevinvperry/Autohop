@@ -11,22 +11,30 @@ import UIKit
 // root template immediately, runs launch readiness for CarPlay-only starts, and
 // projects shared AppState into read-only CarPlay templates.
 //
-// CURRENT SCOPE: Phase 8 test-backed CarPlay adapter. The coordinator renders
-// Now Playing, Up Next, Queue, and empty states from AppState.downloadedQueue,
+// CURRENT SCOPE: Real-hardware CarPlay adapter. The coordinator renders Now
+// Playing, Queue, and empty states from AppState.downloadedQueue,
 // observes AppState conservatively, and delegates behavior decisions to
 // CarPlayActionRouter so Play/Play Next/Archive/speed/Shared Listening paths can
-// be tested without a live CarPlay runtime. Connecting CarPlay must not activate
-// audio by itself, refresh feeds, download episodes, search, browse, or create
-// any separate CarPlay queue/playback/settings state.
+// be tested without a live CarPlay runtime. Dialog-style templates always include
+// a visible Cancel action; pushed list pages rely on the native Back button only.
+// CarPlay-only cold launches use AppState.sharedOrBootstrap() so selecting
+// Autohop in CarPlay after the iPhone app was swiped closed still creates the
+// shared queue/playback model before templates are rendered.
+// Connecting CarPlay must not activate audio by itself, refresh feeds, download
+// episodes, search, browse, or create any separate CarPlay queue/playback/settings
+// state.
 //
 // TEMPLATE STACK COUNT:
 //  - Loading: CPListTemplate root only (depth 1).
-//  - No current episode: Up Next CPListTemplate root -> optional Queue list ->
-//    optional Queue action sheet (depth 3).
-//  - Current episode: CPNowPlayingTemplate root -> optional Up Next list ->
-//    optional Queue list -> optional Queue action sheet (depth 4).
-//  - Shared Listening: CPNowPlayingTemplate root -> one action sheet with toggle
-//    plus the short speed list (depth 2). No action opens another action sheet.
+//  - No current episode: Queue CPListTemplate root -> optional Queue action list
+//    -> optional Archive confirmation (depth 3).
+//  - Current episode: CPNowPlayingTemplate root -> optional Queue list ->
+//    optional Queue action list -> optional Archive confirmation (depth 4).
+//  - Speed: CPNowPlayingTemplate root -> one action sheet with slower/faster plus
+//    Cancel (depth 2).
+//  - Shared Listening: CPNowPlayingTemplate root -> one action sheet with toggle,
+//    speed picker entry, and Cancel (depth 2), or a pushed short speed list
+//    (depth 2). No action opens another action sheet.
 //
 // NEXT PHASES: Keep this as an adapter layer over AppState. Any future CarPlay
 // controls should call existing app services or small AppState helpers rather
@@ -42,8 +50,8 @@ final class CarPlayCoordinator: NSObject {
     private let presenter = CarPlayEpisodePresenter()
     private let artworkProvider = CarPlayArtworkProvider()
 
-    private var upNextTemplate: CPListTemplate?
     private var queueTemplate: CPListTemplate?
+    private var queueActionTemplate: CPListTemplate?
     private var rootRoute: RootRoute = .loading
     private var lastSnapshot: Snapshot?
     private let maximumSharedListeningSpeedActions = 4
@@ -51,11 +59,6 @@ final class CarPlayCoordinator: NSObject {
     private enum RootRoute {
         case loading
         case nowPlaying
-        case upNext
-    }
-
-    private enum ListMode {
-        case upNext
         case queue
     }
 
@@ -99,8 +102,8 @@ final class CarPlayCoordinator: NSObject {
         refreshTask = nil
         cancellables.removeAll()
         CPNowPlayingTemplate.shared.remove(self)
-        upNextTemplate = nil
         queueTemplate = nil
+        queueActionTemplate = nil
         rootRoute = .loading
         lastSnapshot = nil
         self.interfaceController = nil
@@ -111,27 +114,23 @@ final class CarPlayCoordinator: NSObject {
         readinessTask = Task { @MainActor [weak self, weak interfaceController] in
             guard let self, let interfaceController else { return }
 
-            await AppState.shared.startPlaybackOnLaunchIfNeeded()
+            let appState = AppState.sharedOrBootstrap()
+            await appState.startPlaybackOnLaunchIfNeeded()
             guard !Task.isCancelled, self.interfaceController === interfaceController else { return }
             self.observeAppState()
-            self.showInitialTemplate(animated: true)
+            self.showInitialTemplate(appState: appState, animated: true)
         }
     }
 
-    private func showInitialTemplate(animated: Bool) {
-        guard let appState = AppState.shared else {
-            setLoadingRootTemplate(animated: animated)
-            return
-        }
-
+    private func showInitialTemplate(appState: AppState, animated: Bool) {
         if appState.currentPlayerEpisode != nil {
             configureNowPlayingMetadata(appState: appState)
             configureNowPlayingButtons(appState: appState)
             rootRoute = .nowPlaying
             setRootTemplate(CPNowPlayingTemplate.shared, animated: animated)
         } else {
-            rootRoute = .upNext
-            setRootTemplate(makeUpNextTemplate(appState: appState), animated: animated)
+            rootRoute = .queue
+            setRootTemplate(makeQueueTemplate(appState: appState), animated: animated)
         }
         lastSnapshot = Snapshot(appState: appState)
     }
@@ -152,27 +151,17 @@ final class CarPlayCoordinator: NSObject {
         return CPListTemplate(title: "Autohop", sections: [section])
     }
 
-    private func makeUpNextTemplate(appState: AppState) -> CPListTemplate {
-        let template = CPListTemplate(title: "Up Next", sections: makeQueueSections(appState: appState, mode: .upNext))
-        template.trailingNavigationBarButtons = [
-            CPBarButton(title: "Queue") { [weak self] _ in
-                Task { @MainActor in self?.showQueueTemplate() }
-            }
-        ]
-        return template
-    }
-
     private func makeQueueTemplate(appState: AppState) -> CPListTemplate {
-        CPListTemplate(title: "Queue", sections: makeQueueSections(appState: appState, mode: .queue))
+        CPListTemplate(title: "Queue", sections: makeQueueSections(appState: appState))
     }
 
-    private func makeQueueSections(appState: AppState, mode: ListMode) -> [CPListSection] {
+    private func makeQueueSections(appState: AppState) -> [CPListSection] {
         let rows = presenter.rows(from: appState)
         guard !rows.isEmpty else {
             return [CPListSection(items: [makeEmptyQueueItem()])]
         }
 
-        return [CPListSection(items: rows.map { makeListItem(row: $0, mode: mode) })]
+        return [CPListSection(items: rows.map { makeListItem(row: $0) })]
     }
 
     private func makeEmptyQueueItem() -> CPListItem {
@@ -181,7 +170,7 @@ final class CarPlayCoordinator: NSObject {
         return item
     }
 
-    private func makeListItem(row: CarPlayEpisodeRow, mode: ListMode) -> CPListItem {
+    private func makeListItem(row: CarPlayEpisodeRow) -> CPListItem {
         let item = CPListItem(
             text: row.title,
             detailText: row.podcastTitle,
@@ -194,14 +183,9 @@ final class CarPlayCoordinator: NSObject {
             item.playbackProgress = progress
         }
         item.handler = { [weak self] _, completion in
+            completion()
             Task { @MainActor in
-                switch mode {
-                case .upNext:
-                    await self?.playEpisode(row.episode)
-                case .queue:
-                    self?.presentQueueActions(for: row)
-                }
-                completion()
+                self?.showQueueActions(for: row)
             }
         }
 
@@ -219,13 +203,6 @@ final class CarPlayCoordinator: NSObject {
         pushTemplate(queue, animated: true)
     }
 
-    private func showUpNextTemplate() {
-        guard let appState = AppState.shared else { return }
-        let upNext = makeUpNextTemplate(appState: appState)
-        upNextTemplate = upNext
-        pushTemplate(upNext, animated: true)
-    }
-
     private func pushTemplate(_ template: CPTemplate, animated: Bool) {
         interfaceController?.pushTemplate(template, animated: animated) { _, _ in }
     }
@@ -235,7 +212,7 @@ final class CarPlayCoordinator: NSObject {
         template.remove(self)
         template.add(self)
         template.isUpNextButtonEnabled = true
-        template.upNextTitle = "Up Next"
+        template.upNextTitle = "Queue"
         template.isAlbumArtistButtonEnabled = false
         if let appState = AppState.shared {
             configureNowPlayingButtons(appState: appState)
@@ -278,20 +255,19 @@ final class CarPlayCoordinator: NSObject {
     private func scheduleRefresh() {
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             self?.refreshFromAppState()
         }
     }
 
     private func refreshFromAppState() {
-        guard let appState = AppState.shared else { return }
+        let appState = AppState.sharedOrBootstrap()
         let snapshot = Snapshot(appState: appState)
         guard snapshot != lastSnapshot else { return }
         lastSnapshot = snapshot
 
-        upNextTemplate?.updateSections(makeQueueSections(appState: appState, mode: .upNext))
-        queueTemplate?.updateSections(makeQueueSections(appState: appState, mode: .queue))
+        queueTemplate?.updateSections(makeQueueSections(appState: appState))
 
         if appState.currentPlayerEpisode != nil {
             configureNowPlayingMetadata(appState: appState)
@@ -300,9 +276,9 @@ final class CarPlayCoordinator: NSObject {
                 rootRoute = .nowPlaying
                 setRootTemplate(CPNowPlayingTemplate.shared, animated: true)
             }
-        } else if rootRoute != .upNext {
-            rootRoute = .upNext
-            setRootTemplate(makeUpNextTemplate(appState: appState), animated: true)
+        } else if rootRoute != .queue {
+            rootRoute = .queue
+            setRootTemplate(makeQueueTemplate(appState: appState), animated: true)
         }
     }
 
@@ -316,38 +292,33 @@ final class CarPlayCoordinator: NSObject {
         refreshFromAppState()
     }
 
-    private func presentQueueActions(for row: CarPlayEpisodeRow) {
-        let play = CPAlertAction(title: "Play", style: .default) { [weak self] _ in
-            Task { @MainActor in
-                self?.dismissPresentedTemplate()
-                await self?.playEpisode(row.episode)
-            }
+    private func showQueueActions(for row: CarPlayEpisodeRow) {
+        let play = makeActionItem(title: "Play Now", detail: nil) { [weak self] in
+            await self?.playEpisode(row.episode)
+        }
+        let playNext = makeActionItem(title: "Play Next", detail: nil) { [weak self] in
+            self?.playEpisodeNext(row.episode)
+            self?.popTemplate()
+        }
+        let playLast = makeActionItem(title: "Play Last", detail: nil) { [weak self] in
+            self?.playEpisodeLast(row.episode)
+            self?.popTemplate()
+        }
+        let archive = makeActionItem(title: "Archive", detail: nil) { [weak self] in
+            self?.presentArchiveConfirmation(
+                title: "Archive Episode?",
+                message: row.title,
+                afterArchive: { [weak self] in self?.popTemplate() },
+                archive: { [weak self] in await self?.archiveEpisode(row.episode) }
+            )
         }
 
-        let playNext = CPAlertAction(title: "Play Next", style: .default) { [weak self] _ in
-            Task { @MainActor in
-                self?.dismissPresentedTemplate()
-                self?.playEpisodeNext(row.episode)
-            }
-        }
-
-        let archive = CPAlertAction(title: "Archive", style: .destructive) { [weak self] _ in
-            Task { @MainActor in
-                self?.dismissPresentedTemplate()
-                await self?.archiveEpisode(row.episode)
-            }
-        }
-
-        let cancel = CPAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
-            Task { @MainActor in self?.dismissPresentedTemplate() }
-        }
-
-        let sheet = CPActionSheetTemplate(
+        let template = CPListTemplate(
             title: row.title,
-            message: row.podcastTitle,
-            actions: [play, playNext, archive, cancel]
+            sections: [CPListSection(items: [play, playNext, playLast, archive])]
         )
-        interfaceController?.presentTemplate(sheet, animated: true) { _, _ in }
+        queueActionTemplate = template
+        pushTemplate(template, animated: true)
     }
 
     private func playEpisodeNext(_ episode: Episode) {
@@ -356,6 +327,12 @@ final class CarPlayCoordinator: NSObject {
             await CarPlayActionRouter(appState: appState).playNext(episode)
             self?.refreshFromAppState()
         }
+    }
+
+    private func playEpisodeLast(_ episode: Episode) {
+        guard let appState = AppState.shared else { return }
+        CarPlayActionRouter(appState: appState).playLast(episode)
+        refreshFromAppState()
     }
 
     private func archiveEpisode(_ episode: Episode) async {
@@ -370,12 +347,70 @@ final class CarPlayCoordinator: NSObject {
         refreshFromAppState()
     }
 
-    private func cyclePlaybackSpeed() {
+    private func presentArchiveCurrentConfirmation() {
+        guard let appState = AppState.shared,
+              let episode = appState.currentPlayerEpisode
+        else { return }
+
+        presentArchiveConfirmation(
+            title: "Archive Current Episode?",
+            message: episode.title,
+            afterArchive: nil,
+            archive: { [weak self] in await self?.archiveCurrentEpisode() }
+        )
+    }
+
+    private func presentPlaybackSpeedActions() {
         guard let appState = AppState.shared else { return }
-        CarPlayActionRouter(appState: appState).cyclePlaybackSpeed()
+
+        let currentSpeed = currentPlaybackSpeed(appState: appState)
+        let slower = CPAlertAction(title: "−", style: .default) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismissPresentedTemplate {
+                    self?.adjustPlaybackSpeed(direction: -1)
+                }
+            }
+        }
+        let faster = CPAlertAction(title: "+", style: .default) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismissPresentedTemplate {
+                    self?.adjustPlaybackSpeed(direction: 1)
+                }
+            }
+        }
+        let cancel = CPAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            Task { @MainActor in self?.dismissPresentedTemplate() }
+        }
+
+        let sheet = CPActionSheetTemplate(
+            title: "Playback Speed",
+            message: "Current \(PlaybackPreference.speedLabel(currentSpeed))",
+            actions: [slower, faster, cancel]
+        )
+        interfaceController?.presentTemplate(sheet, animated: true) { _, _ in }
+    }
+
+    private func adjustPlaybackSpeed(direction: Int) {
+        guard let appState = AppState.shared else { return }
+        let currentSpeed = currentPlaybackSpeed(appState: appState)
+        guard let index = PlaybackPreference.speedOptions.indices.min(by: {
+            abs(PlaybackPreference.speedOptions[$0] - currentSpeed) < abs(PlaybackPreference.speedOptions[$1] - currentSpeed)
+        }) else { return }
+        let targetIndex = max(
+            PlaybackPreference.speedOptions.startIndex,
+            min(PlaybackPreference.speedOptions.index(before: PlaybackPreference.speedOptions.endIndex), index + direction)
+        )
+        appState.setPlaybackSpeedForCurrentEpisode(PlaybackPreference.speedOptions[targetIndex])
         configureNowPlayingMetadata(appState: appState)
         configureNowPlayingButtons(appState: appState)
         refreshFromAppState()
+    }
+
+    private func currentPlaybackSpeed(appState: AppState) -> Double {
+        guard let episode = appState.currentPlayerEpisode,
+              let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID)
+        else { return 1.0 }
+        return appState.effectiveSpeed(for: subscription)
     }
 
     private func presentSharedListeningActions() {
@@ -395,15 +430,10 @@ final class CarPlayCoordinator: NSObject {
             }
         }
 
-        let speedActions = AppState.sharedListeningSpeedOptions.prefix(maximumSharedListeningSpeedActions).map { speed in
-            CPAlertAction(title: PlaybackPreference.speedLabel(speed), style: .default) { [weak self] _ in
-                Task { @MainActor in
-                    guard let appState = AppState.shared else { return }
-                    self?.dismissPresentedTemplate()
-                    CarPlayActionRouter(appState: appState).selectSharedListeningSpeed(speed)
-                    self?.configureNowPlayingMetadata(appState: appState)
-                    self?.configureNowPlayingButtons(appState: appState)
-                    self?.refreshFromAppState()
+        let chooseSpeed = CPAlertAction(title: "Choose Speed", style: .default) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismissPresentedTemplate {
+                    self?.showSharedListeningSpeedPicker()
                 }
             }
         }
@@ -417,18 +447,92 @@ final class CarPlayCoordinator: NSObject {
             message: appState.sharedListeningActive
                 ? "Current speed \(PlaybackPreference.speedLabel(appState.sharedListeningSpeed))"
                 : nil,
-            actions: [toggle] + speedActions + [cancel]
+            actions: [toggle, chooseSpeed, cancel]
         )
         interfaceController?.presentTemplate(sheet, animated: true) { _, _ in }
     }
 
-    private func dismissPresentedTemplate() {
-        interfaceController?.dismissTemplate(animated: true) { _, _ in }
+    private func showSharedListeningSpeedPicker() {
+        guard let appState = AppState.shared else { return }
+
+        let items = AppState.sharedListeningSpeedOptions.prefix(maximumSharedListeningSpeedActions).map { speed in
+            makeActionItem(
+                title: PlaybackPreference.speedLabel(speed),
+                detail: abs(speed - appState.sharedListeningSpeed) < 0.01 ? "Current" : nil
+            ) { [weak self] in
+                guard let appState = AppState.shared else { return }
+                CarPlayActionRouter(appState: appState).selectSharedListeningSpeed(speed)
+                self?.configureNowPlayingMetadata(appState: appState)
+                self?.configureNowPlayingButtons(appState: appState)
+                self?.refreshFromAppState()
+                self?.popTemplate()
+            }
+        }
+
+        let template = CPListTemplate(
+            title: "Shared Speed",
+            sections: [CPListSection(items: Array(items))]
+        )
+        pushTemplate(template, animated: true)
+    }
+
+    private func presentArchiveConfirmation(
+        title: String,
+        message: String?,
+        afterArchive: (() -> Void)?,
+        archive: @escaping () async -> Void
+    ) {
+        let confirm = CPAlertAction(title: "Archive", style: .destructive) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismissPresentedTemplate {
+                    Task { @MainActor in
+                        await archive()
+                        afterArchive?()
+                    }
+                }
+            }
+        }
+
+        let cancel = CPAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            Task { @MainActor in self?.dismissPresentedTemplate() }
+        }
+
+        let sheet = CPActionSheetTemplate(
+            title: title,
+            message: message,
+            actions: [confirm, cancel]
+        )
+        interfaceController?.presentTemplate(sheet, animated: true) { _, _ in }
+    }
+
+    private func makeActionItem(
+        title: String,
+        detail: String?,
+        action: @escaping () async -> Void
+    ) -> CPListItem {
+        let item = CPListItem(text: title, detailText: detail)
+        item.handler = { _, completion in
+            completion()
+            Task { @MainActor in
+                await action()
+            }
+        }
+        return item
+    }
+
+    private func dismissPresentedTemplate(completion: (() -> Void)? = nil) {
+        interfaceController?.dismissTemplate(animated: true) { _, _ in
+            Task { @MainActor in completion?() }
+        }
+    }
+
+    private func popTemplate() {
+        interfaceController?.popTemplate(animated: true) { _, _ in }
     }
 
     private func makePlaybackSpeedButton(appState: AppState) -> CPNowPlayingPlaybackRateButton {
         let button = CPNowPlayingPlaybackRateButton { [weak self] _ in
-            Task { @MainActor in self?.cyclePlaybackSpeed() }
+            Task { @MainActor in self?.presentPlaybackSpeedActions() }
         }
         button.isEnabled = appState.currentPlayerEpisode != nil && !appState.sharedListeningActive
         return button
@@ -448,7 +552,7 @@ final class CarPlayCoordinator: NSObject {
         let image = UIImage(systemName: "archivebox") ?? UIImage()
         let button = CPNowPlayingImageButton(image: image) { [weak self] _ in
             Task { @MainActor in
-                await self?.archiveCurrentEpisode()
+                self?.presentArchiveCurrentConfirmation()
             }
         }
         button.isEnabled = appState.currentPlayerEpisode != nil
@@ -459,7 +563,7 @@ final class CarPlayCoordinator: NSObject {
 extension CarPlayCoordinator: CPNowPlayingTemplateObserver {
     nonisolated func nowPlayingTemplateUpNextButtonTapped(_ nowPlayingTemplate: CPNowPlayingTemplate) {
         Task { @MainActor [weak self] in
-            self?.showUpNextTemplate()
+            self?.showQueueTemplate()
         }
     }
 }

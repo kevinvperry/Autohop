@@ -1,8 +1,9 @@
 // AI CONTEXT - Tests/CarPlayBehaviorTests.swift
-// Phase 8 coverage for CarPlay behavior that can be verified without a live
-// CarPlay runtime: queue projection, action routing decisions, speed cycling,
-// and Shared Listening state. SwiftPM's AutohopCore target intentionally excludes
-// App/CarPlay, so these tests compile only in the Xcode app test target.
+// Coverage for CarPlay behavior that can be verified without a live CarPlay
+// runtime: queue projection, action routing decisions, speed cycling, system
+// playback-rate command routing, and Shared Listening state. SwiftPM's
+// AutohopCore target intentionally excludes App/CarPlay, so these tests compile
+// only in the Xcode app test target.
 import XCTest
 
 #if !AUTOHOP_SPM
@@ -72,6 +73,19 @@ final class CarPlayBehaviorTests: XCTestCase {
         XCTAssertTrue(harness.playback.playedEpisodes.isEmpty)
     }
 
+    func testPlayLastDemotesEpisodeToEndOfQueue() throws {
+        let harness = try makeHarness()
+        let first = makeEpisode(subscriptionID: harness.subscriptionID, guid: "first", title: "First", publishedAt: Date(timeIntervalSince1970: 1))
+        let second = makeEpisode(subscriptionID: harness.subscriptionID, guid: "second", title: "Second", publishedAt: Date(timeIntervalSince1970: 2))
+        let third = makeEpisode(subscriptionID: harness.subscriptionID, guid: "third", title: "Third", publishedAt: Date(timeIntervalSince1970: 3))
+        try harness.installEpisodes([first, second, third], downloadedIDs: [first.id, second.id, third.id])
+        harness.appState.currentPlayerEpisode = try XCTUnwrap(harness.store.episode(subscriptionID: harness.subscriptionID, episodeID: first.id))
+
+        CarPlayActionRouter(appState: harness.appState).playLast(try XCTUnwrap(harness.store.episode(subscriptionID: harness.subscriptionID, episodeID: second.id)))
+
+        XCTAssertEqual(harness.appState.downloadedQueue.map(\.id), [first.id, third.id, second.id])
+    }
+
     func testArchiveCurrentAdvancesOrClearsWhenQueueIsEmpty() async throws {
         let harness = try makeHarness()
         let first = makeEpisode(subscriptionID: harness.subscriptionID, guid: "first", title: "First", publishedAt: Date(timeIntervalSince1970: 1))
@@ -113,6 +127,24 @@ final class CarPlayBehaviorTests: XCTestCase {
             PlaybackPreference.speedOptions.first!,
             accuracy: 0.001
         )
+    }
+
+    func testSystemPlaybackRateCommandUpdatesCurrentPodcastSpeed() throws {
+        let harness = try makeHarness()
+        let episode = makeEpisode(subscriptionID: harness.subscriptionID, guid: "rate", title: "Rate")
+        try harness.installEpisodes([episode], downloadedIDs: [episode.id])
+        harness.appState.currentPlayerEpisode = try XCTUnwrap(harness.store.episode(subscriptionID: harness.subscriptionID, episodeID: episode.id))
+        harness.appState.isPlaying = true
+
+        harness.appState.setPlaybackSpeedForCurrentEpisode(1.6)
+
+        XCTAssertEqual(try XCTUnwrap(harness.store.subscription(id: harness.subscriptionID)?.playbackPreference.speed), 1.6, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(harness.playback.lastSpeed), 1.6, accuracy: 0.001)
+
+        CarPlayActionRouter(appState: harness.appState).setSharedListening(active: true)
+        harness.appState.setPlaybackSpeedForCurrentEpisode(2.0)
+
+        XCTAssertEqual(try XCTUnwrap(harness.store.subscription(id: harness.subscriptionID)?.playbackPreference.speed), 1.6, accuracy: 0.001)
     }
 
     func testSharedListeningBlocksPodcastSpeedCycleAndUpdatesSharedSpeed() throws {

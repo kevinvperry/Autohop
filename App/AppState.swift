@@ -18,8 +18,9 @@ import UIKit
 //    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
 //    CarPlay is deliberately just another UI surface over these same methods:
 //    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
-//    and cyclePlaybackSpeedForCurrentEpisode() exist to keep CarPlay action
-//    routing thin while preserving one shared playback/queue/settings model.
+//    cyclePlaybackSpeedForCurrentEpisode(), and setPlaybackSpeedForCurrentEpisode(_:)
+//    exist to keep CarPlay action routing thin while preserving one shared
+//    playback/queue/settings model.
 //    External `podcast:chapters` are fetched AFTER play() begins (P7):
 //    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
 //    ephemeral session) so a slow endpoint never delays the first audio frame,
@@ -135,7 +136,8 @@ import UIKit
 //  - upNextEpisode refreshes are debounced via scheduleUpNextRefresh; mutate
 //    suppressUpNextRefresh around bulk operations to avoid churn.
 //  - Listening history requires ≥ 60 s listened before an entry is shown.
-//  - AppState.shared is set once in init (used by AppDelegate/background tasks).
+//  - AppState.shared is created through bootstrap/sharedOrBootstrap (used by
+//    AppDelegate/background tasks and CarPlay-only cold launches).
 //  - All methods assume MainActor; long work hops to detached tasks/services.
 // ============================================================================
 
@@ -1055,6 +1057,11 @@ final class AppState: ObservableObject {
                     guard let ep = state.currentPlayerEpisode else { return }
                     await state.handleEpisodeFinished(ep)
                 }
+            },
+            onPlaybackRateChange: { rate in
+                Task { @MainActor in
+                    state.setPlaybackSpeedForCurrentEpisode(Double(rate))
+                }
             }
         )
         NowPlayingService.shared.updateSkipIntervals(
@@ -1120,6 +1127,13 @@ final class AppState: ObservableObject {
             NotificationService.shared.updateBadge(count: badgeCount)
         }
         return state
+    }
+
+    static func sharedOrBootstrap() -> AppState {
+        if let shared {
+            return shared
+        }
+        return bootstrap()
     }
 
     // MARK: - Playback controls
@@ -2007,6 +2021,19 @@ final class AppState: ObservableObject {
             ? PlaybackPreference.speedOptions[PlaybackPreference.speedOptions.startIndex]
             : PlaybackPreference.speedOptions[nextIndex]
         updatePlaybackSpeed(for: subscription.id, speed: nextSpeed)
+    }
+
+    func setPlaybackSpeedForCurrentEpisode(_ speed: Double) {
+        guard !sharedListeningActive,
+              let episode = currentPlayerEpisode,
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
+              !PlaybackPreference.speedOptions.isEmpty
+        else { return }
+
+        let normalizedSpeed = PlaybackPreference.speedOptions.min { lhs, rhs in
+            abs(lhs - speed) < abs(rhs - speed)
+        } ?? speed
+        updatePlaybackSpeed(for: subscription.id, speed: normalizedSpeed)
     }
 
     func updateVocalBoost(for subscriptionID: UUID, level: VocalBoostLevel) {

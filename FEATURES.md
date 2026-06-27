@@ -26,10 +26,10 @@ flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
-entitlement scope: Now Playing, Up Next, Queue, downloaded-only playback, Play,
-Play Next, Archive, playback speed, and Shared Listening. CarPlay must not grow
-search, browsing, downloads, feed refresh, settings, sleep controls, stats, OPML,
-notifications, or other non-driving workflows.
+entitlement scope: Now Playing, Queue, downloaded-only playback, Play Now, Play
+Next, Play Last, Archive, playback speed, and Shared Listening. CarPlay must not
+grow search, browsing, downloads, feed refresh, settings, sleep controls, stats,
+OPML, notifications, or other non-driving workflows.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -263,7 +263,11 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 **Pin badges:** Episodes with a Play Next or Play Last override show a pin badge above the duration — blue for Play Next, orange for Play Last.
 
-**Episode details & settings shortcut:** Tapping an episode's title expands the row to reveal the full episode description. The expanded row also shows a small purple circular gear button in its bottom-right corner; tapping it closes the Queue and opens that podcast's **Podcast Settings** page in its place.
+**Episode details & shortcuts:** Tapping an episode's title expands the row to reveal the full episode description. The expanded row also shows two small purple circular glass buttons in its bottom-right corner:
+- **Podcast list** (`list.bullet`) — closes the Queue and opens that podcast's **Podcast Detail** page (episode list) in its place.
+- **Podcast settings** (`gearshape`) — closes the Queue and opens that podcast's **Podcast Settings** page in its place.
+
+Both use the same "replace the queue" pattern: the subscriptionID is staged, the Queue sheet dismisses, and the new sheet is presented in `onDismiss` so UIKit never sees two simultaneous sheet transitions.
 
 **Action animations:** Each swipe action is animated with a matched haptic (`.sensoryFeedback`) and the list reorders fluidly (a no-bounce `.smooth` spring keyed to the queue's episode order):
 - **Play Next / Play Last** — a light impact haptic; the row pops gently and flashes a directional badge at its leading edge (blue ↑ "to top" / orange ↓ "to bottom"), then the row visibly glides to its new top/bottom slot. The reorder is deferred until the swipe row finishes closing, so a neighbouring episode never appears to jump over the one being moved.
@@ -764,7 +768,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to first-seen surveillance because published times cannot be trusted; recent real releases can temporarily tighten the cadence. |
 | `hourly` | Episodes arrive near-hourly around the same minute of the hour. | Open a short window around the learned minute and check on high rotation. |
 | `rollingBulletin` | Short news-style feeds use predictable minute marks but change cadence, such as hourly most of the day with half-hourly releases during breakfast. | Open short windows around each learned minute-of-hour slot, such as `:00` and `:30`, instead of treating the feed as random. |
-| `burst` | Multiple episodes repeatedly appear inside a short daily window, then the feed goes quiet. | Check before and through the burst; keep checking after the first episode because more may follow. |
+| `burst` ("Daily – Multiple Episodes") | Multiple episodes per day inside a short daily window, on **most days of the week**. A multi-segment show on only one or two weekdays falls through to weekly instead. | Check before and through the daily window; keep checking after the first episode because more may follow. |
 | `dailyWeekdays` | A near-daily feed (5+ active days, ~1-day cadence). Classified on cadence + the set of weekdays it reliably publishes on — publish time is irrelevant here. The active-day set distinguishes **Weekdays** (Mon–Fri) from **Daily** (includes the weekend); `FeedScheduleProfile.categoryLabel` reads it to print the right label. | Check across the learned window on each *active* weekday only; never opens weekend slots for a Mon–Fri show; stand down after the expected episode arrives. |
 | `weekly` | One reliable publish day on a ~weekly cadence (4–11 day gap). The publish *time* may drift hours week to week (produced shows post-process late), so classification rests on the day + cadence, not a fixed minute. | Check across the learned window on that day, then stand down until the next expected week. |
 | `multiSlot` | "Several times a week" — a small, consistent set of 2–4 active days. | Check across the learned window on each of those days. |
@@ -1159,21 +1163,21 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 
 **Entry behavior:**
 - If an episode is currently loaded, CarPlay opens to **Now Playing**.
-- If no episode is currently loaded, CarPlay opens to **Up Next**.
-- During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Up Next.
+- If no episode is currently loaded, CarPlay opens to **Queue**.
+- During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Queue.
 
 **Screens:**
 - **Now Playing** — current episode metadata, artwork when available, system playback controls, Archive, speed cycling, Shared Listening toggle, and Shared Listening speed picker.
-- **Up Next** — a compact list of downloaded queue episodes. Tapping a row starts that episode immediately.
-- **Queue** — the same downloaded queue with an action sheet for Play, Play Next, and Archive.
+- **Queue** — downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions.
 
 **Downloaded-only rule:** CarPlay reads from `AppState.downloadedQueue` only. It does not search, browse podcasts, refresh feeds, start downloads, stream episodes, or expose subscription management.
 
 **Actions:**
-- **Play** starts the selected downloaded episode immediately.
+- **Play Now** starts the selected downloaded episode immediately.
 - **Play Next** moves the selected episode directly after the currently playing episode, matching iPhone behavior. If there is no current episode, Play Next behaves as Play.
+- **Play Last** moves the selected episode to the end of the queue, matching iPhone behavior.
 - **Archive** removes the selected episode from the queue. Archiving the current episode advances to the next downloaded queue item when one exists; otherwise Now Playing is cleared and the empty queue state is shown.
-- **Playback Speed** cycles through Autohop's existing preset speeds, using the current episode's podcast settings as the base.
+- **Playback Speed** opens a slower/faster dialog using Autohop's existing preset speeds and the current episode's podcast settings as the base.
 - **Shared Listening** controls the same global temporary override as iPhone. Disconnecting CarPlay does not change the Shared Listening state.
 
 **Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.

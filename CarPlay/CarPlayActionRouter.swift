@@ -7,9 +7,10 @@ import Foundation
 // CarPlay template navigation; this value owns the small behavior decisions that
 // should be verified without a live CarPlay runtime.
 //
-// CURRENT SCOPE: Phase 8 tests. Keep this as a thin wrapper over AppState. It
-// must not introduce separate CarPlay queue/playback/settings state and must not
-// start downloads, feed refresh, search, browsing, notifications, or sleep flows.
+// CURRENT SCOPE: Real-hardware CarPlay behavior adapter. Keep this as a thin
+// wrapper over AppState. It must not introduce separate CarPlay
+// queue/playback/settings state and must not start downloads, feed refresh,
+// search, browsing, notifications, or sleep flows.
 // ============================================================================
 
 @MainActor
@@ -26,6 +27,10 @@ struct CarPlayActionRouter {
         } else {
             appState.playEpisodeNext(episode)
         }
+    }
+
+    func playLast(_ episode: Episode) {
+        appState.playEpisodeLast(episode)
     }
 
     func archive(_ episode: Episode) async {

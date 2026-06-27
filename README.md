@@ -58,7 +58,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
-- CarPlay audio support: Now Playing, compact Up Next, simplified Queue actions, downloaded-only playback, Archive, playback speed cycling, and Shared Listening controls
+- CarPlay audio support: Now Playing, Queue actions, downloaded-only playback, Play Now, Play Next, Play Last, Archive, playback speed adjustment, and Shared Listening controls
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
 
@@ -68,7 +68,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 |---|---|
 | [`FEATURES.md`](FEATURES.md) | **Source of truth** for every feature, setting label, default, and behaviour. Update this first when any model/view/setting changes, then propagate to the website and App Store copy. |
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
-| [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference). |
+| [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference), plus the current glass-ready app icon recipe. |
 | [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
 | [`Docs/CARPLAY_CODE_STRATEGY.md`](Docs/CARPLAY_CODE_STRATEGY.md) | CarPlay implementation plan, phase gates, and release sequencing. |
 | [`Docs/CARPLAY_PHASE9_QA.md`](Docs/CARPLAY_PHASE9_QA.md) | CarPlay simulator/hardware QA status and manual checklist. |

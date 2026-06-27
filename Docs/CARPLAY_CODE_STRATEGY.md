@@ -19,11 +19,11 @@ Do not create a second app model. Do not create a second queue. Do not create a 
 The first release remains:
 
 - Now Playing first when an episode is loaded.
-- Up Next if no episode is loaded.
-- Simplified Queue for actions.
+- Queue if no episode is loaded.
+- Simplified Queue for selection and actions.
 - Downloaded queue only.
-- Queue actions: Play, Play Next, Archive.
-- Player actions: Archive, speed cycle, Shared Listening toggle, Shared Listening speed picker.
+- Queue actions: Play Now, Play Next, Play Last, Archive.
+- Player actions: Archive, slower/faster speed dialog, Shared Listening toggle, Shared Listening speed picker.
 - No search, browsing, downloads, feed refresh, sleep controls, settings, stats, diagnostics, sharing, or CarPlay notifications.
 
 ## Implementation Shape
@@ -171,7 +171,7 @@ Tasks:
 - Make the coordinator show Loading until this startup step has completed.
 - After readiness:
   - show Now Playing if `currentPlayerEpisode` exists.
-  - otherwise show Up Next.
+  - otherwise show Queue.
 
 Gate:
 
@@ -191,7 +191,6 @@ Tasks:
   - podcast title.
   - artwork or placeholder.
   - optional progress.
-- Add Up Next list.
 - Add Queue list.
 - Add empty downloaded queue template.
 - Configure `CPNowPlayingTemplate.shared` enough to show current metadata.
@@ -199,10 +198,9 @@ Tasks:
 
 Important design choice:
 
-- Up Next and Queue should both read from the same `downloadedQueue`.
-- Their difference is behavior:
-  - Up Next tap eventually plays immediately.
-  - Queue tap eventually opens actions.
+- CarPlay uses the Queue list only. Earlier Up Next/Queue separation was removed
+  after real-hardware testing because it added navigation without adding useful
+  driver value.
 
 Gate:
 
@@ -218,14 +216,12 @@ Goal: wire CarPlay controls into existing AppState behavior.
 
 Tasks:
 
-- Up Next row tap:
-  - call `await appState.playEpisode(episode)`.
-  - present or rely on Now Playing as appropriate.
 - Queue row tap:
-  - open an action sheet.
-- Queue action sheet:
-  - Play: `await appState.playEpisode(episode)`.
+  - open a short action page.
+- Queue action page:
+  - Play Now: `await appState.playEpisode(episode)`.
   - Play Next: `appState.playEpisodeNext(episode)`.
+  - Play Last: `appState.playEpisodeLast(episode)`.
   - Archive:
     - if current episode, `await appState.archiveEpisodeAndPlayNext(episode)`.
     - otherwise `await appState.archiveEpisode(episode)`.
@@ -310,10 +306,10 @@ Tasks:
 - Keep max depth below 5.
 - Ensure Now Playing only pushes a List template above it.
 - Avoid nested action chains.
-- Make Queue action sheet one level only.
+- Make Queue action page one level only.
 - Make Shared Listening speed picker one short list only.
 - Test no-current-episode states:
-  - root Up Next.
+  - root Queue.
   - empty queue.
   - Play Next with no current episode.
 
@@ -368,12 +364,11 @@ Simulator checks:
 - Launch while iPhone UI is already open.
 - Launch while iPhone UI is not open.
 - Current episode opens Now Playing.
-- No current episode opens Up Next.
+- No current episode opens Queue.
 - Empty queue shows calm empty state.
-- Up Next tap plays.
-- Queue action sheet works.
+- Queue action page works.
 - Now Playing Archive advances.
-- Speed cycle works.
+- Speed slower/faster dialog works.
 - Shared Listening toggle and speed list work.
 - Light and dark appearances.
 - Different screen sizes.
@@ -433,12 +428,11 @@ Use this order when implementation begins:
 2. Regenerate project and confirm entitlement/profile.
 3. Add CarPlay scene skeleton with Loading template.
 4. Add coordinator and readiness flow.
-5. Add row presenter and read-only Up Next/Queue templates.
+5. Add row presenter and read-only Queue template.
 6. Add Now Playing template setup.
-7. Add Up Next Play action.
-8. Add Queue action sheet with Play, Play Next, Archive.
+7. Add Queue action page with Play Now, Play Next, Play Last, Archive.
 9. Add Now Playing Archive.
-10. Add speed cycle.
+10. Add slower/faster speed dialog.
 11. Add Shared Listening toggle.
 12. Add Shared Listening speed list.
 13. Add artwork provider and progress indicators.
@@ -466,7 +460,6 @@ Do not implement:
 - Podcast/library browsing.
 - Add feed.
 - Download/refresh from CarPlay.
-- Play Last.
 - Drag/reorder.
 - Sleep controls.
 - Stats.
@@ -482,7 +475,7 @@ The cleanest first PR should include:
 - Project capability setup.
 - CarPlay scene skeleton.
 - Loading/empty templates.
-- Read-only Up Next and Queue templates.
+- Read-only Queue template.
 - No playback actions yet.
 
 This makes the riskiest platform integration reviewable before behavior gets layered on.

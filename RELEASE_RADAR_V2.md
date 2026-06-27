@@ -27,6 +27,10 @@ real feeds to Random. v2 splits it:
 - **Window (Stage 2):** densest-mode primary window + a lighter *soft tail* for any
   secondary cluster (e.g. Windows Weekly: tight 4–5am + light 9–11am).
 - **Recency (Stage 2):** recent episodes weighted more, but all history counts.
+- **DST-stable windows:** each episode's time is taken in whichever representation —
+  wall-clock local vs UTC-anchored to the current offset — clusters tighter
+  (`dstStableMinutes`), so a UTC-stamped feed doesn't drift ±1h across daylight-saving
+  boundaries while a locally-stamped feed keeps its wall-clock time.
 
 ## Stage 1 — IMPLEMENTED ✅
 `regularCadenceProfile` (runs after hourly/rolling-bulletin/burst):

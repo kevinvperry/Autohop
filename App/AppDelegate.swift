@@ -1,3 +1,4 @@
+import CarPlay
 import UIKit
 import BackgroundTasks
 
@@ -24,6 +25,11 @@ import BackgroundTasks
 //  5. Installs NotificationService as the UNUserNotificationCenter delegate
 //     (before launch returns) so Sleep Schedule "Still Listening" action taps
 //     that wake the app from the lock screen are handled.
+//  6. CarPlay cold-launch scene routing: when the app is opened from CarPlay
+//     after the iPhone app has been swiped closed, iOS may connect only the
+//     CarPlay template scene. The delegate returns an explicit CarPlay scene
+//     configuration so CarPlaySceneDelegate is used even without an iPhone
+//     WindowGroup already alive.
 // GOTCHA: a BGAppRefreshTask run with "no feeds due" still reports success —
 // reporting failure teaches iOS to deprioritise future background wakes.
 final class AppDelegate: NSObject, UIApplicationDelegate {
@@ -39,6 +45,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        if connectingSceneSession.role.rawValue == "CPTemplateApplicationSceneSessionRoleApplication" {
+            let configuration = UISceneConfiguration(
+                name: "CarPlay",
+                sessionRole: connectingSceneSession.role
+            )
+            configuration.sceneClass = CPTemplateApplicationScene.self
+            configuration.delegateClass = CarPlaySceneDelegate.self
+            return configuration
+        }
+
+        return UISceneConfiguration(
+            name: "Default Configuration",
+            sessionRole: connectingSceneSession.role
+        )
     }
 
     func application(

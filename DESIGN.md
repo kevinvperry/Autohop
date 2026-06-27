@@ -12,6 +12,7 @@ The **Priority**, **Queue**, **Downloads**, **Individual Subscription**, and **I
 |---|---|
 | `ColorScheme-Dark` | Every page forces dark mode — no white or light screens |
 | `Accent-Purple` | Purple is the highlight colour for buttons, icons, active states, and progress |
+| `AppIcon-GlassReady` | iOS app icon source: vivid purple Liquid Glass-ready background, lavender/white podcast bars, green fallback bars, centred white skip chevron |
 | `NavTitle-Inline` | Page title in the centre of the top bar, not as a large heading |
 | `NavBack-Standard` | Pushed pages: brand back chevron top-left, nothing else in that corner |
 | `SheetClose-Standard` | Informational sheets: ✕ close button top-right, no Done/Cancel |
@@ -123,6 +124,22 @@ Purple (`Color.purple`) is the primary accent throughout the app:
 - Artwork placeholder gradients
 - Progress bars (`ProgressView.tint(.purple)`)
 - Contextual shortcut button when active
+
+---
+
+## App Icon
+
+**Label: `AppIcon-GlassReady`**
+
+The app icon source of truth is [`Design/AppIcon/autohop-icon-v1.svg`](Design/AppIcon/autohop-icon-v1.svg). The Xcode-facing PNGs live in [`Assets.xcassets/AppIcon.appiconset`](Assets.xcassets/AppIcon.appiconset) and must be regenerated whenever the SVG changes.
+
+Current visual recipe:
+
+- **Background** — iOS 26 Liquid Glass-ready purple gradient: `#7C61FF` → `#5B3FD6` → `#4930B8`, plus a soft white top-left glow. Avoid returning to dark navy; the glass overlay muddies it.
+- **Left waveform** — four enlarged rounded bars in glass-safe near-white/lavender tones: `#F8F4FF`, `#FFFFFF`, `#E9E1FF`, `#D8CCFF`. These preserve colour variety while staying legible under the system glass layer.
+- **Centre chevron** — strong white skip-forward mark, visually centred between the waveform groups and thick enough to read at small icon sizes.
+- **Right waveform** — bright green rounded bars, with the tallest bar set to the more vibrant `#2EEB73` so the music-fallback side stays energetic.
+- **Composition** — waveform groups fill more of the square than the original icon, with balanced outside margins and a lowered baseline. Keep the SVG square, unrounded, and opaque; iOS applies the final icon mask.
 
 ---
 

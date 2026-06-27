@@ -4,6 +4,9 @@ import Foundation
 // XMLParser-based RSS/podcast feed parser → ParsedFeed/ParsedEpisode values.
 // Handles itunes:* tags, enclosure media kind detection (audio vs video),
 // duration formats, chapters (podcast:chapters external URL), explicit flags.
+// pubDate → absolute Date via parseDate: ISO8601 then RFC822 formatters (numeric
+// offsets + `zzz`), with a named-zone fallback table (GMT/AEST/BST/CET/JST/NZST…);
+// genuinely ambiguous abbreviations (IST, CST) are deliberately omitted.
 // maxEpisodes short-circuits parsing (didReachEpisodeLimit aborts the parse
 // but is NOT an error). Pre-pass dataByEscapingBareAmpersands() repairs the
 // most common real-world feed defect — unescaped "&" — by escaping any
@@ -452,7 +455,26 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             "AEDT": "+1100",
             "ACST": "+0930",
             "ACDT": "+1030",
-            "AWST": "+0800"
+            "AWST": "+0800",
+            // Europe
+            "BST": "+0100",   // British Summer Time (the dominant feed use of "BST")
+            "WET": "+0000",
+            "WEST": "+0100",
+            "CET": "+0100",
+            "CEST": "+0200",
+            "EET": "+0200",
+            "EEST": "+0300",
+            // Asia / Pacific / Africa
+            "JST": "+0900",
+            "KST": "+0900",
+            "HKT": "+0800",
+            "SGT": "+0800",
+            "SAST": "+0200",
+            "NZST": "+1200",
+            "NZDT": "+1300"
+            // NOTE: ambiguous abbreviations (e.g. "IST" = India/Irish/Israel, "CST" =
+            // US Central/China) are deliberately omitted — a wrong offset is worse than a
+            // parse failure. Feeds overwhelmingly use numeric offsets (+HHMM) anyway.
         ]
 
         guard let offset = offsets[timezone.uppercased()] else { return nil }

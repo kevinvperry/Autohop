@@ -17,16 +17,23 @@ import UIKit
 // artwork of any episode newly added to the queue (2.5 s, gated on
 // isPlayerVisible). Hosts the sheets: AudioControlsSheetView
 // (speed/trim/boost), Sleep Timer, Queue, Episode Share, archive
-// confirmation, and Podcast Settings (SubscriptionSettingsView) — the latter is
-// opened from a Queue row's expanded gear: the Queue sheet dismisses and the
-// Settings sheet opens in its place via the queue sheet's onDismiss. Video
+// confirmation, Podcast Settings (SubscriptionSettingsView), and Podcast Detail
+// (PodcastDetailView). The latter two are opened from the Queue row's expanded
+// buttons (list.bullet → Detail, gearshape → Settings) using the staged-ID
+// "replace the queue" pattern: the subscriptionID is stored in
+// queueRequestedDetailID / queueRequestedSettingsID, the Queue sheet is
+// dismissed, and the target sheet is presented in showQueue's onDismiss so
+// UIKit never sees two simultaneous sheet transitions. Video
 // episodes embed the AVPlayer-backed
 // NativeVideoPlayerView with full-screen + PiP and landscape unlock via
 // VideoOrientationController. Scrubber uses local sliderValue + isSeeking so
 // engine ticks don't fight the user's drag. Also manages the
 // keep-screen-awake idle timer via appState.updateIdleTimer(playerVisible:).
-// Podcast/episode artwork shown in Now Playing, queue flashes, fallback detail
-// art, and queue rows goes through CachedArtworkImage with explicit target sizes;
+// Artwork priority in the Now Playing panel: episode-specific artworkURL first
+// (RSS <itunes:image> on the item), falling back to the subscription's artwork.
+// Do NOT revert this order — episode art takes precedence by design.
+// Queue flashes and queue rows use subscription artwork only (no episode art).
+// All artwork goes through CachedArtworkImage with explicit target sizes;
 // HTML description images intentionally remain AsyncImage because they are feed
 // content, not canonical podcast/episode artwork.
 // FIRST-RUN: when there's nothing to play (isPlayerEmpty) the panels are replaced
@@ -37,9 +44,12 @@ import UIKit
 
 // MARK: - Root player
 
-/// Identifiable wrapper so the Queue's "open Podcast Settings" gear shortcut can
-/// drive a `.sheet(item:)` — a bare `UUID` is not Identifiable.
+/// Identifiable wrapper so Queue sheet shortcuts can drive `.sheet(item:)` —
+/// a bare `UUID` is not Identifiable.
 private struct PodcastSettingsRoute: Identifiable {
+    let id: UUID
+}
+private struct PodcastDetailRoute: Identifiable {
     let id: UUID
 }
 
@@ -48,10 +58,12 @@ struct PlayerView: View {
     @State private var selectedPanel = 0
     @State private var showMenu = false
     @State private var showQueue = false
-    // Staged by the Queue sheet's gear shortcut, consumed on Queue dismissal to
-    // open that podcast's Settings in the Queue's place ("replace the queue").
+    // Staged by Queue sheet shortcuts, consumed on Queue dismissal to open the
+    // target page in the Queue's place ("replace the queue").
     @State private var queueRequestedSettingsID: UUID?
     @State private var podcastSettingsRoute: PodcastSettingsRoute?
+    @State private var queueRequestedDetailID: UUID?
+    @State private var podcastDetailRoute: PodcastDetailRoute?
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
     @State private var showAudioControlMenu = false
@@ -152,22 +164,36 @@ struct PlayerView: View {
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
         .sheet(isPresented: $showQueue, onDismiss: {
-            // "Replace the queue": if the gear shortcut was tapped, open that
-            // podcast's Settings only after the Queue sheet has fully dismissed —
-            // presenting during dismissal would be dropped by UIKit.
+            // "Replace the queue": open the target page only after the Queue sheet
+            // has fully dismissed — presenting during dismissal is dropped by UIKit.
             if let id = queueRequestedSettingsID {
                 queueRequestedSettingsID = nil
                 podcastSettingsRoute = PodcastSettingsRoute(id: id)
+            } else if let id = queueRequestedDetailID {
+                queueRequestedDetailID = nil
+                podcastDetailRoute = PodcastDetailRoute(id: id)
             }
         }) {
-            QueueSheetView(onOpenPodcastSettings: { subscriptionID in
-                queueRequestedSettingsID = subscriptionID
-                showQueue = false
-            })
+            QueueSheetView(
+                onOpenPodcastSettings: { subscriptionID in
+                    queueRequestedSettingsID = subscriptionID
+                    showQueue = false
+                },
+                onOpenPodcastDetail: { subscriptionID in
+                    queueRequestedDetailID = subscriptionID
+                    showQueue = false
+                }
+            )
         }
         .sheet(item: $podcastSettingsRoute) { route in
             NavigationStack {
                 SubscriptionSettingsView(subscriptionID: route.id)
+            }
+            .environmentObject(appState)
+        }
+        .sheet(item: $podcastDetailRoute) { route in
+            NavigationStack {
+                PodcastDetailView(subscriptionID: route.id)
             }
             .environmentObject(appState)
         }
@@ -606,8 +632,8 @@ struct PlayerView: View {
     // MARK: - Artwork
 
     private var artworkURL: URL? {
-        episode.flatMap { appState.subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
-            ?? episode?.artworkURL
+        episode?.artworkURL
+            ?? episode.flatMap { appState.subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
     }
 
     private func artworkZStack(size: CGFloat, height: CGFloat? = nil, cornerRadius: CGFloat) -> some View {

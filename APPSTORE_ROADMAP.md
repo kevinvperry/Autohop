@@ -2,7 +2,7 @@
 
 **Status legend:** ✅ done · 🔄 in progress · ⬜ not started · 🧍 needs you (Apple account / device / asset / decision)
 **Owner:** **[Me]** = doable in-repo by the assistant · **[You]** = requires your Apple account, hardware, or a manual store action.
-**Last updated:** 2026-06-26
+**Last updated:** 2026-06-27
 **STATUS: v1.0 (build 1) APPROVED & LIVE 2026-06-17 (apps.apple.com/au/app/autohop/id6777946512). Now preparing the next feature release: v1.1 work remains captured below, and CarPlay Audio App entitlement approval has been granted for the account. CarPlay release preparation notes, review copy, and remaining simulator/hardware gates are captured in Appendix 5.**
 
 > **v1.1 submission steps:** ✅ **Step 0 — version bump (1.1/build 2) + `xcodegen generate`** done & verified in pbxproj (2026-06-21). · ✅ **Step 1 — CloudKit schema live in Production** (`iCloud.com.kevinperry.autohop`): EpisodeState, SubscriptionState, HistoryEntry, DayStats all present in Production; no pending deploy (verified 2026-06-21) · ✅ **Step 2 — build 1.1 (2) archived, validated & uploaded** to ASC (Processing in TestFlight, 2026-06-21 8:49 AM) · ✅ **Step 3 — ASC metadata/ASO done**: name `Autohop: Podcast Player`, subtitle `Auto-queue, sync & sleep`, promo text, What's New, updated description, and per-storefront keyword fields for English (U.S./U.K./Australia) (2026-06-21) · ✅ **Step 4 — screenshots updated** (6.9" refreshed for Liquid Glass + new iCloud Sync shot, across US/UK/AU localizations) (2026-06-21) · ✅ **Step 5 — build 1.1 (2) attached, review notes pasted (incl. CloudKit paragraph), App Privacy confirmed "Data Not Collected"** (2026-06-21) · ✅ **Step 6 — SUBMITTED, "Waiting for Review"** (manual release chosen) (2026-06-21). **ALL STEPS COMPLETE.** Remaining: click "Release This Version" once Apple approves. ✅ listing copy, What's New, review notes drafted in-repo (Appendices 1–4).
@@ -28,6 +28,7 @@
 | D9 | Create App Store Connect record | P0 | You | ✅ Apple ID 6777946512, SKU autohop-1 |
 | D10 | Category selection | P0 | You | ⬜ |
 | D11 | Screenshots (6.9"/6.7" iPhone) | P0 | You | ✅ 6 shots @ 1290×2796 (6.9" slot) |
+| D11a | Glass-ready app icon refresh | P1 | Me | ✅ source SVG + all app icon PNG slots regenerated |
 | D12 | Listing copy (name/subtitle/desc/keywords) | P0 | Me | ✅ draft (Appendix 1) |
 | D13 | Support / Marketing / Privacy URLs | P0 | You | ✅ URLs ready |
 | D14 | App Privacy "Data Not Collected" answers | P0 | Me/You | ✅ published in ASC (Data Not Collected) |
@@ -71,6 +72,7 @@
 - ⬜ **D9** Create the app record (name "Autohop", primary language en, bundle ID, SKU).
 - ⬜ **D10** Category — recommended **Primary: News**, **Secondary: Entertainment** (matches how Pocket Casts/Overcast are categorized).
 - ✅ **D11** Screenshots — 6 captured on a Pro Max device at **1290×2796** (accepted in the 6.9" slot). Set: Now Playing (hero), Sleep Schedule, Audio Controls, Subscriptions/Priority, Top Shows (Stats), Discover. Recommended order: Now Playing → Sleep Schedule → Audio Controls → Subscriptions → Discover → Stats. Optional later polish: Shared Listening ON, Subscriptions from #1, Stats heatmap variant.
+- ✅ **D11a — Glass-ready app icon refresh.** Updated the master SVG (`Design/AppIcon/autohop-icon-v1.svg`) and regenerated every PNG in `Assets.xcassets/AppIcon.appiconset`. Current recipe: vivid purple Liquid Glass-ready gradient background, glass-safe lavender/white podcast bars, centred strong white skip-forward chevron, and brighter tall green fallback bar (`#2EEB73`). Exported PNGs remain opaque and square; iOS applies the mask.
 - ✅ **D12** Listing copy drafted — Appendix 1.
 - ✅ **D13** URLs ready: Support `https://kevmarl.com/autohop/support` · Marketing `https://kevmarl.com/autohop` · Privacy `https://kevmarl.com/autohop/privacy`.
 - ✅ **D14** App Privacy answers drafted — Appendix 4 ("Data Not Collected").
@@ -214,7 +216,7 @@ ICLOUD SYNC (new in 1.1)
 Autohop can sync a user's subscriptions, priority order, queue, listening history, stats, and playback position across their own devices using CloudKit and the user's PRIVATE iCloud database (CKSyncEngine). No Autohop-operated server is involved and the developer cannot access this data; it is the user's own iCloud. Sync is optional. No account or login is added — it uses the device's existing iCloud account.
 
 CARPLAY AUDIO APP
-Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing, Up Next, and a simplified Queue for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
+Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing and Queue controls for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
 
 PRIVACY
 Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only, and — when the user enables iCloud Sync — in their own private iCloud (CloudKit private database), never on any developer server. See the privacy manifest and https://kevmarl.com/autohop/privacy.
@@ -273,9 +275,8 @@ Autohop includes CarPlay support under the CarPlay Audio App entitlement.
 
 The CarPlay interface is audio-only and limited to safe playback controls for already downloaded podcast episodes:
 - Now Playing for the current episode.
-- Up Next for quick selection from the downloaded queue.
-- Queue actions: Play, Play Next, and Archive.
-- Playback speed cycling using Autohop's existing presets.
+- Queue actions: Play Now, Play Next, Play Last, and Archive.
+- Playback speed adjustment using Autohop's existing presets.
 - Shared Listening toggle and Shared Listening speed picker.
 
 CarPlay uses the same queue, playback, archive, speed, and Shared Listening state as the iPhone app. It does not create a separate CarPlay queue or separate playback system.
