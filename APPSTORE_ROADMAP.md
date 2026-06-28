@@ -225,7 +225,14 @@ HOW TO TEST SLEEP SCHEDULE QUICKLY
 Menu (☰) → Sleep Schedule → enable, set the active-hours window to cover the current time, set "Ask Every" to the shortest interval, then play any downloaded episode and wait for the prompt.
 
 OPEN SOURCE
-Two audio files (SilenceDetector.swift, PlaybackEngine.swift) are derived from Pocket Casts for iOS under MPL-2.0; see in-app Settings → Open Source Acknowledgements.
+Four audio/sync files (SilenceDetector.swift, SilenceGapAccounting.swift, PlaybackEngine.swift, Synced.swift) are derived from Pocket Casts for iOS under MPL-2.0; see in-app Settings → Open Source Acknowledgements.
+
+CONTENT SOURCES — NOTE FOR REVIEW (re: Guideline 5.2.3)
+Version 1.1 was initially flagged under Guideline 5.2.3 and approved after the following clarification, included here to assist this review.
+
+Autohop is a podcast player. It plays podcasts that their publishers distribute as open RSS feeds — the public, open standard that underpins podcasting and is expressly intended for playback by any third-party podcast app (the same model as Apple Podcasts, Overcast, Pocket Casts, and Castro). All audio and video is streamed or downloaded directly from each publisher's own server, using the enclosure URL the publisher declares in their public RSS feed. The show titles and artwork shown are likewise each podcast's own publicly available feed metadata. Autohop accesses no DRM-protected, login-gated, or proprietary streaming catalog, and it hosts, long-term caches, or redistributes nothing.
+
+To help users find shows, Autohop uses Apple's publicly available podcast directory only to locate publicly listed podcast RSS feeds. It does not reproduce a proprietary catalog — it points users to publishers' own public feeds, which are then read directly. By the nature of that directory, a podcast listed in Apple Podcasts is a public RSS feed made discoverable for open consumption.
 ```
 
 ---
