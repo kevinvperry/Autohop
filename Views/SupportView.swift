@@ -208,6 +208,25 @@ private struct SupportBlockView: View {
                 SupportSwipeCard(title: rightTitle, titleColor: Color(red: 0.09, green: 0.64, blue: 0.29), actions: right)
                 SupportSwipeCard(title: leftTitle, titleColor: .purple, actions: left)
             }
+
+        case .link(let label, let urlString):
+            if let url = URL(string: urlString) {
+                Link(destination: url) {
+                    HStack {
+                        Text(label)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.purple)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.purple.opacity(0.7))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Color.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.purple.opacity(0.25), lineWidth: 0.5))
+                }
+            }
         }
     }
 }

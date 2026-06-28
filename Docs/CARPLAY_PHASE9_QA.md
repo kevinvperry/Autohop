@@ -25,12 +25,14 @@ Date: 2026-06-26
 - Launch Autohop from the CarPlay home screen.
 - Launch while the iPhone UI is already open.
 - Launch while the iPhone UI is not open.
-- Confirm a current episode opens Now Playing.
-- Confirm no current episode opens Queue.
-- Confirm an empty queue shows `No downloaded episodes`.
-- Open Queue, tap a row, and confirm the action page shows Play Now, Play Next, Play Last, and Archive.
+- With the iPhone app swiped closed and a saved mid-episode position, confirm
+  CarPlay resumes playback from that saved position after the loading state.
+- Confirm a current episode opens Now Playing only when metadata is available; otherwise it falls back to Up Next instead of a blank player.
+- Confirm no current episode opens Up Next.
+- Confirm an empty queue shows the native `No downloaded episodes` empty state.
+- Open Up Next, tap a row, and confirm the action page shows Play Now, Play Next, Play Last, and Archive.
 - Confirm Now Playing Archive advances to the next downloaded episode.
-- Confirm the speed button opens slower/faster controls using Autohop's existing preset speeds.
+- Confirm the speed button opens a slower/faster page that stays open after each adjustment.
 - Confirm Shared Listening can be toggled and its speed picker works.
 - Check light and dark appearances.
 - Check compact and wide CarPlay screen sizes if available.

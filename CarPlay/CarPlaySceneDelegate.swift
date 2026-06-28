@@ -12,7 +12,7 @@ import UIKit
 // CURRENT SCOPE: Phase 7 navigation-safe CarPlay lifecycle. On connect it gives
 // CarPlay a root "Loading..." template immediately, then lets CarPlayCoordinator
 // run Autohop's idempotent launch-readiness path before rendering Now Playing,
-// Queue, or empty-state templates. On disconnect it clears the interface-
+// Up Next, or empty-state templates. On disconnect it clears the interface-
 // controller reference and cancels pending readiness/refresh work. It
 // intentionally performs no playback, feed, notification, or audio-session work.
 //

@@ -17,9 +17,11 @@ import BackgroundTasks
 //     feeds into Release Radar's deferred backlog. Task
 //     identifiers are forwarded for diagnostics so logs can distinguish each wake
 //     source (BGAppRefreshTask / BGProcessingTask / foreground / background-audio).
-//  2. Background URLSession wake: stores the system completion handler on
-//     DownloadManager so it fires after urlSessionDidFinishEvents.
-//  3. OPML/.xml file-open events → AppState.importOPML.
+//  2. Background URLSession wake: bootstraps AppState on demand, then stores the
+//     system completion handler on DownloadManager so it fires after
+//     urlSessionDidFinishEvents.
+//  3. OPML/.xml file-open events → AppState.importOPML, bootstrapping on demand
+//     because AppState is no longer created in AutohopApp.init.
 //  4. Orientation lock: delegates to VideoOrientationController so landscape
 //     is only allowed during full-screen video playback.
 //  5. Installs NotificationService as the UNUserNotificationCenter delegate
@@ -83,8 +85,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         options: [UIApplication.OpenURLOptionsKey: Any] = [:]
     ) -> Bool {
         let ext = url.pathExtension.lowercased()
-        guard (ext == "opml" || ext == "xml"), let appState else { return false }
-        Task { await appState.importOPML(from: url) }
+        guard ext == "opml" || ext == "xml" else { return false }
+        Task { @MainActor [weak self] in
+            let state = AppState.sharedOrBootstrap()
+            self?.appState = state
+            _ = await state.importOPML(from: url)
+        }
         return true
     }
 
@@ -101,7 +107,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
         // Hand the completion handler to DownloadManager so it can call it after
         // urlSessionDidFinishEvents(forBackgroundURLSession:) fires.
-        appState?.downloadManager.backgroundEventsCompletionHandler = completionHandler
+        Task { @MainActor [weak self] in
+            let state = AppState.sharedOrBootstrap()
+            self?.appState = state
+            state.downloadManager.backgroundEventsCompletionHandler = completionHandler
+        }
     }
 
     // MARK: - BGTask registration
@@ -142,7 +152,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BackgroundTaskCoordinator.scheduleAppRefresh()
 
         let work = Task {
-            let didRun = await AppState.shared.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
+            let state = AppState.sharedOrBootstrap()
+            let didRun = await state.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
             AppLogger.shared.info("background.complete", "Background app refresh completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
@@ -157,7 +168,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 "identifier": task.identifier
             ])
             Task { @MainActor in
-                AppState.shared.cancelRefreshCycleIfBackgroundOnly(reason: "background.expired")
+                AppState.sharedOrBootstrap().cancelRefreshCycleIfBackgroundOnly(reason: "background.expired")
             }
             work.cancel()
             task.setTaskCompleted(success: false)
@@ -171,7 +182,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BackgroundTaskCoordinator.scheduleProcessing()
 
         let work = Task {
-            let didRun = await AppState.shared.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
+            let state = AppState.sharedOrBootstrap()
+            let didRun = await state.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
             AppLogger.shared.info("background.processingComplete", "Background processing completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
@@ -184,7 +196,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 "identifier": task.identifier
             ])
             Task { @MainActor in
-                AppState.shared.cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
+                AppState.sharedOrBootstrap().cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
             }
             work.cancel()
             task.setTaskCompleted(success: false)

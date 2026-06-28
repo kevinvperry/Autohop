@@ -11,7 +11,7 @@ import SwiftUI
 // The website's SVG diagrams are intentionally omitted here — the surrounding
 // text and tables carry the same information on a phone screen.
 // CarPlay support copy intentionally describes only the approved audio scope:
-// Now Playing, Queue actions, downloaded-only playback, playback speed, Shared
+// Now Playing, Up Next actions, downloaded-only playback, playback speed, Shared
 // Listening, and Archive. Do not add search, browsing, downloads, settings,
 // sleep controls, notifications, or feed-refresh workflows to the CarPlay guide.
 
@@ -63,6 +63,8 @@ enum SupportBlock {
     case pills([SupportPill])
     case swipe(rightTitle: String, right: [SupportSwipeAction],
                leftTitle: String, left: [SupportSwipeAction])
+    /// A tappable external link row — label is the button text, urlString is the destination.
+    case link(label: String, urlString: String)
 }
 
 // MARK: - Section model
@@ -94,7 +96,7 @@ enum SupportGuide {
     static let sections: [SupportSection] = [
         gettingStarted, priorityStack, queue, player, audioControls, carPlay, chapters,
         downloads, podcastSettings, sleepTimer, sleepSchedule, video,
-        notifications, opml, iCloudSync, listeningHistory, stats, appSettings,
+        notifications, opml, iCloudSync, listeningHistory, stats, appSettings, contact,
     ]
 
     // MARK: Getting Started
@@ -114,7 +116,7 @@ enum SupportGuide {
             .heading("The three main pages"),
             .table(headers: nil, rows: [
                 ["Priority", "Your ranked list of subscriptions. Drag to reorder. This page controls the automatic queue order."],
-                ["Queue", "Your current playback queue — all downloaded, unplayed episodes in priority order, with any manual overrides applied."],
+                ["Up Next", "Your current playback queue — all downloaded, unplayed episodes in priority order, with any manual overrides applied."],
                 ["Downloads", "Active downloads, completed downloads, and archived episodes."],
             ]),
         ]
@@ -153,13 +155,13 @@ enum SupportGuide {
         ]
     )
 
-    // MARK: Queue
+    // MARK: Up Next
 
     private static let queue = SupportSection(
-        id: "queue", icon: "square.stack", title: "Queue",
-        summary: "Swipe actions, pins, and what's up next",
+        id: "queue", icon: "square.stack", title: "Up Next",
+        summary: "Swipe actions, pins, and what's playing after",
         blocks: [
-            .paragraph("The Queue sheet shows all episodes that are ready to play, in the order Autohop will play them. Open it by tapping the **Queue** button in the player toolbar."),
+            .paragraph("The Up Next sheet shows all episodes that are ready to play, in the order Autohop will play them. Open it by tapping the **Up Next** button in the player toolbar."),
             .heading("Swipe actions"),
             .swipe(
                 rightTitle: "Swipe Right",
@@ -203,7 +205,7 @@ enum SupportGuide {
                 "**Scrubber** — Drag to seek to any position. Shows elapsed and remaining time.",
                 "**Audio controls button** — Opens the Audio Controls sheet for speed, trim silence, and vocal boost.",
                 "**Sleep timer** — Tap the moon icon to set a sleep timer.",
-                "**Queue button** — Opens the queue sheet.",
+                "**Up Next button** — Opens the Up Next sheet.",
             ]),
             .heading("Lock screen & Control Centre"),
             .paragraph("Autohop integrates with iOS Now Playing controls. Play/pause, skip forward, skip back, and scrubbing all work from the Lock Screen, Control Centre, and CarPlay."),
@@ -259,17 +261,17 @@ enum SupportGuide {
 
     private static let carPlay = SupportSection(
         id: "carplay", icon: "car.fill", title: "CarPlay",
-        summary: "Now Playing and Queue in the car",
+        summary: "Now Playing and Up Next in the car",
         blocks: [
             .paragraph("Autohop supports CarPlay as a focused audio playback surface. It shows what is already ready to listen to, using the same playback, queue, speed, archive, and Shared Listening state as the iPhone app."),
             .heading("What appears in CarPlay"),
             .table(headers: ["Screen", "What it does"], rows: [
                 ["Now Playing", "Shows the current episode with artwork when available, system playback controls, Archive, speed, and Shared Listening controls."],
-                ["Queue", "Shows downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions."],
+                ["Up Next", "Shows downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions."],
             ]),
             .heading("Downloaded queue only"),
             .paragraph("CarPlay only uses episodes that are already downloaded and already in Autohop's queue. It does not search, browse podcasts, refresh feeds, stream episodes, or start downloads from the car interface."),
-            .heading("Queue actions"),
+            .heading("Up Next actions"),
             .bullets([
                 "**Play Now** — starts the selected downloaded episode immediately.",
                 "**Play Next** — moves the episode directly after the currently playing episode. If nothing is currently playing, Play Next starts the episode.",
@@ -277,7 +279,7 @@ enum SupportGuide {
                 "**Archive** — removes the episode from the queue. Archiving the current episode advances to the next downloaded queue item when one is available.",
             ]),
             .heading("Speed and Shared Listening"),
-            .paragraph("The speed button opens a simple control with slower and faster actions using Autohop's existing preset speeds. Shared Listening controls the same global temporary override as the iPhone app, so turning it on or off in CarPlay updates the iPhone state too."),
+            .paragraph("The speed button opens a simple slower/faster page using Autohop's existing preset speeds. It stays open while you adjust speed. Shared Listening controls the same global temporary override as the iPhone app, so turning it on or off in CarPlay updates the iPhone state too."),
             .callout(.note, "**Designed for driving:** CarPlay does not include Search, Discover, podcast settings, Sleep Schedule setup, notifications, Stats, OPML, or long-form episode browsing."),
         ]
     )
@@ -581,6 +583,18 @@ enum SupportGuide {
             .heading("About"),
             .paragraph("Shows the app version number and a link to Open Source Acknowledgements."),
             .callout(.tip, "**Having an issue?** Get in touch from the Contact page at kevmarl.com — include your iOS version and a description of what happened."),
+        ]
+    )
+
+    // MARK: Contact
+
+    private static let contact = SupportSection(
+        id: "contact", icon: "envelope", title: "Contact",
+        summary: "Questions, bug reports, and feedback",
+        blocks: [
+            .paragraph("Have a question, found a bug, or want to share some feedback? I'd love to hear from you — tap the button below to open the contact page."),
+            .link(label: "Get in touch", urlString: "https://kevmarl.com/contact"),
+            .paragraph("Please include your iOS version and a description of what happened if you're reporting a bug — it makes it much easier to track down."),
         ]
     )
 }

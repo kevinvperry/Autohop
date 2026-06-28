@@ -43,6 +43,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     @State private var showOPMLImporter = false
     @State private var showOPMLExporter = false
@@ -77,6 +78,7 @@ struct SettingsView: View {
             if developerModeUnlocked {
                 diagnosticsSection
             }
+            contactSection
             acknowledgementsSection
         }
         .listSectionSpacing(36)
@@ -502,6 +504,23 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var contactSection: some View {
+        Section {
+            Button {
+                if let url = URL(string: "https://kevmarl.com/contact") {
+                    openURL(url)
+                }
+            } label: {
+                rowLabel("Get in Touch", systemImage: "envelope")
+            }
+        } header: {
+            Text("Contact")
+        } footer: {
+            Text("Have a question, found a bug, or want to share feedback? I'd love to hear from you.")
+        }
+        .listRowBackground(cardBackground)
+    }
+
     private var acknowledgementsSection: some View {
         Section {
             NavigationLink {

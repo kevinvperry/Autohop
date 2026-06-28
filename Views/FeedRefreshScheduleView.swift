@@ -24,8 +24,10 @@ import SwiftUI
 // toolbar export button
 // (ShareLink) writes a plain-text diagnostic dump of EVERY active subscription — the
 // same data as the per-podcast "Release Radar Data" screen — to a temp .txt for
-// sharing/submitting for offline trend analysis (see releaseRadarReportText at file
-// end; regenerated alongside `entries`). NavRules: pushed page, brand
+// sharing/submitting for offline trend analysis. The export includes each learned
+// window plus observed spread so over-narrow/widened Radar windows can be audited
+// without raw log parsing (see releaseRadarReportText at file end; regenerated
+// alongside `entries`). NavRules: pushed page, brand
 // back chevron, MiniPlayerBar docked. NOTE: the local behaviour enum is named
 // `Behaviour`, NOT `Group`, so it doesn't shadow SwiftUI.Group used in the body.
 struct FeedRefreshScheduleView: View {
@@ -72,8 +74,8 @@ struct FeedRefreshScheduleView: View {
             case .watchingSoon:     return "The expected window is approaching — Radar will start checking frequently shortly."
             case .hourly:           return "Publishes near-hourly. Watched around each learned minute mark; only sparse checks between."
             case .dailyMultiple:    return "Publishes several episodes per day on most days. Watched through the daily release window."
-            case .daily:            return "Publishes about one episode per day. Watched around the learned time of day; about once a day otherwise."
-            case .severalTimesWeek: return "Publishes one episode on a few set days each week. Watched around those days; a light check otherwise."
+            case .daily:            return "Publishes about one episode per day. Watched around the learned time of day; broad safety checks otherwise."
+            case .severalTimesWeek: return "Publishes one episode on a few set days each week. Watched around those days; broad safety checks otherwise."
             case .weekly:           return "Publishes weekly. Watched around the learned day and time; about once a day otherwise."
             case .learning:         return "Not enough data yet to predict a window — checked on a light fallback cadence until a pattern emerges."
             }
@@ -324,10 +326,14 @@ struct FeedRefreshScheduleView: View {
     /// When it WON'T actively watch.
     private func offWindowLabel(_ entry: Entry) -> String {
         switch entry.profile.kind {
-        case .hourly, .rollingBulletin, .multiSlot, .burst:
+        case .hourly, .rollingBulletin:
             return "Between windows: only sparse checks"
-        case .dailyWeekdays, .weekly:
-            return "Outside the window: about once a day"
+        case .multiSlot, .burst:
+            return "Between windows: broad safety checks"
+        case .dailyWeekdays:
+            return "Outside the window: broad safety checks about twice a day"
+        case .weekly:
+            return "Outside the window: broad safety checks about once a day"
         case .learning, .unreliableDates, .random:
             return "Light periodic checks while learning"
         }
@@ -481,7 +487,7 @@ private func releaseRadarReportText(
         out += "  Classification: \(d.profile.categoryLabel) · \(reportPercent(d.profile.confidence)) confidence\n"
         out += "  Reason: \(d.profile.reason)\n"
         if let window = d.profile.releaseWindow {
-            out += "  Learned window: \(reportClock(window.startMinuteOfDay))–\(reportClock(window.endMinuteOfDay))\n"
+            out += "  Learned window: \(reportWindow(window))\n"
         }
         out += "  Observations: \(d.observationCount) total · \(d.reliableDateCount) reliable\n"
         let quality = d.qualityBreakdown.sorted { $0.key < $1.key }
@@ -526,6 +532,14 @@ private func reportPercent(_ value: Double) -> String { "\(Int((value * 100).rou
 
 private func reportClock(_ minute: Int) -> String {
     String(format: "%02d:%02d", minute / 60, minute % 60)
+}
+
+private func reportWindow(_ window: FeedScheduleWindow) -> String {
+    var text = "\(reportClock(window.startMinuteOfDay))–\(reportClock(window.endMinuteOfDay))"
+    if let spread = window.observedSpreadMinutes {
+        text += " · observed spread \(spread) min"
+    }
+    return text
 }
 
 private func reportWeekday(_ weekday: Int, _ calendar: Calendar) -> String {

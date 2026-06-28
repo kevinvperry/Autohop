@@ -18,12 +18,12 @@ Do not create a second app model. Do not create a second queue. Do not create a 
 
 The first release remains:
 
-- Now Playing first when an episode is loaded.
-- Queue if no episode is loaded.
-- Simplified Queue for selection and actions.
+- Now Playing first when an episode is loaded and valid CarPlay metadata can be projected.
+- Up Next if no episode is loaded, or if cold-launch metadata is not ready.
+- Simplified Up Next for selection and actions.
 - Downloaded queue only.
-- Queue actions: Play Now, Play Next, Play Last, Archive.
-- Player actions: Archive, slower/faster speed dialog, Shared Listening toggle, Shared Listening speed picker.
+- Up Next actions: Play Now, Play Next, Play Last, Archive.
+- Player actions: Archive, persistent slower/faster speed page, Shared Listening toggle, Shared Listening speed picker.
 - No search, browsing, downloads, feed refresh, sleep controls, settings, stats, diagnostics, sharing, or CarPlay notifications.
 
 ## Implementation Shape
@@ -160,18 +160,24 @@ Goal: make CarPlay safe when it connects before the iPhone UI appears.
 
 Current risk:
 
-- `AppState.bootstrap()` already happens in `AutohopApp.init()`.
-- `startPlaybackOnLaunchIfNeeded()` currently runs from the SwiftUI `WindowGroup` task.
+- `AutohopApp.init()` must stay lightweight. Do not bootstrap `AppState` there:
+  a CarPlay-only cold launch needs to reach `CarPlaySceneDelegate.didConnect`
+  and set the first root template before full app-state hydration begins.
+- The iPhone `WindowGroup` bootstraps `AppState` lazily when the phone UI appears.
+- CarPlay bootstraps or reuses `AppState` only after the Loading template is set.
+- CarPlay-only cold launches resume the restored episode from its saved playback
+  position after Loading is installed. Normal iPhone launch still restores the
+  episode into a paused state.
 - A CarPlay-only launch must not depend on the phone window appearing before CarPlay can render useful state.
 
 Tasks:
 
-- Add an idempotent app-readiness entry point in `AppState`, or reuse `startPlaybackOnLaunchIfNeeded()` from the CarPlay coordinator.
+- Keep an idempotent app-readiness entry point in `AppState`, or reuse `startPlaybackOnLaunchIfNeeded()` from the CarPlay coordinator.
 - Ensure the method is safe to call from both iPhone and CarPlay paths.
 - Make the coordinator show Loading until this startup step has completed.
 - After readiness:
-  - show Now Playing if `currentPlayerEpisode` exists.
-  - otherwise show Queue.
+  - show Now Playing if `currentPlayerEpisode` exists and metadata can be projected.
+  - otherwise show Up Next.
 
 Gate:
 
@@ -191,21 +197,21 @@ Tasks:
   - podcast title.
   - artwork or placeholder.
   - optional progress.
-- Add Queue list.
+- Add Up Next list.
 - Add empty downloaded queue template.
 - Configure `CPNowPlayingTemplate.shared` enough to show current metadata.
 - Observe app state changes and refresh templates conservatively.
 
 Important design choice:
 
-- CarPlay uses the Queue list only. Earlier Up Next/Queue separation was removed
+- CarPlay uses the Up Next list only. Earlier Up Next/Queue separation was removed
   after real-hardware testing because it added navigation without adding useful
   driver value.
 
 Gate:
 
 - Lists show downloaded queue only.
-- Empty queue shows "No downloaded episodes."
+- Empty queue uses `CPListTemplate.emptyViewTitleVariants` to show "No downloaded episodes."
 - Rows show episode title and podcast name only.
 - Artwork failure does not block row display.
 - List remains useful if only 12 items are shown.
@@ -216,9 +222,9 @@ Goal: wire CarPlay controls into existing AppState behavior.
 
 Tasks:
 
-- Queue row tap:
+- Up Next row tap:
   - open a short action page.
-- Queue action page:
+- Up Next action page:
   - Play Now: `await appState.playEpisode(episode)`.
   - Play Next: `appState.playEpisodeNext(episode)`.
   - Play Last: `appState.playEpisodeLast(episode)`.
@@ -250,7 +256,8 @@ Goal: add the chosen audio controls without opening the door to settings.
 Tasks:
 
 - Add Now Playing speed button.
-- Speed button cycles through `PlaybackPreference.speedOptions`.
+- Speed button opens a short pushed speed page rather than an action sheet.
+- The speed page shows current speed plus slower/faster rows and stays open after each adjustment.
 - If Shared Listening is off:
   - update current episode's subscription speed through `updatePlaybackSpeed(for:speed:)`.
 - If Shared Listening is on:
@@ -306,10 +313,10 @@ Tasks:
 - Keep max depth below 5.
 - Ensure Now Playing only pushes a List template above it.
 - Avoid nested action chains.
-- Make Queue action page one level only.
+- Make Up Next action page one level only.
 - Make Shared Listening speed picker one short list only.
 - Test no-current-episode states:
-  - root Queue.
+  - root Up Next.
   - empty queue.
   - Play Next with no current episode.
 
@@ -363,12 +370,14 @@ Simulator checks:
 - Launch Autohop from CarPlay home.
 - Launch while iPhone UI is already open.
 - Launch while iPhone UI is not open.
-- Current episode opens Now Playing.
-- No current episode opens Queue.
+- With the iPhone app swiped closed and a saved mid-episode position, CarPlay
+  resumes playback from that saved position after the Loading state.
+- Current episode opens Now Playing only when metadata can be projected; otherwise CarPlay falls back to Up Next instead of a blank player.
+- No current episode opens Up Next.
 - Empty queue shows calm empty state.
-- Queue action page works.
+- Up Next action page works.
 - Now Playing Archive advances.
-- Speed slower/faster dialog works.
+- Speed slower/faster page works and stays open after each adjustment.
 - Shared Listening toggle and speed list work.
 - Light and dark appearances.
 - Different screen sizes.
@@ -388,6 +397,7 @@ Gate:
 
 - No crashes.
 - No blank templates.
+- Rejected root/push/present/dismiss/pop template operations are logged.
 - No stuck spinners.
 - No unexpected audio session activation.
 - No instruction to use iPhone.
@@ -428,9 +438,9 @@ Use this order when implementation begins:
 2. Regenerate project and confirm entitlement/profile.
 3. Add CarPlay scene skeleton with Loading template.
 4. Add coordinator and readiness flow.
-5. Add row presenter and read-only Queue template.
+5. Add row presenter and read-only Up Next template.
 6. Add Now Playing template setup.
-7. Add Queue action page with Play Now, Play Next, Play Last, Archive.
+7. Add Up Next action page with Play Now, Play Next, Play Last, Archive.
 9. Add Now Playing Archive.
 10. Add slower/faster speed dialog.
 11. Add Shared Listening toggle.
@@ -475,7 +485,7 @@ The cleanest first PR should include:
 - Project capability setup.
 - CarPlay scene skeleton.
 - Loading/empty templates.
-- Read-only Queue template.
+- Read-only Up Next template.
 - No playback actions yet.
 
 This makes the riskiest platform integration reviewable before behavior gets layered on.

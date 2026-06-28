@@ -1,21 +1,22 @@
 import SwiftUI
 
-// AI CONTEXT — Views/QueueSheetView.swift ("Queue" sheet — the canonical
-// design-system reference page per DESIGN.md). Shows Up Next + the priority-
-// ordered downloaded queue from appState.downloadedQueue (overrides applied).
-// Chrome (NavRules): centered title, SheetCloseButton ✕ top-right, pull-to-
-// refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by design):
-// leading Play / Play Next, trailing Archive / Play Last. Pin badges mark
-// Play Next (blue) / Play Last (orange) overrides.
+// AI CONTEXT — Views/QueueSheetView.swift ("Up Next" sheet — labelled "Up Next"
+// in-app; the canonical design-system reference page per DESIGN.md; internal
+// struct name remains QueueSheetView). Shows Up Next + the priority-ordered
+// downloaded queue from appState.downloadedQueue (overrides applied).
+// Chrome (NavRules): centered title "Up Next", SheetCloseButton ✕ top-right,
+// pull-to-refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by
+// design): leading Play / Play Next, trailing Archive / Play Last. Pin badges
+// mark Play Next (blue) / Play Last (orange) overrides.
 // EXPANDED ROW: tapping an episode title toggles expandedEpisodeID, unclamping
 // the title and revealing the full plain-text description, plus two small purple
 // circular glass buttons at the bottom-right (matching PodcastDetailView.refreshButton):
 //   • list.bullet — navigates to PodcastDetailView for that subscription
 //   • gearshape   — navigates to SubscriptionSettingsView for that subscription
 // Both call their respective callbacks (onOpenPodcastDetail / onOpenPodcastSettings);
-// the presenter (PlayerView) dismisses this Queue sheet and presents the target
+// the presenter (PlayerView) dismisses this Up Next sheet and presents the target
 // view in its place ("replace the queue") using the staged-ID pattern so the
-// new sheet isn't presented during the Queue sheet's dismissal animation.
+// new sheet isn't presented during the Up Next sheet's dismissal animation.
 // ACTION ANIMATIONS: the List carries `.animation(value: downloadedQueue.map(\.id))`
 // so any order/membership change glides rows to their new slots. performMove
 // (Play Next/Last) fires a light haptic, pops the row + flashes a directional
@@ -273,7 +274,7 @@ struct QueueSheetView: View {
                     .sensoryFeedback(.success, trigger: archiveHapticTrigger)
                 }
             }
-            .navigationTitle("Queue")
+            .navigationTitle("Up Next")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable {
                 await refreshQueue()

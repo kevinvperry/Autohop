@@ -17,12 +17,11 @@ The first CarPlay release should support:
 
 - Now Playing.
 - Up Next.
-- A simplified Queue page.
 - Playback speed control.
 - Shared Listening on/off.
 - Shared Listening speed picker.
 - Archive current episode from the player.
-- Queue row actions: Play, Play Next, Archive.
+- Up Next row actions: Play, Play Next, Archive.
 
 The first CarPlay release should not support:
 
@@ -54,7 +53,7 @@ Relevant entitlement:
 
 Do not ship CarPlay UI until Apple grants the entitlement and the provisioning profile includes it. Once the entitlement is added, Autohop appears on the CarPlay home screen for everyone using that build; there is no per-user hiding of CarPlay.
 
-The entitlement request should describe only the audio use case: downloaded podcast playback, automatic queue continuity, Now Playing, Up Next, and minimal queue actions.
+The entitlement request should describe only the audio use case: downloaded podcast playback, automatic queue continuity, Now Playing, Up Next, and minimal actions.
 
 ## Product principles
 
@@ -131,15 +130,13 @@ Default launch behavior:
 Screens:
 
 - Now Playing: system Now Playing template.
-- Up Next: compact list of downloaded queue items. Tap plays immediately.
-- Queue: action list of downloaded queue items. Tap opens actions: Play, Play Next, Archive.
+- Up Next: downloaded queue items. Tap opens actions: Play, Play Next, Play Last, Archive.
 - Shared Listening speed picker: short list of `AppState.sharedListeningSpeedOptions`.
 
 Navigation model:
 
 - Now Playing is the primary entry when audio is available.
 - Up Next should be reachable from Now Playing using the Playing Next affordance where supported.
-- Queue should be reachable from the root surface or a simple list route.
 - The hierarchy must never exceed 5 templates.
 
 ## Text wireframes
@@ -189,35 +186,14 @@ Up Next
 Behavior:
 
 - Shows only `AppState.downloadedQueue`.
-- Tapping a row immediately plays that episode.
+- Tapping a row opens a short action page.
 - Artwork appears when available; otherwise use a placeholder.
 - Row text is episode title plus podcast name only.
 - Keep useful when limited to 12 rows.
-
-### Queue
-
-```text
-Queue
-
-[artwork] Episode title
-          Podcast name
-          subtle progress indicator, if supported
-
-Tap row:
-
-Play
-Play Next
-Archive
-Cancel
-```
-
-Behavior:
-
-- Same downloaded queue as Up Next.
-- Tapping a row opens an action sheet.
-- Play starts the episode immediately.
+- Play Now starts the episode immediately.
 - Play Next moves the episode directly after the current episode by using the existing Play Next override.
-- Archive immediately archives the episode.
+- Play Last moves the episode to the end of the queue.
+- Archive archives the episode after confirmation where required.
 - If the archived episode is currently playing, continue playback with the next downloaded queue item.
 
 ### Now Playing
@@ -272,13 +248,13 @@ Up Next row tap:
 - Call `await AppState.playEpisode(episode)`.
 - Push or present Now Playing if CarPlay does not do so automatically.
 
-Queue action sheet "Play":
+Up Next action sheet "Play":
 
 - Same behavior as Up Next.
 
 ### Play Next
 
-Queue action sheet "Play Next":
+Up Next action sheet "Play Next":
 
 - Call `AppState.playEpisodeNext(episode)`.
 - Do not start playback immediately.
@@ -287,7 +263,7 @@ Queue action sheet "Play Next":
 
 ### Archive
 
-Queue action sheet "Archive":
+Up Next action sheet "Archive":
 
 - If the selected episode is current, call `await AppState.archiveEpisodeAndPlayNext(episode)`.
 - Otherwise call `await AppState.archiveEpisode(episode)`.
@@ -396,10 +372,9 @@ Avoid:
 
 - Helper methods for creating:
   - Loading template.
-  - Empty queue template.
+  - Empty Up Next template.
   - Up Next list template.
-  - Queue list template.
-  - Queue action sheet.
+  - Up Next action sheet.
   - Shared Listening speed list.
 
 `CarPlay/CarPlayEpisodeRow.swift`
@@ -499,7 +474,7 @@ Avoid:
 
 ### Tests to add
 
-`Tests/CarPlayQueueProjectionTests.swift`
+`Tests/CarPlayBehaviorTests.swift`
 
 - Downloaded-only queue projection.
 - Empty queue state.
@@ -507,10 +482,11 @@ Avoid:
 - Progress calculation.
 - 12-item limited rendering still keeps the first queue items useful.
 
-`Tests/CarPlayActionTests.swift`
+`Tests/CarPlayBehaviorTests.swift`
 
-- Queue Play calls the same behavior as iPhone play.
-- Queue Play Next updates override IDs/order.
+- Up Next Play Now calls the same behavior as iPhone play.
+- Up Next Play Next updates override IDs/order.
+- Up Next Play Last updates demotion IDs/order.
 - Archive non-current removes the row.
 - Archive current calls archive-and-advance semantics.
 
@@ -578,7 +554,6 @@ Tasks:
 
 - Populate `CPNowPlayingTemplate.shared`.
 - Render Up Next from `AppState.downloadedQueue`.
-- Render Queue from `AppState.downloadedQueue`.
 - Show artwork with placeholder fallback.
 - Show subtle progress if supported.
 - Handle empty downloaded queue.
@@ -587,7 +562,7 @@ Exit criteria:
 
 - Now Playing appears with correct episode and podcast metadata.
 - Up Next shows downloaded queue only.
-- Queue shows the same downloaded queue.
+- Up Next shows the same downloaded queue.
 - Simulator and real hardware show useful rows with 12-item limits.
 
 ### Phase 3: Playback actions
@@ -596,16 +571,15 @@ Goal: wire safe controls into existing AppState behavior.
 
 Tasks:
 
-- Up Next row tap plays immediately.
-- Queue row tap opens action sheet.
-- Queue action sheet supports Play, Play Next, Archive.
+- Up Next row tap opens action sheet.
+- Up Next action sheet supports Play Now, Play Next, Play Last, Archive.
 - Now Playing supports Archive current episode.
 - Archive current advances to next queue item.
 
 Exit criteria:
 
 - iPhone UI and CarPlay stay in sync.
-- Queue updates immediately after Play Next and Archive.
+- Up Next updates immediately after Play Next and Archive.
 - No duplicate playback state is introduced.
 
 ### Phase 4: Speed and Shared Listening
@@ -677,24 +651,26 @@ Entitlement/review:
 Launch:
 
 - If current episode exists, CarPlay opens to Now Playing.
+- If CarPlay cold-launches Autohop from a swiped-closed state and a saved
+  mid-episode position exists, CarPlay resumes playback from that position.
 - If no current episode exists, CarPlay opens to Up Next.
 - If app is bootstrapping, CarPlay shows Loading and then resolves.
 - Empty queue shows "No downloaded episodes."
 
 Playback:
 
-- Up Next tap starts playback.
-- Queue Play starts playback.
+- Up Next Play Now starts playback.
 - Now Playing transport controls work.
 - Skip intervals match user settings through existing remote command behavior.
 
-Queue:
+Up Next:
 
-- Queue rows show episode title and podcast name.
-- Queue rows show artwork where available.
-- Queue rows show subtle progress where supported.
-- Queue actions are Play, Play Next, Archive.
+- Up Next rows show episode title and podcast name.
+- Up Next rows show artwork where available.
+- Up Next rows show subtle progress where supported.
+- Up Next actions are Play Now, Play Next, Play Last, Archive.
 - Play Next moves the item after the current episode.
+- Play Last moves the item to the end of the queue.
 - Archive removes the item immediately.
 - Archive current episode advances to next item.
 
@@ -743,7 +719,7 @@ Immediate Archive is useful while driving but can be tapped accidentally.
 
 Mitigation:
 
-- In Queue, Archive is inside an action sheet, not directly on the row.
+- In Up Next, Archive is inside an action sheet, not directly on the row.
 - On Now Playing, Archive should use a clear label/icon.
 - Ensure iPhone can still show archived state and unarchive through existing UI if needed.
 
@@ -793,8 +769,8 @@ These do not block the strategy, but should be decided during implementation:
 
 - Should the Speed button label show the next speed or current speed?
 - Should Play Next with no current episode behave as Play or show a short status?
-- Should Archive current episode be a Now Playing custom button or live only through Queue action sheet if template constraints are tight?
-- Should Up Next and Queue be separate root-level entries, or should Queue be reached from Up Next?
+- Should Archive current episode be a Now Playing custom button or live only through Up Next action sheet if template constraints are tight?
+- Should Up Next have any separate compact preview, or should the single Up Next list carry all selection and action behavior?
 - What placeholder artwork should CarPlay use: app icon, generated podcast placeholder, or monochrome Autohop mark?
 
 ## Recommended v1 route
@@ -804,8 +780,8 @@ Build the most review-safe version that still feels like Autohop:
 1. Apply for entitlement.
 2. Add CarPlay scene and coordinator.
 3. Launch into Now Playing when possible, otherwise Up Next.
-4. Render Up Next and Queue from `AppState.downloadedQueue`.
-5. Wire Play, Play Next, Archive.
+4. Render Up Next from `AppState.downloadedQueue`.
+5. Wire Play Now, Play Next, Play Last, Archive.
 6. Add Speed cycle.
 7. Add Shared Listening toggle and speed picker.
 8. Harden locked-device access.

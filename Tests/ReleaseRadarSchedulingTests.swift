@@ -12,7 +12,8 @@
 // gates) — variable-time weekday feeds classify as dailyWeekdays/Weekdays, 7-day
 // feeds as Daily, 2–4 days as multiSlot, irregular days stay Random, and weekends
 // stay out of a Mon–Fri feed's active set. And the Stage-2 window/scheduling: the
-// learned window hugs the densest publish-time mode (stragglers go to the soft tail),
+// learned window hugs the densest publish-time mode but widens when the full observed
+// spread is genuinely messy, broad safety sweeps catch out-of-window ordinary feeds,
 // recency retunes it toward recent times, and a medium-probability weekday gets light-
 // tier checks rather than full rotation or being skipped. See RELEASE_RADAR_V2.md.
 import XCTest
@@ -275,6 +276,78 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         }
         XCTAssertEqual(window.endMinuteOfDay - window.startMinuteOfDay, 60, "Tight feed should sit at the 1-hour floor")
         XCTAssertEqual(window.typicalMinuteOfDay, 9 * 60)
+    }
+
+    /// A normal weekday feed with releases spread across much of the day should still
+    /// classify as Weekdays, but its primary window should not stay razor-thin around
+    /// one mode. The wider floor plus lower confidence prevents the Radar from acting
+    /// overconfident about a messy publisher.
+    func testWideSpreadWeekdayFeedGetsBroaderWindowAndLowerConfidence() {
+        let calendar = utcCalendar()
+        let sunday = date(2024, 1, 7, 0, 0, calendar: calendar)
+        let times: [(Int, Int)] = [(8, 0), (10, 0), (13, 0), (17, 0), (21, 0)]
+        let observations = observationsOnWeekdays(
+            weeks: 8,
+            weekdays: [2, 3, 4, 5, 6],
+            times: times,
+            startSunday: sunday,
+            calendar: calendar
+        )
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: calendar)
+
+        XCTAssertEqual(profile.kind, .dailyWeekdays)
+        guard let window = profile.releaseWindow else {
+            return XCTFail("Weekday profile should carry a learned release window")
+        }
+        XCTAssertGreaterThanOrEqual(window.observedSpreadMinutes ?? 0, 8 * 60)
+        XCTAssertGreaterThanOrEqual(window.endMinuteOfDay - window.startMinuteOfDay, 4 * 60)
+        XCTAssertLessThan(profile.confidence, 0.9)
+    }
+
+    /// After the learned window has already produced an episode, a daily/weekly/multi
+    /// feed should not disappear until the next normal window. A broad safety sweep gives
+    /// messy real-world feeds a low-priority second chance without making hourly news
+    /// windows wider.
+    func testLearnedFeedGetsSafetySweepOutsideWindow() {
+        let calendar = utcCalendar()
+        let now = date(2026, 6, 23, 21, 0, calendar: calendar) // Tuesday
+        let latestPublishedAt = date(2026, 6, 23, 8, 15, calendar: calendar)
+        let lastFetched = date(2026, 6, 23, 8, 30, calendar: calendar)
+        let profile = FeedScheduleProfile(
+            kind: .dailyWeekdays,
+            confidence: 0.78,
+            observationCount: 30,
+            reliableDateCount: 30,
+            activeWeekdays: [3],
+            typicalMinuteOfDay: 8 * 60 + 30,
+            cadenceSeconds: 24 * 60 * 60,
+            releaseWindow: FeedScheduleWindow(
+                activeWeekdays: [3],
+                startMinuteOfDay: 8 * 60,
+                endMinuteOfDay: 9 * 60,
+                typicalMinuteOfDay: 8 * 60 + 30,
+                observedEpisodeCount: 30,
+                observedSpreadMinutes: 60
+            ),
+            reason: "test daily show"
+        )
+        let stats = RefreshStats(lastFetchedAt: lastFetched)
+
+        let prediction = FeedRefreshScheduling.prediction(
+            profile: profile,
+            latestPublishedAt: latestPublishedAt,
+            publishDates: [],
+            stats: stats,
+            minRecheckInterval: 5 * 60,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(prediction.state, .fallback)
+        XCTAssertLessThanOrEqual(prediction.nextDueAt, now)
+        XCTAssertEqual(prediction.recheckInterval, TimeInterval(12 * 60 * 60))
+        XCTAssertTrue(prediction.reason.localizedCaseInsensitiveContains("safety"))
     }
 
     // MARK: - Release Radar v2 — Stage 1 (cadence + active-day, no time gate)

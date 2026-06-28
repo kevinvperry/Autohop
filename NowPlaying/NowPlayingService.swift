@@ -12,6 +12,9 @@ import UIKit
 // pushes state updates on every tick/transition. Artwork loads through
 // ArtworkImageCache at a 512 pt target and is guarded by currentArtworkURL so a
 // late image fetch cannot patch the lock-screen card for the wrong episode.
+// Metadata sets the podcast title as Artist only, not Album Title too, because
+// some CarPlay head units render both fields and duplicate the subscription
+// title on the main player screen.
 
 /// Manages the lock-screen / Control Centre Now Playing card and remote controls.
 ///
@@ -120,7 +123,6 @@ final class NowPlayingService {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle:                   episode.title,
             MPMediaItemPropertyArtist:                  podcastTitle,
-            MPMediaItemPropertyAlbumTitle:              podcastTitle,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPNowPlayingInfoPropertyPlaybackRate:        isPlaying ? speed : 0.0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: speed,

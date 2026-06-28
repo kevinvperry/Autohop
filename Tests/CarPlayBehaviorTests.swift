@@ -1,7 +1,7 @@
 // AI CONTEXT - Tests/CarPlayBehaviorTests.swift
 // Coverage for CarPlay behavior that can be verified without a live CarPlay
-// runtime: queue projection, action routing decisions, speed cycling, system
-// playback-rate command routing, and Shared Listening state. SwiftPM's
+// runtime: queue projection, cold-launch resume, action routing decisions,
+// speed cycling, system playback-rate command routing, and Shared Listening state. SwiftPM's
 // AutohopCore target intentionally excludes App/CarPlay, so these tests compile
 // only in the Xcode app test target.
 import XCTest
@@ -45,6 +45,20 @@ final class CarPlayBehaviorTests: XCTestCase {
         try harness.installEpisodes([episode], downloadedIDs: [])
 
         XCTAssertTrue(CarPlayEpisodePresenter().rows(from: harness.appState).isEmpty)
+    }
+
+    func testCarPlayColdLaunchResumesRestoredEpisode() async throws {
+        let harness = try makeHarness()
+        let episode = makeEpisode(subscriptionID: harness.subscriptionID, guid: "restored", title: "Restored", duration: 300)
+        try harness.installEpisodes([episode], downloadedIDs: [episode.id])
+        harness.appState.currentPlayerEpisode = try XCTUnwrap(harness.store.episode(subscriptionID: harness.subscriptionID, episodeID: episode.id))
+        harness.appState.currentPlayerTime = 123
+
+        await harness.appState.resumePlaybackForCarPlayLaunchIfNeeded()
+
+        XCTAssertEqual(harness.playback.playedEpisodes.map(\.id), [episode.id])
+        XCTAssertEqual(try XCTUnwrap(harness.playback.lastSeek), 123, accuracy: 0.001)
+        XCTAssertTrue(harness.appState.isPlaying)
     }
 
     func testPlayNextWithoutCurrentEpisodePlaysImmediately() async throws {
@@ -308,6 +322,7 @@ private final class PlaybackSpy: PlaybackControlling {
     var videoPlayer: AVPlayer? { nil }
     var playedEpisodes: [Episode] = []
     var lastSpeed: Double?
+    var lastSeek: TimeInterval?
 
     func play(_ episode: Episode, preference: PlaybackPreference, filter: ChapterFilter) async throws {
         currentEpisode = episode
@@ -320,7 +335,7 @@ private final class PlaybackSpy: PlaybackControlling {
     func resume() { isPlaying = true }
     func skipForward(seconds: TimeInterval) {}
     func skipBackward(seconds: TimeInterval) {}
-    func seek(to seconds: TimeInterval) {}
+    func seek(to seconds: TimeInterval) { lastSeek = seconds }
     func updatePlaybackSpeed(_ speed: Double) { lastSpeed = speed }
     func updateVocalBoost(_ level: VocalBoostLevel) {}
     func updateTrimSilence(_ amount: TrimSilenceAmount) {}

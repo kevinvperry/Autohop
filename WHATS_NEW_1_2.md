@@ -6,8 +6,7 @@ Autohop now works on your car's dashboard. Connect your iPhone and Autohop appea
 
 **What you get in CarPlay:**
 - Now Playing screen with artwork, scrubber, and transport controls
-- Up Next — see what's playing after the current episode
-- Queue browser — your full downloaded queue, right on the dash
+- Up Next — your downloaded queue, right on the dash
 - Play Next, Archive, and playback speed controls
 - All actions route through your existing queue and settings — nothing gets out of sync
 

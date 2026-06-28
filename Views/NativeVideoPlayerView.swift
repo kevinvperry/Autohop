@@ -9,6 +9,19 @@ import SwiftUI
 // supportedInterfaceOrientationsFor). Orientation changes use the iOS 16+
 // scene geometry API plus setNeedsUpdateOfSupportedInterfaceOrientations() on
 // the active controller; do not reintroduce deprecated static rotation calls.
+//
+// BACKGROUND VIDEO / PIP: Two complementary mechanisms prevent AVPlayer from
+// pausing when the app resigns active during inline video playback:
+//   1. Coordinator.attachIfNeeded — establishes the parent-child UIViewController
+//      relationship (addChild/didMove) so canStartPictureInPictureAutomaticallyFromInline
+//      actually fires. SwiftUI's UIViewControllerRepresentable does NOT call addChild
+//      automatically, orphaning the controller and silently disabling auto-PiP.
+//   2. PlayerView observes scenePhase: when the scene goes .inactive during inline
+//      video playback, it increments pictureInPictureStartToken, which triggers
+//      VideoPictureInPictureHost.startIfNeeded → AVPictureInPictureController.startPictureInPicture().
+// Do not remove either mechanism — they are complementary, not redundant: (1) makes
+// the AVPlayerViewController's own auto-PiP work; (2) is the explicit fallback via
+// the PlayerLayerView-backed controller for devices / scenarios where (1) isn't enough.
 enum VideoOrientationController {
     static var supportedOrientations: UIInterfaceOrientationMask = .portrait
 
@@ -77,6 +90,8 @@ enum VideoOrientationController {
 struct NativeVideoPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
@@ -92,6 +107,39 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         if controller.player !== player {
             controller.player = player
+        }
+        // Establish the parent-child UIViewController relationship so
+        // canStartPictureInPictureAutomaticallyFromInline actually fires on background.
+        // SwiftUI's UIViewControllerRepresentable hosting does not call addChild /
+        // didMove automatically; without it the AVPlayerViewController is orphaned
+        // and iOS won't trigger auto-PiP on resign-active.
+        context.coordinator.attachIfNeeded(controller)
+    }
+
+    final class Coordinator {
+        private weak var attached: AVPlayerViewController?
+
+        func attachIfNeeded(_ controller: AVPlayerViewController) {
+            guard attached !== controller else { return }
+            guard let parent = controller.view.window?.rootViewController
+                    ?? findHostingController(for: controller.view)
+            else { return }
+            guard controller.parent == nil else {
+                attached = controller
+                return
+            }
+            parent.addChild(controller)
+            controller.didMove(toParent: parent)
+            attached = controller
+        }
+
+        private func findHostingController(for view: UIView?) -> UIViewController? {
+            var responder: UIResponder? = view
+            while let r = responder {
+                if let vc = r as? UIViewController { return vc }
+                responder = r.next
+            }
+            return nil
         }
     }
 }

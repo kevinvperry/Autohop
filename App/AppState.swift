@@ -20,7 +20,10 @@ import UIKit
 //    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
 //    cyclePlaybackSpeedForCurrentEpisode(), and setPlaybackSpeedForCurrentEpisode(_:)
 //    exist to keep CarPlay action routing thin while preserving one shared
-//    playback/queue/settings model.
+//    playback/queue/settings model. CarPlay-only cold launches use
+//    resumePlaybackForCarPlayLaunchIfNeeded() to resume the restored episode
+//    after the coordinator has installed its first Loading template; normal
+//    iPhone launch still restores into a paused state.
 //    External `podcast:chapters` are fetched AFTER play() begins (P7):
 //    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
 //    ephemeral session) so a slow endpoint never delays the first audio frame,
@@ -50,6 +53,10 @@ import UIKit
 //    mutable feed metadata on the Subscription (author + artworkURL) so changed
 //    podcast art is picked up by the shared artwork cache after the next
 //    successful refresh instead of being frozen at subscribe time.
+//    A changed latest episode is treated as a Release Radar "found new release"
+//    signal even when the episode had already been seen in history, so manual
+//    refreshes that discover out-of-window releases teach the schedule instead
+//    of only fixing the immediate feed state.
 //    IMPORTANT: keep user-initiated download/play-now paths awaitable, but do
 //    not put `await downloadEpisode` back inside the feed-refresh success path.
 //    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
@@ -81,7 +88,8 @@ import UIKit
 //    foreground poll, and background audio can keep the process alive while the
 //    UI scene is inactive. Timed/background cycles also log a feed.refreshAll.plan
 //    summary plus per-feed score/profile/prediction metadata on
-//    feed.refreshAll.itemStart when the diagnostic log is enabled. Refresh logs
+//    feed.refreshAll.itemStart when the diagnostic log is enabled, including the
+//    learned release window and observed spread when available. Refresh logs
 //    include subscriptionID + a stable feedHash alongside the title so renamed
 //    feeds remain traceable. ResourceMonitor's main-thread watchdog also calls
 //    resourceContext() only after a suspected hang, adding playback, refresh,
@@ -1214,6 +1222,40 @@ final class AppState: ObservableObject {
         logger.info("player.launch", "Loaded episode in paused state on launch", metadata: [
             "episode": episode.title
         ])
+    }
+
+    func resumePlaybackForCarPlayLaunchIfNeeded() async {
+        guard !hasHandledLaunchPlayback else { return }
+        hasHandledLaunchPlayback = true
+
+        if playbackEngine.isPlaying {
+            isPlaying = true
+            if let episode = currentPlayerEpisode,
+               let subscription = subscriptionStore.subscription(id: episode.subscriptionID) {
+                playbackEngine.updatePlaybackSpeed(effectiveSpeed(for: subscription))
+                NowPlayingService.shared.updateTime(
+                    currentTime: currentPlayerTime,
+                    isPlaying: true,
+                    speed: effectiveSpeed(for: subscription)
+                )
+            }
+            logger.info("player.carplayLaunch", "Playback already active on CarPlay launch", metadata: [
+                "episode": currentPlayerEpisode?.title ?? "none"
+            ])
+            return
+        }
+
+        if let episode = currentPlayerEpisode {
+            logger.info("player.carplayLaunch", "Resuming restored episode from CarPlay launch", metadata: [
+                "episode": episode.title,
+                "resume": "\(Int(currentPlayerTime))"
+            ])
+            if await startPlayback(episode: episode, resumeFrom: currentPlayerTime) {
+                return
+            }
+        }
+
+        logger.info("player.carplayLaunch", "No restored episode available for CarPlay launch")
     }
 
     func seek(to seconds: TimeInterval) {
@@ -2448,15 +2490,19 @@ final class AppState: ObservableObject {
                 !previouslyKnownEpisodeKeys.contains(RefreshStats.releaseObservationKey(for: episode))
                     && currentFilterSettings.evaluation(for: episode).isIncluded
             }
+            let latestChanged = oldLatestGUID != result.latestEpisode.guid
+            let latestChangedEligible = latestChanged && currentFilterSettings.evaluation(for: result.latestEpisode).isIncluded
+            let releaseSignalPublishedAt = newEligibleEpisode?.publishedAt
+                ?? (latestChangedEligible ? result.latestEpisode.publishedAt : nil)
             stats.recordFetch(
-                foundNewEpisode: newEligibleEpisode != nil,
-                publishedAt: newEligibleEpisode?.publishedAt
+                foundNewEpisode: newEligibleEpisode != nil || latestChangedEligible,
+                publishedAt: releaseSignalPublishedAt
             )
             subscriptionStore.updateRefreshStats(subscriptionID: subscription.id, stats: stats)
             let oldLatestWasDownloaded = subscription.latestEpisode?.downloadState == .downloaded
 
             if let old = subscription.latestEpisode,
-               result.latestEpisode.guid != old.guid,
+               latestChanged,
                currentPlayerEpisode?.id != old.id {
                 if old.localFileURL != nil {
                     logger.info("feed.cleanupOldLatest", "Deleting old latest episode after new feed item", metadata: refreshFeedMetadata(for: subscription, includeURL: false, extra: [
@@ -2477,7 +2523,9 @@ final class AppState: ObservableObject {
                 "oldLatest": oldLatestGUID ?? "none",
                 "newLatest": result.latestEpisode.guid,
                 "episodeCount": "\(result.episodes.count)",
-                "newlyObservedEpisodes": "\(newlyObservedEpisodes)"
+                "newlyObservedEpisodes": "\(newlyObservedEpisodes)",
+                "latestChanged": "\(latestChanged)",
+                "releaseSignal": "\(newEligibleEpisode != nil || latestChangedEligible)"
             ]))
             subscriptionStore.updateEpisodes(
                 subscriptionID: subscription.id,
@@ -3318,6 +3366,14 @@ final class AppState: ObservableObject {
             "expectedWindowEnd": refreshLogDate(candidate.prediction.expectedWindowEnd),
             "recheckIntervalSeconds": candidate.prediction.recheckInterval.map { "\(Int($0.rounded()))" } ?? "none"
         ]
+        if let window = candidate.profile.releaseWindow {
+            metadata["releaseWindow"] = String(format: "%02d:%02d-%02d:%02d",
+                                               window.startMinuteOfDay / 60, window.startMinuteOfDay % 60,
+                                               window.endMinuteOfDay / 60, window.endMinuteOfDay % 60)
+            if let observedSpread = window.observedSpreadMinutes {
+                metadata["releaseWindowObservedSpreadMinutes"] = "\(observedSpread)"
+            }
+        }
         if candidate.deferredCount > 0 {
             metadata["deferredRefreshCount"] = "\(candidate.deferredCount)"
             metadata["deferredRefreshSince"] = refreshLogDate(candidate.deferredSince)

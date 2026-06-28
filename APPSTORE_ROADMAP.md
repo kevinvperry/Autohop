@@ -72,7 +72,7 @@
 - ⬜ **D9** Create the app record (name "Autohop", primary language en, bundle ID, SKU).
 - ⬜ **D10** Category — recommended **Primary: News**, **Secondary: Entertainment** (matches how Pocket Casts/Overcast are categorized).
 - ✅ **D11** Screenshots — 6 captured on a Pro Max device at **1290×2796** (accepted in the 6.9" slot). Set: Now Playing (hero), Sleep Schedule, Audio Controls, Subscriptions/Priority, Top Shows (Stats), Discover. Recommended order: Now Playing → Sleep Schedule → Audio Controls → Subscriptions → Discover → Stats. Optional later polish: Shared Listening ON, Subscriptions from #1, Stats heatmap variant.
-- ✅ **D11a — Glass-ready app icon refresh.** Updated the master SVG (`Design/AppIcon/autohop-icon-v1.svg`) and regenerated every PNG in `Assets.xcassets/AppIcon.appiconset`. Current recipe: vivid purple Liquid Glass-ready gradient background, glass-safe lavender/white podcast bars, centred strong white skip-forward chevron, and brighter tall green fallback bar (`#2EEB73`). Exported PNGs remain opaque and square; iOS applies the mask.
+- ✅ **D11a — Glass-ready app icon refresh.** Updated the master SVG (`Design/AppIcon/autohop-icon-v1.svg`) and regenerated every PNG in `Assets.xcassets/AppIcon.appiconset`. Current recipe: vivid purple Liquid Glass-ready gradient background, waveform bar colours based on the startup splash animation (`LaunchLoadingView`) with the two tallest bars brightened for home-screen contrast, and centred strong white skip-forward chevron. Exported PNGs remain opaque and square; iOS applies the mask.
 - ✅ **D12** Listing copy drafted — Appendix 1.
 - ✅ **D13** URLs ready: Support `https://kevmarl.com/autohop/support` · Marketing `https://kevmarl.com/autohop` · Privacy `https://kevmarl.com/autohop/privacy`.
 - ✅ **D14** App Privacy answers drafted — Appendix 4 ("Data Not Collected").
@@ -216,7 +216,7 @@ ICLOUD SYNC (new in 1.1)
 Autohop can sync a user's subscriptions, priority order, queue, listening history, stats, and playback position across their own devices using CloudKit and the user's PRIVATE iCloud database (CKSyncEngine). No Autohop-operated server is involved and the developer cannot access this data; it is the user's own iCloud. Sync is optional. No account or login is added — it uses the device's existing iCloud account.
 
 CARPLAY AUDIO APP
-Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing and Queue controls for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
+Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing and Up Next controls for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
 
 PRIVACY
 Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only, and — when the user enables iCloud Sync — in their own private iCloud (CloudKit private database), never on any developer server. See the privacy manifest and https://kevmarl.com/autohop/privacy.
@@ -275,7 +275,7 @@ Autohop includes CarPlay support under the CarPlay Audio App entitlement.
 
 The CarPlay interface is audio-only and limited to safe playback controls for already downloaded podcast episodes:
 - Now Playing for the current episode.
-- Queue actions: Play Now, Play Next, Play Last, and Archive.
+- Up Next actions: Play Now, Play Next, Play Last, and Archive.
 - Playback speed adjustment using Autohop's existing presets.
 - Shared Listening toggle and Shared Listening speed picker.
 

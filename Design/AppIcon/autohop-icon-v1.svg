@@ -8,9 +8,9 @@
     Master vector source for the iOS app icon. The generated PNGs in
     Assets.xcassets/AppIcon.appiconset must be regenerated whenever this file
     changes. The mark is tuned for the iOS 26 Liquid Glass home-screen treatment:
-    vivid medium-purple glass-ready background, high-contrast lavender/white
-    podcast bars on the left, bright Spotify-green fallback bars on the right,
-    and a strong white skip-forward chevron centred between the two waveforms.
+    vivid medium-purple glass-ready background, launch-splash-matched lavender
+    podcast bars on the left, launch-splash-matched green fallback bars on the
+    right, and a strong white skip-forward chevron centred between the two waveforms.
     Keep the asset square, unmasked, and opaque when rasterizing for App Store
     and Xcode app icon slots; iOS applies the rounded mask itself.
   -->
@@ -31,10 +31,10 @@
   <rect width="1024" height="1024" fill="url(#softTopGlow)"/>
   <rect width="1024" height="1024" fill="none" stroke="#ffffff" stroke-width="6" opacity="0.16"/>
 
-  <rect x="56" y="414" width="80" height="246" rx="40" fill="#F8F4FF"/>
-  <rect x="168" y="270" width="80" height="532" rx="40" fill="#FFFFFF"/>
-  <rect x="280" y="350" width="80" height="376" rx="40" fill="#E9E1FF"/>
-  <rect x="392" y="456" width="80" height="184" rx="40" fill="#D8CCFF"/>
+  <rect x="56" y="414" width="80" height="246" rx="40" fill="#A89EE8"/>
+  <rect x="168" y="270" width="80" height="532" rx="40" fill="#D4CEFF"/>
+  <rect x="280" y="350" width="80" height="376" rx="40" fill="#B0A8ED"/>
+  <rect x="392" y="456" width="80" height="184" rx="40" fill="#998FE3"/>
 
   <path
     d="M486 326 L564 512 L486 698"
@@ -46,10 +46,10 @@
     opacity="0.92"
   />
 
-  <rect x="596" y="438" width="80" height="216" rx="40" fill="#1DB954"/>
-  <rect x="708" y="270" width="80" height="532" rx="40" fill="#2EEB73"/>
-  <rect x="820" y="366" width="80" height="344" rx="40" fill="#1DB954"/>
-  <rect x="924" y="474" width="60" height="148" rx="30" fill="#18A84A" opacity="0.78"/>
+  <rect x="596" y="438" width="80" height="216" rx="40" fill="#1CBA54"/>
+  <rect x="708" y="270" width="80" height="532" rx="40" fill="#35E879"/>
+  <rect x="820" y="366" width="80" height="344" rx="40" fill="#1CBA54"/>
+  <rect x="924" y="474" width="60" height="148" rx="30" fill="#17A84A" opacity="0.75"/>
 
   <line x1="64" y1="816" x2="960" y2="816" stroke="#3C27A5" stroke-width="4" opacity="0.42"/>
 </svg>

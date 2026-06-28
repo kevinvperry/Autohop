@@ -12,16 +12,17 @@ import UIKit
 // + minutes until the next "still listening?" prompt, icon-only when not
 // counting) appears only while in-window and pushes AppRoute.sleepSchedule;
 // icon pills switch panels (selected pill
-// expands to icon + label); queue button (right, playerActionIcon tint style,
-// icon + count) opens the Queue sheet and momentarily flashes the subscription
-// artwork of any episode newly added to the queue (2.5 s, gated on
-// isPlayerVisible). Hosts the sheets: AudioControlsSheetView
-// (speed/trim/boost), Sleep Timer, Queue, Episode Share, archive
-// confirmation, Podcast Settings (SubscriptionSettingsView), and Podcast Detail
-// (PodcastDetailView). The latter two are opened from the Queue row's expanded
-// buttons (list.bullet → Detail, gearshape → Settings) using the staged-ID
+// expands to icon + label); Up Next button (right, playerActionIcon tint style,
+// icon + count, accessibilityLabel "Up Next, N episodes") opens the Up Next
+// sheet (QueueSheetView) and momentarily flashes the subscription artwork of
+// any episode newly added to the queue (2.5 s, gated on isPlayerVisible).
+// Hosts the sheets: AudioControlsSheetView (speed/trim/boost), Sleep Timer,
+// Up Next (QueueSheetView), Episode Share, archive confirmation, Podcast
+// Settings (SubscriptionSettingsView), and Podcast Detail (PodcastDetailView).
+// The latter two are opened from the Up Next row's expanded buttons
+// (list.bullet → Detail, gearshape → Settings) using the staged-ID
 // "replace the queue" pattern: the subscriptionID is stored in
-// queueRequestedDetailID / queueRequestedSettingsID, the Queue sheet is
+// queueRequestedDetailID / queueRequestedSettingsID, the Up Next sheet is
 // dismissed, and the target sheet is presented in showQueue's onDismiss so
 // UIKit never sees two simultaneous sheet transitions. Video
 // episodes embed the AVPlayer-backed
@@ -33,6 +34,10 @@ import UIKit
 // (RSS <itunes:image> on the item), falling back to the subscription's artwork.
 // Do NOT revert this order — episode art takes precedence by design.
 // Queue flashes and queue rows use subscription artwork only (no episode art).
+// BACKGROUND VIDEO: a scenePhase observer increments pictureInPictureStartToken
+// when the scene becomes .inactive during inline video playback. This triggers
+// VideoPictureInPictureHost → startPictureInPicture() so AVPlayer doesn't pause.
+// See NativeVideoPlayerView.swift AI CONTEXT for the complementary fix (Option B).
 // All artwork goes through CachedArtworkImage with explicit target sizes;
 // HTML description images intentionally remain AsyncImage because they are feed
 // content, not canonical podcast/episode artwork.
@@ -55,6 +60,7 @@ private struct PodcastDetailRoute: Identifiable {
 
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedPanel = 0
     @State private var showMenu = false
     @State private var showQueue = false
@@ -156,6 +162,15 @@ struct PlayerView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             audioRouteName = Self.currentAudioRouteName()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // When the scene becomes inactive (home button, lock screen, app switch)
+            // during inline video playback, kick off PiP via VideoPictureInPictureHost
+            // so iOS doesn't pause the AVPlayer. Full-screen video has its own PiP
+            // path through AVPlayerViewController, so skip that case.
+            if phase == .inactive, isVideoEpisode, !showFullScreenVideo {
+                pictureInPictureStartToken += 1
+            }
         }
         .onChange(of: appState.currentEpisodeSupportsChapters) { _, supportsChapters in
             if !supportsChapters && selectedPanel == PlayerPanel.chapters.rawValue {
@@ -399,7 +414,7 @@ struct PlayerView: View {
                 .frame(height: 32)
                 .playerGlassPill()
             }
-            .accessibilityLabel("Queue, \(appState.downloadedQueue.count) episodes")
+            .accessibilityLabel("Up Next, \(appState.downloadedQueue.count) episodes")
         }
         .onChange(of: appState.downloadedQueue.map(\.id)) { oldIDs, newIDs in
             // Flash the artwork of an episode newly added to the queue.

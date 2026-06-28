@@ -6,7 +6,7 @@ Use this as the working copy when requesting the CarPlay app entitlement in Appl
 
 Audio app.
 
-Autohop is a native iOS podcast player. Its CarPlay experience should focus on playback of downloaded podcast episodes, lightweight queue navigation, Now Playing controls, and hands-free continuity while driving.
+Autohop is a native iOS podcast player. Its CarPlay experience should focus on playback of downloaded podcast episodes, lightweight Up Next navigation, Now Playing controls, and hands-free continuity while driving.
 
 The relevant entitlement key is:
 
@@ -31,7 +31,7 @@ CarPlay support would let users control that existing audio experience through t
 - Play, pause, skip back, and skip forward using the user's configured skip intervals.
 - Continue the automatic priority queue.
 - View a short Up Next list of downloaded episodes.
-- Select an already downloaded episode from the current queue.
+- Select an already downloaded episode from Up Next.
 - Access a small library view limited to subscribed podcasts with downloaded, playable episodes.
 - Support lock screen, Control Center, steering wheel, and remote transport commands through the existing audio session and Now Playing integration.
 - Keep artwork, episode title, podcast title, duration, and progress visible where supported by CarPlay templates.
@@ -77,7 +77,7 @@ The CarPlay implementation will add a CarPlay scene and use Apple's CarPlay fram
 - CarPlay UI must use supported templates for their intended purpose. Unsupported templates can trigger runtime exceptions.
 - Audio apps can use list, tab bar, grid, alert, action sheet, and now playing templates, but should keep the hierarchy shallow.
 - Audio apps are limited to a template depth of 5, including the root template.
-- Some cars dynamically limit lists to 12 items, so Autohop should be useful even when only 12 queue or podcast rows are visible.
+- Some cars dynamically limit lists to 12 items, so Autohop should be useful even when only 12 Up Next rows are visible.
 - The Now Playing template must be populated whenever CarPlay can show it, including when opened from the CarPlay home screen or navigation bar.
 - Only a list template can be pushed on top of the Now Playing template. Autohop's "Playing Next" action should therefore open a list of upcoming episodes.
 - The app icon appears on the CarPlay home screen once the entitlement is added; Autohop cannot selectively hide CarPlay from some users.
@@ -92,11 +92,9 @@ The CarPlay implementation will add a CarPlay scene and use Apple's CarPlay fram
 
 Keep the first version deliberately flat:
 
-1. Root template: tab bar or list.
+1. Root template: Now Playing when metadata is available, otherwise Up Next.
 2. Primary tab/list: Up Next, containing the current automatic downloaded queue.
-3. Secondary tab/list: Downloads or Podcasts, limited to subscribed podcasts with downloaded episodes.
-4. Now Playing: shared `CPNowPlayingTemplate`.
-5. Optional list above Now Playing: Playing Next.
+3. Now Playing: shared `CPNowPlayingTemplate`.
 
 Avoid search as a primary workflow. If search is ever added later, it should be an alternate parked/safe interaction because cars may disable keyboards while driving.
 
@@ -129,7 +127,7 @@ CarPlay support would let drivers control Autohop through the vehicle interface 
 - Screenshots or short screen recording of the iPhone Now Playing screen.
 - Screenshot or demo of the automatic queue.
 - Explanation that Autohop is a podcast/audio playback app, not a navigation, parking, vehicle-control, or messaging app.
-- Brief CarPlay mockup or bullet list showing only Now Playing, Up Next, and Downloads/Subscribed Podcasts.
+- Brief CarPlay mockup or bullet list showing only Now Playing and Up Next.
 
 ## Implementation notes after entitlement approval
 

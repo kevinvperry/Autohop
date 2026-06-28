@@ -46,11 +46,13 @@ import Foundation
 //    activeWeekdays drives scheduling, so a Mon–Fri feed never opens weekend slots.
 //    Every classified feed carries a
 //    releaseWindow sized (Stage 2) to the DENSEST publish-time mode, recency-weighted
-//    (recencyHalfLifeWeeks) — a bimodal feed gets a tight window on its main cluster,
-//    not the full range; stragglers are caught by the missed-release soft tail. Window
-//    times are DST-stable (dstStableMinutes): a UTC-stamped feed doesn't drift ±1h across
-//    daylight-saving boundaries. No clear day+cadence ⇒ random. weekdayProbabilities
-//    feeds Stage-2 watch tiers.
+//    (recencyHalfLifeWeeks), but now widened when the full observed publish spread is
+//    genuinely messy. This preserves tight hourly/rolling bulletin behaviour while
+//    stopping ordinary daily/weekly feeds from being trapped in over-narrow windows;
+//    a low-priority safety sweep catches out-of-window releases once/twice per day.
+//    Window times are DST-stable (dstStableMinutes): a UTC-stamped feed doesn't drift
+//    ±1h across daylight-saving boundaries. No clear day+cadence ⇒ random.
+//    weekdayProbabilities feeds Stage-2 watch tiers.
 //  - FeedRefreshScheduling: converts a schedule profile plus fetch stats into a
 //    FeedRefreshPrediction. Learned feeds open pre-release windows, check in high
 //    rotation during active/fresh-missed windows, expire stale missed-release
@@ -59,8 +61,9 @@ import Foundation
 //    incomplete. Daily weekday feeds deliberately start checking about 30 min
 //    before the learned release time; missed-release urgency expires after 10
 //    post-window empty checks or 8 hours so a late show does not dominate forever.
-//    Weekly feeds use the profile's learned releaseWindow (densest-mode) and close
-//    the window the moment that week's episode lands, standing down until next week.
+//    Weekly feeds use the profile's learned releaseWindow (densest-mode, adaptively
+//    widened for messy real-world feeds) and close the window the moment that week's
+//    episode lands, then fall back to low-priority safety sweeps until next week.
 //    Stage-2 watch tiers (releaseSlots): high-probability weekdays get the full window
 //    on high rotation; medium-probability days (lightTier..fullTier) get lighter slots
 //    (longer recheck, no pre-window, no missed-release escalation); low days are
@@ -278,8 +281,8 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     /// bulletins) carry too few dates to derive a cadence from the feed alone —
     /// this history fills the gap.
     public var recentPublishDates: [Date]
-    /// Longer per-episode observation history for schedule learning. Current
-    /// refresh scheduling intentionally does not read this yet.
+    /// Longer per-episode observation history for schedule learning and the
+    /// Release Radar schedule profile.
     public var releaseObservations: [FeedReleaseObservation]
 
     public static let maxRecentPublishDates = 10
@@ -462,19 +465,25 @@ public struct FeedScheduleWindow: Equatable, Codable, Sendable {
     public var endMinuteOfDay: Int
     public var typicalMinuteOfDay: Int
     public var observedEpisodeCount: Int
+    /// Full circular spread of the reliable publish times that fed this window,
+    /// before the densest-mode window was selected. Used to soften confidence and
+    /// widen non-hourly windows when the feed is genuinely messy.
+    public var observedSpreadMinutes: Int?
 
     public init(
         activeWeekdays: [Int],
         startMinuteOfDay: Int,
         endMinuteOfDay: Int,
         typicalMinuteOfDay: Int,
-        observedEpisodeCount: Int
+        observedEpisodeCount: Int,
+        observedSpreadMinutes: Int? = nil
     ) {
         self.activeWeekdays = activeWeekdays
         self.startMinuteOfDay = startMinuteOfDay
         self.endMinuteOfDay = endMinuteOfDay
         self.typicalMinuteOfDay = typicalMinuteOfDay
         self.observedEpisodeCount = observedEpisodeCount
+        self.observedSpreadMinutes = observedSpreadMinutes
     }
 }
 
@@ -492,10 +501,10 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     public var typicalMinutesOfHour: [Int]?
     public var cadenceSeconds: TimeInterval?
     public var burstWindow: FeedScheduleWindow?
-    /// Learned time-of-day window for single-slot feeds (currently weekly). Sized
-    /// from the observed (outlier-trimmed) publish-time range so produced shows
-    /// whose publish time drifts week to week still get a right-sized window rather
-    /// than the old fixed band. `nil` for feeds the profiler hasn't windowed.
+    /// Learned time-of-day window for single-slot feeds. Sized from the densest
+    /// publish-time mode, then widened when the full observed spread shows the
+    /// feed is too messy for a narrow window. `nil` for feeds the profiler hasn't
+    /// windowed.
     public var releaseWindow: FeedScheduleWindow?
     /// Release Radar v2 (Stage 1): per-weekday publish likelihood — the fraction of
     /// observed weeks the feed published on each Calendar weekday (1 = Sun … 7 = Sat).
@@ -1049,7 +1058,8 @@ public enum FeedScheduleProfiler {
         let confidence = regularCadenceConfidence(
             reliableDateCount: reliableDateCount,
             activeDays: resolvedActiveDays,
-            probabilities: probabilities
+            probabilities: probabilities,
+            releaseWindow: window
         )
         return FeedScheduleProfile(
             kind: kind,
@@ -1120,13 +1130,14 @@ public enum FeedScheduleProfiler {
         return anchoredSpread < localSpread ? anchored : local
     }
 
-    /// Release Radar v2 — Stage 2. Sizes a tight watch window around the DENSEST publish-
-    /// time mode (recency-weighted), not the full observed range. A bimodal feed (most
-    /// episodes 4–5am, some 9–11am) gets a tight 4–5am window; the stragglers are caught
-    /// by the lighter missed-release "soft tail" rather than holding a wide window open on
-    /// high rotation every day. Recent episodes are weighted more (recencyHalfLifeWeeks)
-    /// so a feed that shifts its publish time retunes within a few weeks. Episode times use
-    /// `dstStableMinutes` so a UTC-stamped feed doesn't drift ±1 h across DST.
+    /// Release Radar v2 — Stage 2. Sizes the primary watch window around the DENSEST
+    /// publish-time mode (recency-weighted), then widens the floor when the full spread
+    /// says the feed is genuinely variable. A few stragglers still stay in the missed-
+    /// release/safety-sweep tail; broad messy feeds get more room so manual refresh is
+    /// not needed just because the main cluster was too narrow. Recent episodes are
+    /// weighted more (recencyHalfLifeWeeks) so a feed that shifts its publish time retunes
+    /// within a few weeks. Episode times use `dstStableMinutes` so a UTC-stamped feed
+    /// doesn't drift ±1 h across DST.
     private static func releaseTimeWindow(
         dates: [Date],
         activeWeekdays: [Int],
@@ -1142,11 +1153,13 @@ public enum FeedScheduleProfiler {
                 startMinuteOfDay: 0,
                 endMinuteOfDay: 24 * 60 - 1,
                 typicalMinuteOfDay: 0,
-                observedEpisodeCount: 0
+                observedEpisodeCount: 0,
+                observedSpreadMinutes: nil
             )
         }
 
         let stableMinutes = dstStableMinutes(source, calendar: calendar, now: now)
+        let observedSpread = circularCluster(minutes: stableMinutes, modulo: 24 * 60).spread
         let weighted: [(minute: Int, weight: Double)] = zip(source, stableMinutes).map { date, minute in
             let ageWeeks = max(0, mostRecent.timeIntervalSince(date) / (7 * 86_400))
             return (minute, pow(0.5, ageWeeks / recencyHalfLifeWeeks))
@@ -1174,17 +1187,39 @@ public enum FeedScheduleProfiler {
             .filter { circularDistance($0, bestCenter, modulo: 24 * 60) <= modeSearchHalfWidthMinutes }
         let center = circularCluster(minutes: memberMinutes, modulo: 24 * 60).center
         let range = trimmedOffsetRange(memberMinutes, around: center, modulo: 24 * 60)
+        let modeCoverage = Double(memberMinutes.count) / Double(max(weighted.count, 1))
+        let halfWidthFloor = adaptiveWindowHalfWidth(
+            observedSpreadMinutes: observedSpread,
+            modeCoverage: modeCoverage
+        )
         let startMinute = max(0, min(center + range.low - weeklyWindowMarginMinutes,
-                                     center - weeklyMinHalfWidthMinutes))
+                                     center - halfWidthFloor))
         let endMinute = min(24 * 60 - 1, max(center + range.high + weeklyWindowMarginMinutes,
-                                             center + weeklyMinHalfWidthMinutes))
+                                             center + halfWidthFloor))
         return FeedScheduleWindow(
             activeWeekdays: activeWeekdays,
             startMinuteOfDay: startMinute,
             endMinuteOfDay: endMinute,
             typicalMinuteOfDay: center,
-            observedEpisodeCount: source.count
+            observedEpisodeCount: source.count,
+            observedSpreadMinutes: observedSpread
         )
+    }
+
+    private static func adaptiveWindowHalfWidth(
+        observedSpreadMinutes: Int,
+        modeCoverage: Double
+    ) -> Int {
+        if modeCoverage < 0.55 || (observedSpreadMinutes >= 8 * 60 && modeCoverage < 0.75) {
+            return 120
+        }
+        if modeCoverage < 0.70 || (observedSpreadMinutes >= 4 * 60 && modeCoverage < 0.80) {
+            return 90
+        }
+        if observedSpreadMinutes >= 3 * 60 && modeCoverage < 0.85 {
+            return 60
+        }
+        return weeklyMinHalfWidthMinutes
     }
 
     /// Smallest circular distance between two values modulo `modulo`.
@@ -1198,15 +1233,29 @@ public enum FeedScheduleProfiler {
     private static func regularCadenceConfidence(
         reliableDateCount: Int,
         activeDays: [Int],
-        probabilities: [Int: Double]
+        probabilities: [Int: Double],
+        releaseWindow: FeedScheduleWindow
     ) -> Double {
         let activeProbabilities = activeDays.map { probabilities[$0] ?? 0 }
         let meanActive = activeProbabilities.isEmpty
             ? 0
             : activeProbabilities.reduce(0, +) / Double(activeProbabilities.count)
-        return min(0.97, 0.55
+        let base = min(0.97, 0.55
             + 0.25 * meanActive
             + min(0.15, Double(reliableDateCount) / 200.0))
+        let windowWidth = max(1, releaseWindow.endMinuteOfDay - releaseWindow.startMinuteOfDay)
+        let observedSpread = releaseWindow.observedSpreadMinutes ?? windowWidth
+        let spreadPenalty: Double
+        if observedSpread >= 8 * 60 {
+            spreadPenalty = 0.14
+        } else if observedSpread >= 4 * 60 {
+            spreadPenalty = 0.08
+        } else if observedSpread > windowWidth * 2 {
+            spreadPenalty = 0.04
+        } else {
+            spreadPenalty = 0
+        }
+        return max(0.50, base - spreadPenalty)
     }
 
     private static func countsByWeekday(_ dates: [Date], calendar: Calendar) -> [Int: Int] {
@@ -1393,6 +1442,12 @@ public enum FeedRefreshScheduling {
     /// Recheck multiplier applied to a light-tier day's window (a fraction of the
     /// full-rotation cadence).
     private static let lightTierRecheckMultiplier = 4.0
+    /// Low-priority catch-up cadence for learned non-news feeds outside their main
+    /// window. Hourly/rolling bulletin feeds keep their tight minute slots; ordinary
+    /// daily/weekly/multi feeds get a safety net so messy publisher timestamps don't
+    /// force the user into manual refresh.
+    private static let dailySafetySweepInterval: TimeInterval = 12 * 60 * 60
+    private static let weeklySafetySweepInterval: TimeInterval = 24 * 60 * 60
 
     /// The watch tier a weekday gets for a given per-week publish probability. The single
     /// source of truth for the tier thresholds (used by scheduling and the diagnostics).
@@ -1549,7 +1604,8 @@ public enum FeedRefreshScheduling {
                 now: now,
                 continueCheckingAfterPublishUntilWindowEnd: true,
                 activeReason: "Burst release window is active; keep checking because more episodes may follow.",
-                quietReason: "Burst window already produced an episode and has closed."
+                quietReason: "Burst window already produced an episode and has closed.",
+                safetySweepInterval: dailySafetySweepInterval
             )
 
         case .dailyWeekdays:
@@ -1580,7 +1636,8 @@ public enum FeedRefreshScheduling {
                 now: now,
                 continueCheckingAfterPublishUntilWindowEnd: false,
                 activeReason: "Learned weekday release window is open.",
-                quietReason: "Expected weekday episode appears to have arrived; wait for the next learned weekday window."
+                quietReason: "Expected weekday episode appears to have arrived; wait for the next learned weekday window.",
+                safetySweepInterval: dailySafetySweepInterval
             )
 
         case .weekly:
@@ -1611,7 +1668,8 @@ public enum FeedRefreshScheduling {
                 now: now,
                 continueCheckingAfterPublishUntilWindowEnd: false,
                 activeReason: "Learned weekly release window is open.",
-                quietReason: "Expected weekly episode appears to have arrived; wait for the next learned weekly window."
+                quietReason: "Expected weekly episode appears to have arrived; wait for the next learned weekly window.",
+                safetySweepInterval: weeklySafetySweepInterval
             )
 
         case .multiSlot:
@@ -1642,7 +1700,8 @@ public enum FeedRefreshScheduling {
                 now: now,
                 continueCheckingAfterPublishUntilWindowEnd: false,
                 activeReason: "Learned multi-slot release window is open.",
-                quietReason: "Expected multi-slot episode appears to have arrived; wait for the next learned slot."
+                quietReason: "Expected multi-slot episode appears to have arrived; wait for the next learned slot.",
+                safetySweepInterval: dailySafetySweepInterval
             )
 
         case .random:
@@ -1846,7 +1905,8 @@ public enum FeedRefreshScheduling {
         now: Date,
         continueCheckingAfterPublishUntilWindowEnd: Bool,
         activeReason: String,
-        quietReason: String
+        quietReason: String,
+        safetySweepInterval: TimeInterval? = nil
     ) -> FeedRefreshPrediction {
         let orderedSlots = slots.sorted { $0.preWindowStart < $1.preWindowStart }
         guard !orderedSlots.isEmpty else {
@@ -1865,23 +1925,41 @@ public enum FeedRefreshScheduling {
 
         guard let slot = currentSlot else {
             let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
-            return FeedRefreshPrediction(
-                nextDueAt: nextDue,
-                state: .quiet,
-                profileKind: profile.kind,
+            return quietOrSafetySweepPrediction(
+                profile: profile,
+                stats: stats,
+                now: now,
+                defaultNextDue: nextDue,
                 expectedWindowStart: nextSlot?.windowStart,
                 expectedWindowEnd: nextSlot?.windowEnd,
-                reason: "Outside the learned release window; wait for the next pre-window check."
+                quietReason: "Outside the learned release window; wait for the next pre-window check.",
+                safetySweepInterval: safetySweepInterval
+            )
+        }
+
+        func quietPrediction(
+            defaultNextDue: Date,
+            expectedWindowStart: Date?,
+            expectedWindowEnd: Date?,
+            reason: String
+        ) -> FeedRefreshPrediction {
+            return quietOrSafetySweepPrediction(
+                profile: profile,
+                stats: stats,
+                now: now,
+                defaultNextDue: defaultNextDue,
+                expectedWindowStart: expectedWindowStart,
+                expectedWindowEnd: expectedWindowEnd,
+                quietReason: reason,
+                safetySweepInterval: safetySweepInterval
             )
         }
 
         let publishedInSlot = latestPublishedAt.map { $0 >= slot.windowStart } ?? false
         if publishedInSlot, !continueCheckingAfterPublishUntilWindowEnd {
             let nextDue = nextSlot?.preWindowStart ?? slot.windowEnd.addingTimeInterval(baseRecheck)
-            return FeedRefreshPrediction(
-                nextDueAt: nextDue,
-                state: .quiet,
-                profileKind: profile.kind,
+            return quietPrediction(
+                defaultNextDue: nextDue,
                 expectedWindowStart: nextSlot?.windowStart,
                 expectedWindowEnd: nextSlot?.windowEnd,
                 reason: quietReason
@@ -1917,10 +1995,8 @@ public enum FeedRefreshScheduling {
             // A light (medium-probability) day usually has no episode — don't escalate to
             // missed-release surveillance; stand down until the next learned window.
             let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
-            return FeedRefreshPrediction(
-                nextDueAt: nextDue,
-                state: .quiet,
-                profileKind: profile.kind,
+            return quietPrediction(
+                defaultNextDue: nextDue,
                 expectedWindowStart: nextSlot?.windowStart,
                 expectedWindowEnd: nextSlot?.windowEnd,
                 reason: "Light-tier day window passed; wait for the next learned window."
@@ -1929,10 +2005,8 @@ public enum FeedRefreshScheduling {
 
         if publishedInSlot {
             let nextDue = nextSlot?.preWindowStart ?? now.addingTimeInterval(baseRecheck)
-            return FeedRefreshPrediction(
-                nextDueAt: nextDue,
-                state: .quiet,
-                profileKind: profile.kind,
+            return quietPrediction(
+                defaultNextDue: nextDue,
                 expectedWindowStart: nextSlot?.windowStart,
                 expectedWindowEnd: nextSlot?.windowEnd,
                 reason: quietReason
@@ -2054,6 +2128,55 @@ public enum FeedRefreshScheduling {
             state: state,
             profileKind: profile.kind,
             recheckInterval: recheckInterval,
+            reason: reason
+        )
+    }
+
+    private static func quietOrSafetySweepPrediction(
+        profile: FeedScheduleProfile,
+        stats: RefreshStats,
+        now: Date,
+        defaultNextDue: Date,
+        expectedWindowStart: Date?,
+        expectedWindowEnd: Date?,
+        quietReason: String,
+        safetySweepInterval: TimeInterval?
+    ) -> FeedRefreshPrediction {
+        guard let safetySweepInterval else {
+            return FeedRefreshPrediction(
+                nextDueAt: defaultNextDue,
+                state: .quiet,
+                profileKind: profile.kind,
+                expectedWindowStart: expectedWindowStart,
+                expectedWindowEnd: expectedWindowEnd,
+                reason: quietReason
+            )
+        }
+
+        let safetyDue = dueFromLastFetch(stats.lastFetchedAt, interval: safetySweepInterval, now: now)
+        if safetyDue <= now {
+            return FeedRefreshPrediction(
+                nextDueAt: safetyDue,
+                state: .fallback,
+                profileKind: profile.kind,
+                expectedWindowStart: expectedWindowStart,
+                expectedWindowEnd: expectedWindowEnd,
+                recheckInterval: safetySweepInterval,
+                reason: "Broad safety sweep is due outside the learned release window."
+            )
+        }
+
+        let nextDue = min(defaultNextDue, safetyDue)
+        let reason = safetyDue < defaultNextDue
+            ? "\(quietReason) A broad safety sweep is scheduled before the next learned window."
+            : quietReason
+        return FeedRefreshPrediction(
+            nextDueAt: nextDue,
+            state: .quiet,
+            profileKind: profile.kind,
+            expectedWindowStart: expectedWindowStart,
+            expectedWindowEnd: expectedWindowEnd,
+            recheckInterval: safetyDue < defaultNextDue ? safetySweepInterval : nil,
             reason: reason
         )
     }

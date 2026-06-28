@@ -40,8 +40,9 @@ see ONBOARDING_PLAN.md. This is the one deferred piece.)*
 
 - ✅ **Glass-ready app icon refresh** — shipped as the current master icon. The icon
   now uses a vivid purple gradient tuned for the iOS 26 Liquid Glass overlay,
-  glass-safe lavender/white podcast bars, a stronger white skip-forward chevron,
-  and a more vibrant tall green fallback bar. Source of truth:
+  waveform bar colours based on the startup splash animation, the two tallest
+  bars brightened for home-screen contrast, and a stronger white skip-forward
+  chevron. Source of truth:
   `Design/AppIcon/autohop-icon-v1.svg`; generated PNGs live in
   `Assets.xcassets/AppIcon.appiconset`.
 

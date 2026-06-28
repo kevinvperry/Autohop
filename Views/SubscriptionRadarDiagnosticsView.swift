@@ -5,7 +5,8 @@ import SwiftUI
 // filter-eligible inputs Release Radar derives for ONE subscription and WHY it
 // classified the way it did, so misclassifications can be understood and smarter
 // fixes designed. Shows:
-//   • Classification — learned profile kind + confidence + reason + learned window.
+//   • Classification — learned profile kind + confidence + reason + learned window,
+//     including observed spread so widened/over-narrow Radar windows are visible.
 //   • Why-not-daily / why-not-weekly — each row mirrors a real FeedScheduleProfiler
 //     guard, with this feed's actual value vs the threshold and a pass/fail mark.
 //   • Learning signal — reliable vs total observations, date-quality breakdown,
@@ -66,7 +67,7 @@ struct SubscriptionRadarDiagnosticsView: View {
             }
             if let window = diag.profile.releaseWindow {
                 LabeledContent("Learned window") {
-                    Text("\(clock(window.startMinuteOfDay))–\(clock(window.endMinuteOfDay))")
+                    Text(windowLabel(window))
                         .foregroundStyle(.secondary).monospacedDigit()
                 }
             }
@@ -193,6 +194,14 @@ struct SubscriptionRadarDiagnosticsView: View {
 
     private func clock(_ minute: Int) -> String {
         String(format: "%02d:%02d", minute / 60, minute % 60)
+    }
+
+    private func windowLabel(_ window: FeedScheduleWindow) -> String {
+        var text = "\(clock(window.startMinuteOfDay))–\(clock(window.endMinuteOfDay))"
+        if let spread = window.observedSpreadMinutes {
+            text += " · spread \(spread) min"
+        }
+        return text
     }
 
     private func weekdayName(_ weekday: Int) -> String {

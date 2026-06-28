@@ -13,8 +13,9 @@ the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
 Section 15.1 documents Release Radar's learned scheduling, including hourly,
 rolling-bulletin, burst, daily, weekly, multi-slot, learning, unreliable-date,
 and random profiles; foreground/background caps; protected background slots for
-daily/active/missed release windows; deferred backlog draining; cancellation
-checkpoints; and diagnostic fields.
+daily/active/missed release windows; adaptive window widening for messy ordinary
+feeds; broad safety sweeps outside learned windows; deferred backlog draining;
+cancellation checkpoints; and diagnostic fields.
 Section 7/15.1 documents that feed refresh schedules auto-downloads without
 waiting for media transfer completion, including stale-download cancellation for
 rolling one-item feeds. Section 15.7 documents CloudKit type-namespaced record
@@ -26,7 +27,7 @@ flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
-entitlement scope: Now Playing, Queue, downloaded-only playback, Play Now, Play
+entitlement scope: Now Playing, Up Next, downloaded-only playback, Play Now, Play
 Next, Play Last, Archive, playback speed, and Shared Listening. CarPlay must not
 grow search, browsing, downloads, feed refresh, settings, sleep controls, stats,
 OPML, notifications, or other non-driving workflows.
@@ -51,7 +52,7 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
    - [Subscribe / Unsubscribe Button Behaviour](#23-subscribe--unsubscribe-button-behaviour)
    - [Browse Subscriptions](#24-browse-subscriptions)
    - [Recently Viewed](#25-recently-viewed)
-3. [Queue](#3-queue)
+3. [Up Next](#3-up-next)
 4. [Player](#4-player)
 5. [Audio Controls](#5-audio-controls)
    - [Playback Speed](#51-playback-speed)
@@ -247,9 +248,9 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 ---
 
-## 3. Queue
+## 3. Up Next
 
-**What it is:** A sheet view showing the current automatic playback order — all downloaded, unplayed episodes sorted by podcast priority rank, with any manual overrides applied on top.
+**What it is:** A sheet view showing the current automatic playback order — all downloaded, unplayed episodes sorted by podcast priority rank, with any manual overrides applied on top. The sheet is labelled "Up Next" in-app (was "Queue" prior to v1.3).
 
 **Manual overrides:**
 - **Play Next** (blue) — promotes an episode to the front of the queue. Inserted at position 0, ahead of all other episodes.
@@ -264,10 +265,10 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 **Pin badges:** Episodes with a Play Next or Play Last override show a pin badge above the duration — blue for Play Next, orange for Play Last.
 
 **Episode details & shortcuts:** Tapping an episode's title expands the row to reveal the full episode description. The expanded row also shows two small purple circular glass buttons in its bottom-right corner:
-- **Podcast list** (`list.bullet`) — closes the Queue and opens that podcast's **Podcast Detail** page (episode list) in its place.
-- **Podcast settings** (`gearshape`) — closes the Queue and opens that podcast's **Podcast Settings** page in its place.
+- **Podcast list** (`list.bullet`) — closes the Up Next sheet and opens that podcast's **Podcast Detail** page (episode list) in its place.
+- **Podcast settings** (`gearshape`) — closes the Up Next sheet and opens that podcast's **Podcast Settings** page in its place.
 
-Both use the same "replace the queue" pattern: the subscriptionID is staged, the Queue sheet dismisses, and the new sheet is presented in `onDismiss` so UIKit never sees two simultaneous sheet transitions.
+Both use the same "replace the queue" pattern: the subscriptionID is staged, the Up Next sheet dismisses, and the new sheet is presented in `onDismiss` so UIKit never sees two simultaneous sheet transitions.
 
 **Action animations:** Each swipe action is animated with a matched haptic (`.sensoryFeedback`) and the list reorders fluidly (a no-bounce `.smooth` spring keyed to the queue's episode order):
 - **Play Next / Play Last** — a light impact haptic; the row pops gently and flashes a directional badge at its leading edge (blue ↑ "to top" / orange ↓ "to bottom"), then the row visibly glides to its new top/bottom slot. The reorder is deferred until the swipe row finishes closing, so a neighbouring episode never appears to jump over the one being moved.
@@ -747,7 +748,7 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 Release Radar is Autohop's automatic feed-refresh system. Its job is to detect and download new podcast episodes faster than ordinary podcast apps while avoiding wasteful checks during periods when a feed is predictably quiet.
 
-**When checks run:** Autohop checks due feeds (1) on a ~30-second timer while the app is open, (2) **while you're listening with the app in the background** — audio playback keeps the app alive, so due feeds are refreshed and new episodes downloaded on the same cadence as in the foreground, (3) opportunistically via iOS Background App Refresh (`BGAppRefreshTask`), whose timing iOS controls and never guarantees, and (4) as a longer catch-up via a `BGProcessingTask` that iOS runs while the device is **charging and on Wi-Fi** (typically overnight) — a full sweep of every due feed plus downloads, so you wake up current even after a long stretch without opening the app. Newly found episodes download via a background `URLSession` that continues even if the app is later suspended. If the user has turned **Background App Refresh** off for Autohop, iOS grants *no* off-app checks at all; **Settings → Release Radar** then shows a warning with an **Open iOS Settings** link explaining this (and that force-quitting the app also stops background checks). (Background-task reliability research and the design rationale live in `BACKGROUND_REFRESH_RESEARCH.md`.) **Settings → Release Radar → Feed Refresh Schedule** (`FeedRefreshScheduleView`) shows a per-active-subscription table of when Release Radar will and won't check each feed — learned profile + confidence, current state, the recurring watch pattern, and the next concrete window — grouped by behaviour (Inactive subs excluded). Each row has a **Rebuild Prediction** button that fetches the feed's last 100 episodes' publish dates **and times** into the learner (without adding episodes to your library) to form a stronger schedule prediction; episodes skipped by Download Filters are excluded from that learner. For a weekly show this is typically enough history to size its release window from the observed publish-time spread. The page also has a toolbar **export** button that writes a shareable plain-text diagnostic of every active subscription — each show's classification, daily/weekly gate outcomes, learning signal, weekday counts, **per-weekday watch tiers** (probability → Full/Light/Skip), and recent eligible observations — so the whole picture can be exported and analysed for trends.
+**When checks run:** Autohop checks due feeds (1) on a ~30-second timer while the app is open, (2) **while you're listening with the app in the background** — audio playback keeps the app alive, so due feeds are refreshed and new episodes downloaded on the same cadence as in the foreground, (3) opportunistically via iOS Background App Refresh (`BGAppRefreshTask`), whose timing iOS controls and never guarantees, and (4) as a longer catch-up via a `BGProcessingTask` that iOS runs while the device is **charging and on Wi-Fi** (typically overnight) — a full sweep of every due feed plus downloads, so you wake up current even after a long stretch without opening the app. Newly found episodes download via a background `URLSession` that continues even if the app is later suspended. If the user has turned **Background App Refresh** off for Autohop, iOS grants *no* off-app checks at all; **Settings → Release Radar** then shows a warning with an **Open iOS Settings** link explaining this (and that force-quitting the app also stops background checks). (Background-task reliability research and the design rationale live in `BACKGROUND_REFRESH_RESEARCH.md`.) **Settings → Release Radar → Feed Refresh Schedule** (`FeedRefreshScheduleView`) shows a per-active-subscription table of when Release Radar will and won't check each feed — learned profile + confidence, current state, the recurring watch pattern, and the next concrete window — grouped by behaviour (Inactive subs excluded). Each row has a **Rebuild Prediction** button that fetches the feed's last 100 episodes' publish dates **and times** into the learner (without adding episodes to your library) to form a stronger schedule prediction; episodes skipped by Download Filters are excluded from that learner. For a weekly show this is typically enough history to size its release window from the observed publish-time spread. The page also has a toolbar **export** button that writes a shareable plain-text diagnostic of every active subscription — each show's classification, daily/weekly gate outcomes, learning signal, learned window, observed spread, weekday counts, **per-weekday watch tiers** (probability → Full/Light/Skip), and recent eligible observations — so the whole picture can be exported and analysed for trends.
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
@@ -760,7 +761,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 
 **Initial seeding:** When a new subscription is added, `SubscriptionStore` seeds release observations from the episodes already present in the fetched feed. New subscriptions then continue to be checked at the Radar sensitivity cadence until enough reliable observations exist to classify the schedule.
 
-**Schedule profiles:** `FeedScheduleProfiler` classifies each podcast into one of these profile kinds. Hourly / rolling-bulletin / burst are detected first. Everything else is classified by **Release Radar v2** on its *cadence + active-day pattern only* — publish *time of day* never gates classification, it only sizes the watch window. The profiler learns a **recency-weighted** per-weekday publish probability (recent weeks count for more, so a feed that changed its schedule — or whose older history was captured incompletely — self-corrects rather than being held back by stale data) and watches each weekday at a tier set by that probability: **high → full window on high rotation**, **medium → a lighter occasional check**, **low → skipped entirely**. So a Mon–Fri show spends nothing on the weekend, while a show that *occasionally* drops a Saturday still gets a light Saturday check. A weekly show that skips the odd week (holidays/hiatus) is still recognised as weekly via its dominant weekday's share of episodes.
+**Schedule profiles:** `FeedScheduleProfiler` classifies each podcast into one of these profile kinds. Hourly / rolling-bulletin / burst are detected first. Everything else is classified by **Release Radar v2** on its *cadence + active-day pattern only* — publish *time of day* never gates classification, it only sizes the watch window. The profiler learns a **recency-weighted** per-weekday publish probability (recent weeks count for more, so a feed that changed its schedule — or whose older history was captured incompletely — self-corrects rather than being held back by stale data) and watches each weekday at a tier set by that probability: **high → full window on high rotation**, **medium → a lighter occasional check**, **low → skipped entirely**. So a Mon–Fri show spends nothing on the weekend, while a show that *occasionally* drops a Saturday still gets a light Saturday check. A weekly show that skips the odd week (holidays/hiatus) is still recognised as weekly via its dominant weekday's share of episodes. Learned windows hug the densest publish-time cluster for tight feeds, but ordinary daily/weekly/multi feeds widen and lower confidence when their full observed spread is genuinely messy.
 
 | Profile | Meaning | Refresh behaviour |
 |---|---|---|
@@ -781,11 +782,11 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | `hourly` | 3 minutes before the learned minute. | 2 minutes before to 15 minutes after the learned minute. |
 | `rollingBulletin` | 3 minutes before each learned minute-of-hour slot. | 2 minutes before to 15 minutes after each learned slot. |
 | `burst` | 10 minutes before the learned burst start. | Learned burst start through learned burst end + 30 minutes. |
-| `dailyWeekdays` | 20 minutes before the learned window start, on each active weekday. | The learned `releaseWindow` — a tight window around the **densest** publish-time mode (recency-weighted), repeated on every active weekday. Falls back to typical − 10 min … + 75 min if unwindowed. |
-| `weekly` | 20 minutes before the learned window start. | The learned `releaseWindow` — a tight window hugging the densest publish-time cluster (recency-weighted, +20 min margin, 1-hour floor), **not** the full range; stragglers outside it are caught by the lighter missed-release "soft tail". Falls back to typical − 10 min … + 120 min if unwindowed. Closes early the moment that week's episode arrives. |
-| `multiSlot` | 10 minutes before the learned window start, on each active day. | The learned `releaseWindow` (densest mode), repeated on each active day; falls back to typical − 5 min … + 60 min if unwindowed. |
+| `dailyWeekdays` | 20 minutes before the learned window start, on each active weekday. | The learned `releaseWindow` — a window around the **densest** publish-time mode (recency-weighted), adaptively widened when the full observed spread is messy, repeated on every active weekday. Falls back to typical − 10 min … + 75 min if unwindowed. |
+| `weekly` | 20 minutes before the learned window start. | The learned `releaseWindow` — a window hugging the densest publish-time cluster (recency-weighted, +20 min margin, 1-hour floor), widened when the observed spread is broad; stragglers outside it are caught by missed-release and safety-sweep checks. Falls back to typical − 10 min … + 120 min if unwindowed. Closes early the moment that week's episode arrives. |
+| `multiSlot` | 10 minutes before the learned window start, on each active day. | The learned `releaseWindow` (densest mode, adaptively widened for messy feeds), repeated on each active day; falls back to typical − 5 min … + 60 min if unwindowed. |
 
-If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. This prevents one late episode from being missed while avoiding indefinite high-frequency polling.
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. Learned non-news profiles also get broad low-priority safety sweeps outside their main window (about twice daily for daily/multi/burst feeds and once daily for weekly feeds). This prevents one late or out-of-window episode from being missed while avoiding indefinite high-frequency polling.
 
 **One-item hourly and rolling bulletin feeds:** Feeds that publish frequently but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, a stable single-minute feed can be profiled as `hourly`, while mixed-cadence bulletin feeds can be profiled as `rollingBulletin` when they repeatedly use predictable minute marks such as `:00` and `:30`. This covers feeds that publish hourly most of the day but every half hour during a morning news block, so they receive real release windows instead of being ranked as random surveillance. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
@@ -809,7 +810,7 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 **Individual manual refresh:** An Inactive podcast can still be refreshed from its own Podcast Detail page. If that individual refresh finds a new latest episode, Autohop schedules the normal auto-download and may send a new-episode notification when both notification toggles are enabled.
 
-**Diagnostics:** When diagnostic logging is enabled, every all-feed cycle carries a `refreshCycleID`, `refreshReason`, `trigger` (`manualButton`, `foregroundTimer`, `BGAppRefreshTask`), and `executionContext` (`manual`, `foregroundVisible`, `backgroundRefreshTask`, `backgroundAudioAlive`). Timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. `background.refreshRequested`, `feed.foregroundPollDue`, `background.nextDue`, `background.schedule`, and `background.scheduleSkipped` distinguish true BGAppRefreshTask wakes, foreground catch-up, requested-vs-effective iOS wake timing, and already-pending requests. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. `feed.autoDownloadScheduled`, `feed.autoDownloadStart`, and `feed.autoDownloadSkipped` trace the post-refresh media scheduling path. These logs are the primary tuning surface for Release Radar.
+**Diagnostics:** When diagnostic logging is enabled, every all-feed cycle carries a `refreshCycleID`, `refreshReason`, `trigger` (`manualButton`, `foregroundTimer`, `BGAppRefreshTask`), and `executionContext` (`manual`, `foregroundVisible`, `backgroundRefreshTask`, `backgroundAudioAlive`). Timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, learned release window, observed spread, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. Individual refresh merges log `latestChanged` and `releaseSignal` so manual refreshes that find out-of-window latest episodes can be confirmed as Radar learning signals. `background.refreshRequested`, `feed.foregroundPollDue`, `background.nextDue`, `background.schedule`, and `background.scheduleSkipped` distinguish true BGAppRefreshTask wakes, foreground catch-up, requested-vs-effective iOS wake timing, and already-pending requests. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. `feed.autoDownloadScheduled`, `feed.autoDownloadStart`, and `feed.autoDownloadSkipped` trace the post-refresh media scheduling path. These logs are the primary tuning surface for Release Radar.
 
 **Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
@@ -1162,13 +1163,13 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 **What it is:** A native CarPlay Audio App surface for Autohop's existing downloaded playback queue. CarPlay is another UI over the same `AppState`, queue, playback engine, archive behavior, speed preferences, and Shared Listening state used by the iPhone app.
 
 **Entry behavior:**
-- If an episode is currently loaded, CarPlay opens to **Now Playing**.
-- If no episode is currently loaded, CarPlay opens to **Queue**.
-- During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Queue.
+- If an episode is currently loaded and valid metadata is available, CarPlay opens to **Now Playing**.
+- If no episode is currently loaded, or cold-launch metadata is not ready, CarPlay opens to **Up Next** instead of a blank player.
+- During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Up Next.
 
 **Screens:**
-- **Now Playing** — current episode metadata, artwork when available, system playback controls, Archive, speed cycling, Shared Listening toggle, and Shared Listening speed picker.
-- **Queue** — downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions.
+- **Now Playing** — current episode metadata, artwork when available, system playback controls, Archive, a persistent speed adjustment page, Shared Listening toggle, and Shared Listening speed picker.
+- **Up Next** — downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions.
 
 **Downloaded-only rule:** CarPlay reads from `AppState.downloadedQueue` only. It does not search, browse podcasts, refresh feeds, start downloads, stream episodes, or expose subscription management.
 
@@ -1177,7 +1178,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 - **Play Next** moves the selected episode directly after the currently playing episode, matching iPhone behavior. If there is no current episode, Play Next behaves as Play.
 - **Play Last** moves the selected episode to the end of the queue, matching iPhone behavior.
 - **Archive** removes the selected episode from the queue. Archiving the current episode advances to the next downloaded queue item when one exists; otherwise Now Playing is cleared and the empty queue state is shown.
-- **Playback Speed** opens a slower/faster dialog using Autohop's existing preset speeds and the current episode's podcast settings as the base.
+- **Playback Speed** opens a slower/faster page using Autohop's existing preset speeds and the current episode's podcast settings as the base. The page stays open after each adjustment.
 - **Shared Listening** controls the same global temporary override as iPhone. Disconnecting CarPlay does not change the Shared Listening state.
 
 **Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.
