@@ -63,24 +63,30 @@ The Discover page now has two full chart pages you can dive into.
 
 ---
 
-## Queue Animations
+## Up Next Animations
 
-Swipe actions in the Queue now have clear, satisfying animations that show exactly what's happening:
+Swipe actions in the Up Next sheet now have clear, satisfying animations that show exactly what's happening:
 
-- **Play Next / Play Last** — a directional badge flashes at the leading edge (blue arrow up / orange arrow down) and the row visibly glides to the top or bottom of the queue
+- **Play Next / Play Last** — a directional badge flashes at the leading edge (blue arrow up / orange arrow down) and the row visibly glides to the top or bottom of the list
 - **Archive** — the row slides toward the right while shrinking and fading, with a purple archive-box badge appearing as it goes, then the gap closes cleanly behind it
 - All actions include a matched haptic so the gesture feels physical
 
 ---
 
-## Queue Shortcuts
+## Up Next Shortcuts
 
-Expanding an episode row in the Queue now shows two shortcut buttons in the bottom corner:
+Expanding an episode row in Up Next now shows two shortcut buttons in the bottom corner:
 
 - **Podcast list** — jumps straight to that show's episode list
 - **Settings** — jumps straight to that podcast's settings
 
-Both close the Queue and open the target page in its place, so you're never more than a tap away from adjusting a show's settings mid-queue.
+Both close Up Next and open the target page in its place, so you're never more than a tap away from adjusting a show's settings mid-session.
+
+---
+
+## Renamed: Queue → Up Next
+
+The playback queue sheet is now called **Up Next** throughout the app and in CarPlay, replacing the previous "Queue" label. Everything works the same way — the name better describes what the sheet actually shows.
 
 ---
 
@@ -128,6 +134,7 @@ The main player view now shows the episode's own artwork when the podcast provid
 
 ## Stability & Bug Fixes
 
+- Fixed video episodes pausing when navigating away from the app or locking the screen — video now transitions to Picture in Picture automatically to keep playback running
 - Fixed AirPods and speaker handover causing playback to pause unexpectedly when switching audio routes
 - Fixed iCloud sync not correctly restoring per-podcast settings after a CloudKit migration
 - Fixed Inactive podcasts appearing as unsubscribed in Search, Discover, and episode routing
