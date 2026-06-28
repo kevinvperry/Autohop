@@ -195,44 +195,39 @@ Autohop is open source under the MIT License, with two audio-engine files used u
 ## Appendix 2 — App Review notes (draft)
 
 ```
-No account or login is required to use Autohop — open the app and all features are available.
+No account or login is required — open the app and all features are available.
 
 WHAT IT DOES
-Autohop is a download-first podcast player. Users subscribe to public RSS podcast feeds (or browse Apple's public Podcasts charts), rank their shows, and Autohop builds and plays an automatic queue.
+Autohop is a download-first podcast player. Users subscribe to public RSS feeds (or browse Apple's public Podcasts charts), rank their shows, and Autohop builds and plays an automatic queue.
 
 BACKGROUND MODES
-- audio: AVAudioSession keeps podcast playback alive when the screen locks.
-- fetch (BGAppRefreshTask "com.autohop.feedrefresh"): periodically checks subscribed feeds for new episodes.
-- processing (BGProcessingTask "com.autohop.feedprocessing"): a longer feed catch-up that runs only while charging and on Wi-Fi (typically overnight), to refresh feeds and download new episodes when the app hasn't been opened in a while. No user data is collected or transmitted beyond fetching the user's own podcast feeds.
-- remote-notification: receives CloudKit (CKSyncEngine) silent change pushes for the optional iCloud Sync feature (see below).
+- audio: AVAudioSession keeps playback alive when the screen locks.
+- fetch (BGAppRefreshTask "com.autohop.feedrefresh"): checks subscribed feeds for new episodes.
+- processing (BGProcessingTask "com.autohop.feedprocessing"): longer feed catch-up while charging on Wi-Fi overnight. No user data collected beyond fetching the user's own podcast feeds.
+- remote-notification: receives CloudKit silent pushes for optional iCloud Sync.
 
 APP TRANSPORT SECURITY
-NSAllowsArbitraryLoads is enabled because podcast feeds, episode audio/video enclosures, and artwork are served from arbitrary third-party hosts chosen by the user (and by Apple's public chart feeds). Many podcast hosts still serve plain HTTP, and the set of hosts is unbounded and unknown at build time, so per-domain exceptions are not possible. Autohop adds no first-party HTTP endpoints and operates no server of its own.
+NSAllowsArbitraryLoads is enabled because feeds, enclosures, and artwork come from unbounded, user-supplied third-party hosts (many HTTP-only). Per-domain exceptions are not viable. Autohop has no first-party server.
 
 TIME SENSITIVE NOTIFICATIONS
-The optional "Sleep Schedule" feature posts a local, time-sensitive notification ("Are you still listening?") with a "Still Listening" action so a user can confirm from the lock screen without unlocking. It is generated entirely on-device; APNs is not used.
+Sleep Schedule posts a local time-sensitive notification ("Are you still listening?") with a lock-screen action. Generated entirely on-device; APNs not used.
 
-ICLOUD SYNC (new in 1.1)
-Autohop can sync a user's subscriptions, priority order, queue, listening history, stats, and playback position across their own devices using CloudKit and the user's PRIVATE iCloud database (CKSyncEngine). No Autohop-operated server is involved and the developer cannot access this data; it is the user's own iCloud. Sync is optional. No account or login is added — it uses the device's existing iCloud account.
+ICLOUD SYNC
+Optional. Syncs subscriptions, queue, history, and playback position via the user's private CloudKit database. No Autohop server involved; developer cannot access this data.
 
 CARPLAY AUDIO APP
-Autohop includes CarPlay support under the CarPlay Audio App entitlement. The CarPlay interface is audio-only and limited to Now Playing and Up Next controls for already downloaded podcast episodes. CarPlay uses the same queue and playback state as the iPhone app. It does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, settings, Sleep Schedule, notifications, stats, OPML, sharing, diagnostics, or any text-entry workflows.
+CarPlay interface is audio-only: Now Playing and Up Next controls for downloaded episodes only. No search, browsing, feed refresh, downloads, streaming, settings, notifications, stats, OPML, or text entry.
 
-PRIVACY
-Autohop collects no data and contains no analytics, advertising, or tracking SDKs. All user data (subscriptions, playback position, listening history, stats, settings) is stored on-device only, and — when the user enables iCloud Sync — in their own private iCloud (CloudKit private database), never on any developer server. See the privacy manifest and https://kevmarl.com/autohop/privacy.
-
-HOW TO TEST SLEEP SCHEDULE QUICKLY
-Menu (☰) → Sleep Schedule → enable, set the active-hours window to cover the current time, set "Ask Every" to the shortest interval, then play any downloaded episode and wait for the prompt.
+HOW TO TEST SLEEP SCHEDULE
+Menu → Sleep Schedule → enable, set active hours to cover now, set Ask Every to shortest interval, play any downloaded episode.
 
 OPEN SOURCE
-Four audio/sync files (SilenceDetector.swift, SilenceGapAccounting.swift, PlaybackEngine.swift, Synced.swift) are derived from Pocket Casts for iOS under MPL-2.0; see in-app Settings → Open Source Acknowledgements.
+Four files derived from Pocket Casts for iOS under MPL-2.0: SilenceDetector.swift, SilenceGapAccounting.swift, PlaybackEngine.swift, Synced.swift. See Settings → Open Source Acknowledgements.
 
-CONTENT SOURCES — NOTE FOR REVIEW (re: Guideline 5.2.3)
-Version 1.1 was initially flagged under Guideline 5.2.3 and approved after the following clarification, included here to assist this review.
+CONTENT SOURCES (re: Guideline 5.2.3)
+Version 1.1 was flagged under 5.2.3 and approved after this clarification, included to assist this review.
 
-Autohop is a podcast player. It plays podcasts that their publishers distribute as open RSS feeds — the public, open standard that underpins podcasting and is expressly intended for playback by any third-party podcast app (the same model as Apple Podcasts, Overcast, Pocket Casts, and Castro). All audio and video is streamed or downloaded directly from each publisher's own server, using the enclosure URL the publisher declares in their public RSS feed. The show titles and artwork shown are likewise each podcast's own publicly available feed metadata. Autohop accesses no DRM-protected, login-gated, or proprietary streaming catalog, and it hosts, long-term caches, or redistributes nothing.
-
-To help users find shows, Autohop uses Apple's publicly available podcast directory only to locate publicly listed podcast RSS feeds. It does not reproduce a proprietary catalog — it points users to publishers' own public feeds, which are then read directly. By the nature of that directory, a podcast listed in Apple Podcasts is a public RSS feed made discoverable for open consumption.
+Autohop plays podcasts distributed as open RSS feeds — the public standard intended for playback by any third-party app (same model as Apple Podcasts, Overcast, Pocket Casts). Audio and video is downloaded directly from each publisher's own server using the enclosure URL they declare in their feed. Autohop accesses no DRM-protected or login-gated content and redistributes nothing. It uses Apple's public podcast directory only to locate public RSS feeds — it does not reproduce a proprietary catalog.
 ```
 
 ---
