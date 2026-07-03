@@ -30,6 +30,9 @@ import UniformTypeIdentifiers
 // (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
+    /// Progress ticks publish on this dedicated model (not AppState) — reading
+    /// appState.downloadProgress in body would render stale.
+    @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @State private var editMode: EditMode = .inactive
     @State private var isRefreshingAll = false
     @State private var showMenu = false
@@ -377,7 +380,7 @@ struct PodcastsView: View {
                 .padding(.top, 3)
 
                 if episode.downloadState == .downloading,
-                   let progress = appState.downloadProgress[episode.id] {
+                   let progress = downloadProgressModel.progress[episode.id] {
                     ProgressView(value: progress, total: 1.0)
                         .tint(.purple)
                         .animation(.linear(duration: 0.3), value: progress)

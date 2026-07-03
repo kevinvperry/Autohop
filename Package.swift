@@ -91,6 +91,7 @@ let package = Package(
                 "Persistence/CloudSyncEngine.swift",
                 "Persistence/ListeningStatsStore.swift",
                 "Persistence/AutoDownloadIntentStore.swift",
+                "Persistence/PlaybackPositionStore.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift"
             ]

@@ -11,6 +11,9 @@ import SwiftUI
 // progress and the downloaded transition drive the UI reactively.
 struct FirstSubscribeCard: View {
     @EnvironmentObject private var appState: AppState
+    /// Progress ticks publish on this dedicated model (not AppState) — reading
+    /// appState.downloadProgress in body would render stale.
+    @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @Environment(\.dismiss) private var dismiss
     let subscriptionID: UUID
 
@@ -30,7 +33,7 @@ struct FirstSubscribeCard: View {
     private var isDownloaded: Bool { latestEpisode?.downloadState == .downloaded }
     private var progress: Double? {
         guard let id = latestEpisode?.id else { return nil }
-        return appState.downloadProgress[id]
+        return downloadProgressModel.progress[id]
     }
 
     var body: some View {

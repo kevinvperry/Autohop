@@ -979,6 +979,9 @@ struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID
     @EnvironmentObject private var appState: AppState
+    /// Progress ticks publish on this dedicated model (not AppState) — reading
+    /// appState.downloadProgress in body would render stale.
+    @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @Environment(\.dismiss) private var dismiss
     @State private var showShareSheet = false
     @State private var showExpandedArtwork = false
@@ -1146,7 +1149,7 @@ struct EpisodeDetailView: View {
 
             }
 
-            if isDownloading, let progress = appState.downloadProgress[ep.id] {
+            if isDownloading, let progress = downloadProgressModel.progress[ep.id] {
                 ProgressView(value: progress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: progress)

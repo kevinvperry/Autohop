@@ -42,6 +42,10 @@ private struct AutohopRootBootstrapView: View {
                     // 2 Hz playback tick — observed only by the scrubber/mini-player
                     // surfaces (PERF-1), so the tick no longer wakes AppState observers.
                     .environmentObject(appState.playbackClock)
+                    // Per-episode download progress — observed only by the
+                    // episode-row/first-subscribe surfaces that render it, so
+                    // progress ticks no longer wake AppState observers.
+                    .environmentObject(appState.downloadProgressModel)
                     .task {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }

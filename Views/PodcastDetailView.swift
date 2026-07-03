@@ -48,6 +48,9 @@ import SwiftUI
 
 struct PodcastDetailView: View {
     @EnvironmentObject private var appState: AppState
+    /// Progress ticks publish on this dedicated model (not AppState) — reading
+    /// appState.downloadProgress in body would render stale.
+    @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.displayScale) private var displayScale
 
@@ -691,7 +694,7 @@ struct PodcastDetailView: View {
             }
 
             if episode.downloadState == .downloading,
-               let progress = appState.downloadProgress[episode.id] {
+               let progress = downloadProgressModel.progress[episode.id] {
                 ProgressView(value: progress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: progress)

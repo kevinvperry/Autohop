@@ -17,6 +17,10 @@ import UIKit
 // releaseRadarProfile(for:) is memoized per subscription (PERF-2 — fingerprint-
 // validated cache + off-main cold-launch warm-up via warmReleaseRadarProfileCache),
 // so the 30 s due-feed poll no longer rebuilds every profile on the main thread.
+// Download progress lives on the dedicated DownloadProgressModel observable
+// (2026-07-04, same pattern as PlaybackClock): AppState.downloadProgress is a
+// proxy; only progress-rendering surfaces observe the model, so ≥1% progress
+// steps no longer invalidate every AppState observer during active downloads.
 // RESPONSIBILITIES:
 //  - Player state: currentPlayerEpisode / currentPlayerTime / isPlaying;
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
@@ -125,13 +129,12 @@ import UIKit
 //    state only — .failed and .notDownloaded states do not consume a slot.
 //    This prevents a failed download from causing a working downloaded episode
 //    to be archived behind it.
-//  - Persistence side: playback positions held in an authoritative in-memory
-//    cache (savedPositionsCache, P2) loaded once and mutated through the
-//    writeSavedPositions(_:) write-through helper — reads (savedPlaybackTime,
-//    restorePlaybackPosition) never re-read/re-decode the file; writes stay
-//    immediate (savePlaybackPosition throttled ~10 s) to playback-position.json,
-//    keyed by subscription-scoped episode GUID/URL so re-fetched episodes resume
-//    correctly without colliding across feeds.
+//  - Persistence side: playback positions live in
+//    Persistence/PlaybackPositionStore.swift (AppState-split first carve, in
+//    AutohopCore + headless-tested): write-through in-memory cache (P2),
+//    subscription-scoped GUID/URL keys, resume normalization, legacy decode.
+//    AppState keeps same-named thin wrappers (savePlaybackPosition /
+//    savedPlaybackTime / clearPlaybackPosition) and the ~10 s tick throttle.
 //    Listening history + stats recorded on playback ticks (recordProgress only
 //    accrues time; played/archived status transitions go through mark()).
 //  - OPML import/export with progress reporting.
@@ -190,6 +193,22 @@ final class PlaybackClock: ObservableObject {
     @Published var time: TimeInterval = 0
 }
 
+/// Dedicated per-episode download-progress publisher (2026-07-04, deep-scan
+/// "reduce broad SwiftUI invalidations" — same targeted pattern as PlaybackClock).
+/// `downloadProgress` used to be `@Published` directly on AppState, so every ≥1%
+/// progress step of every active download (1–3 publishes/sec with concurrent
+/// transfers) invalidated EVERY AppState observer. Only the surfaces that render
+/// per-episode progress observe this object (episode rows in PodcastsView /
+/// PodcastDetailView / EpisodeDetailView, FirstSubscribeCard; DownloadsView reads
+/// DownloadActivityStore instead). AppState.downloadProgress remains the
+/// canonical accessor — it proxies here, so all existing read/write sites behave
+/// unchanged. Injected into the environment at the app root (AutohopApp).
+@MainActor
+final class DownloadProgressModel: ObservableObject {
+    /// Fraction complete (0.0 – 1.0) keyed by episode UUID.
+    @Published var progress: [UUID: Double] = [:]
+}
+
 @MainActor
 final class AppState: ObservableObject {
     let feedService: FeedServicing
@@ -236,8 +255,15 @@ final class AppState: ObservableObject {
         didSet { invalidateDownloadedQueueCache() }
     }
 
-    // Per-episode download progress (0.0 – 1.0)
-    @Published var downloadProgress: [UUID: Double] = [:]
+    /// Per-episode download progress (0.0 – 1.0) lives on its own observable so
+    /// progress ticks don't invalidate every AppState observer; this proxy keeps
+    /// all existing call sites working. Views that RENDER progress must observe
+    /// `downloadProgressModel` instead (reading this proxy in body renders stale).
+    let downloadProgressModel = DownloadProgressModel()
+    var downloadProgress: [UUID: Double] {
+        get { downloadProgressModel.progress }
+        set { downloadProgressModel.progress = newValue }
+    }
     // Onboarding coach mark currently on screen (nil = none). See OnboardingTip.
     @Published var activeTip: OnboardingTip?
     // Transient onboarding confirmation toast (e.g. after an import). Auto-cleared
@@ -284,15 +310,6 @@ final class AppState: ObservableObject {
     private let networkMonitor = NWPathMonitor()
     private var latestNetworkPath: NWPath?
 
-    // Persisted position file
-    private static let positionFileURL: URL? = {
-        guard let appSupport = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true
-        ) else { return nil }
-        return appSupport.appendingPathComponent("Autohop/playback-position.json")
-    }()
-
     // Persisted queue pin file
     private static let queuePinsFileURL: URL? = {
         guard let appSupport = try? FileManager.default.url(
@@ -307,24 +324,11 @@ final class AppState: ObservableObject {
         var demotedIDs: [UUID]
     }
 
-    private struct SavedPosition: Codable {
-        var episodeID: UUID
-        var subscriptionID: UUID
-        var episodeKey: String?
-        var timeSeconds: TimeInterval
-        var updatedAt: Date?
-    }
-
-    private typealias SavedPositions = [String: SavedPosition]
-
-    /// Authoritative in-memory copy of the saved playback positions (P2). Loaded
-    /// from disk once on first access and kept the source of truth thereafter, so
-    /// repeated reads (e.g. `savedPlaybackTime` called in a loop over the queue
-    /// during `playNextEpisode`/`restorePlaybackPosition`) never re-read+re-decode
-    /// the whole positions file. Mutators update this and write through to disk.
-    /// `nil` = not yet loaded. AppState is `@MainActor` and the sole owner of the
-    /// positions file, so this never goes stale behind our back.
-    private var savedPositionsCache: SavedPositions?
+    /// Playback-position persistence (file + cache + key/normalization rules),
+    /// extracted to Persistence/PlaybackPositionStore.swift (AppState-split
+    /// first carve). AppState keeps same-named thin wrappers below; the 10 s
+    /// tick write-throttle (positionSaveCounter) stays here.
+    private let playbackPositionStore = PlaybackPositionStore()
 
     // Throttle disk writes: save at most once every 10 s.
     private var positionSaveCounter = 0
@@ -4158,27 +4162,10 @@ final class AppState: ObservableObject {
     }
 
     private func savePlaybackPosition() {
-        guard let episode = currentPlayerEpisode,
-              currentPlayerTime > 0,
-              Self.positionFileURL != nil
-        else { return }
-        guard normalizedResumeTime(currentPlayerTime, duration: episode.durationSeconds) > 0 else {
-            clearPlaybackPosition(for: episode)
-            return
-        }
-
-        let episodeKey = playbackPositionKey(for: episode)
-        let position = SavedPosition(
-            episodeID: episode.id,
-            subscriptionID: episode.subscriptionID,
-            episodeKey: episodeKey,
-            timeSeconds: currentPlayerTime,
-            updatedAt: Date()
-        )
-        var positions = savedPositions()
-        positions[episodeKey] = position
-        positions.removeValue(forKey: episode.id.uuidString)
-        writeSavedPositions(positions)
+        guard let episode = currentPlayerEpisode, currentPlayerTime > 0 else { return }
+        // The store clears the position instead when the time normalizes to 0
+        // (finished/near-end), matching the historical behavior.
+        playbackPositionStore.save(episode: episode, timeSeconds: currentPlayerTime)
     }
 
     func persistCurrentPlaybackPosition() {
@@ -4218,29 +4205,9 @@ final class AppState: ObservableObject {
     }
 
     private func restorePlaybackPosition() {
-        let positions = savedPositions()
-        guard let restored = downloadedQueue
-            .compactMap({ episode -> (Episode, SavedPosition)? in
-                let saved = positions[playbackPositionKey(for: episode)]
-                    ?? positions[episode.id.uuidString]
-                guard let saved else { return nil }
-                return (episode, saved)
-            })
-            .max(by: { lhs, rhs in
-                switch (lhs.1.updatedAt, rhs.1.updatedAt) {
-                case let (left?, right?):
-                    return left < right
-                case (nil, _?):
-                    return true
-                case (_?, nil):
-                    return false
-                case (nil, nil):
-                    return lhs.1.timeSeconds < rhs.1.timeSeconds
-                }
-            })
-        else { return }
-        let episode = restored.0
-        let saved = restored.1
+        guard let restored = playbackPositionStore.bestRestoreCandidate(in: downloadedQueue) else { return }
+        let episode = restored.episode
+        let saved = restored.position
 
         // Only restore if the episode is still downloaded.
         guard let sub = subscriptionStore.subscription(id: episode.subscriptionID),
@@ -4266,91 +4233,23 @@ final class AppState: ObservableObject {
         ])
     }
 
+    // Thin delegations into PlaybackPositionStore (AppState-split first carve) —
+    // same names as the historical private helpers so playback call sites are
+    // unchanged. All key/normalization/cache/disk logic lives in the store.
     private func savedPlaybackTime(for episode: Episode) -> TimeInterval {
-        let positions = savedPositions()
-        guard let position = positions[playbackPositionKey(for: episode)] ?? positions[episode.id.uuidString],
-              position.subscriptionID == episode.subscriptionID
-        else { return 0 }
-        return normalizedResumeTime(position.timeSeconds, duration: episode.durationSeconds)
-    }
-
-    /// Returns the saved positions, loading from disk once and caching the result.
-    private func savedPositions() -> SavedPositions {
-        if let cached = savedPositionsCache { return cached }
-        let loaded = loadSavedPositionsFromDisk()
-        savedPositionsCache = loaded
-        return loaded
-    }
-
-    private func loadSavedPositionsFromDisk() -> SavedPositions {
-        guard let url = Self.positionFileURL,
-              FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url)
-        else { return [:] }
-
-        LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: url)
-        if let positions = try? JSONDecoder().decode(SavedPositions.self, from: data) {
-            return positions
-        }
-
-        if let legacyPositions = try? JSONDecoder().decode([UUID: SavedPosition].self, from: data) {
-            return Dictionary(uniqueKeysWithValues: legacyPositions.map { ($0.key.uuidString, $0.value) })
-        }
-
-        if let legacyPosition = try? JSONDecoder().decode(SavedPosition.self, from: data) {
-            return [legacyPosition.episodeID.uuidString: legacyPosition]
-        }
-
-        return [:]
-    }
-
-    /// Updates the in-memory cache and writes it through to disk atomically;
-    /// removes the file when empty. Single source of truth for position writes.
-    private func writeSavedPositions(_ positions: SavedPositions) {
-        savedPositionsCache = positions
-        guard let url = Self.positionFileURL else { return }
-        if positions.isEmpty {
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
-        guard let data = try? JSONEncoder().encode(positions) else { return }
-        try? LockedDeviceFileAccess.writeDataAtomically(data, to: url)
+        playbackPositionStore.savedTime(for: episode)
     }
 
     private func clearPlaybackPosition(for episodeID: UUID) {
-        var positions = savedPositions()
-        positions.removeValue(forKey: episodeID.uuidString)
-        writeSavedPositions(positions)
+        playbackPositionStore.clear(episodeID: episodeID)
     }
 
     private func clearPlaybackPosition(for episode: Episode) {
-        var positions = savedPositions()
-        positions.removeValue(forKey: playbackPositionKey(for: episode))
-        positions.removeValue(forKey: episode.id.uuidString)
-        writeSavedPositions(positions)
-    }
-
-    private func clearPlaybackPosition() {
-        writeSavedPositions([:])
+        playbackPositionStore.clear(for: episode)
     }
 
     private func normalizedResumeTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
-        guard seconds.isFinite, seconds > 0 else { return 0 }
-        guard let duration, duration.isFinite, duration > 0 else { return seconds }
-        let clamped = clampedPlaybackTime(seconds, duration: duration)
-        return clamped >= max(0, duration - 2) ? 0 : clamped
-    }
-
-    private func playbackPositionKey(for episode: Episode) -> String {
-        let subscriptionPrefix = episode.subscriptionID.uuidString
-        let trimmedGUID = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedGUID.isEmpty {
-            return "\(subscriptionPrefix)|guid:\(trimmedGUID)"
-        }
-        if let publishedAt = episode.publishedAt {
-            return "\(subscriptionPrefix)|title-date:\(episode.title.lowercased())|\(Int(publishedAt.timeIntervalSince1970))"
-        }
-        return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
+        PlaybackPositionStore.normalizedResumeTime(seconds, duration: duration)
     }
 
     private func recordListeningProgress(at time: TimeInterval) {
@@ -4463,9 +4362,7 @@ final class AppState: ObservableObject {
     }
 
     private func clampedPlaybackTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
-        let lowerBounded = max(0, seconds.isFinite ? seconds : 0)
-        guard let duration, duration.isFinite, duration > 0 else { return lowerBounded }
-        return min(lowerBounded, duration)
+        PlaybackPositionStore.clampedTime(seconds, duration: duration)
     }
 
     private func localAudioFileExists(for episode: Episode) -> Bool {
