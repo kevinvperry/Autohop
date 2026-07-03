@@ -21,10 +21,27 @@ MOVED to PlaybackCore/ + gained `capabilities`, PlaybackCapabilities presets
 (.iOSFull/.tvStreaming), StreamingPlaybackEngine (AVPlayer-only, asset
 resolution local→stream, headless-tested; default-unused on iOS). Related
 earlier carves: PlaybackPositionStore + AutoDownloadIntentStore (also core).
-REMAINING: §5 item 4 (PlaybackSession — own reviewable unit, needs Kevin
-compile checkpoints), item 5 (LibraryModel/SyncController thin wrappers),
-Kevin's Xcode build + full iPhone manual pass (§5 verification checklist).
-No tvOS code exists yet; Phase 0 must be verified on iPhone before Phase 1.
+ITEM 4 (2026-07-04, own unit): delivered as a POLICY extraction —
+PlaybackCore/PlaybackSessionPolicy.swift holds every playback DECISION
+(effective preference incl. browse + Shared Listening, resume-vs-start-skip
+start resolution, speed cycle/normalize, chapter prev/next), exact ports,
+headless-tested; AppState methods delegate decisions and keep effect
+execution (engine/NowPlaying/sleep/stats/store). BEHAVIOUR NOTES: zero
+intended changes — startPlayback's seek/reported-time/fresh-start triple,
+speed ±0.01 matching + wrap, and chapter-position navigation are pinned by
+Tests/PlaybackSessionPolicyTests.swift. ONE deliberate behaviour FIX (Kevin-
+approved, same day): NowPlaying now receives reportedStartTime at start, so
+the lock screen no longer flashes 0:00 under a start-skip before the first
+tick (it previously got safeResumeTime). Redundant speedOptions.isEmpty
+guards also removed (provably dead — the options list is a non-empty
+constant). Resume==start-skip still counts as a fresh start on purpose. The
+session-STATE move (currentPlayerEpisode/isPlaying behind a core object) is
+DEFERRED: they are @Published with ~24 observers, an invalidation-semantics
+change needing Kevin's compile checkpoints + view-by-view migration.
+REMAINING: item 5 (LibraryModel/SyncController thin wrappers), the deferred
+session-state move, Kevin's Xcode build + full iPhone manual pass (§5
+checklist). No tvOS code exists yet; Phase 0 must be verified on iPhone
+before Phase 1.
 
 RELATED: Docs/WATCH_APP_IMPLEMENTATION_PROPOSAL.md — the watch proposal
 defines the WatchPlaySource pattern and D-series decisions this doc extends
@@ -98,7 +115,7 @@ onboarding carousel.
 
 | Phase | Ships | Platform(s) affected | Status |
 |---|---|---|---|
-| 0 | Platform foundation: AutohopCore matrix, AppState domain extraction, streaming playback source | iOS (refactor), unblocks tvOS/watch/iPad | IN PROGRESS — items 1–3, 6 done 2026-07-04; item 4 (PlaybackSession) + 5 + iPhone verification remain (see STATUS header) |
+| 0 | Platform foundation: AutohopCore matrix, AppState domain extraction, streaming playback source | iOS (refactor), unblocks tvOS/watch/iPad | IN PROGRESS — items 1–4, 6 done 2026-07-04 (item 4 as policy extraction; session-state move deferred); item 5 + iPhone verification remain (see STATUS header) |
 | 1 | tvOS target scaffolding + purge-resilient bootstrap | tvOS | Not started |
 | 2 | Browse UI: Home, Queue, Library, episode lists (read-only) | tvOS | Not started |
 | 3 | Playback: audio + video streaming player, position sync | tvOS | Not started |

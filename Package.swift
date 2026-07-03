@@ -100,6 +100,7 @@ let package = Package(
                 "Queue/QueueModel.swift",
                 "PlaybackCore/PlaybackControlling.swift",
                 "PlaybackCore/PlaybackCapabilities.swift",
+                "PlaybackCore/PlaybackSessionPolicy.swift",
                 "PlaybackCore/StreamingPlaybackEngine.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift"

@@ -26,6 +26,10 @@ import UIKit
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
 //    playNextEpisode), seek, chapter navigation, per-podcast audio settings
 //    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
+//    Playback DECISIONS (effective preference, resume-vs-start-skip, speed
+//    cycle/normalize, chapter prev/next targets) live in AutohopCore's
+//    PlaybackSessionPolicy (tvOS Phase 0 item 4) — AppState delegates the
+//    decisions and executes the effects. Keep new decisions in the policy.
 //    CarPlay is deliberately just another UI surface over these same methods:
 //    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
 //    cyclePlaybackSpeedForCurrentEpisode(), and setPlaybackSpeedForCurrentEpisode(_:)
@@ -1373,14 +1377,16 @@ final class AppState: ObservableObject {
         }
     }
 
+    // Chapter prev/next target decisions live in PlaybackSessionPolicy
+    // (Phase 0 item 4); these wrappers gather the active chapter list and seek.
     func navigateToPreviousChapter() {
         guard let episode = currentPlayerEpisode,
               let sub = subscriptionStore.subscription(id: episode.subscriptionID),
               let current = currentChapter
         else { return }
         let active = chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
-        guard let pos = active.firstIndex(where: { $0.position == current.position }), pos > 0 else { return }
-        seek(to: active[pos - 1].startSeconds)
+        guard let target = PlaybackSessionPolicy.previousChapterStart(from: current, in: active) else { return }
+        seek(to: target)
     }
 
     func navigateToNextChapter() {
@@ -1389,9 +1395,8 @@ final class AppState: ObservableObject {
               let current = currentChapter
         else { return }
         let active = chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
-        guard let pos = active.firstIndex(where: { $0.position == current.position }),
-              pos < active.count - 1 else { return }
-        seek(to: active[pos + 1].startSeconds)
+        guard let target = PlaybackSessionPolicy.nextChapterStart(from: current, in: active) else { return }
+        seek(to: target)
     }
 
     // MARK: - Download
@@ -2140,31 +2145,27 @@ final class AppState: ObservableObject {
     func cyclePlaybackSpeedForCurrentEpisode() {
         guard !sharedListeningActive,
               let episode = currentPlayerEpisode,
-              let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
-              !PlaybackPreference.speedOptions.isEmpty
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
         else { return }
 
-        let currentSpeed = subscription.playbackPreference.speed
-        let currentIndex = PlaybackPreference.speedOptions.firstIndex { abs($0 - currentSpeed) < 0.01 }
-            ?? PlaybackPreference.speedOptions.startIndex
-        let nextIndex = PlaybackPreference.speedOptions.index(after: currentIndex)
-        let nextSpeed = nextIndex == PlaybackPreference.speedOptions.endIndex
-            ? PlaybackPreference.speedOptions[PlaybackPreference.speedOptions.startIndex]
-            : PlaybackPreference.speedOptions[nextIndex]
+        // Cycle decision lives in PlaybackSessionPolicy (Phase 0 item 4).
+        guard let nextSpeed = PlaybackSessionPolicy.cycledSpeed(
+            after: subscription.playbackPreference.speed
+        ) else { return }
         updatePlaybackSpeed(for: subscription.id, speed: nextSpeed)
     }
 
     func setPlaybackSpeedForCurrentEpisode(_ speed: Double) {
         guard !sharedListeningActive,
               let episode = currentPlayerEpisode,
-              let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
-              !PlaybackPreference.speedOptions.isEmpty
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
         else { return }
 
-        let normalizedSpeed = PlaybackPreference.speedOptions.min { lhs, rhs in
-            abs(lhs - speed) < abs(rhs - speed)
-        } ?? speed
-        updatePlaybackSpeed(for: subscription.id, speed: normalizedSpeed)
+        // Nearest-option decision lives in PlaybackSessionPolicy (Phase 0 item 4).
+        updatePlaybackSpeed(
+            for: subscription.id,
+            speed: PlaybackSessionPolicy.normalizedSpeed(closestTo: speed)
+        )
     }
 
     func updateVocalBoost(for subscriptionID: UUID, level: VocalBoostLevel) {
@@ -2286,16 +2287,17 @@ final class AppState: ObservableObject {
     /// The subscription's preference with the Shared Listening override applied.
     /// All playback paths must read speed/trim through this, never directly.
     func effectivePreference(for subscription: Subscription) -> PlaybackPreference {
-        // Non-subscribed (browse-only) feeds always follow the live global
-        // default — they never carry user-customised settings of their own.
-        var preference = subscription.browseDate != nil
-            ? settingsStore.appSettings.defaultPlaybackPreference
-            : subscription.playbackPreference
-        if settingsStore.appSettings.sharedListeningActive {
-            preference.speed = settingsStore.appSettings.sharedListeningSpeed
-            preference.trimSilence = .off
-        }
-        return preference
+        // Decision lives in PlaybackSessionPolicy (AutohopCore, Phase 0 item 4)
+        // so every surface resolves browse-feed + Shared Listening overrides
+        // identically; this wrapper feeds it the live settings.
+        PlaybackSessionPolicy.effectivePreference(
+            subscriptionPreference: subscription.playbackPreference,
+            isBrowseFeed: subscription.browseDate != nil,
+            defaultPreference: settingsStore.appSettings.defaultPlaybackPreference,
+            sharedListeningSpeed: settingsStore.appSettings.sharedListeningActive
+                ? settingsStore.appSettings.sharedListeningSpeed
+                : nil
+        )
     }
 
     func effectiveSpeed(for subscription: Subscription) -> Double {
@@ -2386,19 +2388,21 @@ final class AppState: ObservableObject {
                 filter: subscription.chapterFilter
             )
 
-            // Restore mid-episode position (overrides start-skip when > 0).
-            if safeResumeTime > preference.startSkipSeconds {
-                playbackEngine.seek(to: safeResumeTime)
-                currentPlayerTime = safeResumeTime
-            } else {
-                // No resume — playback begins at the start-skip offset, so report that rather than 0
-                // (otherwise Now Playing and history tracking briefly show 0 until the first tick).
-                currentPlayerTime = preference.startSkipSeconds
+            // Resume-vs-start-skip decision lives in PlaybackSessionPolicy
+            // (Phase 0 item 4): a mid-episode resume overrides start-skip and
+            // seeks; otherwise report the start-skip offset (not 0) and credit
+            // a fresh "episode started" to stats.
+            let start = PlaybackSessionPolicy.startResolution(
+                resumeTime: safeResumeTime,
+                startSkipSeconds: preference.startSkipSeconds
+            )
+            if let seekTarget = start.seekTarget {
+                playbackEngine.seek(to: seekTarget)
             }
+            currentPlayerTime = start.reportedStartTime
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
-            // Fresh start only — resuming a partially played episode is not a new "start".
-            if safeResumeTime <= preference.startSkipSeconds {
+            if start.isFreshStart {
                 listeningStatsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
             }
             currentPlayerEpisode = playableEpisode
@@ -2448,7 +2452,10 @@ final class AppState: ObservableObject {
             NowPlayingService.shared.update(
                 episode: playableEpisode,
                 podcastTitle: subscription.title,
-                currentTime: safeResumeTime,
+                // reportedStartTime, not safeResumeTime: under a start-skip
+                // with no resume the lock screen otherwise shows 0:00 until
+                // the first tick while the app already shows the skip offset.
+                currentTime: start.reportedStartTime,
                 duration: playableEpisode.durationSeconds,
                 speed: effectiveSpeed(for: subscription),
                 isPlaying: true,
