@@ -39,7 +39,9 @@ import UIKit
 //    ephemeral session) so a slow endpoint never delays the first audio frame,
 //    then applies chapters live to the store, currentPlayerEpisode, and the
 //    engine (PlaybackControlling.updateChapters) iff that episode still plays.
-//  - Queue: downloadedQueue = QueueService priority order + manual overrides,
+//  - Queue: downloadedQueue = QueueService priority order + manual overrides
+//    (pin application now lives in AutohopCore's QueueModel.applyPins — tvOS
+//    Phase 0 — with AppState delegating via orderedQueueWithOverrides),
 //    MEMOIZED in cachedDownloadedQueue (P3) and invalidated synchronously in the
 //    subscriptionStore.objectWillChange sink + the pin didSets.
 //    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
@@ -485,22 +487,14 @@ final class AppState: ObservableObject {
         return queue.first { $0.id != current.id }
     }
 
+    /// Pin application moved to QueueModel.applyPins (AutohopCore, Phase 0 of
+    /// the tvOS proposal) so every surface shares one Priority Stack
+    /// composition; this wrapper feeds it the persisted pin lists.
     private func orderedQueueWithOverrides(_ baseQueue: [Episode]) -> [Episode] {
-        guard !queueOverrideEpisodeIDs.isEmpty || !queueDemotedEpisodeIDs.isEmpty else { return baseQueue }
-
-        let availableIDs = Set(baseQueue.map(\.id))
-        let validOverrideIDs = queueOverrideEpisodeIDs.filter { availableIDs.contains($0) }
-        let validDemotedIDs = queueDemotedEpisodeIDs.filter { availableIDs.contains($0) }
-        guard !validOverrideIDs.isEmpty || !validDemotedIDs.isEmpty else { return baseQueue }
-
-        let specialIDs = Set(validOverrideIDs).union(Set(validDemotedIDs))
-        let overrideEpisodes = validOverrideIDs.compactMap { id in baseQueue.first { $0.id == id } }
-        let demotedEpisodes = validDemotedIDs.compactMap { id in baseQueue.first { $0.id == id } }
-
-        var ordered = baseQueue.filter { !specialIDs.contains($0.id) }
-        ordered.insert(contentsOf: overrideEpisodes, at: 0)
-        ordered.append(contentsOf: demotedEpisodes)
-        return ordered
+        QueueModel.applyPins(baseQueue, pins: QueuePins(
+            playNextIDs: queueOverrideEpisodeIDs,
+            playLastIDs: queueDemotedEpisodeIDs
+        ))
     }
 
     private let defaultFeedEpisodeLimit = 50

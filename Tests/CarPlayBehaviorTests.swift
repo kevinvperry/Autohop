@@ -320,6 +320,7 @@ private final class PlaybackSpy: PlaybackControlling {
     private(set) var currentEpisode: Episode?
     private(set) var isPlaying = false
     var videoPlayer: AVPlayer? { nil }
+    var capabilities: PlaybackCapabilities { .iOSFull }
     var playedEpisodes: [Episode] = []
     var lastSpeed: Double?
     var lastSeek: TimeInterval?

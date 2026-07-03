@@ -12,7 +12,12 @@ import PackageDescription
 let package = Package(
     name: "Autohop",
     platforms: [
+        // Phase 0 of Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md: AutohopCore is
+        // the shared library for every Autohop surface. macOS is here only for
+        // headless `swift test`; there is no Mac app.
         .iOS(.v17),
+        .tvOS(.v17),
+        .watchOS(.v10),
         .macOS(.v14)
     ],
     products: [
@@ -60,7 +65,6 @@ let package = Package(
                 "OPMLSmokeTests",
                 "Persistence/SettingsStore.swift",
                 "Playback",
-                "Queue",
                 "README.md",
                 "Settings",
                 "SmokeTests",
@@ -92,6 +96,11 @@ let package = Package(
                 "Persistence/ListeningStatsStore.swift",
                 "Persistence/AutoDownloadIntentStore.swift",
                 "Persistence/PlaybackPositionStore.swift",
+                "Queue/QueueService.swift",
+                "Queue/QueueModel.swift",
+                "PlaybackCore/PlaybackControlling.swift",
+                "PlaybackCore/PlaybackCapabilities.swift",
+                "PlaybackCore/StreamingPlaybackEngine.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift"
             ]

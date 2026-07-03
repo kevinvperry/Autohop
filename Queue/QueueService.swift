@@ -6,19 +6,23 @@ import Foundation
 // episodes oldest-published first; include ONLY episodes that are downloaded
 // (with a local file), not played, and not archived. Browse subscriptions are
 // filtered out upstream by SubscriptionStore accessors. Manual Play Next /
-// Play Last overrides are NOT applied here — AppState layers its pinned-ID
-// lists on top via orderedQueueWithOverrides().
-protocol QueueServicing {
+// Play Last overrides are NOT applied here — QueueModel.applyPins (same
+// directory) layers the pinned-ID lists on top; AppState delegates to it.
+// PUBLIC + in AutohopCore since Phase 0 (tvOS proposal §4.2) so every surface
+// (iPhone, CarPlay, tvOS, watch) composes the queue from one implementation.
+public protocol QueueServicing {
     func nextPlayableEpisode(from subscriptions: [Subscription]) -> Episode?
     func downloadedQueue(from subscriptions: [Subscription]) -> [Episode]
 }
 
-final class QueueService: QueueServicing {
-    func nextPlayableEpisode(from subscriptions: [Subscription]) -> Episode? {
+public final class QueueService: QueueServicing {
+    public init() {}
+
+    public func nextPlayableEpisode(from subscriptions: [Subscription]) -> Episode? {
         downloadedQueue(from: subscriptions).first
     }
 
-    func downloadedQueue(from subscriptions: [Subscription]) -> [Episode] {
+    public func downloadedQueue(from subscriptions: [Subscription]) -> [Episode] {
         subscriptions
             .sorted { $0.priorityRank < $1.priorityRank }
             .flatMap { subscription in

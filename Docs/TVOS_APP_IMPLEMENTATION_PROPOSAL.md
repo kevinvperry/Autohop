@@ -11,9 +11,20 @@ tvOS 26 design), and (c) an audit of Autohop's multi-platform seams. Includes
 the cross-platform codebase refactor (Phase 0) that also benefits iPhone,
 iPad, CarPlay, and the planned watch app.
 
-STATUS: PROPOSAL — no tvOS code exists yet. Phase 0 (platform foundation) is
-prerequisite work in the EXISTING iOS codebase; it must land and be verified
-on iPhone before any tvOS UI is built.
+STATUS: PHASE 0 IN PROGRESS (commenced 2026-07-04, Kevin's go; on main per
+standing instruction). Done: §5 items 1–3 + 6 — Package.swift platform matrix
+(iOS/tvOS/watchOS/macOS-for-tests), platform audit (core was already
+UIKit-free; LockedDeviceFileAccess already guards), QueueService+QueueModel
+public in AutohopCore (AppState.orderedQueueWithOverrides delegates to
+QueueModel.applyPins; pins semantics headless-tested), PlaybackControlling
+MOVED to PlaybackCore/ + gained `capabilities`, PlaybackCapabilities presets
+(.iOSFull/.tvStreaming), StreamingPlaybackEngine (AVPlayer-only, asset
+resolution local→stream, headless-tested; default-unused on iOS). Related
+earlier carves: PlaybackPositionStore + AutoDownloadIntentStore (also core).
+REMAINING: §5 item 4 (PlaybackSession — own reviewable unit, needs Kevin
+compile checkpoints), item 5 (LibraryModel/SyncController thin wrappers),
+Kevin's Xcode build + full iPhone manual pass (§5 verification checklist).
+No tvOS code exists yet; Phase 0 must be verified on iPhone before Phase 1.
 
 RELATED: Docs/WATCH_APP_IMPLEMENTATION_PROPOSAL.md — the watch proposal
 defines the WatchPlaySource pattern and D-series decisions this doc extends
@@ -87,7 +98,7 @@ onboarding carousel.
 
 | Phase | Ships | Platform(s) affected | Status |
 |---|---|---|---|
-| 0 | Platform foundation: AutohopCore matrix, AppState domain extraction, streaming playback source | iOS (refactor), unblocks tvOS/watch/iPad | Not started |
+| 0 | Platform foundation: AutohopCore matrix, AppState domain extraction, streaming playback source | iOS (refactor), unblocks tvOS/watch/iPad | IN PROGRESS — items 1–3, 6 done 2026-07-04; item 4 (PlaybackSession) + 5 + iPhone verification remain (see STATUS header) |
 | 1 | tvOS target scaffolding + purge-resilient bootstrap | tvOS | Not started |
 | 2 | Browse UI: Home, Queue, Library, episode lists (read-only) | tvOS | Not started |
 | 3 | Playback: audio + video streaming player, position sync | tvOS | Not started |
