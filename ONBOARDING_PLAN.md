@@ -314,7 +314,7 @@ Park these in `FUTURE_VERSIONS.md`; build after P0/P1 prove out.
 
 ### Welcome (Phase 2 / 7)
 - `WELCOME_TITLE` — **"Welcome to Autohop"**
-- `WELCOME_BODY` — "Subscribe to your shows and Autohop does the rest — it downloads the latest episodes, builds your queue, and just plays. Like radio, but only your podcasts."
+- `WELCOME_BODY` — "Subscribe to your shows and Autohop does the rest — it downloads the latest episodes, builds Up Next, and just plays. Like radio, but only your podcasts."
 - `WELCOME_CTA_FIND` — "Find shows"
 - `WELCOME_CTA_IMPORT` — "Import from another app"
 - `WELCOME_CTA_SKIP` — "I'll explore on my own"
@@ -339,15 +339,15 @@ Park these in `FUTURE_VERSIONS.md`; build after P0/P1 prove out.
 - `EMPTY_SUBS_CTA_IMPORT` — "Import subscriptions"
 
 ### Empty Queue / Downloads / History / Stats (Phase 1c/1d)
-- `EMPTY_QUEUE_TITLE` — "Your queue builds itself"
+- `EMPTY_QUEUE_TITLE` — "Up Next builds itself"
 - `EMPTY_QUEUE_BODY` — "As you subscribe and episodes download, they line up here in priority order — newest first, ready to play."
-- `EMPTY_DOWNLOADS_BODY` — "Downloaded episodes appear here. Autohop keeps your queue stocked automatically over Wi-Fi."
+- `EMPTY_DOWNLOADS_BODY` — "Downloaded episodes appear here. Autohop keeps your queue stocked automatically in the background."
 - `EMPTY_HISTORY_BODY` — "Episodes you've listened to will show up here, newest first."
 - `EMPTY_STATS_BODY` — "Start listening and Autohop will track your time, your streak, and how much time you've saved."
 
 ### First subscribe (Phase 3)
 - `FIRST_SUB_TITLE` — "You're all set 🎧"
-- `FIRST_SUB_BODY` — "Autohop is downloading the latest episode of {show}. When it's ready it'll kick off your queue — no tapping play, episode after episode."
+- `FIRST_SUB_BODY` — "Autohop is downloading the latest episode of {show}. When it's ready it'll start Up Next — no tapping play, episode after episode."
 - `FIRST_SUB_CTA_PLAY` — "Play latest"
 - `FIRST_SUB_PLAY_PROGRESS` — "Downloading… we'll start the moment it's ready"
 - `FIRST_SUB_AUTOSTART` — "Starting in {count}…"

@@ -32,8 +32,18 @@ import BackgroundTasks
 //     CarPlay template scene. The delegate returns an explicit CarPlay scene
 //     configuration so CarPlaySceneDelegate is used even without an iPhone
 //     WindowGroup already alive.
+//  7. Launch diagnostics: logs `app.launch` at didFinishLaunching with
+//     launchState (background = iOS system-launched us, a good sign; foreground =
+//     user-initiated, the only way a terminated/force-quit app comes back) and
+//     the Background App Refresh authorisation. The BG task entry logs
+//     (background.launch / background.processingLaunch) also carry the
+//     authorisation, so a refresh review can tell "iOS never fired the task"
+//     (no entry log) from "fired but not permitted".
 // GOTCHA: a BGAppRefreshTask run with "no feeds due" still reports success —
 // reporting failure teaches iOS to deprioritise future background wakes.
+// GOTCHA: iOS never runs BGTasks for a user-force-quit app; an app.launch with
+// launchState=foreground on every start (never background) is the log signature
+// of that — the app is only ever coming back because the user reopened it.
 final class AppDelegate: NSObject, UIApplicationDelegate {
 
     weak var appState: AppState?
@@ -43,6 +53,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         registerBackgroundTasks()
+        // Record how this launch began and whether iOS will grant background
+        // wakes at all. launchState=background means the system cold-launched us
+        // (BGTask / push) — proof iOS is willing to wake the app; launchState=
+        // foreground on every launch means the app was terminated and only the
+        // user brought it back (a force-quit app never gets background wakes).
+        let launchState: String
+        switch application.applicationState {
+        case .background: launchState = "background"
+        case .active, .inactive: launchState = "foreground"
+        @unknown default: launchState = "unknown"
+        }
+        AppLogger.shared.info("app.launch", "App launched", metadata: [
+            "launchState": launchState,
+            "backgroundRefreshStatus": BackgroundTaskCoordinator.backgroundRefreshStatusLabel
+        ])
         // Install the notification-center delegate before launch returns so
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()
@@ -146,8 +171,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
+        // Delivered on the main queue (register(using: nil)), so assumeIsolated is
+        // safe for the main-actor status read.
+        let refreshStatus = MainActor.assumeIsolated {
+            BackgroundTaskCoordinator.backgroundRefreshStatusLabel
+        }
         AppLogger.shared.info("background.launch", "Background app refresh task started", metadata: [
-            "identifier": task.identifier
+            "identifier": task.identifier,
+            "backgroundRefreshStatus": refreshStatus
         ])
         BackgroundTaskCoordinator.scheduleAppRefresh()
 
@@ -176,8 +207,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private static func handleFeedProcessing(_ task: BGProcessingTask) {
+        // Delivered on the main queue (register(using: nil)), so assumeIsolated is
+        // safe for the main-actor status read.
+        let refreshStatus = MainActor.assumeIsolated {
+            BackgroundTaskCoordinator.backgroundRefreshStatusLabel
+        }
         AppLogger.shared.info("background.processingLaunch", "Background processing task started", metadata: [
-            "identifier": task.identifier
+            "identifier": task.identifier,
+            "backgroundRefreshStatus": refreshStatus
         ])
         BackgroundTaskCoordinator.scheduleProcessing()
 

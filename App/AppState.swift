@@ -11,6 +11,12 @@ import UIKit
 // whole app. Every view observes this object; every service (feeds, downloads,
 // playback, queue, stats, history, notifications) is owned and orchestrated here.
 //
+// PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
+// observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
+// AppState observer; only PlayerView's scrubber + MiniPlayerBar observe the clock).
+// releaseRadarProfile(for:) is memoized per subscription (PERF-2 — fingerprint-
+// validated cache + off-main cold-launch warm-up via warmReleaseRadarProfileCache),
+// so the 30 s due-feed poll no longer rebuilds every profile on the main thread.
 // RESPONSIBILITIES:
 //  - Player state: currentPlayerEpisode / currentPlayerTime / isPlaying;
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
@@ -145,9 +151,38 @@ import UIKit
 //    suppressUpNextRefresh around bulk operations to avoid churn.
 //  - Listening history requires ≥ 60 s listened before an entry is shown.
 //  - AppState.shared is created through bootstrap/sharedOrBootstrap (used by
-//    AppDelegate/background tasks and CarPlay-only cold launches).
+//    AppDelegate/background tasks and CarPlay-only cold launches). bootstrap() is
+//    single-instance: it early-returns an existing `shared` and publishes the new
+//    instance the moment it's created, so racing/re-entrant callers (CarPlay cold
+//    launch + phone WindowGroup) can never build two AppStates.
 //  - All methods assume MainActor; long work hops to detached tasks/services.
 // ============================================================================
+
+/// Cached Release Radar profile + the fingerprint that validates it (PERF-2 memo —
+/// see AppState.releaseRadarProfile). File-scope (not nested in AppState) on purpose:
+/// nested types inherit the class's @MainActor isolation, and the cold-launch
+/// warm-up constructs these OFF the main actor in a detached task.
+private struct ReleaseRadarProfileCacheEntry {
+    var observationCount: Int
+    var newestObservationKey: String?
+    var filterSettings: DownloadFilterSettings
+    var generatedAt: Date
+    var profile: FeedScheduleProfile
+}
+
+/// Dedicated 2 Hz playback-time publisher (PERF-1 targeted fix). The scrubber tick
+/// used to be `@Published` directly on AppState, so every 0.5 s write invalidated
+/// EVERY view observing AppState (24 files) for the whole duration of playback.
+/// Only the surfaces that genuinely render the ticking time (PlayerView scrubber,
+/// MiniPlayerBar progress/remaining) observe this object; everything else observes
+/// AppState and no longer wakes on the tick. AppState.currentPlayerTime remains the
+/// canonical accessor — it proxies to this clock, so all existing read/write sites
+/// behave unchanged. Injected into the environment at the app root alongside
+/// AppState (AutohopApp).
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var time: TimeInterval = 0
+}
 
 @MainActor
 final class AppState: ObservableObject {
@@ -162,7 +197,10 @@ final class AppState: ObservableObject {
     let listeningStatsStore = ListeningStatsStore()
 
     /// Opt-in cross-device sync engine (CloudKit). Started only while
-    /// AppSettings.iCloudSyncEnabled is true.
+    /// AppSettings.iCloudSyncEnabled is true. History/stats pushes are coalesced
+    /// on a ~60 s slow lane inside the engine; flushDeferredSyncPushes(reason:)
+    /// is the lifecycle checkpoint that pushes them immediately (pause,
+    /// sleep-timer/schedule pause, scene background/resign-active).
     private let cloudSyncEngine: CloudSyncEngine
     static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
     let downloadActivityStore = DownloadActivityStore()
@@ -171,7 +209,14 @@ final class AppState: ObservableObject {
     @Published var currentPlayerEpisode: Episode? {
         didSet { scheduleUpNextRefresh(reason: "player.currentChanged") }
     }
-    @Published var currentPlayerTime: TimeInterval = 0
+    /// 2 Hz scrubber time lives on its own observable (PERF-1) so the tick no longer
+    /// invalidates every AppState observer; this proxy keeps all existing call sites
+    /// working. Views that render the ticking time observe `playbackClock` instead.
+    let playbackClock = PlaybackClock()
+    var currentPlayerTime: TimeInterval {
+        get { playbackClock.time }
+        set { playbackClock.time = newValue }
+    }
     @Published var isPlaying: Bool = false
     @Published private(set) var upNextEpisode: Episode?
     @Published private var queueOverrideEpisodeIDs: [UUID] = [] {
@@ -742,6 +787,15 @@ final class AppState: ObservableObject {
     }
 
     static func bootstrap() -> AppState {
+        // Re-entrancy / single-instance guard. bootstrap() runs on the @MainActor and is
+        // synchronous, so two *concurrent* callers can't interleave — but a caller reached
+        // from within bootstrap's own setup (or any future `await` added before the shared
+        // assignment) could otherwise build a SECOND AppState. Returning the existing
+        // instance here, and publishing `shared` the instant it exists (below), guarantees
+        // one instance no matter how many sharedOrBootstrap() callers race (e.g. a CarPlay
+        // cold-launch scene and the phone WindowGroup both bootstrapping at startup).
+        if let shared { return shared }
+
         let chapterService = ChapterService()
         let queueService = QueueService()
         let playbackEngine = PlaybackEngine(chapterService: chapterService, queueService: queueService)
@@ -755,6 +809,9 @@ final class AppState: ObservableObject {
             settingsStore: SettingsStore(),
             subscriptionStore: SubscriptionStore()
         )
+        // Publish immediately, before the remaining setup, so any re-entrant
+        // sharedOrBootstrap() during bootstrap resolves to THIS instance.
+        AppState.shared = state
 
         // Episode completion
         playbackEngine.onEpisodeFinished = { [weak state] episode in
@@ -949,6 +1006,15 @@ final class AppState: ObservableObject {
         downloadManager.onProgressUpdate = { [weak state] episodeID, fraction, writtenBytes, expectedBytes in
             Task { @MainActor in
                 guard let state else { return }
+                // Coalesce UI publishes: DownloadManager already throttles to ~1/s per
+                // task, but with several concurrent downloads each tick still fired an
+                // AppState-wide @Published invalidation (downloadProgress) PLUS an
+                // activity-store publish — several whole-tree re-evals per second,
+                // which showed as scroll jank on the Downloads page. Progress bars
+                // don't need sub-1% fidelity, so skip publishes until the fraction has
+                // moved ≥1% (completion always publishes).
+                let lastFraction = state.downloadProgress[episodeID] ?? -1
+                guard fraction >= 1.0 || abs(fraction - lastFraction) >= 0.01 else { return }
                 state.downloadProgress[episodeID] = fraction
                 state.downloadActivityStore.progress(
                     episodeID: episodeID,
@@ -975,6 +1041,12 @@ final class AppState: ObservableObject {
                 guard let state, state.isPlaying else { return }
                 state.playbackEngine.pause()
                 state.isPlaying = false
+                // Pause checkpoint: flush throttled stats to disk + sync DB, then
+                // push any coalesced history/stats sync rows (the scene usually
+                // resigned long before a sleep-timer fire, so this is the only
+                // checkpoint that catches the tail of the session).
+                state.listeningStatsStore.save()
+                state.flushDeferredSyncPushes(reason: "sleepTimer.pause")
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NowPlayingService.shared.updateTime(
@@ -1039,6 +1111,7 @@ final class AppState: ObservableObject {
                 state.seek(to: rewindTarget)
                 state.savePlaybackPosition()
                 state.listeningStatsStore.save()
+                state.flushDeferredSyncPushes(reason: "sleepSchedule.asleep")
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NowPlayingService.shared.updateTime(
@@ -1123,13 +1196,17 @@ final class AppState: ObservableObject {
         state.loadQueuePins()
         state.startForegroundPolling()
         state.startResourceMonitoring()
+        // Warm the Release Radar profile cache off-main so the poller's first tick
+        // (30 s after launch) doesn't build every profile on the main thread.
+        state.warmReleaseRadarProfileCache()
         Task { @MainActor in
             await state.runAutoArchiveIfNeeded(reason: "app.startup")
         }
         Task { @MainActor in
             await state.reconcileOrphanedDownloads()
         }
-        AppState.shared = state
+        // `AppState.shared` was already published right after creation (above) so a
+        // re-entrant bootstrap can't create a second instance.
         Task { @MainActor in
             let badgeCount = state.settingsStore.appSettings.showQueueBadge ? state.downloadedQueue.count : 0
             NotificationService.shared.updateBadge(count: badgeCount)
@@ -1163,6 +1240,7 @@ final class AppState: ObservableObject {
             playbackEngine.pause()
             isPlaying = false
             listeningStatsStore.save()
+            flushDeferredSyncPushes(reason: "playback.pause")
             if let ep = currentPlayerEpisode,
                let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                 NowPlayingService.shared.updateTime(
@@ -3217,8 +3295,74 @@ final class AppState: ObservableObject {
         )
     }
 
+    /// Memoized Release Radar profile per subscription (PERF-2). The profiler runs the
+    /// full v2 detector pipeline (sort/cluster over up to 200 observations); the
+    /// foreground poller calls this for EVERY subscription every 30 s just to count due
+    /// feeds, which showed up in diagnostics as ~300 ms main-thread hangs right after
+    /// launch. The profile is a pure function of (releaseObservations,
+    /// downloadFilterSettings) — both change only on feed refresh / filter edits — so a
+    /// fingerprint-validated cache is self-invalidating with no hooks needed at
+    /// mutation sites. A 15-min TTL bounds drift from the profiler's time-dependent
+    /// recency windows (they move over days, not minutes).
+    private var releaseRadarProfileCache: [UUID: ReleaseRadarProfileCacheEntry] = [:]
+    private static let releaseRadarProfileCacheTTL: TimeInterval = 15 * 60
+
+    /// Cold-launch cache warm-up: computes every active subscription's profile OFF the
+    /// main actor (the profiler is a pure function over value-type snapshots) so the
+    /// first 30 s poller tick after launch hits a warm cache instead of building ~all
+    /// profiles synchronously on the main thread (the post-launch hang burst in the
+    /// 2026-07-02 diagnostic log). Entries are fingerprint-validated on read, so a feed
+    /// refresh landing mid-warm-up just causes that one profile to recompute.
+    func warmReleaseRadarProfileCache() {
+        let snapshot = subscriptionStore.subscriptions.filter {
+            !$0.excludeFromAutoFeedRefresh && $0.browseDate == nil
+        }
+        guard !snapshot.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let now = Date()
+            var warmed: [UUID: ReleaseRadarProfileCacheEntry] = [:]
+            for sub in snapshot {
+                let observations = sub.refreshStats.releaseObservations
+                warmed[sub.id] = ReleaseRadarProfileCacheEntry(
+                    observationCount: observations.count,
+                    newestObservationKey: observations.last?.episodeKey,
+                    filterSettings: sub.downloadFilterSettings,
+                    generatedAt: now,
+                    profile: sub.refreshStats.scheduleProfile(downloadFilterSettings: sub.downloadFilterSettings)
+                )
+            }
+            let entries = warmed
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // Don't clobber entries the main actor computed while we were warming.
+                self.releaseRadarProfileCache.merge(entries) { existing, _ in existing }
+                self.logger.info("radar.profileCacheWarmed", "Release Radar profile cache warmed off-main", metadata: [
+                    "profiles": "\(entries.count)"
+                ])
+            }
+        }
+    }
+
     private func releaseRadarProfile(for subscription: Subscription) -> FeedScheduleProfile {
-        subscription.refreshStats.scheduleProfile(downloadFilterSettings: subscription.downloadFilterSettings)
+        let observations = subscription.refreshStats.releaseObservations
+        let settings = subscription.downloadFilterSettings
+        let now = Date()
+        if let entry = releaseRadarProfileCache[subscription.id],
+           entry.observationCount == observations.count,
+           entry.newestObservationKey == observations.last?.episodeKey,
+           entry.filterSettings == settings,
+           now.timeIntervalSince(entry.generatedAt) < Self.releaseRadarProfileCacheTTL {
+            return entry.profile
+        }
+        let profile = subscription.refreshStats.scheduleProfile(downloadFilterSettings: settings)
+        releaseRadarProfileCache[subscription.id] = ReleaseRadarProfileCacheEntry(
+            observationCount: observations.count,
+            newestObservationKey: observations.last?.episodeKey,
+            filterSettings: settings,
+            generatedAt: now,
+            profile: profile
+        )
+        return profile
     }
 
     private func refreshPrediction(
@@ -3938,6 +4082,16 @@ final class AppState: ObservableObject {
         listeningHistoryStore.save()
     }
 
+    /// Lifecycle checkpoint for sync: pushes any slow-lane (history/stats)
+    /// CloudKit changes the engine is holding on its ~60 s coalescing debounce.
+    /// Call AFTER `listeningStatsStore.save()` (or `flushPendingStatsDays`) so
+    /// the day buckets are in the sync database before the engine scans for
+    /// pending rows. Wired to pause, sleep-timer/schedule pause, and scene
+    /// backgrounding/resign-active (AutohopApp).
+    func flushDeferredSyncPushes(reason: String) {
+        cloudSyncEngine.flushDeferredPushes(reason: reason)
+    }
+
     private func saveQueuePins() {
         guard let url = Self.queuePinsFileURL else { return }
         let pins = SavedQueuePins(overrideIDs: queueOverrideEpisodeIDs, demotedIDs: queueDemotedEpisodeIDs)
@@ -4470,6 +4624,10 @@ final class AppState: ObservableObject {
     private func resourceContext(_ extra: [String: String] = [:]) -> [String: String] {
         var context = [
             "isPlaying": "\(isPlaying)",
+            // Video playback (GPU decode + display on) is a major battery/heat source;
+            // flag it so a warm-phone snapshot is attributable. Audio-path DSP (trim
+            // silence / vocal boost) is already recorded at playback.start.
+            "playingVideo": "\(currentPlayerEpisode?.mediaKind == .video)",
             "sceneActive": "\(isSceneActive)",
             "refreshActive": "\(activeRefreshCycle != nil)",
             "currentEpisode": currentPlayerEpisode?.title ?? "none",

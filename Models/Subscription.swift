@@ -43,6 +43,13 @@ import Foundation
 //    vs "Daily"). FALLBACK: if no day clears the active bar but one weekday holds
 //    ≥`weeklyDominantShareThreshold` of all episodes on a ~weekly cadence, it's .weekly
 //    by episode share (so a weekly show that skips the odd week still classifies).
+//    SECOND FALLBACK (recent-daily rescue): the MEDIAN GAP and a PRESENCE-based recent
+//    active-weekday set are measured over only the last `cadenceRecencyWindowSize`
+//    observations (not all history); if a feed has published on 5+ distinct weekdays at
+//    a ≤2-day gap within that window it's .dailyWeekdays even before any weekday's
+//    per-week probability clears the active bar. This self-heals feeds whose old
+//    episodes are purged from the RSS, leaving a stale single-weekday seed (e.g. The
+//    Daily → Sunday-only retention) that would otherwise be misread as .weekly.
 //    activeWeekdays drives scheduling, so a Mon–Fri feed never opens weekend slots.
 //    Every classified feed carries a
 //    releaseWindow sized (Stage 2) to the DENSEST publish-time mode, recency-weighted
@@ -648,6 +655,23 @@ public enum FeedScheduleProfiler {
     /// episodes on a ~weekly cadence, classify as weekly even when that day's per-week
     /// probability dips below `activeDayThreshold` because the show skips the odd week.
     private static let weeklyDominantShareThreshold = 0.65
+    /// Cadence classification (median gap + recent active-weekday presence) runs over
+    /// only the most recent this-many reliable dates, NOT all history. This keeps a
+    /// stale back-catalogue from pinning the class to the wrong cadence — e.g. The
+    /// Daily, whose feed only retains Sunday episodes long-term, seeds dozens of
+    /// Sunday-only observations that outvote its genuine 7-days-a-week publishing.
+    /// Windowing is self-healing: as fresh daily captures accumulate and the stale
+    /// seed ages out of the window, the class corrects automatically. Sized in
+    /// observations (not days) so it self-scales across cadences — ~25 obs is ~3½
+    /// weeks for a daily feed but ~25 weeks for a weekly one, giving each enough
+    /// recent signal without dragging in ancient history. The recency-weighted weekday
+    /// PROBABILITIES and the time-of-day window keep using full history (they have
+    /// their own recency weighting).
+    private static let cadenceRecencyWindowSize = 25
+    /// A weekday must appear at least this many times inside the recency window to count
+    /// as a "recent active day". 2 keeps a single stray capture from inflating the
+    /// distinct-weekday count while still recognising ~2 weeks of genuine daily output.
+    private static let recentActiveWeekdayMinCount = 2
 
     // Release Radar v2 — Stage 2 (densest-mode window + recency + watch-intensity tiers).
     /// Half-width (minutes) of the search window used to locate the densest publish-time
@@ -800,9 +824,12 @@ public enum FeedScheduleProfiler {
         let cluster = reliable.isEmpty
             ? nil
             : circularCluster(minutes: reliable.map { minuteOfDay(for: $0, calendar: calendar) }, modulo: 24 * 60)
-        let intervals = zip(reliable, reliable.dropFirst()).map { $1.timeIntervalSince($0) }.filter { $0 > 0 }
-        let medianIntervalSeconds = median(intervals)
+        // Cadence stats (median gap + recent active-weekday presence) use the recency
+        // window, matching regularCadenceProfile, so a stale back-catalogue doesn't skew
+        // the class or these explanations. See `cadenceRecencyWindowSize`.
+        let medianIntervalSeconds = recentMedianInterval(reliable)
         let medianDays = medianIntervalSeconds.map { $0 / 86_400 }
+        let recentActiveCount = recentActiveWeekdays(reliable, calendar: calendar).count
 
         // Release Radar v2 gate checks: classification is cadence + active-day pattern,
         // NOT publish time. (Publish-time spread still shows under "Learning signal" —
@@ -813,14 +840,14 @@ public enum FeedScheduleProfiler {
         let dailyChecks: [FeedScheduleDiagnostics.GateCheck] = [
             .init(label: "≥ 6 reliable dates", passed: reliableDateCount >= multiDayMinimumReliableDates, detail: "\(reliableDateCount) / 6"),
             .init(label: "≥ 3 weeks of history", passed: weeksObserved >= regularMinimumWeeks, detail: "\(weeksObserved) wk"),
-            .init(label: "5+ active days/week", passed: activeDayCount >= 5, detail: "\(activeDayCount) active"),
-            .init(label: "Median gap ≤ 2 days", passed: (medianDays ?? .greatestFiniteMagnitude) <= 2, detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
+            .init(label: "5+ active days/week", passed: activeDayCount >= 5 || recentActiveCount >= 5, detail: "\(activeDayCount) active · \(recentActiveCount) recent"),
+            .init(label: "Median gap ≤ 2 days (recent)", passed: (medianDays ?? .greatestFiniteMagnitude) <= 2, detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
         ]
         let weeklyChecks: [FeedScheduleDiagnostics.GateCheck] = [
             .init(label: "≥ 4 reliable dates", passed: reliableDateCount >= regularMinimumReliableDates, detail: "\(reliableDateCount) / 4"),
             .init(label: "≥ 3 weeks of history", passed: weeksObserved >= regularMinimumWeeks, detail: "\(weeksObserved) wk"),
             .init(label: "1 active day or ≥65% on one weekday", passed: activeDayCount == 1 || dominantRatio >= weeklyDominantShareThreshold, detail: "\(activeDayCount) active · \(Int((dominantRatio * 100).rounded()))%"),
-            .init(label: "Median gap 4–11 days", passed: (4.0...11.0).contains(medianDays ?? -1), detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
+            .init(label: "Median gap 4–11 days (recent)", passed: (4.0...11.0).contains(medianDays ?? -1), detail: medianDays.map { String(format: "%.1f d", $0) } ?? "—")
         ]
 
         return FeedScheduleDiagnostics(
@@ -995,6 +1022,34 @@ public enum FeedScheduleProfiler {
     /// rolling-bulletin/burst detectors, so it only sees feeds that publish at most
     /// ~once per active day. Active days drive scheduling, so a Mon–Fri feed simply
     /// never opens weekend slots.
+    /// The most recent slice of (ascending-sorted) reliable publish dates used for
+    /// cadence classification. See `cadenceRecencyWindowSize`.
+    private static func recentCadenceDates(_ sortedDates: [Date]) -> [Date] {
+        Array(sortedDates.suffix(cadenceRecencyWindowSize))
+    }
+
+    /// Median inter-publish gap (seconds) over the recency window of the given
+    /// ascending-sorted dates — the cadence signal that decides median-gap gates.
+    private static func recentMedianInterval(_ sortedDates: [Date]) -> TimeInterval? {
+        let recent = recentCadenceDates(sortedDates)
+        let intervals = zip(recent, recent.dropFirst())
+            .map { $1.timeIntervalSince($0) }
+            .filter { $0 > 0 }
+        return median(intervals)
+    }
+
+    /// Weekdays the feed has published on at least `recentActiveWeekdayMinCount` times
+    /// within the recency window — a PRESENCE signal (not the week-fraction probability).
+    /// This is what lets a feed with only a couple of weeks of genuine daily capture be
+    /// recognised as daily before any single weekday's per-week probability can climb
+    /// above `activeDayThreshold`.
+    private static func recentActiveWeekdays(_ sortedDates: [Date], calendar: Calendar) -> [Int] {
+        countsByWeekday(recentCadenceDates(sortedDates), calendar: calendar)
+            .filter { $0.value >= recentActiveWeekdayMinCount }
+            .keys
+            .sorted()
+    }
+
     private static func regularCadenceProfile(
         dates: [Date],
         calendar: Calendar,
@@ -1015,7 +1070,12 @@ public enum FeedScheduleProfiler {
             .filter { $0.value >= activeDayThreshold }
             .keys
             .sorted()
-        let medianGapDays = (medianInterval ?? .greatestFiniteMagnitude) / 86_400
+        // Median gap and the recent active-weekday presence are measured over the
+        // recency window, not all history, so a stale back-catalogue (e.g. The Daily's
+        // Sunday-only retention) can't pin the cadence to the wrong class.
+        let windowedMedianInterval = recentMedianInterval(dates)
+        let medianGapDays = (windowedMedianInterval ?? medianInterval ?? .greatestFiniteMagnitude) / 86_400
+        let recentActive = recentActiveWeekdays(dates, calendar: calendar)
 
         // Episode-SHARE dominant weekday — robust to a weekly show that skips the odd
         // week (holidays/hiatus), whose per-week probability would dip below the active
@@ -1050,6 +1110,19 @@ public enum FeedScheduleProfiler {
             kind = .weekly
             reason = "Publishes about once a week on a consistent day (with occasional skipped weeks)."
             resolvedActiveDays = [dominantKey]
+        } else if recentActive.count >= 5, medianGapDays <= 2, reliableDateCount >= multiDayMinimumReliableDates {
+            // Recent-behaviour daily rescue: the feed has published on 5+ distinct
+            // weekdays on a near-daily cadence within the recency window, even though no
+            // single weekday's per-week probability has climbed above the active bar yet
+            // (too few daily weeks so far — e.g. a show whose older episodes are purged
+            // from the RSS, leaving a stale single-weekday seed). Presence over the recent
+            // window, not week-fraction, is the right signal here.
+            let hasWeekend = !Set(recentActive).isDisjoint(with: [1, 7])
+            kind = .dailyWeekdays
+            reason = hasWeekend
+                ? "Publishes most days of the week (based on recent activity)."
+                : "Publishes on weekdays (Mon–Fri), based on recent activity."
+            resolvedActiveDays = recentActive
         } else {
             return nil
         }
@@ -1068,7 +1141,7 @@ public enum FeedScheduleProfiler {
             reliableDateCount: reliableDateCount,
             activeWeekdays: resolvedActiveDays,
             typicalMinuteOfDay: window.typicalMinuteOfDay,
-            cadenceSeconds: medianInterval,
+            cadenceSeconds: windowedMedianInterval ?? medianInterval,
             releaseWindow: window,
             weekdayProbabilities: probabilities,
             reason: reason

@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 // subscriptions AND !hasCompletedWelcome), presented as a fullScreenCover from
 // RootView while the launch splash is still up so the transition is seamless
 // (both share the purple launch background). It teaches the core model
-// (subscribe → Autohop builds your queue → it just plays) and offers the three
+// (subscribe → Autohop builds Up Next → it just plays) and offers the three
 // ways forward: Find shows (Discover), Import (OPML), or Skip. The chosen path
 // is reported back via `onComplete`; RootView sets hasCompletedWelcome and
 // routes the NavigationStack. See ONBOARDING_PLAN.md Phase 2.
@@ -38,7 +38,7 @@ struct WelcomeView: View {
                     panelView(
                         hero: AnyView(heroMotif),
                         title: "Welcome to Autohop",
-                        body: "Subscribe to your shows and Autohop does the rest — it downloads the latest episodes, builds your queue, and just plays. Like radio, but only your podcasts."
+                        body: "Subscribe to your shows and Autohop does the rest — it downloads the latest episodes, builds Up Next, and just plays. Like radio, but only your podcasts."
                     ).tag(0)
 
                     panelView(

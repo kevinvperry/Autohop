@@ -10,7 +10,10 @@ import Foundation
 // happens on the main actor and views observe `subscriptions` through AppState's
 // subscriptionStore.objectWillChange bridge. The array is not @Published on
 // purpose: save() is the single publisher, which lets refresh-stat-only writes
-// persist quietly without waking UI/sync.
+// persist quietly without waking UI/sync. begin/endChangeNotificationCoalescing
+// lets CloudSyncEngine apply a fetched-changes burst with ONE objectWillChange at
+// the end instead of one per record (post-launch sync bursts were a main-thread
+// hang source); disk persistence is unaffected.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted/downloadedAt — the merge also reconstructs wasCompleted from
@@ -847,6 +850,7 @@ public final class SubscriptionStore: ObservableObject {
         sub.playbackPreference = merged.playbackPreference
         sub.autoArchiveSettings = merged.autoArchiveSettings
         sub.chapterFilter = merged.chapterFilter
+        sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
         normalizePriorityOrder()
         save()
@@ -893,6 +897,9 @@ public final class SubscriptionStore: ObservableObject {
         sub.playbackPreference = merged.playbackPreference
         sub.autoArchiveSettings = merged.autoArchiveSettings
         sub.chapterFilter = merged.chapterFilter
+        // Legacy records predate filter sync, so this is normally the local
+        // value carried through the merge (nil remote stamp = no opinion).
+        sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
         normalizePriorityOrder()
         save()
@@ -1089,9 +1096,38 @@ public final class SubscriptionStore: ObservableObject {
         Dictionary(subs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    // MARK: - Change-notification coalescing (launch-jank fix)
+
+    /// While true, `save(notifyObservers: true)` defers its `objectWillChange` into a
+    /// single pending flag instead of firing per mutation. Used by CloudSyncEngine's
+    /// fetched-changes apply loop: a post-launch sync burst (e.g. 18 remote records)
+    /// otherwise fires 18 whole-app invalidations back-to-back on the main thread.
+    /// Disk persistence is unaffected — only the UI/sync notification is coalesced.
+    private var changeNotificationsCoalesced = false
+    private var coalescedChangeNotificationPending = false
+
+    /// Begin deferring observer notifications. Must be paired with
+    /// `endChangeNotificationCoalescing()` on the main actor.
+    public func beginChangeNotificationCoalescing() {
+        changeNotificationsCoalesced = true
+    }
+
+    /// Stop deferring and fire ONE `objectWillChange` if any save was suppressed.
+    public func endChangeNotificationCoalescing() {
+        changeNotificationsCoalesced = false
+        if coalescedChangeNotificationPending {
+            coalescedChangeNotificationPending = false
+            objectWillChange.send()
+        }
+    }
+
     private func save(notifyObservers: Bool = true) {
         if notifyObservers {
-            objectWillChange.send()
+            if changeNotificationsCoalesced {
+                coalescedChangeNotificationPending = true
+            } else {
+                objectWillChange.send()
+            }
         }
         guard let database else { return }
         // Coalesce saves issued while a write is in flight: rerun once it lands

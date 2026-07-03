@@ -5,7 +5,11 @@ import UniformTypeIdentifiers
 // home page, see PAGES.md). Ranked list of real subscriptions (browse
 // subscriptions filtered out; Inactive subscriptions remain visible at the
 // bottom with the orange pill); drag-to-reorder in Reorder mode rewrites
-// priorityRank for the whole list. Each row shows artwork, title, and a
+// priorityRank for the whole list. Each row shows artwork, the show title and
+// the show's (channel-level) description clamped to 2 lines — styled to match
+// PodcastDetailView's episode-row title/description (subheadline-semibold /
+// caption-secondary) — plus a metadata line "Updated: <relative age>"
+// (mins/hours → "Yesterday" → "2…6 days ago" → exact date; no episode length) and a
 // colour-coded status pill for the podcast's latest episode (pills hide in
 // Reorder mode so they never fight the drag grips). Pill logic: archived
 // episodes show Played (not Archived) when Episode.wasCompleted is true, so
@@ -300,23 +304,22 @@ struct PodcastsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
+                    // Title + show (channel-level) description, styled to match the
+                    // episode rows on PodcastDetailView (subheadline-semibold title,
+                    // caption-secondary description).
                     Text(sub.title)
-                        .font(.headline.weight(.bold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         // Reserve room on the right so the title never runs under
                         // the floating video/explicit pills.
                         .padding(.trailing, 30)
 
-                    if let episode = sub.latestEpisode {
-                        Text(episode.title)
-                            .font(.subheadline)
+                    if let description = sub.description.map(stripHTML), !description.isEmpty {
+                        Text(description)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
-                    } else {
-                        Text("No episode available")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,19 +335,10 @@ struct PodcastsView: View {
                     rankPill(sub.priorityRank)
                         .frame(minWidth: 44, alignment: .center)
 
-                    // Metadata: date · duration/remaining · Spacer · status pill
+                    // Metadata: "Updated: <relative date>" · Spacer · status pill
                     HStack(spacing: 4) {
                         if let date = episode.publishedAt {
-                            Text(formatPublishedDate(date))
-                                .lineLimit(1)
-                        }
-                        if let duration = episode.durationSeconds {
-                            let elapsed = appState.effectivePlaybackTime(for: episode)
-                            let remaining = elapsed > 0 ? max(0, duration - elapsed) : duration
-                            let isPartial = elapsed > 0
-                            Text("•")
-                            Text(isPartial ? "\(formatDuration(remaining)) left remaining" : formatDuration(duration))
-                                .monospacedDigit()
+                            Text("Updated: \(latestEpisodeRelativeLabel(date))")
                                 .lineLimit(1)
                         }
 
@@ -443,15 +437,34 @@ struct PodcastsView: View {
         }
     }
 
-    private func formatDuration(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let h = s / 3600
-        let m = (s % 3600) / 60
-        return h > 0 ? "\(h)h \(m)m" : "\(m)m"
-    }
-
-    private func formatPublishedDate(_ date: Date) -> String {
-        relativePublishedLabel(date)   // shared tiered formatter (EpisodeBadges.swift)
+    /// Relative age of the most recent episode for the "Latest episode:" metadata
+    /// line: mins → hours → "Yesterday" → "2…6 days ago" → an abbreviated exact date
+    /// (year shown only when it isn't the current year). Days are counted by calendar
+    /// day (not elapsed seconds) so "Yesterday"/"N days ago" match the wall clock.
+    private func latestEpisodeRelativeLabel(_ date: Date) -> String {
+        let now = Date()
+        let calendar = Calendar.current
+        let elapsed = now.timeIntervalSince(date)
+        if elapsed < 60 { return "just now" }
+        if elapsed < 3600 {
+            let mins = Int(elapsed / 60)
+            return "\(mins) min\(mins == 1 ? "" : "s") ago"
+        }
+        if elapsed < 86_400 {
+            let hours = Int(elapsed / 3600)
+            return "\(hours) hour\(hours == 1 ? "" : "s") ago"
+        }
+        let dayDiff = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: date),
+            to: calendar.startOfDay(for: now)
+        ).day ?? 0
+        if dayDiff == 1 { return "Yesterday" }
+        if (2...6).contains(dayDiff) { return "\(dayDiff) days ago" }
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        return sameYear
+            ? date.formatted(.dateTime.day().month(.abbreviated))
+            : date.formatted(.dateTime.day().month(.abbreviated).year())
     }
 
     private func artwork(url: URL?) -> some View {
@@ -477,3 +490,52 @@ struct PodcastsView: View {
 }
 
 // `EpisodeStatusKind` and `EpisodeStatusPill` are shared in Views/EpisodeBadges.swift.
+
+// Show-description cleanup for the subscription-list rows. Mirrors the file-private
+// helpers in PodcastDetailView / SubscriptionSettingsView (same tag-strip + entity
+// decode). NOTE: this is now the THIRD copy — a shared HTMLText util is warranted.
+private func stripHTML(_ html: String) -> String {
+    let withoutTags = html.replacingOccurrences(
+        of: #"(?is)<[^>]+>"#, with: " ", options: .regularExpression
+    )
+    return decodeHTMLEntities(withoutTags)
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+}
+
+private func decodeHTMLEntities(_ text: String) -> String {
+    var result = text
+    // Numeric decimal (&#NNN;) and hex (&#xHHH;) character references.
+    for pattern in [#"&#(\d+);"#, #"&#x([0-9a-fA-F]+);"#] {
+        let radix = pattern.contains("x") ? 16 : 10
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        let mutable = NSMutableString(string: result)
+        var offset = 0
+        for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)) {
+            guard let numRange = Range(match.range(at: 1), in: result),
+                  let codePoint = UInt32(result[numRange], radix: radix),
+                  let scalar = Unicode.Scalar(codePoint) else { continue }
+            let replacement = String(scalar)
+            let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+            mutable.replaceCharacters(in: adjustedRange, with: replacement)
+            offset += replacement.count - match.range.length
+        }
+        result = mutable as String
+    }
+    // Named entities — same table as PodcastDetailView so descriptions decode
+    // identically between the list and the detail page.
+    let named: [(String, String)] = [
+        ("&amp;",   "&"),  ("&lt;",    "<"),  ("&gt;",    ">"),
+        ("&quot;",  "\""), ("&apos;",  "'"),  ("&nbsp;",  " "),
+        ("&mdash;", "—"),  ("&ndash;", "–"),  ("&rsquo;", "\u{2019}"),
+        ("&lsquo;", "\u{2018}"), ("&rdquo;", "\u{201D}"), ("&ldquo;", "\u{201C}"),
+        ("&hellip;","\u{2026}"), ("&bull;",  "\u{2022}"), ("&copy;",  "\u{00A9}"),
+        ("&reg;",   "\u{00AE}"), ("&trade;", "\u{2122}"), ("&euro;",  "\u{20AC}"),
+        ("&pound;", "\u{00A3}"), ("&yen;",   "\u{00A5}"), ("&cent;",  "\u{00A2}"),
+    ]
+    for (entity, replacement) in named {
+        result = result.replacingOccurrences(of: entity, with: replacement)
+    }
+    return result
+}

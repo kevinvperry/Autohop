@@ -14,6 +14,9 @@ import SwiftUI
 // Now Playing, Up Next actions, downloaded-only playback, playback speed, Shared
 // Listening, and Archive. Do not add search, browsing, downloads, settings,
 // sleep controls, notifications, or feed-refresh workflows to the CarPlay guide.
+// User-facing references to the old "Queue" page name should say "Up Next";
+// keep lowercase "queue" only when explaining the generic automatic playback
+// order or internal data model.
 
 // MARK: - Block model
 
@@ -308,14 +311,14 @@ enum SupportGuide {
         blocks: [
             .paragraph("Autohop is a **download-first** player. Episodes must be downloaded before they can be played. The app never streams directly from the internet during playback."),
             .heading("Downloading an episode"),
-            .paragraph("In the Queue or Priority pages, swipe right on an episode that hasn't been downloaded yet and tap **Download**. A progress bar appears in the episode row while downloading."),
+            .paragraph("In Up Next or the Priority page, swipe right on an episode that hasn't been downloaded yet and tap **Download**. A progress bar appears in the episode row while downloading."),
             .paragraph("You can also tap the **Download** button that appears inline in the episode metadata row for any undownloaded episode."),
             .heading("Background downloads"),
             .paragraph("Downloads continue in the background even when Autohop is not the active app. If a download is in progress and you lock your phone or switch apps, it will complete automatically using iOS background URL sessions."),
             .heading("Pausing and cancelling"),
             .paragraph("Open the **Downloads** page to see all active downloads. Tap a download row to pause it. Tap again to resume. Swipe left to cancel."),
             .heading("Cellular downloads"),
-            .paragraph("By default, Autohop downloads over Wi-Fi only. To also download over mobile data, go to **Settings → Downloading** and turn on **Download over cellular**. You can also turn off **Download over WiFi** if you want full manual control."),
+            .paragraph("By default, Autohop downloads over both Wi-Fi and mobile data so the queue stays stocked. To restrict automatic downloads, go to **Settings → Downloading** and turn off **Download over cellular**, **Download over WiFi**, or both."),
             .heading("Storage"),
             .paragraph("Downloaded episode files are stored in the app's private storage. Go to **Settings → Storage** to see how many episodes are currently downloaded. Episodes are automatically removed when archived (manually or by auto-archive policy)."),
         ]
@@ -377,7 +380,7 @@ enum SupportGuide {
         id: "sleep-schedule", icon: "bed.double.fill", title: "Sleep Schedule",
         summary: "A recurring nightly timer that checks if you're awake",
         blocks: [
-            .paragraph("Sleep Schedule is a **recurring, nightly sleep timer** — set it up once and it works every night, no taps required at bedtime. It's an Autohop exclusive: nothing like it exists in Apple Podcasts, Pocket Casts or Overcast."),
+            .paragraph("Sleep Schedule is a **recurring, nightly sleep timer** — set it up once and it works every night, no taps required at bedtime."),
             .heading("Setting it up"),
             .steps([
                 "Open the **Menu** (☰) → **Sleep Schedule**.",
@@ -469,7 +472,7 @@ enum SupportGuide {
             .heading("What syncs"),
             .bullets([
                 "Your subscriptions, and the order you ranked them in",
-                "Each podcast's own settings (speed, Trim Silence, Vocal Boost, skips, auto-archive rules)",
+                "Each podcast's own settings (speed, Trim Silence, Vocal Boost, skips, auto-archive rules, Download Filters)",
                 "Played, paused and archived state, and your exact position in each episode",
                 "Your listening history and your stats",
             ]),
@@ -556,13 +559,13 @@ enum SupportGuide {
             .table(headers: nil, rows: [
                 ["Downloads", "Navigate to the Downloads page showing active, completed, and recently archived episodes."],
                 ["Download over WiFi", "Allow downloads on Wi-Fi networks. On by default."],
-                ["Download over cellular", "Allow downloads over mobile data. Off by default — turn on to download over cellular as well as Wi-Fi."],
+                ["Download over cellular", "Allow downloads over mobile data. On by default — turn off to restrict downloads to Wi-Fi or manual control."],
             ]),
             .heading("Controls"),
             .table(headers: nil, rows: [
                 ["Keep Screen Awake", "Prevents the screen from dimming or locking while an episode is actively playing in the full-screen player. Has no effect when playback is paused. Off by default."],
                 ["Lock Screen Scrubbing", "Allows seeking from the Lock Screen and Control Centre scrubber. On by default. Turn off to prevent accidental seeks when your phone is in your pocket."],
-                ["Queue Badge", "Shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. On by default. Turn off to clear the badge."],
+                ["Up Next Badge", "Shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. On by default. Turn off to clear the badge."],
                 ["Skip back", "Duration of the skip-back button in the player. Range: 5–120 seconds in 5-second steps. Default: 15s."],
                 ["Skip forward", "Duration of the skip-forward button in the player. Range: 5–120 seconds in 5-second steps. Default: 30s."],
             ]),
@@ -579,7 +582,7 @@ enum SupportGuide {
             .heading("Sync"),
             .paragraph("Turn on **iCloud Sync** to keep your listening in step across your devices. Off by default. See the iCloud Sync section for the full picture."),
             .heading("Storage"),
-            .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes in the Queue or adjust the Episode Limit in your per-podcast auto-archive settings."),
+            .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes from Up Next or adjust the Episode Limit in your per-podcast auto-archive settings."),
             .heading("About"),
             .paragraph("Shows the app version number and a link to Open Source Acknowledgements."),
             .callout(.tip, "**Having an issue?** Get in touch from the Contact page at kevmarl.com — include your iOS version and a description of what happened."),

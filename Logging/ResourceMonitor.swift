@@ -6,7 +6,17 @@ import Darwin.Mach
 // Captures device/process resource snapshots (Mach task memory, battery,
 // thermal state, low-power mode) for diagnostic log context. AppState attaches
 // a snapshot's metadata to significant log events and runs a periodic sampling
-// timer while diagnostics are enabled. The main-thread watchdog reuses the same
+// timer while diagnostics are enabled.
+// BATTERY/THERMAL DIAGNOSTICS: each snapshot also carries `cpuPercent` (app CPU as
+// a % of one core, summed over live non-idle threads via task_threads/thread_info —
+// the primary "warm phone" signal; sustained high values with the app backgrounded /
+// audio-only point at a busy loop or over-frequent timer), `threadCount`, and
+// `batteryDrainPctPerHour` (discharge rate tracked between real 1% level changes,
+// unplugged only). Thermal escalations and Low Power Mode flips are ALSO logged as
+// discrete events (resources.thermalChange / resources.powerModeChange) so they're
+// timestamped, not just caught at the next 60 s sample. Pair with AppState.resource
+// context's `playingVideo`, `activeDownloads`, `refreshActive`, and the playback-tick
+// cost fields to attribute the load. The main-thread watchdog reuses the same
 // lightweight context provider only when a hang/recovery is detected, so hang
 // bursts include app state without doing extra work on every 100 ms watchdog
 // tick. The watchdog must keep only one outstanding main-queue ping at a time:
@@ -36,9 +46,23 @@ struct ResourceSnapshot {
     var physicalMemoryMB: Int
     var deviceModel: String
     var osVersion: String
+    /// Instantaneous app (task) CPU load as a percentage of ONE core — summed over
+    /// all live, non-idle threads. > 100 means multiple cores busy. The primary
+    /// signal for "the phone feels warm": sustained high values here (especially with
+    /// the app backgrounded / audio-only) point at a busy loop, over-frequent timer,
+    /// or runaway view invalidation rather than normal playback.
+    var cpuUsagePercent: Double?
+    /// Live thread count — a spike or steady climb hints at thread churn / leaks that
+    /// also burn CPU.
+    var threadCount: Int?
+    /// Battery drain since the last level change, in percentage points per hour
+    /// (positive = draining). Only populated while unplugged and after the level has
+    /// actually moved, so it reflects a real discharge rate rather than 1%-granularity
+    /// noise. Correlate a high rate with the concurrent cpuUsagePercent / thermalState.
+    var batteryDrainPercentPerHour: Double?
 
     var metadata: [String: String] {
-        [
+        var m = [
             "footprintMB": "\(footprintMB)",
             "residentMemoryMB": "\(residentMemoryMB)",
             "batteryPercent": batteryLevelPercent.map(String.init) ?? "unknown",
@@ -50,6 +74,12 @@ struct ResourceSnapshot {
             "deviceModel": deviceModel,
             "osVersion": osVersion
         ]
+        if let cpuUsagePercent { m["cpuPercent"] = String(format: "%.0f", cpuUsagePercent) }
+        if let threadCount { m["threadCount"] = "\(threadCount)" }
+        if let batteryDrainPercentPerHour {
+            m["batteryDrainPctPerHour"] = String(format: "%.1f", batteryDrainPercentPerHour)
+        }
+        return m
     }
 }
 
@@ -174,9 +204,34 @@ final class ResourceMonitor {
     private var samplingTask: Task<Void, Never>?
     private var lastSnapshotTime: Date?
     private let minimumManualSnapshotInterval: TimeInterval = 8
+    /// Anchor for the battery drain-rate calc: the last level (0…1) and when it was
+    /// observed. Held until the level actually changes so the rate spans a real 1%
+    /// drop rather than 60 s of unchanged reading.
+    private var batteryAnchor: (level: Float, at: Date)?
 
     private init() {
         UIDevice.current.isBatteryMonitoringEnabled = true
+        // Thermal + power-mode transitions logged as discrete events so a "warm phone"
+        // escalation (nominal → fair → serious) is timestamped and correlatable with
+        // what the app was doing, not just caught at the next 60 s sample. These
+        // notifications post on arbitrary threads, so observe on the main queue and
+        // assumeIsolated to stay MainActor-safe (ResourceMonitor is @MainActor).
+        NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                let monitor = ResourceMonitor.shared
+                monitor.logger.warning("resources.thermalChange", "Thermal state changed", metadata: monitor.snapshot().metadata)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                let monitor = ResourceMonitor.shared
+                monitor.logger.info("resources.powerModeChange", "Low Power Mode changed", metadata: monitor.snapshot().metadata)
+            }
+        }
     }
 
     func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
@@ -212,6 +267,7 @@ final class ResourceMonitor {
         let device = UIDevice.current
         let batteryLevel = device.batteryLevel >= 0 ? Int((device.batteryLevel * 100).rounded()) : nil
         let processInfo = ProcessInfo.processInfo
+        let cpu = cpuUsage()
 
         return ResourceSnapshot(
             footprintMB: taskMemory.footprintMB,
@@ -223,8 +279,74 @@ final class ResourceMonitor {
             activeProcessorCount: processInfo.activeProcessorCount,
             physicalMemoryMB: Int(processInfo.physicalMemory / 1_048_576),
             deviceModel: deviceModelIdentifier(),
-            osVersion: "\(device.systemName) \(device.systemVersion)"
+            osVersion: "\(device.systemName) \(device.systemVersion)",
+            cpuUsagePercent: cpu?.percent,
+            threadCount: cpu?.threadCount,
+            batteryDrainPercentPerHour: batteryDrainRate(level: device.batteryLevel, state: device.batteryState)
         )
+    }
+
+    /// Discharge rate in percentage points per hour, tracked between real 1% level
+    /// changes. Returns nil while charging, before the level has moved, or when the
+    /// level is unknown. Mutates `batteryAnchor` (safe — ResourceMonitor is a class).
+    private func batteryDrainRate(level: Float, state: UIDevice.BatteryState) -> Double? {
+        guard level >= 0 else { return nil }
+        let now = Date()
+        let charging = state == .charging || state == .full
+        guard !charging else {
+            batteryAnchor = (level, now)   // no discharge while on power
+            return nil
+        }
+        guard let anchor = batteryAnchor else {
+            batteryAnchor = (level, now)
+            return nil
+        }
+        if level < anchor.level {
+            let hours = now.timeIntervalSince(anchor.at) / 3600
+            let rate = hours > 0 ? Double(anchor.level - level) * 100 / hours : nil
+            batteryAnchor = (level, now)   // re-anchor at the new, lower level
+            return rate
+        }
+        if level > anchor.level {
+            batteryAnchor = (level, now)   // level rose (brief charge) — reset
+        }
+        // level == anchor.level: keep the anchor so elapsed grows until a real drop.
+        return nil
+    }
+
+    /// Instantaneous app CPU load as a % of one core (sum over live non-idle threads),
+    /// plus the live thread count. See `ResourceSnapshot.cpuUsagePercent`.
+    private func cpuUsage() -> (percent: Double, threadCount: Int)? {
+        var threadsArray: thread_act_array_t?
+        var threadCount = mach_msg_type_number_t(0)
+        guard task_threads(mach_task_self_, &threadsArray, &threadCount) == KERN_SUCCESS,
+              let threadsArray else { return nil }
+        defer {
+            vm_deallocate(
+                mach_task_self_,
+                vm_address_t(UInt(bitPattern: threadsArray)),
+                vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
+            )
+        }
+        // TH_USAGE_SCALE (1000) and TH_FLAGS_IDLE (0x1) are C macros that don't import
+        // into Swift; use their fixed values from <mach/thread_info.h>.
+        let usageScale = 1000.0
+        let idleFlag: Int32 = 0x1
+        let infoCount = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        var totalPercent = 0.0
+        for i in 0..<Int(threadCount) {
+            var info = thread_basic_info()
+            var count = infoCount
+            let kr = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    thread_info(threadsArray[i], thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
+                }
+            }
+            if kr == KERN_SUCCESS, (info.flags & idleFlag) == 0 {
+                totalPercent += Double(info.cpu_usage) / usageScale * 100.0
+            }
+        }
+        return (totalPercent, Int(threadCount))
     }
 
     private func deviceModelIdentifier() -> String {

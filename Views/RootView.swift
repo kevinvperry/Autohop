@@ -12,6 +12,10 @@ import SwiftUI
 // Also shows the launch splash overlay briefly on cold start. MiniPlayerBar
 // artwork uses a 40 pt CachedArtworkImage target so the always-visible chrome
 // reuses the shared artwork cache without decoding full covers.
+// PERF-1: MiniPlayerBar's progress bar + remaining-time readout observe the
+// @EnvironmentObject PlaybackClock (playbackClock.time), NOT
+// appState.currentPlayerTime — AppState no longer publishes the 2 Hz tick, so
+// reading the proxy in body would render stale time.
 //
 // ONBOARDING / LAUNCH ROUTING (ONBOARDING_PLAN.md; FEATURES.md §18): on cold
 // start the .task decides the initial navigationPath while the splash is up —
@@ -66,12 +70,15 @@ struct SheetCloseButton: View {
 /// nothing when no episode is loaded.
 struct MiniPlayerBar: View {
     @EnvironmentObject private var appState: AppState
+    /// 2 Hz playback tick (PERF-1): the progress bar / remaining-time readout observe
+    /// this dedicated clock so AppState no longer publishes on every 0.5 s update.
+    @EnvironmentObject private var playbackClock: PlaybackClock
 
     var body: some View {
         if let episode = appState.currentPlayerEpisode {
             let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID)
             let duration = episode.durationSeconds ?? 0
-            let progress = duration > 0 ? min(1, max(0, appState.currentPlayerTime / duration)) : 0
+            let progress = duration > 0 ? min(1, max(0, playbackClock.time / duration)) : 0
 
             // Edge-to-edge: opaque full-width bar so page content never shows
             // through or scrolls visibly beneath it.
@@ -112,7 +119,7 @@ struct MiniPlayerBar: View {
                             }
                             if duration > 0 {
                                 if subscription?.title != nil { Text("•") }
-                                Text("-\(formatRemaining(max(0, duration - appState.currentPlayerTime)))")
+                                Text("-\(formatRemaining(max(0, duration - playbackClock.time)))")
                                     .monospacedDigit()
                             }
                         }
@@ -347,7 +354,7 @@ struct LaunchLoadingView: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("Loading your queue")
+                Text("Loading Up Next")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.58))
             }

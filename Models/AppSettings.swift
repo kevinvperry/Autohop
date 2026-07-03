@@ -1,5 +1,15 @@
 import Foundation
 
+// AI CONTEXT — Models/AppSettings.swift
+// Global (non-per-podcast) settings value type, persisted by SettingsStore as
+// JSON. These are currently local/device settings only: CloudKit sync covers
+// subscriptions, episode state, listening history, and stats, but not AppSettings.
+// Keep every default synchronized with FEATURES.md, SYNC_DESIGN.md, SettingsView,
+// SupportContent, and the website Support/Privacy pages. In particular,
+// downloadOverWifi and downloadOverCellular both intentionally default true:
+// a fresh install should keep the download-first queue stocked on Wi-Fi and
+// mobile data unless the user chooses to restrict either network type.
+
 /// Which screen Autohop opens to on a normal cold launch (set in App Settings →
 /// Startup). The first-run Welcome flow always takes precedence for brand-new
 /// users; this applies once onboarding is complete. See RootView launch routing.
@@ -19,9 +29,7 @@ enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-// AI CONTEXT — Models/AppSettings.swift
-// Global (non-per-podcast) settings value type, persisted by SettingsStore as
-// JSON. podcastPollMinutes is the Release Radar sensitivity (how often a feed
+// podcastPollMinutes is the Release Radar sensitivity (how often a feed
 // is re-checked while a drop is imminent, default 5 min). The *Migrated flags
 // are one-shot first-launch migration markers (e.g. moving existing users to
 // the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag

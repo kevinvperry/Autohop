@@ -13,8 +13,15 @@ import SwiftUI
 // notification bell shown beside it for real subscriptions, bound to
 // Subscription.notificationsEnabled)
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
-// DESIGN.md) pushing EpisodeDetailView, with the standard leading (Play / Play
-// Next) and trailing (Archive / Play Last) swipes — NO share swipe. For an
+// DESIGN.md) pushing EpisodeDetailView, with leading (Play / Play Next) and
+// trailing (far-right Download/Archive · Play Last) swipes — NO share swipe.
+// The trailing FAR-RIGHT button follows the download state: a DOWNLOADED episode
+// shows Archive (purple, archivebox); an un-downloaded episode on a subscribed +
+// ACTIVE feed shows Download (teal, arrow.down.circle) which downloads into the Up
+// Next queue at its priority-sorted position (no play). On non-subscribed previews
+// or Inactive subscriptions (Download must not appear there) the far-right button
+// falls back to the original Archive/Unarchive. Unarchive is otherwise only on the
+// Episode Detail page. For an
 // real subscription, not-downloaded rows that Download Filters currently exclude
 // show the grey Skipped status pill while swipe/manual actions still work. The
 // feed-refresh button sits on the "Episodes" heading row
@@ -29,6 +36,15 @@ import SwiftUI
 // row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
 // prefetches are cancelled so long feeds with many distinct episode images do
 // not compete with on-screen artwork loads.
+// TAP-CRASH HISTORY: intermittent (~50%) crashes when tapping an episode row to
+// push EpisodeDetailView had TWO independent causes. (1) duplicate ForEach IDs —
+// fixed at the source in updateEpisodes plus the defensive dedupe below;
+// (2) the REAL persistent one, fixed July 2026: EpisodeDetailView's description
+// card (HTMLDescriptionText in PlayerView.swift) ran the WebKit-backed
+// NSAttributedString HTML importer synchronously inside `body` during the push
+// transition — illegal during layout and intermittently fatal. It now parses in
+// `.task`. If this crash ever resurfaces, look for NEW in-body HTML imports, not
+// for ID duplicates.
 
 struct PodcastDetailView: View {
     @EnvironmentObject private var appState: AppState
@@ -780,7 +796,26 @@ struct PodcastDetailView: View {
     private func trailingSwipe(episode: Episode, sub: Subscription) -> some View {
         let isCurrentlyPlaying = appState.currentPlayerEpisode?.id == episode.id
         if !isCurrentlyPlaying {
-            if episode.playedState == .archived || episode.playedState == .played {
+            // Far-right (edge) button. Global rules: a DOWNLOADED episode always offers
+            // Archive; an un-downloaded episode on a subscribed + ACTIVE feed offers
+            // Download (teal). For non-subscribed previews or Inactive subscriptions
+            // (where Download must not appear) it falls back to the original
+            // Archive/Unarchive so those rows keep an archive control.
+            if episode.downloadState == .downloaded {
+                Button {
+                    Task { await appState.archiveEpisode(episode) }
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .tint(.purple)
+            } else if isRealSubscription, !sub.excludeFromAutoFeedRefresh {
+                Button {
+                    Task { await appState.downloadEpisodeForQueue(episode) }
+                } label: {
+                    Label("Download", systemImage: "arrow.down.circle")
+                }
+                .tint(.teal)
+            } else if episode.playedState == .archived || episode.playedState == .played {
                 Button {
                     appState.unarchiveEpisode(episode)
                 } label: {

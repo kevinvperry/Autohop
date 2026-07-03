@@ -1,6 +1,14 @@
 About This File (Autohop Project Note)
 ======================================
 
+AI CONTEXT - LICENSE-MPL-2.0.md
+This project note precedes the verbatim MPL-2.0 license text. It is the
+maintainer-facing map of which Autohop files contain code derived from Pocket
+Casts for iOS, which surrounding features were inspired by Pocket Casts design
+ideas or common podcast-player conventions, and which files remain original MIT
+Autohop code. Do not weaken the Pocket Casts attribution without re-auditing the
+listed source files against Automattic/pocket-casts-ios.
+
 This file contains the complete, verbatim text of the Mozilla Public
 License, Version 2.0 (MPL-2.0). It is included in the Autohop project
 because portions of Autohop's audio engine are derived from **Pocket Casts
@@ -60,8 +68,7 @@ patterns, and UX conventions*, not copied code or assets: every
 implementation outside the MPL-covered files listed above is an original,
 independent Swift reimplementation (own algorithms, layouts, and visual
 design), and no Pocket Casts artwork, strings, or interface assets are used.
-This
-acknowledgement is offered for transparency and credit, not because the
+This acknowledgement is offered for transparency and credit, not because the
 MPL-2.0 requires it.
 
 > **Maintainer note (resolved 2026-06-18):** `Models/Synced.swift` was

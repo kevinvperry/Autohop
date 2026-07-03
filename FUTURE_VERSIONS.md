@@ -104,6 +104,29 @@ the app. Ordered roughly by how much each one caps the addressable market.*
   it now. New users feel the wait as friction before they read the rationale.
   Consider a "stream while downloading" / play-from-partial-download path so the
   download-first architecture stays intact.
+- 💡 **Apple Watch app** — full implementation proposal written (2026-07-02):
+  `Docs/WATCH_APP_IMPLEMENTATION_PROPOSAL.md`, based on a file-level review of the
+  Pocket Casts watch app (local clone). Remote-first phasing: Phases 1–2 = phone
+  remote control (Now Playing + Priority Stack actions, no watch DB) form a shippable
+  v1; Phase 3 = standalone watch playback with CloudKit sync — a differentiator,
+  since Autohop can offer phone-free watch playback without the subscription
+  Pocket Casts requires for theirs.
+- 💡 **Apple TV (tvOS) app** — full implementation proposal written (2026-07-03):
+  `Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md`, based on a file-level review of the
+  Pocket Casts TV app plus tvOS platform research. Streaming-first (tvOS storage is
+  purgeable — only ~500 KB durable), audio + video via AVPlayerViewController with
+  chapter markers, Liquid Glass / sidebarAdaptable UI. Its Phase 0 is a
+  cross-platform codebase refactor (AutohopCore platform matrix, AppState domain
+  extraction, streaming engine) that also unblocks the watch app, thins CarPlay,
+  makes iPad cheap, and lays the foundation for the "Streaming / instant play"
+  Tier 1 item above.
+- 💡 **iOS 27 resizability / adaptive layout (iPad + foldable readiness)** — full
+  implementation proposal written (2026-07-03): `Docs/RESPONSIVE_LAYOUT_PROPOSAL.md`,
+  from WWDC26's app-resizability push ("dynamic range of sizes and aspect ratios",
+  fluid reflow not letterboxing). Phased: fluid iPhone at arbitrary window sizes →
+  iPad enablement (supersedes the tvOS doc's Phase 5 stub) → hinge-API adoption once
+  foldable hardware/APIs are public. Note: rebuilding against the iOS 27 SDK
+  auto-opts Autohop into resizability, so Phase 0/1 have a soft deadline.
 - 💡 **Cross-platform reach (Android / web / desktop / CarPlay-watch)** — iOS-only
   caps the market hard (Pocket Casts is everywhere). Overcast is also iOS-only so
   Autohop isn't uniquely crippled, but the moment a user has an Android phone, work

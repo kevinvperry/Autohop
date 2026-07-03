@@ -159,7 +159,7 @@ A short, skippable value-prop screen (2–3 panels max, or one strong screen). I
 land the mental model, not just look pretty.
 
 - **Panel 1 — the promise:** "Subscribe to your shows. Autohop downloads the latest,
-  builds your queue, and just plays — like radio for your podcasts."
+  builds Up Next, and just plays — like radio for your podcasts."
 - **Panel 2 — (optional) the differentiators in one line:** trim silence, smart speed,
   sleep schedule, shared listening — "less faff, more listening."
 - **Primary CTA:** **Find shows** → Discover.

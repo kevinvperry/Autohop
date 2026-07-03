@@ -21,6 +21,16 @@ import Foundation
 // hidden auto-feed-refresh return rank so an Inactive show can move to the
 // bottom on one device and later restore its old Priority Stack position on
 // another.
+//
+// downloadFilterSettings joined the projection in July 2026 (it was
+// local/backup-only in v1). Struct-level LWW like the other settings
+// sub-structs. UPGRADE PATH: adding the field makes pre-upgrade projection
+// payloads undecodable, which deliberately routes through the existing re-seed
+// heal (AutohopDatabase decode-failure fallback + reseedUndecodableSyncState):
+// each subscription re-seeds fully dirty and re-uploads a complete snapshot,
+// which is also what first populates the filters on the server. Old remote
+// records without the field decode with a nil stamp = "no remote opinion", so
+// they can never reset local filters to defaults.
 
 // MARK: - Episode
 
@@ -141,6 +151,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
     @Synced public var playbackPreference: PlaybackPreference
     @Synced public var autoArchiveSettings: AutoArchiveSettings
     @Synced public var chapterFilter: ChapterFilter
+    @Synced public var downloadFilterSettings: DownloadFilterSettings
 
     /// Seed from a subscription with every field stamped dirty — a new local
     /// subscription needs to be pushed in full on first sync.
@@ -156,6 +167,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _playbackPreference = Synced(wrappedValue: subscription.playbackPreference, modifiedAt: dirtyAt)
         _autoArchiveSettings = Synced(wrappedValue: subscription.autoArchiveSettings, modifiedAt: dirtyAt)
         _chapterFilter = Synced(wrappedValue: subscription.chapterFilter, modifiedAt: dirtyAt)
+        _downloadFilterSettings = Synced(wrappedValue: subscription.downloadFilterSettings, modifiedAt: dirtyAt)
     }
 
     /// Designated initializer from already-wrapped fields — used when decoding a
@@ -171,7 +183,8 @@ public struct SubscriptionSyncState: Codable, Equatable {
         autoFeedRefreshReturnPriorityRank: Synced<Int?> = Synced(wrappedValue: nil),
         playbackPreference: Synced<PlaybackPreference>,
         autoArchiveSettings: Synced<AutoArchiveSettings>,
-        chapterFilter: Synced<ChapterFilter>
+        chapterFilter: Synced<ChapterFilter>,
+        downloadFilterSettings: Synced<DownloadFilterSettings> = Synced(wrappedValue: .default)
     ) {
         self.subscriptionID = subscriptionID
         self.feedURL = feedURL
@@ -184,6 +197,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _playbackPreference = playbackPreference
         _autoArchiveSettings = autoArchiveSettings
         _chapterFilter = chapterFilter
+        _downloadFilterSettings = downloadFilterSettings
     }
 
     /// Field-level last-write-wins merge of a remote projection into this one.
@@ -198,6 +212,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         result._playbackPreference = mergedSyncedField(local: _playbackPreference, remote: remote._playbackPreference)
         result._autoArchiveSettings = mergedSyncedField(local: _autoArchiveSettings, remote: remote._autoArchiveSettings)
         result._chapterFilter = mergedSyncedField(local: _chapterFilter, remote: remote._chapterFilter)
+        result._downloadFilterSettings = mergedSyncedField(local: _downloadFilterSettings, remote: remote._downloadFilterSettings)
         return result
     }
 
@@ -212,6 +227,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         playbackPreference = subscription.playbackPreference
         autoArchiveSettings = subscription.autoArchiveSettings
         chapterFilter = subscription.chapterFilter
+        downloadFilterSettings = subscription.downloadFilterSettings
     }
 
     public var hasPendingChanges: Bool {
@@ -224,6 +240,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
             || _playbackPreference.hasPendingChange
             || _autoArchiveSettings.hasPendingChange
             || _chapterFilter.hasPendingChange
+            || _downloadFilterSettings.hasPendingChange
     }
 
     public mutating func markClean() {
@@ -236,6 +253,7 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _playbackPreference.markClean()
         _autoArchiveSettings.markClean()
         _chapterFilter.markClean()
+        _downloadFilterSettings.markClean()
     }
 
     public mutating func markAllDirty(at date: Date = Date()) {
@@ -248,5 +266,6 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _playbackPreference.markDirty(at: date)
         _autoArchiveSettings.markDirty(at: date)
         _chapterFilter.markDirty(at: date)
+        _downloadFilterSettings.markDirty(at: date)
     }
 }

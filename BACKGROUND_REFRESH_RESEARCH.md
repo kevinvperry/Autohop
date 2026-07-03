@@ -207,7 +207,33 @@ This is the only way to exercise the handler on demand; real wakes are non-deter
 
 ---
 
-## 9. Sources
+## 9. Diagnosing wake behaviour from the diagnostic log
+
+Three log signals answer "why didn't background refresh run?" without a debugger:
+
+- **`app.launch`** (emitted at `didFinishLaunching`) — `launchState=background` means iOS
+  cold-launched the app itself (a BGTask/push wake): the system IS willing to wake it.
+  `launchState=foreground` on *every* start, never `background`, is the signature of a
+  **terminated / user-force-quit app** — iOS never runs BGTasks for a force-quit app, so
+  it only ever comes back because the user reopened it. `backgroundRefreshStatus` on the
+  same line reports the OS permission (`available` / `denied` / `restricted`).
+- **`background.launch` / `background.processingLaunch`** — logged as the *first* line of
+  each BGTask handler. Their **absence** across a session means iOS never fired the task
+  (not an app failure). Both now carry `backgroundRefreshStatus` too.
+- **`background.schedule`** — a successful `submit()`; since `submit()` throws
+  `.notPermitted` when Background App Refresh is off, a `background.schedule` with no
+  paired `background.notPermitted` implies the permission is on. Confirm against the
+  explicit `backgroundRefreshStatus` label (also stamped into the Release Radar export
+  header).
+
+Worked example (2026-07-01 log): activity only 03:24–03:43 then a **cold launch** at
+07:47 (`app.bootstrap`, `autoArchive.start reason=app.startup`) — the process was
+terminated in between. Zero `background.launch` lines in the 4-hour gap ⇒ iOS never ran
+the scheduled task. Every refresh that day was `trigger=foregroundTimer` with the app
+open. Root cause was app termination, not a code/config fault (registration, Info.plist
+identifiers, and scheduling were all correct).
+
+## 10. Sources
 
 - Apple — [BGTaskScheduler](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler),
   [BGAppRefreshTask](https://developer.apple.com/documentation/backgroundtasks/bgapprefreshtask),

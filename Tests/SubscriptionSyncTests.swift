@@ -353,4 +353,88 @@ final class SubscriptionSyncTests: XCTestCase {
 
         XCTAssertNil(store.subscription(id: id))
     }
+
+    // MARK: - Download Filters sync (joined the projection July 2026)
+
+    private func makeCustomFilters() -> DownloadFilterSettings {
+        var filters = DownloadFilterSettings.default
+        filters.titleEnabled = true
+        filters.matchMode = .any
+        filters.titleRules = [DownloadFilterSettings.TextRule(behavior: .exclude, operation: .contains, term: "trailer")]
+        filters.durationEnabled = true
+        filters.durationRules = [DownloadFilterSettings.DurationRule(behavior: .include, comparison: .longerThan, minutes: 20)]
+        return filters
+    }
+
+    func testDownloadFilterSettingsRecordRoundTrip() throws {
+        var sub = makeSubscription(title: "Filtered")
+        sub.downloadFilterSettings = makeCustomFilters()
+        let state = SubscriptionSyncState(subscription: sub)
+
+        let record = CloudKitSync.makeRecord(from: state)
+        let decoded = try XCTUnwrap(CloudKitSync.subscriptionSyncState(from: record))
+
+        XCTAssertEqual(decoded.downloadFilterSettings, sub.downloadFilterSettings)
+        XCTAssertNotNil(decoded.$downloadFilterSettings.modifiedAt)
+    }
+
+    func testRemoteRecordWithoutFiltersFieldPreservesLocalFilters() throws {
+        var sub = makeSubscription()
+        sub.downloadFilterSettings = makeCustomFilters()
+        var local = SubscriptionSyncState(subscription: sub)
+        local.markClean()
+
+        // A record written before filters joined sync has no filter field; it
+        // must decode with a nil stamp ("no remote opinion"), never as an
+        // authoritative default that could wipe local filters.
+        let record = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CloudKitSync.subscriptionRecordID(id: sub.id)
+        )
+        record["subscriptionID"] = sub.id.uuidString
+        record["feedURL"] = sub.feedURL.absoluteString
+        let remote = try XCTUnwrap(CloudKitSync.subscriptionSyncState(from: record))
+        XCTAssertNil(remote.$downloadFilterSettings.modifiedAt)
+
+        let merged = local.merged(withRemote: remote)
+        XCTAssertEqual(merged.downloadFilterSettings, sub.downloadFilterSettings)
+    }
+
+    @MainActor
+    func testApplyRemoteFiltersUpdatesExistingSubscription() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let ep = Episode(subscriptionID: id, guid: "g1", title: "Ep", audioURL: URL(string: "https://e.com/a.mp3")!)
+        let created = try store.addSubscription(id: id, feedURL: URL(string: "https://f.com/feed")!, title: "Show", author: nil, artworkURL: nil, latestEpisode: ep)
+        await store.flushPendingSaves()
+
+        var remoteSub = created
+        remoteSub.downloadFilterSettings = makeCustomFilters()
+        let remote = SubscriptionSyncState(subscription: remoteSub, dirtyAt: Date())
+
+        store.applyRemoteSubscriptionState(remote)
+        await store.flushPendingSaves()
+
+        XCTAssertEqual(store.subscription(id: id)?.downloadFilterSettings, remoteSub.downloadFilterSettings)
+    }
+
+    @MainActor
+    func testLocalFilterEditMarksOnlyFiltersPending() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let ep = Episode(subscriptionID: id, guid: "g1", title: "Ep", audioURL: URL(string: "https://e.com/a.mp3")!)
+        _ = try store.addSubscription(id: id, feedURL: URL(string: "https://f.com/feed")!, title: "Show", author: nil, artworkURL: nil, latestEpisode: ep)
+        await store.flushPendingSaves()
+        let db = try XCTUnwrap(store.database)
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
+
+        store.updateDownloadFilterSettings(subscriptionID: id, settings: makeCustomFilters())
+        await store.flushPendingSaves()
+
+        let pending = try db.pendingSubscriptionSyncStates()
+        let state = try XCTUnwrap(pending.first { $0.subscriptionID == id })
+        XCTAssertTrue(state.$downloadFilterSettings.hasPendingChange)
+        // Field-level dirty-tracking: an untouched sibling setting stays clean.
+        XCTAssertFalse(state.$playbackPreference.hasPendingChange)
+    }
 }

@@ -48,11 +48,11 @@ struct QueueSheetView: View {
     @State private var expandedEpisodeID: UUID? = nil
 
     /// Tapped-gear shortcut from an expanded row. The presenter (PlayerView) uses
-    /// this to dismiss the Queue sheet and open that podcast's Settings in its
-    /// place ("replace the queue"). Optional so previews/other callers still work.
+    /// this to dismiss the Up Next sheet and open that podcast's Settings in its
+    /// place ("replace Up Next"). Optional so previews/other callers still work.
     var onOpenPodcastSettings: ((UUID) -> Void)? = nil
     /// Tapped-podcast shortcut from an expanded row. The presenter (PlayerView)
-    /// dismisses the Queue sheet and opens that podcast's Detail page in its place.
+    /// dismisses the Up Next sheet and opens that podcast's Detail page in its place.
     var onOpenPodcastDetail: ((UUID) -> Void)? = nil
 
     private let logger = AppLogger.shared
@@ -62,7 +62,7 @@ struct QueueSheetView: View {
             Group {
                 if appState.downloadedQueue.isEmpty {
                     ContentUnavailableView(
-                        "Your queue builds itself",
+                        "Up Next builds itself",
                         systemImage: "square.stack",
                         description: Text("As you subscribe and episodes download, they line up here in priority order — newest first, ready to play.")
                     )

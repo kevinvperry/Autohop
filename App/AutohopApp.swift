@@ -6,13 +6,17 @@ import SwiftUI
 // CarPlaySceneDelegate.didConnect and set an immediate Loading template before
 // the heavier app model is created. The iPhone WindowGroup uses
 // AutohopRootBootstrapView to reuse or bootstrap AppState only when the phone UI
-// actually appears, then injects it as an EnvironmentObject under RootView and
+// actually appears, then injects it as an EnvironmentObject under RootView —
+// alongside appState.playbackClock (PERF-1: the dedicated 2 Hz playback-time
+// observable that only PlayerView's scrubber and MiniPlayerBar observe) — and
 // wires scene-phase transitions:
 //  - on launch: resume playback position if an episode was mid-play
 //    (startPlaybackOnLaunchIfNeeded)
 //  - on foreground: run the auto-archive pass if 30 min have elapsed
 //  - on background/inactive: flush playback position + listening stats to disk
-//    (these are write-throttled in memory, so leaving foreground must force-save).
+//    (these are write-throttled in memory, so leaving foreground must force-save),
+//    then flushDeferredSyncPushes so slow-lane (history/stats) CloudKit changes
+//    held on the sync engine's ~60 s coalescing debounce upload before suspension.
 @main
 struct AutohopApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -35,6 +39,9 @@ private struct AutohopRootBootstrapView: View {
             if let appState {
                 RootView()
                     .environmentObject(appState)
+                    // 2 Hz playback tick — observed only by the scrubber/mini-player
+                    // surfaces (PERF-1), so the tick no longer wakes AppState observers.
+                    .environmentObject(appState.playbackClock)
                     .task {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }
@@ -45,6 +52,12 @@ private struct AutohopRootBootstrapView: View {
                         } else {
                             appState.persistCurrentPlaybackPosition()
                             appState.listeningStatsStore.save()
+                            // After the stats/history saves above, so the sync
+                            // scan sees the freshest rows (see CloudSyncEngine
+                            // slow-lane coalescing).
+                            appState.flushDeferredSyncPushes(
+                                reason: phase == .background ? "scene.background" : "scene.inactive"
+                            )
                         }
                     }
             } else {

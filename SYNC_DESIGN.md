@@ -2,20 +2,22 @@
 
 <!--
 AI CONTEXT — SYNC_DESIGN.md
-Canonical design/status note for Autohop's opt-in CloudKit sync layer. Keep this
+Canonical design/status note for Autohop's opt-in CloudKit sync layer. Verified
+again during the 2026-06-28 deep scan. Keep this
 aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
 Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
 Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
 (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique
 across record types inside a zone. Refresh scheduling stats remain local, and
-download/media state never syncs. DownloadFilterSettings is also intentionally
-local/backup-only in v1 and must not be added to SubscriptionSyncState without a
-deliberate product decision.
+download/media state never syncs. DownloadFilterSettings JOINED the sync
+projection in July 2026 (Kevin's product decision) — it was local/backup-only in
+v1; see "Download Filters sync" notes throughout.
 June 2026 diagnostic repair context lives here too: collision quarantine,
 legacy pending-save retirement, full-record namespace migration, recovery from
 legacy unprefixed subscription records after the sparse-record data-loss
-regression, and DayStats conflict convergence/storm logging. Non-sync diagnostic
+regression, and DayStats conflict convergence/storm logging. July 2026 added
+type-aware push coalescing (fast/slow lanes — see "Push coalescing" below). Non-sync diagnostic
 repairs from the same cycle are summarized in `FEATURES.md`: Release Radar
 protected background refresh slots, rolling one-item feed download cleanup,
 foreground/background refresh attribution, playback-tick timing, main-thread
@@ -48,19 +50,20 @@ Verified against `Models/SyncState.swift`, `Persistence/CloudKitSyncMapping.swif
 | **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`AppState.materializeRemoteSubscription`); unsubscribe leaves a `subscribed=false` tombstone. |
 | **Per-episode user state** (playedState, wasCompleted, lastPlayedAt) | ✅ Yes | `EpisodeState` | Field-level LWW + active-player-wins + self-heal. |
 | **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Whole-entry record-level LWW by `lastListenedAt`. This is also how **playback position** roams. |
-| **Individual subscription settings** | ⚠️ Mostly | `SubscriptionState` | Synced: priority rank (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title. **NOT synced:** Download Filters, Release Radar `refreshStats` (see below). |
+| **Individual subscription settings** | ✅ Yes | `SubscriptionState` | Synced: priority rank (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title, **downloadFilterSettings (since July 2026)**. **NOT synced:** Release Radar `refreshStats` (see below). |
 | **Stats page data** | ✅ Yes | `DayStats` | Additive per-device partition `(deviceID, dayKey)`; the Stats page sums across devices on read. Pre-tracking lifetime baseline stays per-device (deferred). |
 | **Overall system settings** (`AppSettings`: poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags, …) | ❌ **No** | — (no record type) | Local `UserDefaults` only; roams **only** via iCloud/device backup-restore, not live CloudKit sync. A fresh install starts from defaults until restored. |
-| **Per-podcast Download Filters** (`DownloadFilterSettings`) | ❌ No | — | On the local `Subscription` payload; backup/local-only in v1 by deliberate decision. |
+| **Per-podcast Download Filters** (`DownloadFilterSettings`) | ✅ Yes (July 2026) | `SubscriptionState` | JSON blob + stamp on the subscription record, struct-level LWW. Was backup/local-only in v1; records written before the field existed decode with a nil stamp and never reset local filters. |
 | **Release Radar learned schedule** (`refreshStats` / `releaseObservations`) | ❌ No | — | Per-device learning; relearns from the feed on each device. |
 | **Downloaded media / download state / files** | ❌ No | — | Per-device by design — re-downloadable from the feed. |
 | **Catalog content** (episode/show title, description, artwork, categories) | ❌ No | — | Re-hydrates from the RSS feed; never synced. |
 
 > **Headline for a reviewer:** the four user-state domains the question asks about —
-> subscriptions, listening history, per-podcast settings, and stats — are all covered.
-> The two intentional gaps to be aware of are **global app settings** and **per-podcast
-> Download Filters** (plus the per-device Release Radar learning), which do **not** roam
-> in v1. See FUTURE_VERSIONS.md if any of these should become a roaming setting.
+> subscriptions, listening history, per-podcast settings (including Download
+> Filters since July 2026), and stats — are all covered. The intentional gaps to
+> be aware of are **global app settings** and the per-device Release Radar
+> learning, which do **not** roam. See FUTURE_VERSIONS.md if any of these should
+> become a roaming setting.
 
 ## Transport: `CKSyncEngine` (not `NSPersistentCloudKitContainer`)
 The container does record-level LWW with no merge hook — it would lose concurrent
@@ -73,8 +76,8 @@ the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
 Release Radar refresh stats are persisted locally on the subscription row but are
 not part of the CloudKit sync projection; refresh-stat-only saves publish no
 `objectWillChange`, so routine polling evidence does not wake the UI or sync
-engine. DownloadFilterSettings is persisted on the local Subscription payload but
-is also outside the sync projection in v1.
+engine. DownloadFilterSettings is persisted on the local Subscription payload
+and, since July 2026, is also part of the sync projection.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
@@ -88,8 +91,15 @@ Projections (Models/SyncState.swift):
 - `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
   autoFeedRefreshReturnPriorityRank (the hidden Inactive return rank), notificationsEnabled,
   excludeFromAutoFeedRefresh, playbackPreference, autoArchiveSettings, chapterFilter,
-  + constant `feedURL`. It deliberately excludes DownloadFilterSettings and
-  refreshStats (Release Radar learning) for v1.
+  downloadFilterSettings (since July 2026), + constant `feedURL`. It deliberately
+  excludes refreshStats (Release Radar learning).
+  **Upgrade path for the July 2026 filter field:** pre-upgrade projection payloads
+  no longer decode (Synced has no missing-key fallback), which deliberately routes
+  through the existing decode-failure re-seed (`recordSubscriptionSyncState`
+  fallback + `reseedUndecodableSyncState` at launch): each subscription re-seeds
+  fully dirty and re-uploads a complete snapshot — which is also what first
+  populates filters on the server. Remote records without the field decode with a
+  nil stamp ("no remote opinion") and can never reset local filters to defaults.
 
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
@@ -109,6 +119,39 @@ The namespace is required because CloudKit record IDs are unique across record
 types inside a zone; an old HistoryEntry record can otherwise block a later
 EpisodeState save with the same record name. Decoders keep the legacy fallbacks
 so existing iCloud data remains readable.
+
+## Push coalescing (fast/slow lanes, July 2026)
+A 2026-07-03 diagnostic log review ("Friday log file.log") found 8 separate
+CKSyncEngine pushes in ~2 minutes of playback, each saving only 1–2 records —
+listening-stats day rows and listening-history rows were queued eagerly on
+every debounced store change as playback dirtied them. `CloudSyncEngine`'s
+queue pass is now type-aware:
+
+- **Fast lane** — `EpisodeState` + `SubscriptionState` (discrete user actions):
+  queued immediately on the existing 1 s store-change debounce, unchanged.
+- **Slow lane** — `HistoryEntry` + `DayStats` (continuously re-dirtied by
+  playback): when a queue pass finds *only* slow-lane dirt, it schedules a
+  ~60 s deferred push (`CloudSyncEngine.slowLaneDebounceSeconds`) instead of
+  queueing. If fast-lane dirt is present, slow rows **piggyback** on that push
+  (a CloudKit request is going out anyway).
+- **Lifecycle flush** — `AppState.flushDeferredSyncPushes(reason:)` →
+  `CloudSyncEngine.flushDeferredPushes(reason:)` queues everything immediately
+  at pause (`togglePlayPause`), sleep-timer and sleep-schedule pause, and scene
+  background/resign-active (AutohopApp). These calls run AFTER
+  `ListeningStatsStore.save()`/`flushPendingStatsDays` so the engine's scan
+  sees the freshest day buckets. Engine activation and account sign-in also
+  flush unconditionally.
+
+Coalescing only delays WHEN records are queued, never what they contain: dirty
+rows stay pending in the local database until a push succeeds (`markSaved`), so
+a killed app loses nothing — the rows are re-queued on next activation. All
+other invariants (field-LWW, type-namespaced record IDs, quarantine repair,
+additive stats partitions) are untouched; the quarantine filter applies per
+lane before the defer decision. The pure lane policy
+(`CloudSyncEngine.shouldDeferSlowLane`) is unit-tested headless in
+`Tests/SyncPushCoalescingTests.swift`; the timer/flush paths need a live
+CKSyncEngine and are device-verified via `sync.slowLaneDeferred` /
+`sync.queued` log keys.
 
 ## Field-level merge (`merged(withRemote:)`)
 Per field: a remote value is authoritative only when it carries a non-nil
@@ -134,7 +177,7 @@ adopted clean. Settings sub-structs
 4. ✅ **Subscription + per-podcast settings over CloudKit** — `SubscriptionState`
    record type (current recordName = `subscription:<subscriptionID>`), all
    synced settings + `feedURL` + stored `subscriptionID`; engine handles both
-   record types; DownloadFilterSettings is intentionally not synced in v1;
+   record types; DownloadFilterSettings joined the record in July 2026;
    `applyRemoteSubscriptionState` updates settings /
    processes unsubscribe / signals `.needsMaterialization`;
    `AppState.materializeRemoteSubscription` fetches the feed via FeedService and
@@ -225,8 +268,9 @@ intentionally avoided because it has more cross-device risk than benefit.
 Sync coverage lives in `Tests/SyncStateTests.swift`,
 `CloudKitSyncMappingTests.swift`, `EpisodeDiffPersistTests.swift`,
 `RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift`,
-`SyncGuardsTests.swift`, `HistorySyncTests.swift`, `StatsSyncTests.swift`, and
-`CloudSyncEnginePermanentFailureTests.swift`.
+`SyncGuardsTests.swift`, `HistorySyncTests.swift`, `StatsSyncTests.swift`,
+`CloudSyncEnginePermanentFailureTests.swift`, and
+`SyncPushCoalescingTests.swift` (slow-lane push-coalescing policy).
 The pure projection/mapping/database paths run under `swift test`; the
 `CloudSyncEngine` itself is build/on-device-verified because CKSyncEngine needs
 entitlements, a container, and a signed-in account.
@@ -237,8 +281,13 @@ the primary way to debug sync on-device, since it can't be unit-tested. Grep the
 Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
 
 - **Lifecycle:** `sync.toggle`, `sync.engineActivated` (restoredState), `sync.stopped`, `sync.startAborted`/`sync.accountStatusFailed`, `sync.account*` (signIn/signOut/switch).
-- **Push:** `sync.queued` (per-type counts plus quarantined count; DayStats
+- **Push:** `sync.queued` (per-type counts plus quarantined count and a
+  `slowLane` label — `piggyback` when slow rows rode a fast-lane pass, else the
+  flush reason such as `engineActivated`/`playback.pause`/`scene.background`/
+  `slowLaneDebounce`; DayStats
   entries also include day keys, cached system-field state, and record names),
+  `sync.slowLaneDeferred` (history/stats-only dirt held for the ~60 s slow-lane
+  debounce, with per-type counts),
   `sync.pushed` (saved count), `sync.pushFailed` (retryable CK error code — ERROR),
   `sync.pushQuarantined` (known permanent record-type collision), `sync.legacyPendingDropped`
   (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.

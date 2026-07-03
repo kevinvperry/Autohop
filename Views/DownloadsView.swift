@@ -6,6 +6,13 @@ import SwiftUI
 // and delete actions routed through AppState (which owns file + model state).
 // Rows use CachedArtworkImage with a 44 pt target so this activity-heavy page
 // shares the app-wide downsampled artwork cache rather than decoding full covers.
+// LAYOUT GOTCHAS: the pause/resume/archive `controls` are `.fixedSize()` because
+// they share a row with the progress text — without it a long "NN% • X MB of Y GB"
+// compresses the buttons ("Re-sume" wraps mid-word). Media/explicit pills are
+// INLINE next to the podcast title, not a top-trailing overlay (the overlay
+// version floated over the Downloading/Paused status pill). Progress publishes
+// are coalesced in AppState.onProgressUpdate (≥1% steps) so several concurrent
+// downloads don't re-invalidate this page multiple times per second (scroll jank).
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -248,13 +255,19 @@ private struct DownloadActivityRow: View {
 
                 // Text stack — Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow
                 VStack(alignment: .leading, spacing: 2) {
+                    // Media/explicit pills live INLINE here (not a top-trailing
+                    // overlay): the overlay badges floated over the Downloading/Paused
+                    // status pill and clipped at the card edge. The inline Audio/Video
+                    // pill also already carried the media kind, so the overlay video
+                    // badge was redundant.
                     HStack(spacing: 6) {
                         Text(activity.podcastTitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
 
-                        if activity.status != .completed { mediaPill }
+                        mediaPill
+                        if episode?.isExplicit == true { ExplicitPillSmall() }
                     }
 
                     Text(activity.episodeTitle)
@@ -287,8 +300,9 @@ private struct DownloadActivityRow: View {
                         Text(progressText)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
 
-                        Spacer()
+                        Spacer(minLength: 8)
 
                         controls
                     }
@@ -309,14 +323,6 @@ private struct DownloadActivityRow: View {
             }
         }
         .padding(14)
-        .overlay(alignment: .topTrailing) {
-            if activity.mediaKind == .video || episode?.isExplicit == true {
-                HStack(spacing: 3) {
-                    if activity.mediaKind == .video { VideoPillSmall() }
-                    if episode?.isExplicit == true { ExplicitPillSmall() }
-                }
-            }
-        }
     }
 
     private var placeholderArtwork: some View {
@@ -380,6 +386,9 @@ private struct DownloadActivityRow: View {
     }
 
     private var controls: some View {
+        // fixedSize: the buttons share a row with the progress/error text; without it
+        // a long "21% • 571 MB of 2.67 GB" compresses the buttons and wraps "Resume"
+        // mid-word. Buttons keep their intrinsic size; the text truncates instead.
         HStack(spacing: 16) {
             switch activity.status {
             case .downloading:
@@ -410,6 +419,7 @@ private struct DownloadActivityRow: View {
                 archiveButton
             }
         }
+        .fixedSize()
     }
 
     private var archiveButton: some View {

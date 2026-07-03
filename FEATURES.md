@@ -102,6 +102,8 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **Reordering:** Drag-and-drop in Reorder mode (toolbar toggle). Priority rank can also be edited numerically via the individual podcast settings page.
 
+**Row layout (2026-07-02):** artwork + rank pill · show title (subheadline-semibold) · the show's **channel-level description** clamped to 2 lines (not the latest episode title) · a metadata line `Updated: <relative age>` (mins/hours → "Yesterday" → "2…6 days ago" → exact date; no episode length). See `ListRow-SubscriptionRow` in DESIGN.md.
+
 **Episode status pills:** Each row shows a colour-coded status pill for the podcast's latest episode.
 
 | State | Colour | Meaning |
@@ -177,7 +179,7 @@ A single page (`PodcastDetailView`) serves every state of a podcast — an unsub
 
 **Episode swipe actions:**
 - Leading: **Play** (green), **Play Next** (blue)
-- Trailing: **Archive / Unarchive** (purple), **Play Last** (orange)
+- Trailing (far-right first): a state-driven **Download / Archive** button, then **Play Last** (orange). The far-right button is **Archive** (purple) whenever the episode is downloaded; **Download** (teal — downloads the episode, which queues it at its priority-sorted Up Next position, no playback) when it isn't downloaded *and* the podcast is a subscribed, active feed; and falls back to the original **Archive / Unarchive** (purple) on non-subscribed previews or Inactive subscriptions. Download never appears on previews or Inactive subs; Unarchive is otherwise reached from the Episode Detail page.
 
 ---
 
@@ -410,11 +412,13 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Download states:** `notDownloaded` → `queued` → `downloading` → `downloaded` / `failed`
 
+**Downloads page rows:** three card sections — Downloading (progress bar + pause/resume + archive; controls are fixed-size so long progress text truncates rather than compressing buttons), Downloaded on Device, Recently Archived (re-download). Audio/Video and Explicit pills sit inline next to the podcast title. Progress publishes are coalesced to ≥1% steps so multiple concurrent downloads don't re-render whole pages every second.
+
 **Manual download:** Episodes not yet downloaded show a "Download" button in the episode list row.
 
 **Download controls (global, in Settings):**
 - Download over WiFi (default: on)
-- Download over cellular (default: off)
+- Download over cellular (default: on)
 
 ---
 
@@ -447,7 +451,10 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 
 **Access:** Menu → Sleep Schedule (`SleepScheduleView`). The recurring nightly counterpart to the one-shot Sleep Timer. Logic lives in `Playback/SleepScheduleService.swift`, owned by `AppState`.
 
-> **Marketing note:** Sleep Schedule is an Autohop exclusive — no recurring/scheduled sleep timer with a "still listening?" check exists in Apple Podcasts, Pocket Casts or Overcast. It appears as a unique feature card and comparison-table row on the kevmarl.com promo page and has its own section in the support guide.
+> **Marketing note:** Sleep Schedule should be described as a shipped Autohop
+> recurring sleep-timer feature, not as a competitor claim. It appears as a
+> feature card on the kevmarl.com promo page and has its own section in the
+> support guide.
 
 **Settings (persisted in `AppSettings`):**
 - **Toggle** — `sleepScheduleEnabled` (default off). Runs every night when on.
@@ -557,7 +564,7 @@ Only shown when the podcast's latest episode has chapter data.
 
 **Access:** Podcast Settings → Feed → Download Filters.
 
-Download Filters are stored in `DownloadFilterSettings` on the local `Subscription` model. They are backup/local-only in v1 and are not part of iCloud Sync. Filters affect automatic downloads from refresh, background refresh, and the priority auto-download flow; manual episode actions (Play, Play Next, Play Last, Download) bypass filters. Episodes skipped by filters are excluded from Release Radar's learned feed schedule, so their publish dates/times do not train future refresh windows.
+Download Filters are stored in `DownloadFilterSettings` on the local `Subscription` model, and since July 2026 they also roam via iCloud Sync as part of the per-podcast settings record (struct-level last-write-wins — the most recently edited device's full filter set wins). Filters affect automatic downloads from refresh, background refresh, and the priority auto-download flow; manual episode actions (Play, Play Next, Play Last, Download) bypass filters. Episodes skipped by filters are excluded from Release Radar's learned feed schedule, so their publish dates/times do not train future refresh windows.
 
 | Control | Options | Default | Notes |
 |---|---|---|---|
@@ -790,7 +797,7 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 **One-item hourly and rolling bulletin feeds:** Feeds that publish frequently but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, a stable single-minute feed can be profiled as `hourly`, while mixed-cadence bulletin feeds can be profiled as `rollingBulletin` when they repeatedly use predictable minute marks such as `:00` and `:30`. This covers feeds that publish hourly most of the day but every half hour during a morning news block, so they receive real release windows instead of being ranked as random surveillance. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
-**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly, rolling-bulletin, burst, and daily-weekday feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their predicted due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed. Background cycles protect 6 of their 8 slots for `preWindow`, `activeWindow`, and `missedRelease` candidates before filling remaining slots with ordinary due/backlog work; this is specifically intended to help daily one-episode shows that publish around a known time and rolling bulletin feeds that move between hourly and half-hourly slots.
+**Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly, rolling-bulletin, burst, and daily-weekday feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their expected due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed. Background cycles protect 6 of their 8 slots for `preWindow`, `activeWindow`, and `missedRelease` candidates before filling remaining slots with ordinary due/backlog work; this is specifically intended to help daily one-episode shows that publish around a known time and rolling bulletin feeds that move between hourly and half-hourly slots.
 
 **Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
 
@@ -837,7 +844,7 @@ The three pickers mirror the per-podcast Auto Archive rules (§10.4) and set the
 |---|---|---|---|
 | Downloads | Navigation link | — | Opens the Downloads page showing active, queued, and completed downloads. |
 | Download over WiFi | Toggle | **On** | Allow downloads on Wi-Fi networks. |
-| Download over cellular | Toggle | **Off** | Allow downloads over mobile data. Off by default so the download-first queue only stocks up over Wi-Fi until the user opts in. |
+| Download over cellular | Toggle | **On** | Allow downloads over mobile data. On by default so the download-first queue can stay stocked when Wi-Fi is unavailable; turn off to restrict downloads to Wi-Fi. |
 
 ---
 
@@ -847,7 +854,7 @@ The three pickers mirror the per-podcast Auto Archive rules (§10.4) and set the
 |---|---|---|---|---|
 | Keep Screen Awake | Toggle | **Off** | — | Prevents the screen from dimming or locking while an episode is actively playing in the full-screen player. Has no effect when playback is paused. |
 | Lock Screen Scrubbing | Toggle | **On** | — | Enables seeking from the Lock Screen and Control Centre scrubber. Turn off to prevent accidental seeks when the phone is in a pocket. |
-| Queue Badge | Toggle | **On** | — | Shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Turn off to clear the badge. |
+| Up Next Badge | Toggle | **On** | — | Shows a number on the Autohop app icon counting how many downloaded episodes are ready to play. Turn off to clear the badge. |
 | Skip back | Sheet (5s steps) | **15s** | 5 – 120s | Duration of the skip-back button in the player. Also controls the skip-back interval shown on the Lock Screen and in Control Centre. |
 | Skip forward | Sheet (5s steps) | **30s** | 5 – 120s | Duration of the skip-forward button in the player. Also controls the skip-forward interval shown on the Lock Screen and in Control Centre. |
 
@@ -888,9 +895,9 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, priority, notifications), subscribe/unsubscribe, and listening history. Download Filters are local/backup-only in v1 and do not sync. |
+| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, Download Filters, priority, notifications), subscribe/unsubscribe, and listening history. |
 
-**What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), per-podcast Download Filters (backup/local-only in v1), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
+**What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Per-podcast Download Filters sync as of July 2026 (they were backup/local-only in v1). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
 
 **CloudKit identity and repair:** CloudKit record names are type-namespaced (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique across record types inside the shared zone. Legacy unprefixed records still decode for existing iCloud data. A known permanent legacy collision where a `HistoryEntry` record blocks an `EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the hot retry loop, and left dirty locally so the next queue pass can send it under the new `episode:` name. Restored pre-namespace save attempts are dropped before sending; deletes are preserved. Fresh namespaced EpisodeState and SubscriptionState records are written as full snapshots so clean local fields are not omitted. Sparse remote fields with no modified timestamp are treated as "no remote opinion" and cannot reset local settings to defaults. A one-shot recovery pass reads legacy unprefixed SubscriptionState records, restores settings only for podcasts that still exist locally, and re-uploads complete `subscription:` records. Old unprefixed CloudKit records may remain as recovery orphans until the namespaced data is verified.
 
@@ -912,7 +919,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
-| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, `stats.*`, `playback.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, download state, and the most recent playback-tick timing (`lastPlaybackTick*`). Slow playback ticks emit `playback.tickSlow`; rolling summaries emit `playback.tickSummary`. Stats-sync breadcrumbs emit `stats.pendingMarked` and `stats.flush`; repeated DayStats CloudKit conflicts emit `sync.conflictStorm`, with `statsConflictResolution` showing whether Autohop will refresh the local partition's server fields or apply another device's partition. Watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses, previous/new route output, deferred restarts, and delayed AVAudioEngine route restarts. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, `stats.*`, `playback.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory, and — for battery/thermal diagnosis — `cpuPercent` (app CPU as a % of one core, summed over live threads; the primary "warm phone" signal), `threadCount`, `batteryDrainPctPerHour` (discharge rate between real 1% level changes, unplugged only), plus `thermalState`, `lowPowerMode`, and `playingVideo`. Thermal escalations and Low Power Mode changes are also logged as discrete `resources.thermalChange` / `resources.powerModeChange` events. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, download state, and the most recent playback-tick timing (`lastPlaybackTick*`). Slow playback ticks emit `playback.tickSlow`; rolling summaries emit `playback.tickSummary`. Stats-sync breadcrumbs emit `stats.pendingMarked` and `stats.flush`; repeated DayStats CloudKit conflicts emit `sync.conflictStorm`, with `statsConflictResolution` showing whether Autohop will refresh the local partition's server fields or apply another device's partition. Watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses, previous/new route output, deferred restarts, and delayed AVAudioEngine route restarts. |
 
 ---
 
@@ -922,7 +929,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 **What it is:** A native, dark-themed in-app User Guide that **mirrors the website Support page** (`kevmarl-site/support.html`). The two are kept in sync by hand — any change to support information is applied in both places.
 
-**Structure:** Drill-down navigation. Support opens to a scannable list of topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Queue, Player, Audio Controls, CarPlay, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, iCloud Sync, Listening History, Stats, App Settings.
+**Structure:** Drill-down navigation. Support opens to a scannable list of topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Up Next, Player, Audio Controls, CarPlay, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, iCloud Sync, Listening History, Stats, App Settings.
 
 **Content blocks (native renderers):** paragraphs with inline Markdown bold, headings, bullet and numbered lists, tinted callouts (tip / note / warning), key-value and labelled tables (as cards), colour-coded status pills, and Queue-style swipe-action cards. The website's SVG diagrams are intentionally omitted — the surrounding text and tables carry the same information on a phone screen. See DESIGN.md `ListRow-SupportSection` and `Blocks-Support`.
 
@@ -1067,7 +1074,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 ### Empty states (every new-user-reachable screen points forward)
 - **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.
 - **Subscriptions** (`PodcastsView`): "Your Priority Stack is empty" with **Find shows** and a working **Import subscriptions** (OPML).
-- **Queue / Listening History**: reassuring "builds itself" / "will show up here" copy.
+- **Up Next / Listening History**: reassuring "builds itself" / "will show up here" copy.
 
 ---
 
@@ -1104,7 +1111,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 |---|---|
 | podcastPollMinutes | 5 |
 | downloadOverWifi | true |
-| downloadOverCellular | false |
+| downloadOverCellular | true |
 | notifyNewEpisodes | false |
 | skipBackSeconds | 15 |
 | skipForwardSeconds | 30 |

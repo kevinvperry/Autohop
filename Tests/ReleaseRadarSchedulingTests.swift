@@ -483,6 +483,27 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertFalse(Set(profile.activeWeekdays).contains(1), "Stale Sunday is no longer active")
     }
 
+    /// The Daily scenario: a long Sunday-only back-catalogue (the RSS only retains
+    /// Sunday episodes long-term) plus only ~2 weeks of genuine 7-day capture. The
+    /// recent daily history is too short for any weekday's per-week probability to clear
+    /// the active bar, so the recency-windowed PRESENCE rescue must classify it Daily
+    /// rather than Weekly-on-Sunday.
+    func testStaleSundaySeedWithShortDailyCaptureClassifiesDaily() {
+        let calendar = utcCalendar()
+        let sunday = date(2024, 1, 7, 20, 0, calendar: calendar)
+        // 30 weeks of Sunday-only seed (what survives in the feed long-term).
+        var observations = observationsOnWeekdays(weeks: 30, weekdays: [1], times: [(20, 0)], startSunday: sunday, calendar: calendar)
+        // Then just 2 weeks where all 7 days are actually captured.
+        let recentStart = calendar.date(byAdding: .weekOfYear, value: 30, to: sunday)!
+        observations += observationsOnWeekdays(weeks: 2, weekdays: [1, 2, 3, 4, 5, 6, 7], times: [(20, 0)], startSunday: recentStart, calendar: calendar)
+
+        let profile = FeedScheduleProfiler.profile(from: observations, calendar: calendar)
+
+        XCTAssertEqual(profile.kind, .dailyWeekdays, "Recent 7-day capture must override the stale Sunday-only seed")
+        XCTAssertEqual(profile.categoryLabel, "Daily", "7 active days incl. weekend → Daily, not Weekdays")
+        XCTAssertTrue(Set(profile.activeWeekdays).isSuperset(of: [1, 7]), "A 7-day feed opens weekend slots too")
+    }
+
     /// Multiple episodes per day on MOST days → "Daily – Multiple Episodes" (burst kind).
     func testMultipleEpisodesPerDayMostDaysIsDailyMultiple() {
         let calendar = utcCalendar()

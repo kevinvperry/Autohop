@@ -7,6 +7,16 @@ import UIKit
 // UI, permanently mounted as the NavigationStack root (see RootView). Three
 // horizontally swipeable panels: Now Playing (artwork/scrubber/transport),
 // Details (description), Chapters (only when the episode has chapters).
+// Also hosts the shared HTMLDescriptionText component (used here + episode
+// detail + podcast settings). CRASH FIX July 2026: it must NEVER call the
+// WebKit-backed NSAttributedString HTML importer inside `body`/layout — that
+// intermittently crashed the app (~50% of taps opening EpisodeDetailView).
+// The parse now runs in `.task` (a plain main-actor turn) with an NSCache;
+// keep it that way. A regex-only plain-text fallback renders until it lands.
+// PERF-1: the scrubber's 2 Hz time comes from the @EnvironmentObject
+// PlaybackClock (playbackClock.time), NOT appState.currentPlayerTime — reading
+// the AppState proxy in body would not re-render on ticks (AppState no longer
+// publishes them). Event handlers (skip buttons) may read the AppState proxy.
 // Top bar (NavRules): quiet list.bullet circle (left) pushes Subscriptions —
 // the only nav exit; next to it a Sleep Schedule indicator pill (bed.double
 // + minutes until the next "still listening?" prompt, icon-only when not
@@ -49,7 +59,7 @@ import UIKit
 
 // MARK: - Root player
 
-/// Identifiable wrapper so Queue sheet shortcuts can drive `.sheet(item:)` —
+/// Identifiable wrapper so Up Next sheet shortcuts can drive `.sheet(item:)` —
 /// a bare `UUID` is not Identifiable.
 private struct PodcastSettingsRoute: Identifiable {
     let id: UUID
@@ -60,12 +70,15 @@ private struct PodcastDetailRoute: Identifiable {
 
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
+    /// 2 Hz playback tick (PERF-1): the scrubber observes this dedicated clock so
+    /// AppState no longer publishes on every 0.5 s time update.
+    @EnvironmentObject private var playbackClock: PlaybackClock
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedPanel = 0
     @State private var showMenu = false
     @State private var showQueue = false
-    // Staged by Queue sheet shortcuts, consumed on Queue dismissal to open the
-    // target page in the Queue's place ("replace the queue").
+    // Staged by Up Next sheet shortcuts, consumed on Up Next dismissal to open
+    // the target page in the sheet's place ("replace Up Next").
     @State private var queueRequestedSettingsID: UUID?
     @State private var podcastSettingsRoute: PodcastSettingsRoute?
     @State private var queueRequestedDetailID: UUID?
@@ -137,7 +150,7 @@ struct PlayerView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onChange(of: appState.currentPlayerTime) { _, time in
+        .onChange(of: playbackClock.time) { _, time in
             if !isSeeking { sliderValue = time }
         }
         .onAppear {
@@ -179,7 +192,7 @@ struct PlayerView: View {
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
         .sheet(isPresented: $showQueue, onDismiss: {
-            // "Replace the queue": open the target page only after the Queue sheet
+            // "Replace Up Next": open the target page only after the Up Next sheet
             // has fully dismissed — presenting during dismissal is dropped by UIKit.
             if let id = queueRequestedSettingsID {
                 queueRequestedSettingsID = nil
@@ -812,7 +825,7 @@ struct PlayerView: View {
 
     private var scrubberView: some View {
         let total = max(1, episode?.durationSeconds ?? 0)
-        let rawDisplayTime = isSeeking ? sliderValue : appState.currentPlayerTime
+        let rawDisplayTime = isSeeking ? sliderValue : playbackClock.time
         let displayTime = min(max(0, rawDisplayTime), total)
         let remainingTime = max(0, total - displayTime)
 
@@ -1460,6 +1473,20 @@ struct HTMLDescriptionText: View {
         self.sentenceBreaks = sentenceBreaks
     }
 
+    /// Rich text parsed OFF the layout pass (see `.task` below). nil until the
+    /// first parse lands; a regex-only plain-text fallback renders until then.
+    ///
+    /// CRASH FIX (July 2026): the WebKit-backed HTML importer
+    /// (`NSAttributedString` with `.documentType: .html`) was previously invoked
+    /// synchronously inside `body`. Apple documents that importer as main-thread
+    /// ONLY and NOT callable during layout — running it mid-layout while a
+    /// navigation push transition was in flight intermittently threw WebKit/
+    /// TextKit internal-inconsistency exceptions, which crashed the app on
+    /// roughly half of the taps opening EpisodeDetailView. `.task` runs in a
+    /// plain main-actor turn after the view is installed (a supported context),
+    /// and results are cached so the same HTML is never parsed twice.
+    @State private var attributedText: AttributedString?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if showsFirstImage, let url = Self.firstImageURL(from: html) {
@@ -1482,15 +1509,53 @@ struct HTMLDescriptionText: View {
                 .clipShape(RoundedRectangle(cornerRadius: 2))
             }
 
-            if let attributedText = Self.attributedText(from: html, sentenceBreaks: sentenceBreaks) {
-                Text(attributedText)
-                    .font(.system(size: fontSize))
-                    .lineSpacing(5)
-                    .foregroundStyle(color)
-                    .tint(linkColor)
-                    .textSelection(.enabled)
+            if let attributedText {
+                styledText(Text(attributedText))
+            } else {
+                // Interim fallback while the WebKit parse is pending — pure
+                // regex, safe to build during layout. Replaced by the rich
+                // version one main-actor turn later (usually imperceptible).
+                let fallback = Self.plainText(from: html)
+                if !fallback.isEmpty {
+                    styledText(Text(fallback))
+                }
             }
         }
+        .task(id: html) {
+            attributedText = Self.cachedAttributedText(
+                from: html, fontSize: fontSize, sentenceBreaks: sentenceBreaks
+            )
+        }
+    }
+
+    private func styledText(_ text: Text) -> some View {
+        text
+            .font(.system(size: fontSize))
+            .lineSpacing(5)
+            .foregroundStyle(color)
+            .tint(linkColor)
+            .textSelection(.enabled)
+    }
+
+    /// Memoizes parsed HTML across view instances (reopening an episode page or
+    /// re-rendering the Player Details panel must not re-run the importer).
+    private final class ParsedHTML {
+        let text: AttributedString?
+        init(_ text: AttributedString?) { self.text = text }
+    }
+
+    private static let parseCache: NSCache<NSString, ParsedHTML> = {
+        let cache = NSCache<NSString, ParsedHTML>()
+        cache.countLimit = 64
+        return cache
+    }()
+
+    private static func cachedAttributedText(from html: String, fontSize: CGFloat, sentenceBreaks: Bool) -> AttributedString? {
+        let key = "\(Int(fontSize))|\(sentenceBreaks)|\(html)" as NSString
+        if let hit = parseCache.object(forKey: key) { return hit.text }
+        let parsed = attributedText(from: html, fontSize: fontSize, sentenceBreaks: sentenceBreaks)
+        parseCache.setObject(ParsedHTML(parsed), forKey: key)
+        return parsed
     }
 
     static func firstImageURL(from html: String) -> URL? {
@@ -1687,7 +1752,7 @@ struct HTMLDescriptionText: View {
 // MARK: - Up Next row (ListRow-Standard, custom swipe gesture)
 //
 // .swipeActions requires a List — nesting a List inside a ScrollView causes gesture
-// conflicts. Custom drag is used instead, matching the Queue page interaction model.
+// conflicts. Custom drag is used instead, matching the Up Next interaction model.
 
 private struct UpNextRow: View {
     @EnvironmentObject private var appState: AppState

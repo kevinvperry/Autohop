@@ -15,7 +15,7 @@ import UniformTypeIdentifiers
 // subscriptions only — Inactive uses download-date clock, not publish date;
 // Episode Limit counts only .queued/.downloaded episodes, not .failed), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
-// lock screen scrubbing, skip back/forward duration sheets), Default Playback
+// lock screen scrubbing, Up Next badge, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
 // PlaybackControlsCard + start/end skip steppers; writes
 // AppSettings.defaultPlaybackPreference, never touches existing subs), Subscriptions
@@ -311,7 +311,7 @@ struct SettingsView: View {
         } header: {
             Text("Downloading")
         } footer: {
-            Text("New episodes download automatically so the queue always plays from files on your device. Downloads use Wi-Fi only by default — turn on cellular to also download over mobile data.")
+            Text("New episodes download automatically so the queue always plays from files on your device. Downloads use Wi-Fi and cellular by default — turn either network type off here if you want to restrict automatic downloads.")
         }
         .listRowBackground(cardBackground)
     }
@@ -326,7 +326,7 @@ struct SettingsView: View {
                 rowLabel("Lock Screen Scrubbing", systemImage: "lock.iphone")
             }
             Toggle(isOn: queueBadgeBinding) {
-                rowLabel("Queue Badge", systemImage: "app.badge")
+                rowLabel("Up Next Badge", systemImage: "app.badge")
             }
             Button {
                 openSkipEditor(.back)
@@ -354,7 +354,7 @@ struct SettingsView: View {
         } header: {
             Text("Controls")
         } footer: {
-            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Queue Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play.\n\nSkip durations also apply to the Lock Screen and Control Centre buttons.")
+            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Up Next Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play.\n\nSkip durations also apply to the Lock Screen and Control Centre buttons.")
         }
         .listRowBackground(cardBackground)
     }

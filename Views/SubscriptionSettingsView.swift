@@ -16,9 +16,11 @@ import SwiftUI
 // SubscriptionRadarDiagnosticsView, a read-only screen showing the raw data and
 // daily/weekly gate outcomes behind this feed's Radar classification),
 // Danger (unsubscribe with confirmation). This
-// file also hosts DownloadFiltersView, a pushed per-subscription page for local
+// file also hosts DownloadFiltersView, a pushed per-subscription page for
 // auto-download eligibility rules (duration/title/description, include/exclude,
-// All/Any, live read-only 50-episode feed preview with greyed skipped rows).
+// All/Any, live read-only 50-episode feed preview with greyed skipped rows);
+// since July 2026 these filters roam via iCloud Sync with the other per-podcast
+// settings (struct-level LWW on the SubscriptionState record).
 // AUTO ARCHIVE RULES: Inactive Episodes (Rule 2) only archives episodes with a
 // non-nil Episode.downloadedAt — episodes never downloaded are fully exempt.
 // The footer copy describes download-date-based inactivity, not publish-date.

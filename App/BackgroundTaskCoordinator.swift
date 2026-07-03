@@ -1,5 +1,6 @@
 import Foundation
 import BackgroundTasks
+import UIKit
 
 // AI CONTEXT — App/BackgroundTaskCoordinator.swift
 // Stateless helper owning the BGAppRefreshTask + BGProcessingTask identifiers and
@@ -13,7 +14,9 @@ import BackgroundTasks
 // intentionally log requested vs effective earliestBeginDate plus pending-request
 // skips so background-refresh reviews can separate "Autohop asked at the right
 // time" from "iOS delivered the wake later" or "a prior request was already
-// waiting."
+// waiting." `backgroundRefreshStatusLabel` exposes the OS Background App Refresh
+// authorisation for the launch log (AppDelegate app.launch) and the Release Radar
+// export header, so a review can rule the permission in/out from the log alone.
 
 /// Owns the `BGTaskScheduler` registration identifiers and submit logic.
 ///
@@ -23,6 +26,23 @@ struct BackgroundTaskCoordinator {
 
     static let feedRefreshIdentifier = "com.autohop.feedrefresh"
     static let feedProcessingIdentifier = "com.autohop.feedprocessing"
+
+    /// Human-readable Background App Refresh authorisation, for diagnostics.
+    /// `.available` = iOS may run our BGTasks; `.denied` = user turned it off in
+    /// Settings; `.restricted` = Screen Time / MDM block. Logged at launch and
+    /// stamped into the Release Radar export header so a review can confirm the OS
+    /// permission from the log alone (a `submit()` succeeding already implies
+    /// `.available`, but an explicit label removes the guesswork). Must be read on
+    /// the main actor — `backgroundRefreshStatus` is a UIApplication API.
+    @MainActor
+    static var backgroundRefreshStatusLabel: String {
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available:  return "available"
+        case .denied:     return "denied"
+        case .restricted: return "restricted"
+        @unknown default: return "unknown"
+        }
+    }
 
     /// Schedules a refresh only when no request is already pending, preventing
     /// every app launch from resetting the earliestBeginDate clock.

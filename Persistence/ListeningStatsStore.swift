@@ -7,7 +7,13 @@ import Foundation
 // title map that survives unsubscribes, four time-saved categories, episodes
 // started/completed, manual skip count, and bytes/episodes downloaded
 // (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
-// 30 s during playback and force-flushed on pause/background (AutohopApp).
+// 30 s during playback and force-flushed on pause / sleep-timer or sleep-schedule
+// pause / background (AutohopApp + AppState). Day-bucket writes into the sync
+// database are separately coalesced on a 10 s throttle (recordDayPending /
+// flushPendingStatsDays below); DOWNSTREAM, CloudSyncEngine holds stats/history-
+// only CloudKit pushes on a further ~60 s slow-lane debounce, flushed at the
+// same lifecycle checkpoints via AppState.flushDeferredSyncPushes — which must
+// run AFTER this store's save()/flush so the scan sees current rows.
 // Diagnostics: stats.pendingMarked logs the first pending sync mark for a day
 // bucket after each flush, and stats.flush logs coalesced writes into
 // stats_sync_state. These low-frequency breadcrumbs help correlate DayStats

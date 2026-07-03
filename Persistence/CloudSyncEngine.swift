@@ -9,8 +9,26 @@ import Combine
 // history, and additive per-device listening stats. Downloads and catalog content
 // never sync.
 //
-// Push: observes SubscriptionStore changes (debounced), scans the database for
-// pending sync-state rows (dirty fields/partitions), and queues saves. Records
+// Pull: handleFetchedChanges wraps the apply loop in SubscriptionStore.begin/
+// endChangeNotificationCoalescing so a fetch burst (e.g. 18 records after cold
+// launch) fires ONE objectWillChange instead of one per record — the per-record
+// version showed as a main-thread hang burst right after launch.
+//
+// Push: observes SubscriptionStore changes (debounced 1 s), scans the database
+// for pending sync-state rows (dirty fields/partitions), and queues saves in two
+// LANES. Fast lane (episode user-state + subscription settings — discrete user
+// actions) queues immediately on the store debounce. Slow lane (listening
+// history + stats day rows) is continuously re-dirtied by playback, so
+// slow-lane-ONLY dirt is held for a ~60 s debounce (slowLanePushTask) instead of
+// waking CloudKit per store change — the 2026-07-03 log review found 8 CK pushes
+// in ~2 min of playback, each saving 1–2 stats/history records. Slow rows
+// piggyback on any fast-lane push (a CK request is going out anyway), and
+// flushDeferredPushes(reason:) queues them immediately at lifecycle checkpoints
+// (pause / background / resign-active — AppState.flushDeferredSyncPushes, called
+// AFTER ListeningStatsStore has flushed day buckets into the sync database).
+// Coalescing only delays WHEN records are queued, never what they contain: rows
+// stay dirty in the local DB until a push succeeds (markSaved), so nothing is
+// lost if the app dies before a deferred push. Records
 // are built by CloudKitSync, starting from cached CKRecord system fields so
 // updates carry the right change tag. Outbound CloudKit record names are now
 // type-namespaced (`episode:...`, `history:...`, etc.) so records of different
@@ -44,7 +62,9 @@ import Combine
 //
 // Observability: every stage logs through AppLogger with `sync.*` event keys
 // (lifecycle, queued/pushed/fetched batch counts, conflicts, materialisation,
-// account changes). Local-DB writes that were once `try?`-swallowed now go
+// account changes). `sync.slowLaneDeferred` marks history/stats-only dirt held
+// for the slow-lane debounce; `sync.queued` carries a `slowLane` label
+// (piggyback vs. the flush reason) so the log shows why a push went out. Local-DB writes that were once `try?`-swallowed now go
 // through runDB() and log failures. ERROR-level sync events use
 // alwaysPersist:true so they survive even when the Diagnostics toggle is off —
 // since this is a since-launch backup feature, a user reporting "my data didn't
@@ -68,6 +88,17 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var quarantinedRecordKeys = Set<QuarantinedRecordKey>()
     private var conflictTrackers: [String: ConflictTracker] = [:]
+
+    /// Slow-lane (history/stats) push debounce. Batches a playback session's
+    /// continuous stats/history churn into roughly one CloudKit push per minute;
+    /// lifecycle checkpoints (pause/background) flush sooner via
+    /// `flushDeferredPushes`, so at most this window of already-persisted local
+    /// rows is waiting to upload at any moment.
+    static let slowLaneDebounceSeconds: TimeInterval = 60
+    /// Non-nil while a deferred slow-lane push is scheduled. MainActor-confined:
+    /// mutated only inside `MainActor.run` blocks and `stop()` (which, like the
+    /// rest of the engine lifecycle, is driven from the main thread by AppState).
+    private var slowLanePushTask: Task<Void, Never>?
 
     private let conflictStormThreshold = 5
     private let conflictStormWindow: TimeInterval = 5 * 60
@@ -166,12 +197,14 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         ])
         Task {
             await recoverLegacySubscriptionSettingsIfNeeded()
-            await queuePendingLocalChanges()
+            await queuePendingLocalChanges(slowLane: .flush(reason: "engineActivated"))
         }
     }
 
     func stop() {
         cancellables.removeAll()
+        slowLanePushTask?.cancel()
+        slowLanePushTask = nil
         engine = nil
         logger.info("sync.stopped", "Sync engine stopped")
     }
@@ -186,12 +219,74 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         subscriptionStore.objectWillChange
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                Task { await self?.queuePendingLocalChanges() }
+                Task { await self?.queuePendingLocalChanges(slowLane: .coalesce) }
             }
             .store(in: &cancellables)
     }
 
-    private func queuePendingLocalChanges() async {
+    /// Queues any deferred slow-lane (history/stats) changes immediately, along
+    /// with whatever else is pending. The app layer calls this at lifecycle
+    /// checkpoints — pause, scene backgrounding, resign-active — AFTER
+    /// ListeningStatsStore has flushed its coalesced day buckets into the sync
+    /// database, so the scan sees the freshest rows. No-op while stopped.
+    func flushDeferredPushes(reason: String) {
+        guard engine != nil else { return }
+        Task { [weak self] in
+            await self?.queuePendingLocalChanges(slowLane: .flush(reason: reason))
+        }
+    }
+
+    /// How a queue pass treats slow-lane pending changes. Fast lane = episode
+    /// user-state + subscription settings (discrete user actions). Slow lane =
+    /// listening history + stats day rows (playback re-dirties them continuously,
+    /// so pushing per store change produced 1–2-record CloudKit saves every few
+    /// seconds — see the file header).
+    enum SlowLaneDisposition {
+        /// Store-change observer path: slow-lane-only dirt waits for the
+        /// slow-lane debounce instead of waking CloudKit per change.
+        case coalesce
+        /// Queue everything now: engine activation, account sign-in, slow-lane
+        /// debounce expiry, and lifecycle checkpoints (`flushDeferredPushes`).
+        case flush(reason: String)
+    }
+
+    /// Pure lane policy (unit-tested headless in SyncPushCoalescingTests):
+    /// defer the slow lane only when the caller allows coalescing, there is
+    /// slow-lane dirt, and no fast-lane push is going out anyway — when one is,
+    /// the slow rows piggyback on it at zero extra request cost.
+    static func shouldDeferSlowLane(_ disposition: SlowLaneDisposition, fastCount: Int, slowCount: Int) -> Bool {
+        guard case .coalesce = disposition else { return false }
+        return fastCount == 0 && slowCount > 0
+    }
+
+    private func scheduleSlowLanePush(historyCount: Int, statsCount: Int) async {
+        await MainActor.run {
+            guard self.slowLanePushTask == nil else { return } // keep the earliest deadline
+            self.logger.info("sync.slowLaneDeferred", "History/stats-only changes held for slow-lane debounce", metadata: [
+                "history": "\(historyCount)",
+                "stats": "\(statsCount)",
+                "debounceSeconds": "\(Int(Self.slowLaneDebounceSeconds))"
+            ])
+            self.slowLanePushTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.slowLaneDebounceSeconds))
+                guard let self, !Task.isCancelled else { return }
+                // Clear the handle BEFORE flushing: if the flush scan comes back
+                // empty (rows already piggybacked onto a fast-lane push), a stale
+                // non-nil handle would block every future slow-lane schedule.
+                await MainActor.run { self.slowLanePushTask = nil }
+                await self.queuePendingLocalChanges(slowLane: .flush(reason: "slowLaneDebounce"))
+            }
+        }
+    }
+
+    private func cancelSlowLanePush() async {
+        await MainActor.run {
+            self.slowLanePushTask?.cancel()
+            self.slowLanePushTask = nil
+        }
+    }
+
+    private func queuePendingLocalChanges(slowLane: SlowLaneDisposition) async {
         guard let engine, let database else { return }
         // A read failure here is not "nothing pending" — treating it as such would
         // silently drop a sync push with no trace. Log each failure (the next store
@@ -216,35 +311,56 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
 
         let episodeChanges = episodes.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.episodeRecordID(for: $0))
-        }
+        }.filter { !isQuarantined($0) }
         let subscriptionChanges = subscriptions.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.subscriptionRecordID(id: $0.subscriptionID))
-        }
+        }.filter { !isQuarantined($0) }
         let historyChanges = history.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.historyRecordID(id: $0.id))
-        }
+        }.filter { !isQuarantined($0) }
         let statsChanges = stats.map {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.statsRecordID(deviceID: deviceID, dayKey: $0.dayKey))
+        }.filter { !isQuarantined($0) }
+
+        let fastChanges = episodeChanges + subscriptionChanges
+        let slowChanges = historyChanges + statsChanges
+
+        if Self.shouldDeferSlowLane(slowLane, fastCount: fastChanges.count, slowCount: slowChanges.count) {
+            // Playback churn: only history/stats rows are dirty. Hold them for
+            // the slow-lane debounce instead of a 1–2-record CloudKit push per
+            // store change. The rows stay dirty locally, so nothing is lost if
+            // the timer never fires — the next flush or queue pass picks them up.
+            await scheduleSlowLanePush(historyCount: historyChanges.count, statsCount: statsChanges.count)
+            return
         }
+
+        let changes = fastChanges + slowChanges
+        guard !changes.isEmpty else { return }
+        // Whatever the slow-lane timer was waiting on is being queued right now
+        // (piggybacked on a fast-lane push, or explicitly flushed) — drop it.
+        await cancelSlowLanePush()
+        engine.state.add(pendingRecordZoneChanges: changes)
         let statsDayKeys = stats.map(\.dayKey).sorted()
         let cachedStatsSystemFieldCount = stats.reduce(into: 0) { count, day in
             if ((try? database.statsSystemFields(dayKey: day.dayKey)) ?? nil) != nil {
                 count += 1
             }
         }
-        let changes = (episodeChanges + subscriptionChanges + historyChanges + statsChanges)
-            .filter { !isQuarantined($0) }
-        guard !changes.isEmpty else { return }
-        engine.state.add(pendingRecordZoneChanges: changes)
+        let slowLaneLabel: String
+        switch slowLane {
+        case .coalesce: slowLaneLabel = "piggyback"
+        case .flush(let reason): slowLaneLabel = reason
+        }
         logger.info("sync.queued", "Queued local changes to push", metadata: [
-            "episodes": "\(episodeChanges.filter { !isQuarantined($0) }.count)",
-            "subscriptions": "\(subscriptionChanges.filter { !isQuarantined($0) }.count)",
-            "history": "\(historyChanges.filter { !isQuarantined($0) }.count)",
-            "stats": "\(statsChanges.filter { !isQuarantined($0) }.count)",
+            "episodes": "\(episodeChanges.count)",
+            "subscriptions": "\(subscriptionChanges.count)",
+            "history": "\(historyChanges.count)",
+            "stats": "\(statsChanges.count)",
             "statsDayKeys": statsDayKeys.joined(separator: ","),
             "statsSystemFieldsCached": "\(cachedStatsSystemFieldCount)",
             "statsRecordNames": statsDayKeys.map { CloudKitSync.statsRecordName(deviceID: deviceID, dayKey: $0) }.joined(separator: ","),
-            "quarantined": "\((episodeChanges + subscriptionChanges + historyChanges + statsChanges).count - changes.count)",
+            "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count) - changes.count)",
+            "slowLane": slowLaneLabel,
             "device": deviceID
         ])
     }
@@ -483,9 +599,16 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     // MARK: - Pull / apply
 
     private func handleFetchedChanges(_ event: CKSyncEngine.Event.FetchedRecordZoneChanges) async {
+        // Coalesce store notifications across the whole apply burst: each applyRemote
+        // save fires its own objectWillChange, so a post-launch fetch of N records
+        // produced N whole-app SwiftUI invalidations back-to-back (observed as a
+        // main-thread hang burst right after cold launch). One notification at the
+        // end is enough — views re-read the final state.
+        await MainActor.run { subscriptionStore.beginChangeNotificationCoalescing() }
         for modification in event.modifications {
             await applyRemote(record: modification.record)
         }
+        await MainActor.run { subscriptionStore.endChangeNotificationCoalescing() }
         guard !event.modifications.isEmpty || !event.deletions.isEmpty else { return }
         logger.info("sync.fetched", "Applied remote changes", metadata: [
             "applied": "\(event.modifications.count)",
@@ -849,7 +972,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             if engine == nil {
                 await MainActor.run { self.start() }
             } else {
-                await queuePendingLocalChanges()
+                await queuePendingLocalChanges(slowLane: .flush(reason: "accountSignIn"))
             }
         case .signOut:
             logger.warning("sync.accountSignOut", "iCloud account signed out — local data retained, nothing pushed")

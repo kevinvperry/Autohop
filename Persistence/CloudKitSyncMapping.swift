@@ -17,7 +17,9 @@ import CloudKit
 // longer just the UUID. SubscriptionState also carries
 // autoFeedRefreshReturnPriorityRank, the hidden rank used to restore an
 // Inactive podcast to its previous Priority Stack position when auto refresh is
-// re-enabled.
+// re-enabled — and, since July 2026, downloadFilterSettings (JSON blob +
+// stamp, struct-level LWW like the other settings sub-structs; absent on older
+// records → nil stamp → local filters preserved).
 
 // Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
 // Generated once and persisted in UserDefaults — stats records are keyed by
@@ -263,6 +265,8 @@ public enum CloudKitSync {
         static let autoArchiveSettingsModifiedAt = "autoArchiveSettingsModifiedAt"
         static let chapterFilter = "chapterFilter"
         static let chapterFilterModifiedAt = "chapterFilterModifiedAt"
+        static let downloadFilterSettings = "downloadFilterSettings"
+        static let downloadFilterSettingsModifiedAt = "downloadFilterSettingsModifiedAt"
     }
 
     public static func makeRecord(from state: SubscriptionSyncState) -> CKRecord {
@@ -328,6 +332,11 @@ public enum CloudKitSync {
             record[SubKey.chapterFilter] = data
             record[SubKey.chapterFilterModifiedAt] = modifiedAt
         }
+        if let modifiedAt = state.$downloadFilterSettings.modifiedAt ?? (includeCleanFields ? authoredAt : nil),
+           let data = try? jsonEncoder.encode(state.downloadFilterSettings) {
+            record[SubKey.downloadFilterSettings] = data
+            record[SubKey.downloadFilterSettingsModifiedAt] = modifiedAt
+        }
     }
 
     public static func subscriptionSyncState(from record: CKRecord) -> SubscriptionSyncState? {
@@ -362,7 +371,11 @@ public enum CloudKitSync {
             autoArchiveSettings: Synced(wrappedValue: decodeStruct(SubKey.autoArchiveSettings, default: AutoArchiveSettings.default),
                                         modifiedAt: record[SubKey.autoArchiveSettingsModifiedAt] as? Date),
             chapterFilter: Synced(wrappedValue: decodeStruct(SubKey.chapterFilter, default: ChapterFilter()),
-                                  modifiedAt: record[SubKey.chapterFilterModifiedAt] as? Date)
+                                  modifiedAt: record[SubKey.chapterFilterModifiedAt] as? Date),
+            // Absent on records written before Download Filters joined sync
+            // (July 2026): nil stamp = "no remote opinion", local filters kept.
+            downloadFilterSettings: Synced(wrappedValue: decodeStruct(SubKey.downloadFilterSettings, default: DownloadFilterSettings.default),
+                                           modifiedAt: record[SubKey.downloadFilterSettingsModifiedAt] as? Date)
         )
     }
 

@@ -55,7 +55,19 @@ real feeds to Random. v2 splits it:
    - **fallback** — no active day, but one weekday holds ≥`weeklyDominantShareThreshold`
      (0.65) of all episodes on a 4–11 day cadence → `.weekly` by EPISODE SHARE (catches a
      weekly show that skips the odd week, whose per-week probability dips below the bar)
+   - **recent-daily rescue** — 5+ DISTINCT weekdays present (PRESENCE, ≥`recentActiveWeekdayMinCount`
+     each) at ≤2-day gap *within the recency window* → `.dailyWeekdays`, even before any
+     weekday's per-week probability clears the bar. Fixes feeds with a stale single-weekday
+     seed (The Daily: only Sunday episodes survive long-term in the RSS) plus only a couple
+     of weeks of genuine daily capture — self-heals as the seed ages out.
    - else → `.random`
+   - **Median gap + the recent active-weekday presence are measured over the last
+     `cadenceRecencyWindowSize` (≈25) observations, not all history** (the weekday
+     probabilities and time-of-day window keep full history, which is already recency-
+     weighted). Sized in observations so it self-scales: ~3½ weeks for a daily feed, ~25
+     weeks for a weekly one. This is what stops a purged back-catalogue from pinning the
+     class to the wrong cadence, and it applies to the diagnostics gate checks too so the
+     "Why not Daily/Weekly" explanations stay consistent with the decision.
 4. `.dailyWeekdays` is shared by Mon–Fri and 7-day feeds;
    `FeedScheduleProfile.categoryLabel` reads `activeWeekdays` to print **Weekdays** vs
    **Daily**. `activeWeekdays` drives scheduling, so a Mon–Fri feed never opens weekend

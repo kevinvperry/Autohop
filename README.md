@@ -1,5 +1,15 @@
 # Autohop
 
+<!--
+AI CONTEXT — README.md
+High-level product, feature, documentation, build, and licensing index for AI
+agents. Treat FEATURES.md as the behaviour/default source of truth, PAGES.md as
+the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
+of truth, and DEEP_SCAN_2026-06-28.md as the newest assessment report. The
+visible playback-order sheet is "Up Next"; the Swift implementation still uses
+legacy `Queue*` type/property names in several places.
+-->
+
 **The podcast player for people who are serious about listening.**
 
 Autohop is a native iOS podcast player built around a single idea: your time is the finite resource, not your content. Most podcast apps treat your queue like a to-do list you manage manually. Autohop manages it for you — automatically, intelligently, and indefinitely — so you can focus on everything else.
@@ -50,7 +60,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
 - Stats page: time listened, time saved, episodes finished, and streaks over calendar-anchored This Week / this month / this year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
-- Sleep Schedule: a recurring nightly sleep timer (Autohop exclusive) — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
+- Sleep Schedule: a recurring nightly sleep timer — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
 - Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned
 - Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history (including your resume position), and stats in step across your devices over your private CloudKit database; downloads, global app settings, and per-podcast Download Filters stay per-device
@@ -58,7 +68,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
-- CarPlay audio support: Now Playing, Queue actions, downloaded-only playback, Play Now, Play Next, Play Last, Archive, playback speed adjustment, and Shared Listening controls
+- CarPlay audio support: Now Playing, Up Next actions, downloaded-only playback, Play Now, Play Next, Play Last, Archive, playback speed adjustment, and Shared Listening controls
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
 
@@ -68,12 +78,14 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 |---|---|
 | [`FEATURES.md`](FEATURES.md) | **Source of truth** for every feature, setting label, default, and behaviour. Update this first when any model/view/setting changes, then propagate to the website and App Store copy. |
 | [`PAGES.md`](PAGES.md) | Canonical page names, code names, and the full navigation structure. |
-| [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Queue page is the canonical reference), plus the current glass-ready app icon recipe. |
+| [`DESIGN.md`](DESIGN.md) | Design system — labelled, reusable UI patterns (the Up Next sheet is the canonical episode-row reference), plus the current glass-ready app icon recipe. |
 | [`APPSTORE_ROADMAP.md`](APPSTORE_ROADMAP.md) | Live checklist of everything required before App Store submission (v1 = iPhone only), with drafted listing copy, review notes, and screenshot shot list. Updated as each step completes. |
 | [`Docs/CARPLAY_CODE_STRATEGY.md`](Docs/CARPLAY_CODE_STRATEGY.md) | CarPlay implementation plan, phase gates, and release sequencing. |
 | [`Docs/CARPLAY_PHASE9_QA.md`](Docs/CARPLAY_PHASE9_QA.md) | CarPlay simulator/hardware QA status and manual checklist. |
 | [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
-| [`ASSESSMENT.md`](ASSESSMENT.md) | Machine-oriented code/feature/security assessment: performance, bugs, stale code, and security findings with `file:line` anchors and severities. |
+| [`project_autohop.md`](project_autohop.md) | Fast machine-readable project brief: architecture, feature map, sync coverage, build notes, and licensing orientation. |
+| [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) | Latest detailed code, feature, settings, sync, documentation, website, performance, security, and Apple-design assessment. |
+| [`ASSESSMENT.md`](ASSESSMENT.md) | Historical machine-oriented code/feature/security assessment. Superseded by the deep scan above for current work. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
 | [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the four covered files and acknowledging Pocket Casts as a broader source of design ideas and inspiration. |
 

@@ -59,7 +59,7 @@ struct FirstSubscribeCard: View {
                 .foregroundStyle(.white)
                 .padding(.bottom, 8)
 
-            Text("Autohop is downloading the latest episode of \(subscription?.title ?? "your show"). When it's ready it'll kick off your queue — no tapping play, episode after episode.")
+            Text("Autohop is downloading the latest episode of \(subscription?.title ?? "your show"). When it's ready it'll start Up Next — no tapping play, episode after episode.")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Color(white: 0.64))
                 .multilineTextAlignment(.center)

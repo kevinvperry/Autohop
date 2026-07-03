@@ -467,7 +467,14 @@ private func releaseRadarReportText(
     var out = "AUTOHOP — RELEASE RADAR DIAGNOSTIC EXPORT\n"
     out += "Generated: \(generatedAt.formatted(.dateTime.year().month().day().hour().minute())) (device local time)\n"
     out += "Active subscriptions: \(subscriptions.count)\n"
+    // Read on the main actor (backgroundRefreshStatus is a UIApplication API);
+    // the export is always user-initiated from the view, so we're on main here.
+    let backgroundRefreshStatus = MainActor.assumeIsolated {
+        BackgroundTaskCoordinator.backgroundRefreshStatusLabel
+    }
+    out += "Background App Refresh: \(backgroundRefreshStatus)\n"
     out += "Weekday counts run Sun→Sat. Times are device-local 24h. Spread = observed publish-time range.\n"
+    out += "Cadence (median gap, active days) uses the most recent ~25 observations so a stale back-catalogue can't skew the class; weekday counts below are all-history.\n"
     out += String(repeating: "=", count: 64) + "\n\n"
 
     let ordered = subscriptions.sorted {
