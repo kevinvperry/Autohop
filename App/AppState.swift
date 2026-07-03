@@ -65,6 +65,12 @@ import UIKit
 //    of only fixing the immediate feed state.
 //    IMPORTANT: keep user-initiated download/play-now paths awaitable, but do
 //    not put `await downloadEpisode` back inside the feed-refresh success path.
+//    scheduleAutoDownloadAfterRefresh persists a durable intent
+//    (AutoDownloadIntentStore) BEFORE spawning the download Task, and
+//    drainAutoDownloadIntents retries at launch/foreground/BG-task end — so a
+//    BG-wake suspension after the feed cycle can never silently lose a
+//    discovered episode (deep-scan AH-2026-06-28-01). Keep intents settled only
+//    via resolveAutoDownloadIntentIfSettled.
 //    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
 //    scheduled media transfer re-validates subscription state, browse previews,
 //    current DownloadFilterSettings eligibility, scheduled-episode staleness,
@@ -195,6 +201,10 @@ final class AppState: ObservableObject {
     let subscriptionStore: SubscriptionStore
     let listeningHistoryStore = ListeningHistoryStore()
     let listeningStatsStore = ListeningStatsStore()
+    /// Durable auto-download intents (AH-2026-06-28-01): recorded before the
+    /// fire-and-forget download Task so a BG-wake suspension can't lose a
+    /// discovered episode; drained at launch/foreground/BG-task end.
+    let autoDownloadIntentStore = AutoDownloadIntentStore()
 
     /// Opt-in cross-device sync engine (CloudKit). Started only while
     /// AppSettings.iCloudSyncEnabled is true. History/stats pushes are coalesced
@@ -1204,6 +1214,9 @@ final class AppState: ObservableObject {
         }
         Task { @MainActor in
             await state.reconcileOrphanedDownloads()
+            // After orphan repair (interrupted transfers → .failed), retry any
+            // auto-downloads whose BG-wake intent never started or died mid-flight.
+            await state.drainAutoDownloadIntents(reason: "launch")
         }
         // `AppState.shared` was already published right after creation (above) so a
         // re-entrant bootstrap can't create a second instance.
@@ -2749,18 +2762,109 @@ final class AppState: ObservableObject {
         podcastTitle: String,
         refreshUpNextAfterMerge: Bool
     ) {
+        // Persist the intent BEFORE spawning the download Task (AH-2026-06-28-01):
+        // a BG wake can suspend/terminate the app right after the feed cycle
+        // returns, losing the Task below before the URLSession transfer starts —
+        // and a successfully-refreshed feed isn't due again until its next
+        // release window, so the episode would otherwise sit undownloaded until
+        // the next app open. The durable intent is drained at launch /
+        // foreground / BG-task end (drainAutoDownloadIntents) and removed once
+        // the episode settles (resolveAutoDownloadIntentIfSettled).
+        autoDownloadIntentStore.record(
+            episodeID: episode.id,
+            subscriptionID: subscriptionID,
+            podcastTitle: podcastTitle
+        )
         logger.info("feed.autoDownloadScheduled", "Auto-download scheduled after feed refresh", metadata: [
             "podcast": podcastTitle,
             "episode": episode.title,
-            "episodeID": episode.id.uuidString
+            "episodeID": episode.id.uuidString,
+            "intentPersisted": "true"
         ])
         Task { @MainActor [weak self] in
-            await self?.runAutoDownloadAfterRefresh(
+            guard let self else { return }
+            await self.runAutoDownloadAfterRefresh(
                 episode: episode,
                 subscriptionID: subscriptionID,
                 podcastTitle: podcastTitle,
                 refreshUpNextAfterMerge: refreshUpNextAfterMerge
             )
+            self.resolveAutoDownloadIntentIfSettled(episodeID: episode.id, subscriptionID: subscriptionID)
+        }
+    }
+
+    /// Removes an episode's persisted auto-download intent once it has reached a
+    /// SETTLED state: downloaded, played/archived, gone (episode or subscription
+    /// removed / became a browse preview), excluded by Download Filters, or
+    /// superseded as the newest auto-download candidate (policy downloads only
+    /// the newest eligible episode). An episode that is merely queued/downloading
+    /// or whose attempt was blocked/interrupted keeps its intent so the next
+    /// drain retries.
+    private func resolveAutoDownloadIntentIfSettled(episodeID: UUID, subscriptionID: UUID) {
+        guard autoDownloadIntentStore.contains(episodeID: episodeID) else { return }
+        func settle(_ reason: String) {
+            autoDownloadIntentStore.remove(episodeID: episodeID)
+            logger.info("download.intentResolved", "Auto-download intent settled", metadata: [
+                "episodeID": episodeID.uuidString,
+                "reason": reason
+            ])
+        }
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID),
+              subscription.browseDate == nil else {
+            settle("subscriptionGone")
+            return
+        }
+        guard let episode = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID) else {
+            settle("episodeGone")
+            return
+        }
+        if episode.downloadState == .downloaded { settle("downloaded"); return }
+        if episode.playedState == .played || episode.playedState == .archived { settle("playedOrArchived"); return }
+        // In flight — the intent stays until the transfer reaches a terminal state
+        // (an interrupted transfer is repaired to .failed by
+        // reconcileOrphanedDownloads, and the next drain retries it).
+        if episode.downloadState == .downloading || episode.downloadState == .queued { return }
+        if !subscription.downloadFilterSettings.evaluation(for: episode).isIncluded { settle("filterExcluded"); return }
+        if newestAutoDownloadCandidate(in: subscription)?.guid != episode.guid { settle("supersededByNewer"); return }
+        // Still wanted and not yet downloading — keep for the next drain.
+    }
+
+    private var isDrainingAutoDownloadIntents = false
+
+    /// Retries persisted auto-download intents (AH-2026-06-28-01). Idempotent:
+    /// every intent is first settled against current state, in-flight transfers
+    /// are left alone, and the actual attempt goes through
+    /// runAutoDownloadAfterRefresh, whose guards re-validate eligibility.
+    /// Called at launch (after reconcileOrphanedDownloads), on scene-foreground,
+    /// and (unawaited) at the end of both BG task handlers.
+    func drainAutoDownloadIntents(reason: String) async {
+        guard !isDrainingAutoDownloadIntents else { return }
+        let pending = autoDownloadIntentStore.intents
+        guard !pending.isEmpty else { return }
+        isDrainingAutoDownloadIntents = true
+        defer { isDrainingAutoDownloadIntents = false }
+
+        logger.info("download.intentDrain", "Draining persisted auto-download intents", metadata: [
+            "reason": reason,
+            "count": "\(pending.count)"
+        ])
+        for intent in pending {
+            resolveAutoDownloadIntentIfSettled(episodeID: intent.episodeID, subscriptionID: intent.subscriptionID)
+            guard autoDownloadIntentStore.contains(episodeID: intent.episodeID),
+                  let episode = subscriptionStore.episode(
+                    subscriptionID: intent.subscriptionID,
+                    episodeID: intent.episodeID
+                  )
+            else { continue }
+            // In flight already — leave it to finish; the intent settles later.
+            if episode.downloadState == .downloading || episode.downloadState == .queued { continue }
+            await runAutoDownloadAfterRefresh(
+                episode: episode,
+                subscriptionID: intent.subscriptionID,
+                podcastTitle: intent.podcastTitle,
+                refreshUpNextAfterMerge: true
+            )
+            resolveAutoDownloadIntentIfSettled(episodeID: intent.episodeID, subscriptionID: intent.subscriptionID)
         }
     }
 

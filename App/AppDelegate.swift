@@ -185,6 +185,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let work = Task {
             let state = AppState.sharedOrBootstrap()
             let didRun = await state.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
+            // Unawaited on purpose: draining awaits full media transfers, which
+            // must not hold setTaskCompleted (a stalled BG task teaches iOS to
+            // stop granting wakes). Intents are persisted, so anything this Task
+            // doesn't reach before suspension is retried at the next drain point.
+            Task { @MainActor in
+                await state.drainAutoDownloadIntents(reason: "bgRefresh")
+            }
             AppLogger.shared.info("background.complete", "Background app refresh completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"
@@ -221,6 +228,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let work = Task {
             let state = AppState.sharedOrBootstrap()
             let didRun = await state.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
+            // Unawaited for the same reason as the refresh handler: never hold
+            // setTaskCompleted on media transfers. BGProcessing runs are long
+            // (charging + Wi-Fi), so this usually drains everything.
+            Task { @MainActor in
+                await state.drainAutoDownloadIntents(reason: "bgProcessing")
+            }
             AppLogger.shared.info("background.processingComplete", "Background processing completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)"

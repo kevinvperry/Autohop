@@ -49,6 +49,9 @@ private struct AutohopRootBootstrapView: View {
                         appState.setSceneActive(phase == .active)
                         if phase == .active {
                             Task { await appState.runAutoArchiveIfNeeded(reason: "app.foreground") }
+                            // Retry auto-downloads whose BG-wake intent never
+                            // started (persisted in AutoDownloadIntentStore).
+                            Task { await appState.drainAutoDownloadIntents(reason: "foreground") }
                         } else {
                             appState.persistCurrentPlaybackPosition()
                             appState.listeningStatsStore.save()
