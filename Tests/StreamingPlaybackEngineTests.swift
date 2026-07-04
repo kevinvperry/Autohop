@@ -92,4 +92,34 @@ final class StreamingPlaybackEngineTests: XCTestCase {
         XCTAssertTrue(PlaybackCapabilities.tvStreaming.streaming)
         XCTAssertTrue(PlaybackCapabilities.tvStreaming.video)
     }
+
+    // MARK: - Buffering / preload (2026-07-04)
+
+    func testInitialBufferingStateIsFalse() {
+        XCTAssertFalse(StreamingPlaybackEngine().isBuffering)
+    }
+
+    func testPreloadedAssetIsAdoptedByPlayOfSameEpisode() async throws {
+        // A local file lets play() succeed headlessly (no network). Preloading
+        // then playing the same episode must start without throwing and land
+        // on the same episode — proving the warm-player adoption path resolves
+        // to a valid item rather than the (guarded) noPlayableSource error.
+        let local = try makeLocalFile()
+        let engine = StreamingPlaybackEngine(localFileResolver: { _ in local })
+        let episode = makeEpisode()
+
+        engine.preload(episode)
+        try await engine.play(episode, preference: .default, filter: ChapterFilter())
+
+        XCTAssertEqual(engine.currentEpisode?.id, episode.id)
+    }
+
+    func testPreloadNoOpWhenStreamingUnavailableAndNoLocalFile() {
+        // iOSFull has streaming off; with no local file there's no asset to
+        // warm, so preload must silently no-op (not crash / not throw).
+        let engine = StreamingPlaybackEngine(capabilities: .iOSFull)
+        engine.preload(makeEpisode())
+        XCTAssertFalse(engine.isBuffering)
+        XCTAssertNil(engine.currentEpisode)
+    }
 }

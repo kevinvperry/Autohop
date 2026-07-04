@@ -67,7 +67,9 @@ public final class PlaybackPositionStore {
     /// Stable position identity for an episode: subscription-scoped GUID, falling
     /// back to title+publish-date, then title+audio-URL for GUID-less feeds. The
     /// local episode UUID is NOT used (it regenerates when a feed re-materialises).
-    public static func key(for episode: Episode) -> String {
+    /// nonisolated: pure — also called from nonisolated core contexts
+    /// (QueueModel.resolvedQueue).
+    public nonisolated static func key(for episode: Episode) -> String {
         let subscriptionPrefix = episode.subscriptionID.uuidString
         let trimmedGUID = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedGUID.isEmpty {
@@ -79,7 +81,7 @@ public final class PlaybackPositionStore {
         return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
     }
 
-    public static func clampedTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
+    public nonisolated static func clampedTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
         let lowerBounded = max(0, seconds.isFinite ? seconds : 0)
         guard let duration, duration.isFinite, duration > 0 else { return lowerBounded }
         return min(lowerBounded, duration)
@@ -88,7 +90,7 @@ public final class PlaybackPositionStore {
     /// A resume time within 2 s of the end (or non-positive/non-finite) counts as
     /// "finished" and normalizes to 0 so the episode restarts rather than
     /// resuming into the outro.
-    public static func normalizedResumeTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
+    public nonisolated static func normalizedResumeTime(_ seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
         guard seconds.isFinite, seconds > 0 else { return 0 }
         guard let duration, duration.isFinite, duration > 0 else { return seconds }
         let clamped = clampedTime(seconds, duration: duration)

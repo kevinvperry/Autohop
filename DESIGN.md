@@ -2603,4 +2603,21 @@ struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
 | Category chips | `.glassCapsule(highlighted: true)` (purple-tinted) |
 | Episode hero rank badge | `.glassCapsule(highlighted: true)` (purple-tinted) |
 | Rail tile rank badge | `.glassCapsule()` (neutral) |
+
+## Apple TV Patterns (tvOS Phase 2)
+
+Read-only browse UI, lean-back and artwork-forward (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md §7). Standard tvOS focus effects only — no custom scale hacks — via `.buttonStyle(.card)`. Files: `TV/Views/*.swift`.
+
+| Pattern | Where | Shape |
+|---|---|---|
+| `TVShelf-Standard` | `TVHomeView.shelf(title:episodes:)` | Section header + horizontal `LazyHStack` inside `ScrollView(.horizontal)`, wrapped in `.focusSection()` per shelf so the focus engine treats it as one unit |
+| `TVCard-Episode` | `TVEpisodeCard` | 280×280 artwork + title (2 lines) + podcast name, `.buttonStyle(.card)` |
+| `TVCard-Hero` | `TVHomeView.continueListeningSection` | Wide artwork + title/podcast/"Resume" label, the `Continue Listening` shelf's single large card |
+| `TVCard-Podcast` | `TVSubscriptionCard` | Square artwork + title, used in the Library grid (`LazyVGrid(.adaptive(minimum: 260))`) |
+| `TVCard-QueueRow` | `TVQueueRow` | Full-width row: artwork + title/podcast/duration — the tvOS analog of "List Row — Up Next Episode Row" |
+| `TVRow-Episode` | `TVEpisodeRow` | Title + relative date + a plain text status pill (Played/Archived/In Progress) — no swipe actions (tvOS has none); a focus-driven context menu is a later-phase option if needed |
+
+**Navigation shell:** `TabView` + `.tabViewStyle(.sidebarAdaptable)`, tvOS 18 `Tab(_:systemImage:value:)` builder (`TVMainTabView`) — this is why `AutohopTV`'s deployment target is 18.0, not the Phase 1 scaffold's 17.0 (see project.yml's inline note). Library pushes by subscription UUID (`TVRouter.libraryPath`), not the `Subscription` value, so a pushed detail page always resolves the live model instead of a stale snapshot.
+
+**Known simplification:** `Continue Listening` identifies an in-progress episode via the synced `Episode.playedState == .playing` field, not a real resume-position bar — there is no core-level listening-history reader the TV target can reach yet (`ListeningHistoryStore` lives in the iOS app target). Revisit when Phase 0 item 5 or a dedicated history-core exposure lands.
 | Podcast hero cards | `TabView(.page)` carousel, same card style as before |

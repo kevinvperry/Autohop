@@ -4,33 +4,43 @@ import Foundation
 // iTunes Search API client (actor) for the Find Podcasts sheet. No API key or
 // account needed. Results lacking a feedUrl (Apple Podcasts exclusives) are
 // silently dropped because Autohop can only subscribe via RSS. Consumed by
-// PodcastSearchView with a 400 ms debounce.
+// PodcastSearchView with a 400 ms debounce. Since tvOS Phase 4 (2026-07-04),
+// `PodcastSearchResult`/`PodcastSearchService` are `public` and part of
+// AutohopCore (Package.swift) — verified Foundation-only, no UIKit — so
+// TV/Views/TVSearchView.swift can consume them directly as a library import.
+// Keep this file UIKit-free; the ViewModels below (iOS-only consumers) stay
+// internal, they just happen to live in the same file.
 
 // MARK: - Model
 
-struct PodcastSearchResult: Identifiable, Hashable, Sendable {
-    let id: Int
-    let title: String
-    let author: String
-    let feedURL: URL
-    let artworkURL: URL?
-    let episodeCount: Int
-    let genre: String
+// PUBLIC since tvOS Phase 4 (§9 item 1): the TV Search tab consumes this
+// service directly (AutohopCore is a library import there, unlike iOS's
+// direct-compile target — access levels matter). Read-only consumption
+// doesn't need a public memberwise init (results are only ever returned by
+// `search`, never constructed fresh outside this file).
+public struct PodcastSearchResult: Identifiable, Hashable, Sendable {
+    public let id: Int
+    public let title: String
+    public let author: String
+    public let feedURL: URL
+    public let artworkURL: URL?
+    public let episodeCount: Int
+    public let genre: String
 }
 
 // MARK: - Service
 
-actor PodcastSearchService {
+public actor PodcastSearchService {
     private let session: URLSession
 
-    init() {
+    public init() {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.waitsForConnectivity = false
         session = URLSession(configuration: config)
     }
 
-    func search(query: String) async throws -> [PodcastSearchResult] {
+    public func search(query: String) async throws -> [PodcastSearchResult] {
         var components = URLComponents(string: "https://itunes.apple.com/search")!
         components.queryItems = [
             URLQueryItem(name: "term", value: query),

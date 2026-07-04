@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 // Reorder mode so they never fight the drag grips). Pill logic: archived
 // episodes show Played (not Archived) when Episode.wasCompleted is true, so
 // auto-archive doesn't erase the "you finished this" signal; not-downloaded
-// latest episodes excluded by Download Filters show the grey Skipped pill
+// latest episodes excluded by Download Feed Filters show the grey Skipped pill
 // instead of the inline Download button. Toolbar: hamburger menu
 // (MenuSheetView) leading, + (pushes DiscoverView as a full page via
 // navigationDestination — parent of Podcast Search) trailing; Reorder and

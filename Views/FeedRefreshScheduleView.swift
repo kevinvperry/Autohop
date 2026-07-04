@@ -15,15 +15,15 @@ import SwiftUI
 // is easy to find. Section headers use the DESIGN.md `Section-Heading` (bold title3 +
 // secondary count) with extra `.listSectionSpacing` between groups. Computed once on
 // appear (and on pull-to-refresh) into @State so the body stays cheap. Each row has a
-// "Diagnostics" button → SubscriptionRadarDiagnosticsView (same per-feed Release Radar
-// Data screen as Podcast Settings) and a "Rebuild Prediction" button →
+// "Diagnostics" button → SubscriptionRadarDiagnosticsView (the per-feed Release Radar
+// Data screen) and a "Rebuild Prediction" button →
 // AppState.rebuildReleasePrediction (learning-only: fetches the last 100 episodes into
 // the Release Radar learner WITHOUT merging episodes into the library/queue; episodes
-// skipped by Download Filters are excluded from the learner), then recomputes the table
-// so the row reflects the stronger profile (and may move to a new behaviour group). A
-// toolbar export button
+// skipped by Download Feed Filters are excluded from the learner), then recomputes
+// the table so the row reflects the stronger profile (and may move to a new
+// behaviour group). A toolbar export button
 // (ShareLink) writes a plain-text diagnostic dump of EVERY active subscription — the
-// same data as the per-podcast "Release Radar Data" screen — to a temp .txt for
+// same data as the per-subscription "Release Radar Data" screen — to a temp .txt for
 // sharing/submitting for offline trend analysis. The export includes each learned
 // window plus observed spread so over-narrow/widened Radar windows can be audited
 // without raw log parsing (see releaseRadarReportText at file end; regenerated
@@ -157,7 +157,7 @@ struct FeedRefreshScheduleView: View {
 
     private var overviewSection: some View {
         Section {
-            Text("When Autohop's Release Radar **will** and **won't** check each active show for new episodes. It watches a feed closely only inside its learned window and does a light check otherwise — so new episodes are caught fast without wasteful polling. Inactive subscriptions and episodes skipped by Download Filters are excluded.")
+            Text("When Autohop's Release Radar **will** and **won't** check each active show for new episodes. It watches a feed closely only inside its learned window and does a light check otherwise — so new episodes are caught fast without wasteful polling. Inactive subscriptions and episodes skipped by Download Feed Filters are excluded.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } footer: {
@@ -489,7 +489,7 @@ private func releaseRadarReportText(
         out += "[\(index + 1)] \(sub.title)\n"
         out += "  Feed: \(sub.feedURL.absoluteString)\n"
         if sub.downloadFilterSettings.hasActiveFilters {
-            out += "  Download Filters: active; skipped episodes excluded from learner/export\n"
+            out += "  Download Feed Filters: active; skipped episodes excluded from learner/export\n"
         }
         out += "  Classification: \(d.profile.categoryLabel) · \(reportPercent(d.profile.confidence)) confidence\n"
         out += "  Reason: \(d.profile.reason)\n"

@@ -101,6 +101,99 @@ Projections (Models/SyncState.swift):
   populates filters on the server. Remote records without the field decode with a
   nil stamp ("no remote opinion") and can never reset local filters to defaults.
 
+**priorityRank materialization bug (found + fixed for TV 2026-07-04):** a
+freshly-syncing device receives subscription records from CloudKit in
+ARBITRARY delivery order, not the phone's true rank order.
+`SubscriptionStore.normalizePriorityOrder()` renumbers every subscription's
+`priorityRank` by its current array position — correct for local edits
+(drag-reorder, subscribe, unsubscribe) where the array itself is the
+authoritative full picture, but WRONG when only some subscriptions have
+received their true synced rank yet: the next one to materialize clobbers
+everyone's rank back to arrival order. Fixed in `materialize`,
+`applyRemoteSubscriptionState`, and `recoverSettingsFromLegacySubscriptionState`
+via a new `resortByCurrentPriorityRank()` (sorts by current rank, does NOT
+renumber — see its header for the full trace). Ranks may keep small numeric
+gaps until the next local edit recompacts them (cosmetic only — iPhone's
+Priority Stack rank badge reads the raw value, but every consumer only ever
+compares relative order). **iPhone's own `AppState.materializeRemoteSubscription`
+has the same underlying flaw** (via `addSubscription(insertAtBottom:)`,
+shared with local OPML import) and is flagged but not yet fixed — needs its
+own pass to separate the two callers' needs.
+
+**Related bug, same root cause class (found + fixed same day):** episode
+played/archived state (`EpisodeSyncState`) can also arrive and stash itself
+BEFORE the episode it describes exists locally (`applyRemoteEpisodeState`'s
+no-local-episode-yet branch) — CloudKit doesn't guarantee episode records
+arrive after their parent subscription. `updateEpisodes` (iPhone) already
+self-healed from that stash; `materialize` (tvOS) didn't, so freshly-
+materialized back-catalog episodes looked unplayed even when already synced
+as played/archived — Up Next was full of "already finished" episodes. Fixed
+by extracting the self-heal logic into a shared
+`SubscriptionStore.selfHealedEpisode`, called from both paths now.
+
+**2026-07-04 audit findings (second real-device pass):**
+- **History persistence depended on an app callback (FIXED).** The engine's
+  fetch path persisted episode/subscription/stats records directly, but
+  history records only via `onRemoteHistoryEntry` — a platform that never
+  wired it (the TV app) silently dropped EVERY synced resume position. The
+  engine now falls back to `saveSyncedHistoryEntry` when no callback is set;
+  iOS (callback wired) is unchanged.
+- **Read side of cross-device resume now exists**:
+  `SubscriptionStore.savedListeningPosition(for:)` (normalized; `.listened`
+  entries only) and `mostRecentInProgressListeningEntry()` (the true
+  cross-device Continue Listening signal, by `lastListenedAt`, requiring a
+  usable position). `markEpisodePlaying` now also stamps `lastPlayedAt` (it
+  never did — recency comparisons between `.playing` episodes were arbitrary).
+- **OPEN GAP — `playedEpisodeKeys` / `archivedEpisodeKeys` do not sync.**
+  These per-subscription key sets are the phone's LONG-TERM memory of
+  finished episodes (they survive feed re-fetches and the 50-episode window;
+  `updateEpisodes` uses them to re-mark returning episodes). A fresh device
+  can only learn played/archived state from `EpisodeSyncState` records —
+  which only exist for episodes touched since projections shipped (June
+  2026). Episodes completed BEFORE that, or whose projections never pushed,
+  look unplayed on a fresh TV forever. Recommended fix: add both sets to
+  `SubscriptionSyncState` (same upgrade pattern as `downloadFilterSettings`);
+  decide merge semantics first — field-LWW loses concurrent additions from
+  two devices; set-union can't propagate unarchive removals. NOT implemented
+  yet; needs that design decision.
+- **RESOLVED (same day, Kevin's decision) — the queue now roams.** New
+  `QueueSnapshot` record type (`queue:current`, ONE per account, whole-record
+  LWW by the payload's `updatedAt` — a queue is one coherent ordered list,
+  not mergeable fields). The iPhone authors it from `downloadedQueue`
+  recomputes (`SubscriptionStore.updateLocalQueueSnapshot`, deduped on entry
+  equality so no-change recomputes never push); entries carry the stable
+  subscription-scoped episode key (`PlaybackPositionStore.key`) + subscriptionID
+  + a display-fallback title. Readers (tvOS `TVAppModel.upNextEpisodes`,
+  future watch) render `QueueModel.resolvedQueue(from:subscriptions:)` —
+  snapshot ORDER is authoritative, unresolvable keys are skipped, and
+  locally-known played/archived episodes are stale-filtered (a pre-completion
+  snapshot can't resurrect a finished episode — this also largely supersedes
+  the playedEpisodeKeys gap above FOR THE QUEUE SURFACE, since the phone's
+  queue never contains finished episodes). Engine: fast lane push, persisted
+  directly on pull (`saveSyncedQueueSnapshot`, LWW guard protects a local
+  author's newer pending queue), notify-only `onRemoteQueueSnapshotChanged`.
+  Storage: single-row `queue_snapshot` table (migration v8). Tested:
+  `Tests/QueueSnapshotSyncTests.swift`.
+  **Fast adoption (2026-07-04, Kevin's follow-up):** waiting for the snapshot
+  to surface in the full CKSyncEngine change stream meant the TV queue cycled
+  through stale episodes for ~10 min after launch. `CloudSyncEngine.fetchQueueSnapshotNow`
+  does a TARGETED single-record fetch (`CKDatabase.record(for: queue:current)`)
+  through the normal `applyRemote` path (so LWW + notify still apply), called
+  by `TVAppModel.refreshQueueFromCloudSoon` at launch and on foreground (with
+  a short retry loop covering the engine's async activation). `.unknownItem`
+  (nothing authored yet) is silent.
+- **Rank-corruption family closed out (same day):** (a) iPhone's
+  `materializeRemoteSubscription` now passes `reindexRanks: false` to
+  `addSubscription` (new parameter; local subscribe/OPML keep the default
+  compaction, which is correct for them); (b) `load()` no longer compacts
+  ranks at startup — a relaunch mid-initial-sync would have tied
+  later-arriving absolute ranks against freshly compacted 1..n. Audit swept
+  every remaining `reindexPriority`/`normalizePriorityOrder` call site: all
+  others are genuine local edits (remove/reorder/rank-edit/preview cleanup)
+  where compaction is correct, and no other synced record type uses
+  positional renumbering (history/stats/episode state are key- or
+  partition-addressed).
+
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
 leaves a `subscribed = false` tombstone.
@@ -187,8 +280,15 @@ adopted clean. Settings sub-structs
 5. ✅ **Listening history + stats**
    - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
      current recordName = `history:<historyID>`, migration v5).
-     ListeningHistoryStore records pending on mutation + merges via applyRemote;
-     denormalized title/artwork kept.
+     ListeningHistoryStore (iOS app target) records pending on mutation +
+     merges via applyRemote; denormalized title/artwork kept. Since tvOS Phase
+     3 (2026-07-04), `SubscriptionStore.recordListeningProgress` /
+     `markListeningHistoryFinished` (AutohopCore) expose the same write path
+     for platforms with no local history store of their own — both use
+     `PlaybackPositionStore.key(for:)` as the entry id, which is byte-for-byte
+     identical to ListeningHistoryStore's private `historyKey(for:)`, so
+     entries from either device collide on the same id and merge rather than
+     duplicate. This is the mechanism behind a phone⇄TV resume round-trip.
    - 5b Stats: **additive — partition by `(deviceID, dayKey)` and sum on read**
      (never LWW). `DeviceIdentity.current` (UserDefaults UUID); DayStats record
      per device-day (current recordName = `stats:<deviceID>:<dayKey>`);

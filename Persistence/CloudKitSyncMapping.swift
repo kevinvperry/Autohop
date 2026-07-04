@@ -63,12 +63,16 @@ public enum CloudKitSync {
     public static let subscriptionRecordType = "SubscriptionState"
     public static let historyRecordType = "HistoryEntry"
     public static let statsRecordType = "DayStats"
+    /// 2026-07-04: the synced Up Next queue (Models/QueueSnapshot.swift) —
+    /// ONE record per account, whole-record LWW by the payload's updatedAt.
+    public static let queueSnapshotRecordType = "QueueSnapshot"
 
     private enum RecordName {
         static let episodePrefix = "episode:"
         static let subscriptionPrefix = "subscription:"
         static let historyPrefix = "history:"
         static let statsPrefix = "stats:"
+        static let queuePrefix = "queue:"
     }
 
     private static let jsonEncoder = JSONEncoder()
@@ -144,10 +148,48 @@ public enum CloudKitSync {
     }
 
     public static func isCurrentRecordName(_ recordName: String) -> Bool {
+        // Every current record type MUST be listed here — a prefix missing
+        // from this check gets its pending saves silently retired as "legacy"
+        // by CloudSyncEngine.isRetiredLegacyPendingSave and never pushes.
         recordName.hasPrefix(RecordName.episodePrefix)
             || recordName.hasPrefix(RecordName.subscriptionPrefix)
             || recordName.hasPrefix(RecordName.historyPrefix)
             || recordName.hasPrefix(RecordName.statsPrefix)
+            || recordName.hasPrefix(RecordName.queuePrefix)
+    }
+
+    // MARK: - Queue snapshot (one record, whole-record LWW by updatedAt)
+
+    public static let queueSnapshotRecordName = "queue:current"
+
+    public static var queueSnapshotRecordID: CKRecord.ID {
+        CKRecord.ID(recordName: queueSnapshotRecordName, zoneID: zoneID)
+    }
+
+    public static func isQueueSnapshotRecordName(_ recordName: String) -> Bool {
+        recordName == queueSnapshotRecordName
+    }
+
+    private enum QueueKey {
+        static let snapshot = "snapshot"
+        static let updatedAt = "updatedAt"
+    }
+
+    /// Whole-snapshot JSON blob + LWW stamp — same shape as history entries.
+    public static func populate(_ record: CKRecord, from snapshot: QueueSnapshot) {
+        record[QueueKey.snapshot] = try? jsonEncoder.encode(snapshot)
+        record[QueueKey.updatedAt] = snapshot.updatedAt
+    }
+
+    public static func makeRecord(from snapshot: QueueSnapshot) -> CKRecord {
+        let record = CKRecord(recordType: queueSnapshotRecordType, recordID: queueSnapshotRecordID)
+        populate(record, from: snapshot)
+        return record
+    }
+
+    public static func queueSnapshot(from record: CKRecord) -> QueueSnapshot? {
+        guard let data = record[QueueKey.snapshot] as? Data else { return nil }
+        return try? jsonDecoder.decode(QueueSnapshot.self, from: data)
     }
 
     private static func stripped(_ value: String, prefix: String) -> String? {

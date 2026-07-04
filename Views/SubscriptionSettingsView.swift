@@ -9,16 +9,14 @@ import SwiftUI
 // 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
 // AppState if this podcast is playing; the dark Speed/Trim/Vocal card is the
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
-// Default Playback panel), Automation (per-podcast notifications,
-// exclude from auto feed refresh), Auto Archive (three rules), Chapter Filter
-// (only when latest episode has chapters; position-based), Feed (read-only
-// URL + Download Filters link + "Release Radar Data" link →
-// SubscriptionRadarDiagnosticsView, a read-only screen showing the raw data and
-// daily/weekly gate outcomes behind this feed's Radar classification),
-// Danger (unsubscribe with confirmation). This
-// file also hosts DownloadFiltersView, a pushed per-subscription page for
-// auto-download eligibility rules (duration/title/description, include/exclude,
-// All/Any, live read-only 50-episode feed preview with greyed skipped rows);
+// Default Playback panel), Download Feed Filters (per-feed auto-download
+// eligibility), Automation (per-podcast notifications, exclude from auto feed
+// refresh), Auto Archive (three rules), Chapter Filter (only when latest episode
+// has chapters; position-based), Feed (read-only URL), Danger (unsubscribe with
+// confirmation). This file also hosts DownloadFiltersView, a pushed
+// per-subscription page for auto-download eligibility rules
+// (duration/title/description, include/exclude, All/Any, live read-only
+// 50-episode feed preview with greyed skipped rows);
 // since July 2026 these filters roam via iCloud Sync with the other per-podcast
 // settings (struct-level LWW on the SubscriptionState record).
 // AUTO ARCHIVE RULES: Inactive Episodes (Rule 2) only archives episodes with a
@@ -154,6 +152,7 @@ struct SubscriptionSettingsView: View {
             if let sub = subscription {
                 Form {
                     podcastSection(sub)
+                    downloadFeedFiltersSection(sub)
                     playbackSection(sub)
                     automationSection(sub)
                     if let episode = sub.latestEpisode, !episode.chapters.isEmpty {
@@ -458,18 +457,6 @@ struct SubscriptionSettingsView: View {
     @ViewBuilder
     private func feedSection(_ sub: Subscription) -> some View {
         Section("Feed") {
-            NavigationLink {
-                DownloadFiltersView(subscriptionID: sub.id)
-            } label: {
-                SettingsRowLabel(title: "Download Filters", systemImage: "line.3.horizontal.decrease.circle")
-            }
-
-            NavigationLink {
-                SubscriptionRadarDiagnosticsView(subscriptionID: sub.id)
-            } label: {
-                SettingsRowLabel(title: "Release Radar Data", systemImage: "stethoscope")
-            }
-
             LabeledContent {
                 Text(sub.feedURL.absoluteString)
                     .foregroundStyle(.secondary)
@@ -477,6 +464,22 @@ struct SubscriptionSettingsView: View {
             } label: {
                 SettingsRowLabel(title: "URL", systemImage: "link")
             }
+        }
+        .listRowBackground(sectionRowBackground)
+    }
+
+    @ViewBuilder
+    private func downloadFeedFiltersSection(_ sub: Subscription) -> some View {
+        Section {
+            NavigationLink {
+                DownloadFiltersView(subscriptionID: sub.id)
+            } label: {
+                SettingsRowLabel(title: "Filter Rules", systemImage: "line.3.horizontal.decrease.circle")
+            }
+        } header: {
+            Text("Download Feed Filters")
+        } footer: {
+            Text("Control which new episodes Autohop downloads automatically from this podcast's feed. Duration, title, and description rules can skip episodes you do not want; manual downloads still work.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -673,7 +676,7 @@ struct DownloadFiltersView: View {
         .background(Color.black.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
-        .navigationTitle("Download Filters")
+        .navigationTitle("Download Feed Filters")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {

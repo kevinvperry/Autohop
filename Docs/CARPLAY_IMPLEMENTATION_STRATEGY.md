@@ -17,22 +17,21 @@ The first CarPlay release should support:
 
 - Now Playing.
 - Up Next.
+- Subscriptions, limited to real subscribed podcasts and their recent episode lists.
 - Playback speed control.
 - Shared Listening on/off.
 - Shared Listening speed picker.
 - Archive current episode from the player.
-- Up Next row actions: Play, Play Next, Archive.
+- Up Next and subscription episode row actions: Play Now, Play Next, Play Last, Archive.
+- Explicit driver-confirmed manual download before Play Now/Next/Last for subscription episodes not already on device.
 
 The first CarPlay release should not support:
 
 - Search.
-- Podcast browsing.
 - Podcast discovery.
 - Adding feeds.
-- Downloads or feed refresh.
+- Automatic downloads or feed refresh.
 - Subscription management.
-- Reordering beyond Play Next.
-- Play Last.
 - Sleep Timer or Sleep Schedule controls.
 - Stats, diagnostics, onboarding, acknowledgements, settings, or sharing.
 - CarPlay notifications.
@@ -53,7 +52,7 @@ Relevant entitlement:
 
 Do not ship CarPlay UI until Apple grants the entitlement and the provisioning profile includes it. Once the entitlement is added, Autohop appears on the CarPlay home screen for everyone using that build; there is no per-user hiding of CarPlay.
 
-The entitlement request should describe only the audio use case: downloaded podcast playback, automatic queue continuity, Now Playing, Up Next, and minimal actions.
+The entitlement request should describe only the audio use case: downloaded podcast playback, automatic queue continuity, Now Playing, Up Next, Subscriptions as a downloaded-episode shortcut, and minimal actions.
 
 ## Product principles
 
@@ -63,7 +62,7 @@ Autohop's CarPlay app exists so a driver can keep listening safely. It is not a 
 
 2. Downloaded only.
 
-CarPlay shows only episodes already in Autohop's downloaded queue. It never starts a feed refresh, search, stream, or download.
+Up Next shows only episodes already downloaded and playable from local files. Subscription episode lists can show undownloaded episodes, but only Play Now, Play Next, and Play Last may start a manual download, and only after confirmation. CarPlay never starts a feed refresh, search, stream, or discovery workflow.
 
 3. Same state, same rules.
 
@@ -130,13 +129,15 @@ Default launch behavior:
 Screens:
 
 - Now Playing: system Now Playing template.
-- Up Next: downloaded queue items. Tap opens actions: Play, Play Next, Play Last, Archive.
+- Up Next: downloaded queue items. Tap opens actions: Play Now, Play Next, Play Last, Archive.
+- Subscriptions: subscribed podcasts sorted by priority. Tap opens that subscription's recent episode list, including played, archived, and not-yet-downloaded episodes.
 - Shared Listening speed picker: short list of `AppState.sharedListeningSpeedOptions`.
 
 Navigation model:
 
 - Now Playing is the primary entry when audio is available.
 - Up Next should be reachable from Now Playing using the Playing Next affordance where supported.
+- Subscriptions is reachable from a Now Playing button and from a top button on Up Next.
 - The hierarchy must never exceed 5 templates.
 
 ## Text wireframes
@@ -210,6 +211,7 @@ Controls:
 Play/Pause
 Skip Back
 Skip Forward
+Subscriptions
 Speed
 Shared Listening
 Archive
@@ -221,25 +223,50 @@ Behavior:
 - Uses `CPNowPlayingTemplate.shared`.
 - Metadata must always be populated when an episode exists.
 - Archive current episode immediately archives and advances.
-- Speed cycles through `PlaybackPreference.speedOptions`.
+- Speed opens a persistent slower/faster list using `PlaybackPreference.speedOptions`.
 - Shared Listening toggles on/off.
 - Shared Listening speed picker opens a small speed list when needed.
+
+### Subscriptions
+
+```text
+Subscriptions
+
+[artwork] Podcast title
+          N downloaded episodes
+
+[artwork] Podcast title
+          N downloaded episodes
+```
+
+Behavior:
+
+- Shows real subscribed podcasts only, sorted by priority rank.
+- Browse/search preview subscriptions are excluded.
+- Tapping a podcast opens a short episode list for that podcast.
+- The episode list mirrors PodcastDetailView by showing recent feed episodes, including played, archived, and not-yet-downloaded episodes.
+- Tapping an episode opens Play Now, Play Next, Play Last, and Archive actions.
+- If Play Now, Play Next, or Play Last is chosen for an episode not on device, ask for confirmation, show a native downloading/loading state, then perform the selected action.
+- No subscription management, discovery, feed refresh, stream, or settings action appears.
 
 ## Detailed behavior decisions
 
 ### Episode source
 
-Only `AppState.downloadedQueue` appears in CarPlay. This queue is already filtered to downloaded, unplayed, unarchived episodes with a local file.
+Up Next episode rows must be downloaded, unplayed, unarchived, and local-file-backed. Subscription episode rows may be undownloaded, played, or archived, but must still be real subscribed-feed episodes.
 
-Do not show:
+Up Next must not show:
 
 - Undownloaded episodes.
 - Downloading episodes.
 - Failed downloads.
 - Archived episodes.
 - Played episodes.
+
+All CarPlay episode lists must not show:
+
 - Browse/discovery results.
-- Non-queue subscription libraries.
+- Subscription management or settings screens.
 
 ### Play
 
@@ -365,7 +392,7 @@ Avoid:
 - Main `@MainActor` coordinator for CarPlay templates.
 - Observes `AppState` and relevant publishers.
 - Owns the current CarPlay route.
-- Builds templates.
+- Builds Now Playing, Up Next, Subscriptions, subscription episode, speed, Shared Listening, action, confirmation, loading, and empty templates.
 - Routes all CarPlay actions into `AppState`.
 
 `CarPlay/CarPlayTemplates.swift`
@@ -374,17 +401,22 @@ Avoid:
   - Loading template.
   - Empty Up Next template.
   - Up Next list template.
+  - Subscriptions list template.
+  - Subscription episode list template.
   - Up Next action sheet.
   - Shared Listening speed list.
 
 `CarPlay/CarPlayEpisodeRow.swift`
 
 - Small projection type for row rendering:
+  - subscription title.
+  - available episode count.
   - episode ID.
   - title.
   - podcast title.
   - artwork.
   - progress.
+  - whether download is required before playback/queue action.
 
 `CarPlay/CarPlayArtworkProvider.swift`
 
@@ -440,6 +472,7 @@ Avoid:
 - Add small public helpers rather than letting CarPlay duplicate logic:
   - `func cyclePlaybackSpeedForCurrentEpisode()`
   - `func archiveCurrentEpisodeAndAdvance() async`
+  - `func downloadEpisodeForCarPlayAction(_:) async -> Episode?`
   - `func carPlayActionRows() -> [Episode]` if a named projection helps.
 - Consider exposing current podcast title for an episode through a helper.
 - Confirm all helpers are `@MainActor`.
@@ -452,7 +485,7 @@ Avoid:
 `Views/QueueSheetView.swift`
 
 - No direct dependency from CarPlay.
-- Use as behavioral reference for Play, Play Next, and Archive.
+- Use as behavioral reference for Play Now, Play Next, Play Last, and Archive.
 
 `Views/PlayerView.swift`
 
@@ -477,6 +510,9 @@ Avoid:
 `Tests/CarPlayBehaviorTests.swift`
 
 - Downloaded-only queue projection.
+- Subscription projection includes real subscriptions in priority order.
+- Subscription episode projection includes recent feed episodes for that subscription and marks rows that require download.
+- Download-before-action helper downloads and returns a playable episode for CarPlay.
 - Empty queue state.
 - Row title/detail mapping.
 - Progress calculation.
@@ -492,8 +528,8 @@ Avoid:
 
 `Tests/CarPlaySpeedTests.swift`
 
-- Speed cycles through `PlaybackPreference.speedOptions`.
-- Wraps from 2.5x to 1.0x.
+- Speed adjusts up and down through `PlaybackPreference.speedOptions`.
+- Slower/faster controls clamp at the first and last supported presets.
 - Does not mutate per-podcast speed while Shared Listening is active if normal speed is disabled.
 
 `Tests/CarPlaySharedListeningTests.swift`
@@ -554,6 +590,7 @@ Tasks:
 
 - Populate `CPNowPlayingTemplate.shared`.
 - Render Up Next from `AppState.downloadedQueue`.
+- Render Subscriptions from real subscriptions, with subscription episode lists matching the phone podcast detail page's recent episodes whether or not they are downloaded.
 - Show artwork with placeholder fallback.
 - Show subtle progress if supported.
 - Handle empty downloaded queue.
@@ -563,6 +600,8 @@ Exit criteria:
 - Now Playing appears with correct episode and podcast metadata.
 - Up Next shows downloaded queue only.
 - Up Next shows the same downloaded queue.
+- Subscriptions exclude browse/search previews.
+- Undownloaded subscription episodes are clearly marked and do not download until Play Now/Next/Last is confirmed.
 - Simulator and real hardware show useful rows with 12-item limits.
 
 ### Phase 3: Playback actions
@@ -573,6 +612,8 @@ Tasks:
 
 - Up Next row tap opens action sheet.
 - Up Next action sheet supports Play Now, Play Next, Play Last, Archive.
+- Subscription episode rows use the same action sheet.
+- Undownloaded subscription episode Play Now/Next/Last asks for confirmation, shows a downloading state, then performs the selected action.
 - Now Playing supports Archive current episode.
 - Archive current advances to next queue item.
 
@@ -674,9 +715,19 @@ Up Next:
 - Archive removes the item immediately.
 - Archive current episode advances to next item.
 
+Subscriptions:
+
+- Now Playing has a Subscriptions button beside the player controls.
+- Up Next has a top Subscriptions button.
+- Subscriptions are listed in priority order.
+- Browse/search preview subscriptions are excluded.
+- Subscription episode lists show recent feed episodes, including played, archived, and not-yet-downloaded episodes.
+- Subscription episode actions are Play Now, Play Next, Play Last, Archive.
+- Not-yet-downloaded Play Now/Next/Last actions require confirmation and show a downloading state before completing.
+
 Audio controls:
 
-- Speed cycles through existing Autohop presets.
+- Speed adjusts up and down through existing Autohop presets.
 - Shared Listening toggles on/off.
 - Shared Listening speed picker uses existing shared speed options.
 - Shared Listening state persists after disconnect.
@@ -698,7 +749,8 @@ Reliability:
 
 - Works while iPhone is locked.
 - Does not activate audio session on CarPlay connection alone.
-- Does not start downloads or feed refresh from CarPlay.
+- Starts downloads only after explicit Play Now/Next/Last confirmation from a subscription episode row.
+- Does not start feed refresh from CarPlay.
 - Survives disconnect/reconnect.
 
 ## Key risks and mitigations
@@ -787,4 +839,4 @@ Build the most review-safe version that still feels like Autohop:
 8. Harden locked-device access.
 9. Test in CarPlay Simulator and real hardware.
 
-This gives Autohop a focused, useful CarPlay presence without diluting the product into browsing, settings, or feed management. It also plays directly to the app's strongest claim: the queue is already built, already downloaded, and ready to keep playing while the driver does less.
+This gives Autohop a focused, useful CarPlay presence without diluting the product into discovery, settings, or feed management. It also plays directly to the app's strongest claim: the queue is already built, already downloaded, and ready to keep playing while the driver does less.

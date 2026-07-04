@@ -21,10 +21,14 @@ The first release remains:
 - Now Playing first when an episode is loaded and valid CarPlay metadata can be projected.
 - Up Next if no episode is loaded, or if cold-launch metadata is not ready.
 - Simplified Up Next for selection and actions.
-- Downloaded queue only.
+- Subscriptions list in priority order, with each subscription opening its
+  recent episode list, including played, archived, and not-yet-downloaded episodes.
+- Up Next remains downloaded queue only.
 - Up Next actions: Play Now, Play Next, Play Last, Archive.
-- Player actions: Archive, persistent slower/faster speed page, Shared Listening toggle, Shared Listening speed picker.
-- No search, browsing, downloads, feed refresh, sleep controls, settings, stats, diagnostics, sharing, or CarPlay notifications.
+- Subscription episode Play Now/Next/Last asks before downloading when the
+  episode is not already on device, then shows a native downloading state.
+- Player actions: Subscriptions, Archive, persistent slower/faster speed page, Shared Listening toggle, Shared Listening speed picker.
+- No search, podcast discovery, feed refresh, sleep controls, settings, stats, diagnostics, sharing, or CarPlay notifications.
 
 ## Implementation Shape
 
@@ -247,7 +251,8 @@ Gate:
 - Play Next changes queue order immediately.
 - Archive removes the row immediately.
 - Archiving current starts the next downloaded queue item.
-- No action starts downloads, feed refresh, search, or browsing.
+- Only driver-confirmed subscription episode Play Now/Next/Last starts a manual download.
+- No action starts feed refresh, search, podcast discovery, streaming, or subscription management.
 
 ## Phase 5: Speed And Shared Listening
 
@@ -412,7 +417,8 @@ Tasks:
 - Add App Review notes:
   - CarPlay is audio-only.
   - It uses downloaded queue items only.
-  - It excludes search, browsing, downloads, and settings.
+  - It excludes search, podcast discovery, streaming, subscription management, and settings.
+  - Downloads are limited to explicit confirmation before Play Now/Next/Last from Subscriptions.
 - Confirm production provisioning profile includes CarPlay audio entitlement.
 - Confirm archive build has the entitlement.
 - Run final regression on:
@@ -467,9 +473,11 @@ Stop and reassess after these moments:
 Do not implement:
 
 - Search.
-- Podcast/library browsing.
+- Podcast discovery.
+- Subscription management.
 - Add feed.
-- Download/refresh from CarPlay.
+- Feed refresh from CarPlay.
+- Background/automatic downloads from CarPlay.
 - Drag/reorder.
 - Sleep controls.
 - Stats.

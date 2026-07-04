@@ -12,7 +12,8 @@ import UIKit
 // projects shared AppState into read-only CarPlay templates.
 //
 // CURRENT SCOPE: Real-hardware CarPlay adapter. The coordinator renders Now
-// Playing, Up Next, and empty states from AppState.downloadedQueue,
+// Playing, Up Next, Subscriptions, subscription episode lists, download progress,
+// and empty states from AppState,
 // observes AppState conservatively, and delegates behavior decisions to
 // CarPlayActionRouter so Play/Play Next/Archive/speed/Shared Listening paths can
 // be tested without a live CarPlay runtime. Dialog-style templates always include
@@ -22,13 +23,17 @@ import UIKit
 // shared queue/playback model before templates are rendered. Never switch to
 // CPNowPlayingTemplate unless current metadata can be projected; otherwise
 // CarPlay shows Apple's blank player shell.
-// Connecting CarPlay must not activate audio by itself, refresh feeds, download
-// episodes, search, browse, or create any separate CarPlay queue/playback/settings
-// state. The CarPlay list page is labelled "Up Next" to match the iPhone sheet,
+// Connecting CarPlay must not activate audio by itself, refresh feeds, search,
+// browse, or create any separate CarPlay queue/playback/settings state. Driver-
+// confirmed manual downloads are allowed only from subscription episode Play
+// Now/Next/Last actions, and they route through AppState's existing download
+// path. The CarPlay Up Next list remains labelled to match the iPhone sheet,
 // while internal queue model names still refer to AppState.downloadedQueue.
-// Loading and empty queues use CPListTemplate's native empty-view APIs instead
-// of fake disabled rows. All CarPlay navigation operations log rejected templates
-// so real-hardware failures leave a diagnostic trail.
+// Subscriptions are exposed as a CarPlay-safe browser over real subscribed
+// podcasts; episode rows can include not-yet-downloaded episodes. Loading,
+// downloading, and empty lists use CPListTemplate's native empty-view APIs
+// instead of fake disabled rows. All CarPlay navigation operations log rejected
+// templates so real-hardware failures leave a diagnostic trail.
 //
 // TEMPLATE STACK COUNT:
 //  - Loading: CPListTemplate root only (depth 1).
@@ -36,6 +41,10 @@ import UIKit
 //    -> optional Archive confirmation (depth 3).
 //  - Current episode: CPNowPlayingTemplate root -> optional Up Next list ->
 //    optional action list -> optional Archive confirmation (depth 4).
+//  - Subscriptions: CPNowPlayingTemplate root -> Subscriptions list ->
+//    subscription episode list -> action list -> optional Download/Archive
+//    confirmation (depth 5). Confirmed downloads temporarily replace the stack
+//    with a native spinner root to avoid exceeding depth.
 //  - Speed: CPNowPlayingTemplate root -> pushed speed list with slower/faster
 //    controls plus native Back (depth 2).
 //  - Shared Listening: CPNowPlayingTemplate root -> one action sheet with toggle,
@@ -58,7 +67,11 @@ final class CarPlayCoordinator: NSObject {
 
     private var queueTemplate: CPListTemplate?
     private var queueActionTemplate: CPListTemplate?
+    private var subscriptionsTemplate: CPListTemplate?
+    private var subscriptionEpisodesTemplate: CPListTemplate?
+    private var selectedSubscriptionID: UUID?
     private var playbackSpeedTemplate: CPListTemplate?
+    private var isShowingDownloadProgress = false
     private var rootRoute: RootRoute = .loading
     private var lastSnapshot: Snapshot?
     private let maximumSharedListeningSpeedActions = 4
@@ -66,8 +79,34 @@ final class CarPlayCoordinator: NSObject {
 
     private enum RootRoute {
         case loading
+        case download
         case nowPlaying
         case queue
+    }
+
+    private enum EpisodeAction {
+        case playNow
+        case playNext
+        case playLast
+
+        var title: String {
+            switch self {
+            case .playNow: return "Play Now"
+            case .playNext: return "Play Next"
+            case .playLast: return "Play Last"
+            }
+        }
+
+        var downloadMessage: String {
+            switch self {
+            case .playNow:
+                return "Download this episode before playing it?"
+            case .playNext:
+                return "Download this episode before moving it to Play Next?"
+            case .playLast:
+                return "Download this episode before moving it to Play Last?"
+            }
+        }
     }
 
     private struct Snapshot: Equatable {
@@ -77,6 +116,7 @@ final class CarPlayCoordinator: NSObject {
         let sharedListeningActive: Bool
         let sharedListeningSpeed: Double
         let queueIDs: [UUID]
+        let subscriptionSignature: [String]
 
         @MainActor
         init(appState: AppState) {
@@ -92,6 +132,25 @@ final class CarPlayCoordinator: NSObject {
             sharedListeningActive = appState.sharedListeningActive
             sharedListeningSpeed = appState.sharedListeningSpeed
             queueIDs = appState.downloadedQueue.map(\.id)
+            subscriptionSignature = appState.subscriptionStore.subscriptions
+                .filter { $0.browseDate == nil }
+                .sorted {
+                    if $0.priorityRank != $1.priorityRank {
+                        return $0.priorityRank < $1.priorityRank
+                    }
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                .map { subscription in
+                    let playableCount = Snapshot.availableCount(subscription)
+                    return "\(subscription.id.uuidString)|\(subscription.priorityRank)|\(subscription.title)|\(subscription.excludeFromAutoFeedRefresh)|\(playableCount)"
+                }
+        }
+
+        private static func availableCount(_ subscription: Subscription) -> Int {
+            let episodes = subscription.episodes.isEmpty
+                ? subscription.latestEpisode.map { [$0] } ?? []
+                : subscription.episodes
+            return episodes.count
         }
     }
 
@@ -113,7 +172,11 @@ final class CarPlayCoordinator: NSObject {
         CPNowPlayingTemplate.shared.remove(self)
         queueTemplate = nil
         queueActionTemplate = nil
+        subscriptionsTemplate = nil
+        subscriptionEpisodesTemplate = nil
+        selectedSubscriptionID = nil
         playbackSpeedTemplate = nil
+        isShowingDownloadProgress = false
         rootRoute = .loading
         lastSnapshot = nil
         self.interfaceController = nil
@@ -183,6 +246,7 @@ final class CarPlayCoordinator: NSObject {
     private func makeQueueTemplate(appState: AppState) -> CPListTemplate {
         let template = CPListTemplate(title: "Up Next", sections: makeQueueSections(appState: appState))
         template.emptyViewTitleVariants = ["No downloaded episodes"]
+        template.trailingNavigationBarButtons = [makeSubscriptionsBarButton()]
         return template
     }
 
@@ -194,7 +258,7 @@ final class CarPlayCoordinator: NSObject {
     private func makeListItem(row: CarPlayEpisodeRow) -> CPListItem {
         let item = CPListItem(
             text: row.title,
-            detailText: row.podcastTitle,
+            detailText: row.requiresDownload ? "Not downloaded" : row.podcastTitle,
             image: artworkProvider.placeholderImage()
         )
         item.userInfo = row.id
@@ -251,6 +315,7 @@ final class CarPlayCoordinator: NSObject {
 
     private func configureNowPlayingButtons(appState: AppState) {
         CPNowPlayingTemplate.shared.updateNowPlayingButtons([
+            makeSubscriptionsButton(appState: appState),
             makePlaybackSpeedButton(appState: appState),
             makeSharedListeningButton(appState: appState),
             makeArchiveNowPlayingButton(appState: appState)
@@ -301,6 +366,14 @@ final class CarPlayCoordinator: NSObject {
         lastSnapshot = snapshot
 
         queueTemplate?.updateSections(makeQueueSections(appState: appState))
+        subscriptionsTemplate?.updateSections(makeSubscriptionSections(appState: appState))
+        if let selectedSubscriptionID {
+            subscriptionEpisodesTemplate?.updateSections(
+                makeSubscriptionEpisodeSections(subscriptionID: selectedSubscriptionID, appState: appState)
+            )
+        }
+
+        guard !isShowingDownloadProgress else { return }
 
         if configureNowPlayingMetadata(appState: appState) {
             configureNowPlayingButtons(appState: appState)
@@ -332,15 +405,13 @@ final class CarPlayCoordinator: NSObject {
 
     private func showQueueActions(for row: CarPlayEpisodeRow) {
         let play = makeActionItem(title: "Play Now", detail: nil) { [weak self] in
-            await self?.playEpisode(row.episode)
+            await self?.performEpisodeAction(.playNow, row: row)
         }
         let playNext = makeActionItem(title: "Play Next", detail: nil) { [weak self] in
-            self?.playEpisodeNext(row.episode)
-            self?.popTemplate()
+            await self?.performEpisodeAction(.playNext, row: row)
         }
         let playLast = makeActionItem(title: "Play Last", detail: nil) { [weak self] in
-            self?.playEpisodeLast(row.episode)
-            self?.popTemplate()
+            await self?.performEpisodeAction(.playLast, row: row)
         }
         let archive = makeActionItem(title: "Archive", detail: nil) { [weak self] in
             self?.presentArchiveConfirmation(
@@ -357,6 +428,197 @@ final class CarPlayCoordinator: NSObject {
         )
         queueActionTemplate = template
         pushTemplate(template, animated: true)
+    }
+
+    private func performEpisodeAction(_ action: EpisodeAction, row: CarPlayEpisodeRow) async {
+        if row.requiresDownload {
+            presentDownloadConfirmation(action: action, episode: row.episode)
+            return
+        }
+
+        await performDownloadedEpisodeAction(action, episode: row.episode)
+    }
+
+    private func performDownloadedEpisodeAction(_ action: EpisodeAction, episode: Episode) async {
+        switch action {
+        case .playNow:
+            await playEpisode(episode)
+        case .playNext:
+            playEpisodeNext(episode)
+            popTemplate()
+        case .playLast:
+            playEpisodeLast(episode)
+            popTemplate()
+        }
+    }
+
+    private func presentDownloadConfirmation(action: EpisodeAction, episode: Episode) {
+        let confirm = CPAlertAction(title: "Download", style: .default) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismissPresentedTemplate {
+                    Task { @MainActor in
+                        await self?.downloadAndPerform(action, episode: episode)
+                    }
+                }
+            }
+        }
+
+        let cancel = CPAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            Task { @MainActor in self?.dismissPresentedTemplate() }
+        }
+
+        let sheet = CPActionSheetTemplate(
+            title: action.title,
+            message: action.downloadMessage,
+            actions: [confirm, cancel]
+        )
+        presentTemplate(sheet, animated: true)
+    }
+
+    private func downloadAndPerform(_ action: EpisodeAction, episode: Episode) async {
+        guard let appState = AppState.shared else { return }
+        showDownloadProgressTemplate(action: action, episode: episode)
+
+        let router = CarPlayActionRouter(appState: appState)
+        guard let downloadedEpisode = await router.downloadForAction(episode) else {
+            isShowingDownloadProgress = false
+            restoreRootTemplate(appState: appState)
+            presentDownloadFailure(for: episode)
+            return
+        }
+
+        isShowingDownloadProgress = false
+        await performDownloadedEpisodeActionAfterDownload(action, episode: downloadedEpisode, appState: appState)
+    }
+
+    private func performDownloadedEpisodeActionAfterDownload(
+        _ action: EpisodeAction,
+        episode: Episode,
+        appState: AppState
+    ) async {
+        switch action {
+        case .playNow:
+            await playEpisode(episode)
+        case .playNext:
+            await CarPlayActionRouter(appState: appState).playNext(episode)
+            configureNowPlayingMetadata(appState: appState)
+            configureNowPlayingButtons(appState: appState)
+            restoreRootTemplate(appState: appState)
+            refreshFromAppState()
+        case .playLast:
+            CarPlayActionRouter(appState: appState).playLast(episode)
+            configureNowPlayingMetadata(appState: appState)
+            configureNowPlayingButtons(appState: appState)
+            restoreRootTemplate(appState: appState)
+            refreshFromAppState()
+        }
+    }
+
+    private func showDownloadProgressTemplate(action: EpisodeAction, episode: Episode) {
+        let template = CPListTemplate(title: "Downloading", sections: [])
+        template.emptyViewTitleVariants = ["Downloading episode"]
+        template.emptyViewSubtitleVariants = [episode.title]
+        if #available(iOS 18.4, *) {
+            template.showsSpinnerWhileEmpty = true
+        }
+        isShowingDownloadProgress = true
+        rootRoute = .download
+        setRootTemplate(template, animated: true)
+        logger.info("carplay.download", "CarPlay download started", metadata: [
+            "episode": episode.title,
+            "action": action.title
+        ])
+    }
+
+    private func restoreRootTemplate(appState: AppState) {
+        if configureNowPlayingMetadata(appState: appState) {
+            rootRoute = .nowPlaying
+            setRootTemplate(CPNowPlayingTemplate.shared, animated: true)
+        } else {
+            rootRoute = .queue
+            setRootTemplate(makeQueueTemplate(appState: appState), animated: true)
+        }
+    }
+
+    private func presentDownloadFailure(for episode: Episode) {
+        let cancel = CPAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            Task { @MainActor in self?.dismissPresentedTemplate() }
+        }
+        let sheet = CPActionSheetTemplate(
+            title: "Download Failed",
+            message: episode.title,
+            actions: [cancel]
+        )
+        presentTemplate(sheet, animated: true)
+    }
+
+    private func showSubscriptionsTemplate() {
+        guard let appState = AppState.shared else { return }
+        let template = makeSubscriptionsTemplate(appState: appState)
+        subscriptionsTemplate = template
+        pushTemplate(template, animated: true)
+    }
+
+    private func makeSubscriptionsTemplate(appState: AppState) -> CPListTemplate {
+        let template = CPListTemplate(
+            title: "Subscriptions",
+            sections: makeSubscriptionSections(appState: appState)
+        )
+        template.emptyViewTitleVariants = ["No subscriptions"]
+        return template
+    }
+
+    private func makeSubscriptionSections(appState: AppState) -> [CPListSection] {
+        let rows = presenter.subscriptionRows(from: appState)
+        return rows.isEmpty ? [] : [CPListSection(items: rows.map { makeSubscriptionItem(row: $0) })]
+    }
+
+    private func makeSubscriptionItem(row: CarPlaySubscriptionRow) -> CPListItem {
+        let countText = row.availableEpisodeCount == 1
+            ? "1 episode"
+            : "\(row.availableEpisodeCount) episodes"
+        let detail = row.isInactive ? "Inactive · \(countText)" : countText
+        let item = CPListItem(
+            text: row.title,
+            detailText: detail,
+            image: artworkProvider.placeholderImage()
+        )
+        item.userInfo = row.id
+        item.handler = { [weak self] _, completion in
+            completion()
+            Task { @MainActor in
+                self?.showSubscriptionEpisodes(for: row.subscription.id)
+            }
+        }
+
+        Task { @MainActor [weak item, artworkProvider] in
+            let image = await artworkProvider.image(for: row.artworkURL)
+            item?.setImage(image)
+        }
+        return item
+    }
+
+    private func showSubscriptionEpisodes(for subscriptionID: UUID) {
+        guard let appState = AppState.shared,
+              let subscription = appState.subscriptionStore.subscription(id: subscriptionID)
+        else { return }
+
+        selectedSubscriptionID = subscriptionID
+        let template = CPListTemplate(
+            title: subscription.title,
+            sections: makeSubscriptionEpisodeSections(subscriptionID: subscriptionID, appState: appState)
+        )
+        template.emptyViewTitleVariants = ["No episodes"]
+        subscriptionEpisodesTemplate = template
+        pushTemplate(template, animated: true)
+    }
+
+    private func makeSubscriptionEpisodeSections(subscriptionID: UUID, appState: AppState) -> [CPListSection] {
+        guard let subscription = appState.subscriptionStore.subscription(id: subscriptionID) else {
+            return []
+        }
+        let rows = presenter.episodeRows(for: subscription, appState: appState)
+        return rows.isEmpty ? [] : [CPListSection(items: rows.map { makeListItem(row: $0) })]
     }
 
     private func playEpisodeNext(_ episode: Episode) {
@@ -629,6 +891,23 @@ final class CarPlayCoordinator: NSObject {
                 "error": error.localizedDescription
             ])
         }
+    }
+
+    private func makeSubscriptionsBarButton() -> CPBarButton {
+        let button = CPBarButton(title: "Subscriptions") { [weak self] _ in
+            Task { @MainActor in self?.showSubscriptionsTemplate() }
+        }
+        button.buttonStyle = .rounded
+        return button
+    }
+
+    private func makeSubscriptionsButton(appState: AppState) -> CPNowPlayingImageButton {
+        let image = UIImage(systemName: "list.bullet.rectangle") ?? UIImage(systemName: "list.bullet") ?? UIImage()
+        let button = CPNowPlayingImageButton(image: image) { [weak self] _ in
+            Task { @MainActor in self?.showSubscriptionsTemplate() }
+        }
+        button.isEnabled = !appState.subscriptionStore.subscriptions.filter { $0.browseDate == nil }.isEmpty
+        return button
     }
 
     private func makePlaybackSpeedButton(appState: AppState) -> CPNowPlayingPlaybackRateButton {

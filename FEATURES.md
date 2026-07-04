@@ -27,10 +27,11 @@ flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
-entitlement scope: Now Playing, Up Next, downloaded-only playback, Play Now, Play
-Next, Play Last, Archive, playback speed, and Shared Listening. CarPlay must not
-grow search, browsing, downloads, feed refresh, settings, sleep controls, stats,
-OPML, notifications, or other non-driving workflows.
+entitlement scope: Now Playing, downloaded-only Up Next, Subscriptions, explicit
+download-before-play confirmation for subscription episodes, Play Now, Play Next,
+Play Last, Archive, playback speed, and Shared Listening. CarPlay must not grow
+search, podcast discovery, feed refresh, settings, sleep controls, stats, OPML,
+notifications, or other non-driving workflows.
 -->
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
@@ -895,7 +896,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, Download Filters, priority, notifications), subscribe/unsubscribe, and listening history. |
+| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, Download Filters, priority, notifications), subscribe/unsubscribe, listening history, and (since July 2026) the Up Next queue itself — its exact episodes and order, authored by the iPhone, mirrored on Apple TV and future devices. |
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Per-podcast Download Filters sync as of July 2026 (they were backup/local-only in v1). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
 
@@ -1167,7 +1168,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 
 ## 19. CarPlay
 
-**What it is:** A native CarPlay Audio App surface for Autohop's existing downloaded playback queue. CarPlay is another UI over the same `AppState`, queue, playback engine, archive behavior, speed preferences, and Shared Listening state used by the iPhone app.
+**What it is:** A native CarPlay Audio App surface for Autohop's playback queue and subscribed-show episode lists. CarPlay is another UI over the same `AppState`, queue, download manager, playback engine, archive behavior, speed preferences, and Shared Listening state used by the iPhone app.
 
 **Entry behavior:**
 - If an episode is currently loaded and valid metadata is available, CarPlay opens to **Now Playing**.
@@ -1175,19 +1176,20 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 - During app readiness, CarPlay shows a short loading state and then switches to Now Playing or Up Next.
 
 **Screens:**
-- **Now Playing** — current episode metadata, artwork when available, system playback controls, Archive, a persistent speed adjustment page, Shared Listening toggle, and Shared Listening speed picker.
+- **Now Playing** — current episode metadata, artwork when available, system playback controls, Subscriptions, Archive, a persistent speed adjustment page, Shared Listening toggle, and Shared Listening speed picker.
 - **Up Next** — downloaded queue episodes with Play Now, Play Next, Play Last, and Archive actions.
+- **Subscriptions** — real subscribed podcasts in priority order. Tapping a podcast opens its recent episode list, including played, archived, and not-yet-downloaded episodes; tapping an episode opens Play Now, Play Next, Play Last, and Archive actions.
 
-**Downloaded-only rule:** CarPlay reads from `AppState.downloadedQueue` only. It does not search, browse podcasts, refresh feeds, start downloads, stream episodes, or expose subscription management.
+**Download boundary:** Up Next remains downloaded-only. Subscription episode lists mirror the phone podcast detail page by showing recent episodes, but Play Now, Play Next, and Play Last on an episode not yet on device must first show a driver confirmation before starting a manual download. During that download, CarPlay shows a native loading/downloading state. CarPlay does not search, discover podcasts, refresh feeds, stream episodes, or expose subscription management.
 
 **Actions:**
-- **Play Now** starts the selected downloaded episode immediately.
-- **Play Next** moves the selected episode directly after the currently playing episode, matching iPhone behavior. If there is no current episode, Play Next behaves as Play.
-- **Play Last** moves the selected episode to the end of the queue, matching iPhone behavior.
+- **Play Now** starts the selected downloaded episode immediately; for an undownloaded subscription episode, it asks to download first, then plays.
+- **Play Next** moves the selected episode directly after the currently playing episode, matching iPhone behavior. If there is no current episode, Play Next behaves as Play. For an undownloaded subscription episode, it asks to download first, then queues.
+- **Play Last** moves the selected episode to the end of the queue, matching iPhone behavior. For an undownloaded subscription episode, it asks to download first, then queues.
 - **Archive** removes the selected episode from the queue. Archiving the current episode advances to the next downloaded queue item when one exists; otherwise Now Playing is cleared and the empty queue state is shown.
 - **Playback Speed** opens a slower/faster page using Autohop's existing preset speeds and the current episode's podcast settings as the base. The page stays open after each adjustment.
 - **Shared Listening** controls the same global temporary override as iPhone. Disconnecting CarPlay does not change the Shared Listening state.
 
 **Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.
 
-**Explicitly excluded from CarPlay v1:** Search, Discover, RSS entry, podcast settings, feed refresh, downloads, streaming, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, diagnostics, sharing, and long-form episode browsing.
+**Explicitly excluded from CarPlay v1:** Search, Discover, RSS entry, podcast settings, subscription management, feed refresh, streaming, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, diagnostics, sharing, and long-form episode browsing. Downloads are limited to explicit confirmation from Play Now, Play Next, or Play Last on a subscribed-show episode row.

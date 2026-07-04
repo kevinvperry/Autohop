@@ -1,7 +1,7 @@
 // AI CONTEXT - Tests/CarPlayBehaviorTests.swift
 // Coverage for CarPlay behavior that can be verified without a live CarPlay
-// runtime: queue projection, cold-launch resume, action routing decisions,
-// speed cycling, system playback-rate command routing, and Shared Listening state. SwiftPM's
+// runtime: queue/subscription projection, cold-launch resume, action routing
+// decisions, speed cycling, system playback-rate command routing, and Shared Listening state. SwiftPM's
 // AutohopCore target intentionally excludes App/CarPlay, so these tests compile
 // only in the Xcode app test target.
 import XCTest
@@ -45,6 +45,118 @@ final class CarPlayBehaviorTests: XCTestCase {
         try harness.installEpisodes([episode], downloadedIDs: [])
 
         XCTAssertTrue(CarPlayEpisodePresenter().rows(from: harness.appState).isEmpty)
+    }
+
+    func testSubscriptionProjectionShowsRealSubscriptionsInPriorityOrder() throws {
+        let harness = try makeHarness()
+        let secondSubscriptionID = UUID()
+        let secondSeed = makeEpisode(subscriptionID: secondSubscriptionID, guid: "later-seed", title: "Later Seed")
+        _ = try harness.store.addSubscription(
+            id: secondSubscriptionID,
+            feedURL: URL(string: "https://example.com/later.xml")!,
+            title: "Later Show",
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: secondSeed,
+            insertAtBottom: true
+        )
+
+        let rows = CarPlayEpisodePresenter().subscriptionRows(from: harness.appState)
+
+        XCTAssertEqual(rows.map(\.title), ["CarPlay Show", "Later Show"])
+        XCTAssertEqual(rows.map(\.id), [harness.subscriptionID, secondSubscriptionID])
+    }
+
+    func testSubscriptionProjectionExcludesBrowsePreviews() throws {
+        let harness = try makeHarness()
+        let parsedEpisode = ParsedEpisode(
+            guid: "preview",
+            title: "Preview Episode",
+            description: nil,
+            subtitle: nil,
+            author: nil,
+            publishedAt: nil,
+            durationSeconds: nil,
+            audioURL: URL(string: "https://example.com/preview.mp3"),
+            artworkURL: nil,
+            fileSizeBytes: nil,
+            isExplicit: nil,
+            chapters: [],
+            externalChaptersURL: nil
+        )
+        let parsedFeed = ParsedFeed(
+            title: "Preview Show",
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: parsedEpisode
+        )
+        _ = try harness.store.addPreviewSubscription(
+            parsedFeed: parsedFeed,
+            feedURL: URL(string: "https://example.com/preview.xml")!
+        )
+
+        let rows = CarPlayEpisodePresenter().subscriptionRows(from: harness.appState)
+
+        XCTAssertEqual(rows.map(\.title), ["CarPlay Show"])
+    }
+
+    func testSubscriptionEpisodeProjectionShowsRecentEpisodesLatestFirstWithDownloadState() throws {
+        let harness = try makeHarness()
+        let old = makeEpisode(
+            subscriptionID: harness.subscriptionID,
+            guid: "old",
+            title: "Old",
+            publishedAt: Date(timeIntervalSince1970: 1)
+        )
+        let new = makeEpisode(
+            subscriptionID: harness.subscriptionID,
+            guid: "new",
+            title: "New",
+            publishedAt: Date(timeIntervalSince1970: 2)
+        )
+        let remote = makeEpisode(
+            subscriptionID: harness.subscriptionID,
+            guid: "remote",
+            title: "Remote",
+            publishedAt: Date(timeIntervalSince1970: 3)
+        )
+        var played = makeEpisode(
+            subscriptionID: harness.subscriptionID,
+            guid: "played",
+            title: "Played",
+            publishedAt: Date(timeIntervalSince1970: 4)
+        )
+        played.playedState = .played
+        var archived = makeEpisode(
+            subscriptionID: harness.subscriptionID,
+            guid: "archived",
+            title: "Archived",
+            publishedAt: Date(timeIntervalSince1970: 5)
+        )
+        archived.playedState = .archived
+        try harness.installEpisodes([old, new, remote, played, archived], downloadedIDs: [old.id, new.id])
+
+        let subscription = try XCTUnwrap(harness.store.subscription(id: harness.subscriptionID))
+        let rows = CarPlayEpisodePresenter().episodeRows(for: subscription, appState: harness.appState)
+
+        XCTAssertEqual(rows.map(\.title), ["Archived", "Played", "Remote", "New", "Old"])
+        XCTAssertEqual(rows.map(\.podcastTitle), Array(repeating: "CarPlay Show", count: 5))
+        XCTAssertEqual(rows.map(\.requiresDownload), [true, true, true, false, false])
+    }
+
+    func testCarPlayDownloadHelperDownloadsAndReturnsPlayableEpisode() async throws {
+        let harness = try makeHarness()
+        let episode = makeEpisode(subscriptionID: harness.subscriptionID, guid: "remote-download", title: "Remote Download")
+        try harness.installEpisodes([episode], downloadedIDs: [])
+        harness.download.downloadHandler = { try harness.makeLocalFile($0.id) }
+
+        let stored = try XCTUnwrap(harness.store.episode(subscriptionID: harness.subscriptionID, episodeID: episode.id))
+        let downloaded = await harness.appState.downloadEpisodeForCarPlayAction(stored)
+
+        XCTAssertEqual(downloaded?.id, episode.id)
+        XCTAssertEqual(downloaded?.downloadState, .downloaded)
+        XCTAssertNotNil(downloaded?.localFileName)
+        XCTAssertEqual(harness.download.downloadedEpisodeIDs, [episode.id])
     }
 
     func testCarPlayColdLaunchResumesRestoredEpisode() async throws {
@@ -200,10 +312,11 @@ final class CarPlayBehaviorTests: XCTestCase {
             latestEpisode: seed
         )
         let playback = PlaybackSpy()
+        let download = TestDownloadManager()
         let settings = TestSettingsStore()
         let appState = AppState(
             feedService: TestFeedService(),
-            downloadManager: TestDownloadManager(),
+            downloadManager: download,
             playbackEngine: playback,
             chapterService: ChapterService(),
             queueService: QueueService(),
@@ -214,6 +327,7 @@ final class CarPlayBehaviorTests: XCTestCase {
             appState: appState,
             store: store,
             playback: playback,
+            download: download,
             settings: settings,
             subscriptionID: subscriptionID,
             makeLocalFile: { [weak self] id in try self?.makeLocalFile(id: id) ?? URL(fileURLWithPath: "/dev/null") }
@@ -253,6 +367,7 @@ private struct Harness {
     let appState: AppState
     let store: SubscriptionStore
     let playback: PlaybackSpy
+    let download: TestDownloadManager
     let settings: TestSettingsStore
     let subscriptionID: UUID
     let makeLocalFile: (UUID) throws -> URL
@@ -293,8 +408,14 @@ private final class TestDownloadManager: DownloadManaging {
     var onBackgroundDownloadCompleted: ((UUID, UUID, URL) -> Void)?
     var onProgressUpdate: ((UUID, Double, Int64, Int64) -> Void)?
     var onWatchdogCancelled: ((UUID) -> Void)?
+    var downloadHandler: ((Episode) throws -> URL)?
+    private(set) var downloadedEpisodeIDs: [UUID] = []
 
     func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL {
+        downloadedEpisodeIDs.append(episode.id)
+        if let downloadHandler {
+            return try downloadHandler(episode)
+        }
         throw TestError.unexpectedCall
     }
 

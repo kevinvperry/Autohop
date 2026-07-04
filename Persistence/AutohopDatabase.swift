@@ -199,6 +199,20 @@ final class AutohopDatabase: @unchecked Sendable {
             try db.rename(table: "episode_sync_state_v7", to: "episode_sync_state")
         }
 
+        // 2026-07-04: the synced Up Next queue snapshot (Models/QueueSnapshot.swift)
+        // — ONE row (fixed id "queue"), whole-record LWW by the payload's
+        // updatedAt. The iPhone authors it; read-only surfaces (tvOS/watch)
+        // render it.
+        migrator.registerMigration("v8_queue_snapshot") { db in
+            try db.create(table: "queue_snapshot") { t in
+                t.column("id", .text).primaryKey()
+                t.column("payload", .blob).notNull()
+                t.column("updatedAt", .double).notNull().defaults(to: 0)
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false)
+                t.column("systemFields", .blob)
+            }
+        }
+
         return migrator
     }
 
@@ -249,6 +263,18 @@ final class AutohopDatabase: @unchecked Sendable {
         var lastListenedAt: Double
         var hasPendingChanges: Bool
         var systemFields: Data?
+    }
+
+    private struct QueueSnapshotRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "queue_snapshot"
+        /// Always `Self.singletonID` — one snapshot per account.
+        var id: String
+        var payload: Data
+        var updatedAt: Double
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+
+        static let singletonID = "queue"
     }
 
     private struct StatsSyncRow: Codable, FetchableRecord, PersistableRecord {
@@ -713,6 +739,18 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    /// Every stored history entry (pending or clean). tvOS uses this for the
+    /// Continue Listening surface — the TV has no in-memory
+    /// ListeningHistoryStore, so the sync rows ARE its history. Undecodable
+    /// payloads (older shapes) are skipped, not fatal.
+    func allHistoryEntries() throws -> [ListeningHistoryEntry] {
+        try dbQueue.read { db in
+            try HistorySyncRow
+                .fetchAll(db)
+                .compactMap { try? decoder.decode(ListeningHistoryEntry.self, from: $0.payload) }
+        }
+    }
+
     func historySystemFields(id: String) throws -> Data? {
         try dbQueue.read { db in
             try HistorySyncRow.fetchOne(db, key: id)?.systemFields
@@ -722,6 +760,92 @@ final class AutohopDatabase: @unchecked Sendable {
     func storeHistorySystemFields(_ data: Data?, id: String) throws {
         try writeAndHarden { db in
             guard var row = try HistorySyncRow.fetchOne(db, key: id) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+
+    // MARK: Queue-snapshot sync accessors (2026-07-04)
+
+    /// Records THIS device's queue snapshot as pending push (preserving cached
+    /// system fields). Callers dedupe (SubscriptionStore.updateLocalQueueSnapshot
+    /// skips identical entry lists) so routine recomputes don't churn pushes.
+    func recordLocalQueueSnapshot(_ snapshot: QueueSnapshot) throws {
+        try writeAndHarden { db in
+            let existing = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID)?.systemFields
+            let row = QueueSnapshotRow(
+                id: QueueSnapshotRow.singletonID,
+                payload: try encoder.encode(snapshot),
+                updatedAt: snapshot.updatedAt.timeIntervalSince1970,
+                hasPendingChanges: true,
+                systemFields: existing
+            )
+            try row.save(db)
+        }
+    }
+
+    /// Applies a snapshot fetched from CloudKit — whole-record LWW by
+    /// `updatedAt`: an older remote never overwrites a newer local (this
+    /// device may itself be a queue author whose newer edit is still pending
+    /// push). Returns true when the remote was adopted.
+    /// (Uses dbQueue.write directly rather than writeAndHarden because it
+    /// returns a value; hardening runs after, same as writeAndHarden does.)
+    @discardableResult
+    func saveSyncedQueueSnapshot(_ snapshot: QueueSnapshot) throws -> Bool {
+        let adopted: Bool = try dbQueue.write { db in
+            if let existingRow = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID),
+               existingRow.updatedAt >= snapshot.updatedAt.timeIntervalSince1970 {
+                return false
+            }
+            let existingSystemFields = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID)?.systemFields
+            let row = QueueSnapshotRow(
+                id: QueueSnapshotRow.singletonID,
+                payload: try encoder.encode(snapshot),
+                updatedAt: snapshot.updatedAt.timeIntervalSince1970,
+                hasPendingChanges: false,
+                systemFields: existingSystemFields
+            )
+            try row.save(db)
+            return true
+        }
+        hardenStoreFiles()
+        return adopted
+    }
+
+    func queueSnapshot() throws -> QueueSnapshot? {
+        try dbQueue.read { db in
+            guard let row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) else { return nil }
+            return try? decoder.decode(QueueSnapshot.self, from: row.payload)
+        }
+    }
+
+    /// The pending snapshot to push, if this device authored a newer queue.
+    func pendingQueueSnapshot() throws -> QueueSnapshot? {
+        try dbQueue.read { db in
+            guard let row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID),
+                  row.hasPendingChanges
+            else { return nil }
+            return try? decoder.decode(QueueSnapshot.self, from: row.payload)
+        }
+    }
+
+    func markQueueSnapshotSynced() throws {
+        try writeAndHarden { db in
+            guard var row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) else { return }
+            row.hasPendingChanges = false
+            try row.save(db)
+        }
+    }
+
+    func queueSnapshotSystemFields() throws -> Data? {
+        try dbQueue.read { db in
+            try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID)?.systemFields
+        }
+    }
+
+    func storeQueueSnapshotSystemFields(_ data: Data?) throws {
+        try writeAndHarden { db in
+            guard var row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) else { return }
             row.systemFields = data
             try row.save(db)
         }

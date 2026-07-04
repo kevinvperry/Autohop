@@ -32,9 +32,10 @@ import UIKit
 //    decisions and executes the effects. Keep new decisions in the policy.
 //    CarPlay is deliberately just another UI surface over these same methods:
 //    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
-//    cyclePlaybackSpeedForCurrentEpisode(), and setPlaybackSpeedForCurrentEpisode(_:)
-//    exist to keep CarPlay action routing thin while preserving one shared
-//    playback/queue/settings model. CarPlay-only cold launches use
+    //    cyclePlaybackSpeedForCurrentEpisode(), setPlaybackSpeedForCurrentEpisode(_:),
+    //    and downloadEpisodeForCarPlayAction(_:) exist to keep CarPlay action routing
+    //    thin while preserving one shared playback/download/queue/settings model.
+    //    CarPlay-only cold launches use
 //    resumePlaybackForCarPlayLaunchIfNeeded() to resume the restored episode
 //    after the coordinator has installed its first Loading template; normal
 //    iPhone launch still restores into a paused state.
@@ -367,6 +368,20 @@ final class AppState: ObservableObject {
             queueService.downloadedQueue(from: subscriptionStore.subscriptions)
         )
         cachedDownloadedQueue = computed
+        // 2026-07-04: the Up Next queue's COMPOSITION now roams (Kevin's
+        // decision — the queue is the product's centre). The iPhone is the
+        // authoring device: publish its ordered episode identities whenever
+        // the queue actually changes. The store dedupes on entry equality, so
+        // recomputes with no real change never dirty the sync record; the
+        // recompute-on-cache-miss cadence (store change / pin change) is
+        // exactly the set of moments the queue can differ.
+        subscriptionStore.updateLocalQueueSnapshot(entries: computed.map { episode in
+            QueueSnapshotEntry(
+                episodeKey: PlaybackPositionStore.key(for: episode),
+                subscriptionID: episode.subscriptionID,
+                episodeTitle: episode.title
+            )
+        })
         return computed
     }
 
@@ -743,6 +758,14 @@ final class AppState: ObservableObject {
     /// Creates a podcast that another device subscribed to, by fetching its feed,
     /// then applies the synced per-podcast settings on top. Invoked by the sync
     /// engine when a remote subscription record has no local match.
+    /// RANK-CORRUPTION FIX (2026-07-04): passes `reindexRanks: false` to
+    /// `addSubscription` below — remote materialization must NOT compact
+    /// every subscription's rank to its array position, or later-arriving
+    /// absolute synced ranks collide with the compacted 1..n values and the
+    /// library ends up in arrival order (the same bug class fixed for TV's
+    /// `materialize` path; see `SubscriptionStore.addSubscription`'s
+    /// `reindexRanks` doc). Local paths (subscribe, OPML import) keep the
+    /// default reindexing, which is correct for them.
     private func materializeRemoteSubscription(_ state: SubscriptionSyncState) async {
         // Already present (by id or feed) — just apply settings.
         if subscriptionStore.subscription(id: state.subscriptionID) != nil
@@ -762,7 +785,8 @@ final class AppState: ObservableObject {
                 title: result.subscriptionTitle, description: result.description,
                 author: result.author, artworkURL: result.artworkURL,
                 categories: result.categories, isExplicit: result.isExplicit,
-                latestEpisode: result.latestEpisode, insertAtBottom: true
+                latestEpisode: result.latestEpisode, insertAtBottom: true,
+                reindexRanks: false
             )
             subscriptionStore.updateEpisodes(subscriptionID: state.subscriptionID, episodes: result.episodes)
             // Apply the synced settings (priority, playback, auto-archive, …) on top.
@@ -1426,6 +1450,64 @@ final class AppState: ObservableObject {
             podcastTitle: subscription.title,
             showCompletionMessage: true
         )
+    }
+
+    func downloadEpisodeForCarPlayAction(_ episode: Episode) async -> Episode? {
+        guard let subscription = subscriptionStore.subscription(id: episode.subscriptionID) else { return nil }
+        if let readyEpisode = carPlayPlayableDownloadedEpisode(subscriptionID: subscription.id, episodeID: episode.id) {
+            return readyEpisode
+        }
+
+        let episodeToDownload = subscriptionStore.episode(subscriptionID: subscription.id, episodeID: episode.id) ?? episode
+        await downloadEpisode(
+            episodeToDownload,
+            subscriptionID: subscription.id,
+            podcastTitle: subscription.title,
+            showCompletionMessage: false
+        )
+        return await waitForCarPlayDownloadedEpisode(subscriptionID: subscription.id, episodeID: episode.id)
+    }
+
+    private func waitForCarPlayDownloadedEpisode(subscriptionID: UUID, episodeID: UUID) async -> Episode? {
+        for _ in 0..<3600 {
+            if Task.isCancelled { return nil }
+            if let readyEpisode = carPlayPlayableDownloadedEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
+                return readyEpisode
+            }
+            guard carPlayDownloadIsActive(subscriptionID: subscriptionID, episodeID: episodeID) else {
+                return nil
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return nil
+    }
+
+    private func carPlayPlayableDownloadedEpisode(subscriptionID: UUID, episodeID: UUID) -> Episode? {
+        guard let episode = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID),
+              episode.downloadState == .downloaded,
+              episode.localFileURL != nil || episode.localFileName != nil
+        else { return nil }
+        return episode
+    }
+
+    private func carPlayDownloadIsActive(subscriptionID: UUID, episodeID: UUID) -> Bool {
+        if pendingDownloadQueue.contains(where: { $0.subscriptionID == subscriptionID && $0.episode.id == episodeID }) {
+            return true
+        }
+        if downloadProgress[episodeID] != nil {
+            return true
+        }
+        if downloadActivityStore.activeActivities.contains(where: { activity in
+            activity.subscriptionID == subscriptionID &&
+            activity.episodeID == episodeID &&
+            (activity.status == .downloading || activity.status == .paused)
+        }) {
+            return true
+        }
+        if let episode = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            return episode.downloadState == .queued || episode.downloadState == .downloading
+        }
+        return false
     }
 
     func deleteDownloadedEpisode(_ episode: Episode) async {

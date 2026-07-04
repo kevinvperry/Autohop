@@ -1,10 +1,10 @@
 import SwiftUI
 
-// AI CONTEXT — Views/SubscriptionRadarDiagnosticsView.swift (pushed from Podcast
-// Settings → Feed → "Release Radar Data"). Read-only diagnostic screen exposing the
-// filter-eligible inputs Release Radar derives for ONE subscription and WHY it
-// classified the way it did, so misclassifications can be understood and smarter
-// fixes designed. Shows:
+// AI CONTEXT — Views/SubscriptionRadarDiagnosticsView.swift (pushed from Settings
+// → Release Radar → Feed Refresh Schedule → Diagnostics). Read-only diagnostic
+// screen exposing the filter-eligible inputs Release Radar derives for ONE
+// subscription and WHY it classified the way it did, so misclassifications can
+// be understood and smarter fixes designed. Shows:
 //   • Classification — learned profile kind + confidence + reason + learned window,
 //     including observed spread so widened/over-narrow Radar windows are visible.
 //   • Why-not-daily / why-not-weekly — each row mirrors a real FeedScheduleProfiler
@@ -17,7 +17,7 @@ import SwiftUI
 // Everything is computed on demand via RefreshStats.releaseRadarDiagnostics(
 // downloadFilterSettings:) (FeedScheduleProfiler.diagnostics) — the SAME helpers
 // the classifier uses, so the numbers match what Radar acts on. Episodes skipped
-// by Download Filters are intentionally excluded. Nothing here is persisted or
+// by Download Feed Filters are intentionally excluded. Nothing here is persisted or
 // mutated. Dark App Settings styling. See FEATURES.md §17 (Release Radar) + PAGES.md.
 
 struct SubscriptionRadarDiagnosticsView: View {

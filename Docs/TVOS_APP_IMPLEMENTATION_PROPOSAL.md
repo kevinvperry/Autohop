@@ -38,10 +38,125 @@ constant). Resume==start-skip still counts as a fresh start on purpose. The
 session-STATE move (currentPlayerEpisode/isPlaying behind a core object) is
 DEFERRED: they are @Published with ~24 observers, an invalidation-semantics
 change needing Kevin's compile checkpoints + view-by-view migration.
-REMAINING: item 5 (LibraryModel/SyncController thin wrappers), the deferred
-session-state move, Kevin's Xcode build + full iPhone manual pass (§5
-checklist). No tvOS code exists yet; Phase 0 must be verified on iPhone
-before Phase 1.
+REMAINING IN PHASE 0: item 5 (LibraryModel/SyncController thin wrappers), the
+deferred session-state move, Kevin's Xcode build + full iPhone manual pass
+(§5 checklist).
+
+PHASE 1: target scaffolding + T2 bootstrap DONE 2026-07-04 (AutohopTV target,
+entitlements, SubscriptionSurvivalKit + identity-preserving
+SubscriptionStore.materialize, TVAppModel bootstrap, root state machine).
+FIRST BUILD VERIFIED 2026-07-04 in Simulator (tvOS 26.5): reached `.empty` with
+correct guidance copy — the expected result with the Simulator's iCloud not
+signed into Kevin's account, so `.ready` (real synced library) is UNVERIFIED
+pending a real Apple TV; treat as a live-debug item when that happens, not a
+blocker for later phases. Two build fixes landed during that first build: (1)
+`AutohopTVApp.swift`'s `Subscription` type was ambiguous against Combine's own
+`Subscription` protocol (both visible since the file imports Combine for
+AnyCancellable/debounce) — qualified as `AutohopCore.Subscription`; (2) — see
+Phase 2 below for the deployment-target correction. FOLLOW-UP FIX 2026-07-04:
+the SAME ambiguity resurfaced in Phase 2's second build via two new functions
+added to `TVAppModel` (`subscription(for:)`/`subscription(id:)`) that used a
+bare `Subscription` return type — every `Subscription` reference in
+`AutohopTVApp.swift` specifically (the one file that imports Combine) must be
+qualified `AutohopCore.Subscription`; other TV/ files don't import Combine and
+are unaffected. REMAINING IN PHASE 1: tvOS
+brand-assets icon stack (art work); §6's `.ready`-path + delete/reinstall
+verification on real hardware.
+
+PHASE 2 (Browse UI) DONE 2026-07-04 as a full implementation (untested on
+device — see Phase 1 note above, same caveat applies here since Home/Queue
+render from the same synced data). DEPLOYMENT-TARGET CORRECTION: Phase 1's
+scaffold set tvOS 17.0, but this phase's own required APIs
+(`.tabViewStyle(.sidebarAdaptable)`, the tvOS 18 `Tab(_:systemImage:value:)`
+builder — both explicitly called for in §7 item 1) need tvOS 18+, and the
+Pocket Casts reference target itself ships tvOS 18; bumped `AutohopTV` to
+18.0 rather than build a second, older navigation path. DONE: `TVMainTabView`
+(Home/Queue/Library `Tab` shell); `TVHomeView` (Continue Listening hero + Up
+Next + Latest shelves); `TVQueueView`; `TVLibraryView` (grid → episode-list
+push by subscription UUID, not the Subscription value, so pushed pages
+resolve live) + `TVEpisodeListView`; `TVArtworkImage` (own lightweight
+AsyncImage wrapper — Views/CachedArtworkImage.swift is iOS-app-target-only
+and unreachable); `TVRouter` (typed tab enum + per-tab push path). CORE
+ADDITION: `QueueModel.streamableQueue` — the streaming-platform analog of
+`QueueService.downloadedQueue` (same priority-rank/oldest-first ordering,
+but WITHOUT the "downloaded with a local file" gate, since TV plays every
+episode from its enclosure URL; no pin overrides — Play Next/Play Last pins
+are local per-device iPhone state with no sync today). Headless-tested
+(Tests/QueueModelTests.swift). KNOWN SIMPLIFICATION carried into this phase:
+Continue Listening has no real resume-position bar (see Phase 0/1 notes on
+the missing core-level history reader) — shown via the synced
+`playedState == .playing` flag only. Patterns documented in DESIGN.md
+("Apple TV Patterns" section). DEBUG-ONLY PREVIEW BYPASS added 2026-07-04:
+`TVAppModel.debugForceReadyForPreview()` + a `#if DEBUG` button on the
+`.empty` screen force `rootState = .ready` with an empty library, so the
+Home/Queue/Library tab shell and each tab's own empty-state UI can be
+checked in the Simulator (which can't reliably sign into iCloud) without
+real synced data; real data arriving still overrides it normally. Compiled
+out of Release/App Store builds. NAVIGATIONSTACK FIX 2026-07-04 (found via the
+debug preview bypass above, on Kevin's first look at the tab shell): Home and
+Queue were each wrapped in their own `NavigationStack` in `TVMainTabView`,
+which fought `.sidebarAdaptable`'s own chrome — the sidebar auto-collapsed
+into an unrecoverable small pill after a few seconds. Only Library legitimately
+needs a NavigationStack (it pushes to episode lists) and already provides its
+own internally; Home/Queue now render flat, with a plain heading `Text`
+instead of `.navigationTitle` (which has no effect without a navigation
+container). See `TVMainTabView`'s header for the full explanation — do not
+reintroduce a NavigationStack on a tab that doesn't push to another screen.
+VERIFIED 2026-07-04 (Simulator, empty-library case): the NavigationStack fix
+confirmed working — Kevin navigated Home ⇄ Up Next ⇄ Library freely via the
+debug preview bypass, each tab rendering its own correct empty state, no
+sidebar collapse. Focus-navigation feel and 60fps-at-50-subscriptions scroll
+still need a real synced library (real hardware, per Phase 1's carried-over
+verification gap) to mean anything, but the structural navigation bug that was
+blocking ALL further tvOS work is resolved and confirmed. Phase 2 is
+considered DONE for what could be verified without real data.
+
+PHASE 3 (Playback) BUILT 2026-07-04. CORE ADDITION —
+SubscriptionStore.recordListeningProgress / markListeningHistoryFinished:
+playback position roams via the whole-entry, record-level-LWW
+ListeningHistoryEntry (SYNC_DESIGN.md), which only the iOS app-target
+ListeningHistoryStore could write before now. Both new methods use
+`PlaybackPositionStore.key(for:)` (extracted in Phase 0) as the entry id —
+verified byte-for-byte identical to ListeningHistoryStore's private
+`historyKey(for:)`, so entries from either device collide on the SAME id and
+MERGE instead of duplicating; this is what makes a phone⇄TV resume round-trip
+possible at all. Read-modify-write (not overwrite) so a TV session's
+`listenedSeconds` accumulates onto whatever the phone already recorded rather
+than shrinking the lifetime total on the next LWW resolution. Headless-tested
+(Tests/TVListeningHistoryWriteBackTests.swift). Also added
+`StreamingPlaybackEngine.avPlayer` (concrete-type-only, not on
+`PlaybackControlling`): the engine is AVPlayer-only for both audio and video,
+so the ONE `AVPlayerViewController` surface (§8 item 1) needs the player even
+for audio episodes, unlike the shared protocol's video-only `videoPlayer` —
+iPhone's PlaybackEngine is completely unaffected. DONE: `TVPlaybackModel`
+(owns the engine, auto-advances through the streaming queue on finish exactly
+like iPhone's mark-played-then-advance policy minus download gating, flushes
+history on a 20 s cadence + pause + finish — not every tick, avoiding the same
+CloudKit push-storm the iOS slow lane was built to prevent); `TVPlayerView`
+(AVPlayerViewController via UIViewControllerRepresentable — transport-bar
+speed menu, a SwiftUI-hosted artwork/title overlay for audio episodes,
+Menu/onExitCommand exits the cover while background audio continues);
+MPNowPlayingInfoCenter + remote-command routing (play/pause/skip); failure UX
+(§8 item 5) — a failed/stalled stream keeps the cover open showing a
+focusable retry card instead of dying silently. Play buttons wired end-to-end
+from Home/Queue/Library — cover-visibility state is deliberately a pure
+navigation concern in `TVMainTabView`, NOT derived from
+`playbackModel.currentEpisode != nil` (which stays set across dismissal and
+auto-advance, for background audio) — see that file's header if this needs
+touching again. BUILD FIX 2026-07-04: a first attempt at chapter markers used
+invented `AVNavigationMarker`/`AVNavigationMarkerGroup` types on
+`AVPlayerViewController` — wrong owner AND wrong names, removed; see
+`TVPlayerView.swift`'s header for the more specific `AVPlayerItem`/
+`AVTimedMetadataGroup` lead (from this doc's own T5) to try once the exact
+initializer signature is confirmed against Xcode. Chapter markers are NOT
+wired for tvOS yet — `TVPlaybackModel.currentChapters` is ready when they are.
+REMAINING IN PHASE 3: Kevin's build; real-hardware playback
+verification (§8's ship gate: phone⇄TV resume round-trip, background audio,
+chapter markers, speed menu, stall/retry UX); external `podcast:chapters`
+fetch-after-play isn't wired for the TV engine yet (only embedded/PSC chapters
+present at play() time work) — note left in TVPlayerView; FEATURES.md +
+SupportContent.swift/support.html + App Store metadata updates are the Ship
+Gate's documentation items, still open.
 
 RELATED: Docs/WATCH_APP_IMPLEMENTATION_PROPOSAL.md — the watch proposal
 defines the WatchPlaySource pattern and D-series decisions this doc extends
@@ -116,10 +231,10 @@ onboarding carousel.
 | Phase | Ships | Platform(s) affected | Status |
 |---|---|---|---|
 | 0 | Platform foundation: AutohopCore matrix, AppState domain extraction, streaming playback source | iOS (refactor), unblocks tvOS/watch/iPad | IN PROGRESS — items 1–4, 6 done 2026-07-04 (item 4 as policy extraction; session-state move deferred); item 5 + iPhone verification remain (see STATUS header) |
-| 1 | tvOS target scaffolding + purge-resilient bootstrap | tvOS | Not started |
-| 2 | Browse UI: Home, Queue, Library, episode lists (read-only) | tvOS | Not started |
-| 3 | Playback: audio + video streaming player, position sync | tvOS | Not started |
-| 4 | Discovery + subscribe on TV, Top Shelf, polish | tvOS | Not started |
+| 1 | tvOS target scaffolding + purge-resilient bootstrap | tvOS | First build verified 2026-07-04 (reached `.empty` correctly; `.ready` path needs real hardware — Simulator iCloud sign-in didn't work); icon art + §6 `.ready`/reinstall verification remain |
+| 2 | Browse UI: Home, Queue, Library, episode lists (read-only) | tvOS | Done 2026-07-04 — NavigationStack sidebar-collapse bug found + fixed, tab navigation + empty states confirmed working in Simulator |
+| 3 | Playback: audio + video streaming player, position sync | tvOS | Built 2026-07-04 (TVPlaybackModel + TVPlayerView + history write-back core API); Kevin's build + real-hardware §8 verification remain |
+| 4 | Discovery + subscribe on TV, Top Shelf, polish | tvOS | Search tab + subscribe-on-TV built 2026-07-04 (Discover/charts shelf, Top Shelf extension, and polish items deliberately deferred — see §9 status note) |
 | 5 | Follow-on: iPad enablement (optional, separate go) | iPadOS | Not started |
 
 **The first tvOS release (Phases 1–3) supports:**
@@ -427,6 +542,19 @@ nothing, and shows a placeholder Home fed by real synced data.
    tvOS brand assets: App Icon & Top Shelf Image stack (layered icon —
    parallax; derive layers from `Design/AppIcon/autohop-icon-v1.svg`:
    background gradient layer + waveform layer + chevron layer).
+   **STATUS (2026-07-04): App Icon art supplied (flat, non-parallax) —
+   `Design/AppIcon/AppleTV/AppStore-1280x768.png` (source, exact tvOS App
+   Store marketing size) + derived `HomeScreen-400x240@1x.png` /
+   `HomeScreen-800x480@2x.png` (sips resize, clean 5:3 ratio match, no
+   cropping/distortion). NOT wired into an asset catalog by the assistant —
+   tvOS's "App Icons & Top Shelf Image" catalog is an intricate,
+   version-sensitive nested Contents.json structure (parallax layers, image
+   stacks) that risks a build break if hand-written without Xcode's own
+   validation; Kevin wires it via Xcode's asset editor UI instead (a few
+   drag-and-drops), then sets `ASSETCATALOG_COMPILER_APPICON_NAME` on the
+   AutohopTV target in project.yml. Top Shelf Image / Top Shelf Image Wide
+   are DEFERRED — those need distinct wide-banner artwork (2.3:1 / 3.2:1),
+   not a resize of the square-ish icon; not yet supplied.**
    iCloud/CloudKit entitlements mirroring the iOS container.
 2. **`TV/App/AutohopTVApp.swift`** — SwiftUI `@main`; `TVAppModel`
    (`@Observable`, the tvOS composition root ~ a few hundred lines, composed
@@ -500,6 +628,26 @@ existing `ArtworkImageCache` with a TV-sized budget).
 **Goal:** streamed playback of both media types with system-native controls;
 position sync back to the phone. Completes the shippable v1.
 
+**PLAYER REDESIGN + POLISH (2026-07-04, Kevin's real-device round 3):**
+- **Player page rebuilt** (`TVPlayerView`/`TVPlayerPage`): audio = full page
+  (artwork, metadata, position bar, focusable transport). Video = same page
+  with a WINDOWED `AVPlayerLayer` surface (`TVVideoSurface`) + a "Full Screen"
+  button that switches to the system `AVPlayerViewController`; Menu in
+  fullscreen returns to the windowed page, Menu on the page exits the cover.
+- **Cover-overlap bug fixed**: tvOS `.fullScreenCover` doesn't force an opaque
+  background and the page's base layer was a 0.25-opacity blurred artwork, so
+  Home bled through ("a confusing mess"). `TVPlayerView` now roots an opaque
+  `Color.black` under all states.
+- **Buffering spinner** (`StreamingPlaybackEngine.onBufferingChanged` via KVO
+  on `timeControlStatus` → `TVPlaybackModel.isBuffering` → overlay on the media
+  surface) so the user sees playback is about to start.
+- **Pre-buffering** (`StreamingPlaybackEngine.preload`): a paused, muted warm
+  player fills the forward buffer of the Continue Listening episode (the most
+  likely next play); `play()` adopts the warm player when the URL matches, so
+  resume starts near-instantly. Triggered from `TVAppModel.refreshLibrary`.
+  Tested: `Tests/StreamingPlaybackEngineTests.swift` (preload adoption +
+  no-op-when-unresolvable).
+
 1. **Player surface** (T5, PC §2.2): `AVPlayerViewController` in
    `UIViewControllerRepresentable`, presented `.fullScreenCover` from any
    card; fed by `StreamingPlaybackEngine`'s `AVPlayer`.
@@ -535,9 +683,98 @@ position sync back to the phone. Completes the shippable v1.
 screenshots. tvOS App Review will exercise focus navigation and the
 empty/sync-disabled paths — test both.
 
+**REAL-DEVICE FINDINGS (2026-07-04, Kevin's first Apple TV run) — three bugs
+found and fixed, plus UX/cleanup:**
+1. **Library/Up Next order looked random.** Root cause: `SubscriptionStore`'s
+   `normalizePriorityOrder()` (called by `materialize` and
+   `applyRemoteSubscriptionState`) renumbers every subscription's rank by its
+   CURRENT ARRAY POSITION, discarding the true synced value. During a fresh
+   multi-subscription sync, CloudKit delivers records in arbitrary order, so
+   each subscription's true rank got clobbered by the next one's
+   materialization before it could stick. **This is a pre-existing core-
+   library bug, not TV-specific** — iPhone's own `AppState.materializeRemoteSubscription`
+   shares the same flaw via `addSubscription(insertAtBottom:)`, so a fresh
+   second iPhone doing a from-scratch resync would show the same symptom;
+   just harder to trigger/notice there. Fixed for TV's path: new
+   `SubscriptionStore.resortByCurrentPriorityRank()` (sorts by current rank
+   WITHOUT renumbering) replaces `normalizePriorityOrder()` in `materialize`,
+   `applyRemoteSubscriptionState`, and `recoverSettingsFromLegacySubscriptionState`.
+   iPhone's `addSubscription` equivalent is flagged (its header comment) but
+   NOT fixed yet — it's shared with local OPML import, which legitimately
+   wants the reindex, so it needs its own careful separation rather than a
+   hasty shared change. Tested: `Tests/SubscriptionSurvivalKitTests.swift`
+   reproduces the exact scrambled-arrival scenario.
+2. **Up Next dumped a show's entire back-catalog before the next show
+   appeared.** `QueueModel.streamableQueue` (Phase 2) returned EVERY unplayed
+   episode per show — correct in spirit (matches `QueueService`'s algorithm)
+   but iPhone never visibly "groups" because its download gate normally
+   limits each show to one queued episode at a time; without that gate, a
+   fresh subscription's full 50-episode backlog appeared consecutively.
+   Fixed: now returns only the single oldest-unplayed episode per show,
+   interleaved by priority rank — matching what an iPhone user actually
+   experiences. Tested (`Tests/QueueModelTests.swift`).
+3. **Up Next was still full of episodes already played/archived on iPhone**
+   (found in a SECOND real-device pass, after (1)/(2) above landed). Root
+   cause: an `EpisodeSyncState` CloudKit record can arrive and cache itself
+   as a "stashed" clean projection (`applyRemoteEpisodeState`'s no-local-
+   episode-yet branch) BEFORE the episode it describes has materialized
+   locally — normal, since CloudKit doesn't guarantee episode records arrive
+   after their parent subscription. `updateEpisodes` (iPhone's feed-refresh
+   path) already self-heals from that stash the moment a matching episode
+   shows up; `materialize` (tvOS/rebuild) built fresh `Episode` objects with
+   NO such check, so already-synced played/archived state was silently
+   never applied — every back-catalog episode looked freshly unplayed.
+   Fixed: extracted the self-heal logic (previously inline only in
+   `updateEpisodes`) into a shared `SubscriptionStore.selfHealedEpisode`,
+   now called by both `materialize` and `updateEpisodes`. Tested — the
+   regression test constructs the exact stash-before-materialize sequence
+   and asserts both the healed `playedState` and that
+   `QueueModel.streamableQueue` correctly excludes it.
+
+**UX fix (same day):** the "No Library Yet" screen sat on screen through
+Kevin's entire ~4-minute first CloudKit sync with no indication anything was
+happening. Root cause: `TVAppModel.bootstrap()` called `refreshLibrary()`
+(which flips `rootState` to `.empty`) BEFORE its old 6 s wait even started —
+so the wait's status-text update was never visible, the screen had already
+switched away from the loading spinner. A first-ever CloudKit sync
+legitimately takes minutes (full historical fetch of the whole private zone,
+no prior change token) — that's Apple's infrastructure speed, not something
+fixable app-side. Fixed the EXPERIENCE instead: `rootState` now stays
+`.loading` (spinner + rotating reassuring status text, ~3 minutes) until
+either real data arrives (the existing debounced sink flips it early) or the
+grace period elapses; the `.empty` fallback screen also now carries a small
+persistent spinner + softer copy so it never reads as a dead end.
+
+**Cleanup (same day):** removed the Simulator debug bypasses
+(`debugForceReadyForPreview`, `debugLoadDemoContent`, the two `.empty`-screen
+buttons) and `TV/DebugSupport/` entirely — real-hardware testing works now,
+so they're no longer needed. See git history if a Simulator testing aid is
+ever needed again.
+
 ---
 
 ## 9. Phase 4 — Discovery, Top Shelf, polish
+
+**STATUS (2026-07-04): item 1's Search half BUILT; Discover/charts, Top
+Shelf, and polish DEFERRED.** `Feeds/PodcastSearch.swift`'s
+`PodcastSearchResult`/`PodcastSearchService` and
+`Feeds/EpisodeFeedLoader.swift`'s `EpisodeFeedLoader` were verified
+Foundation-only (no UIKit) and made `public` + added to `Package.swift`'s
+AutohopCore sources — zero behavior change for iOS, which already compiled
+them directly. `TV/Views/TVSearchView.swift` (search-role `Tab`, 400 ms
+debounce, subscribe with per-result state) + `TVAppModel.subscribe(to:)`
+(fetches the full feed, adds a NEW subscription — mints a fresh id, this is
+not a survival-kit rebuild — then refreshes immediately). T7 respected: this
+always writes to the local store + survival kit regardless of iCloud sync
+state, so subscribing on TV never blocks on or depends on sync working.
+`Feeds/PodcastCharts.swift` (`PodcastChartsService`, `DiscoverViewModel`,
+`ChartPodcast`/`ChartGenre`/`ChartCountry`) is ALSO now in AutohopCore's
+sources (same Foundation-only verification) but its types are still
+`internal` — a bigger, lower-priority publicization surface (genre rails,
+country picker, on-disk chart caching, top-episodes paging) deliberately not
+attempted in the same pass as Search. Wire the Discover shelf when that's
+done. Top Shelf extension (item 2) and the polish pass (item 3) are
+untouched — see the phase table for the running status.
 
 1. **Search tab** (search role) + **subscribe on TV**: reuse
    `Feeds/PodcastSearch.swift` + `Feeds/PodcastCharts.swift` (plain URLSession —

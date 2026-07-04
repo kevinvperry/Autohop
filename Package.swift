@@ -82,12 +82,21 @@ let package = Package(
                 "Models/ListeningHistory.swift",
                 "Models/Synced.swift",
                 "Models/SyncState.swift",
+                "Models/QueueSnapshot.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Models/SilenceGapAccounting.swift",
                 "Feeds/ParsedFeed.swift",
                 "Feeds/RSSParser.swift",
                 "Feeds/OPMLService.swift",
+                // tvOS Phase 4 (§9 item 1): search + charts + the standalone
+                // feed loader are Foundation-only (verified — no UIKit), so
+                // they move into the shared library rather than being
+                // duplicated for TV. Zero behavior change for iOS; it already
+                // compiled these directly.
+                "Feeds/PodcastSearch.swift",
+                "Feeds/PodcastCharts.swift",
+                "Feeds/EpisodeFeedLoader.swift",
                 "Persistence/SubscriptionStore.swift",
                 "Persistence/AutohopDatabase.swift",
                 "Persistence/LockedDeviceFileAccess.swift",
@@ -96,6 +105,7 @@ let package = Package(
                 "Persistence/ListeningStatsStore.swift",
                 "Persistence/AutoDownloadIntentStore.swift",
                 "Persistence/PlaybackPositionStore.swift",
+                "Persistence/SubscriptionSurvivalKit.swift",
                 "Queue/QueueService.swift",
                 "Queue/QueueModel.swift",
                 "PlaybackCore/PlaybackControlling.swift",

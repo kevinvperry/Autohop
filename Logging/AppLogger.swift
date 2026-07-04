@@ -17,8 +17,10 @@ import Foundation
 // fresh log; all handle access stays on `queue`, so no lock is required. If
 // opening succeeds but seek-to-end fails, appendHandle() closes the handle and
 // returns nil rather than risking a write at the wrong offset.
-final class AppLogger: ObservableObject {
-    static let shared = AppLogger()
+// PUBLIC logging surface since tvOS Phase 1: the TV target imports AutohopCore
+// as a library and must reach the shared diagnostic log. Internals stay internal.
+public final class AppLogger: ObservableObject {
+    public static let shared = AppLogger()
 
     @Published private(set) var lastUpdated = Date()
     var isEnabled: Bool = false
@@ -52,11 +54,11 @@ final class AppLogger: ObservableObject {
         logFileURL = directory.appendingPathComponent("autohop-diagnostic.log")
     }
 
-    func info(_ event: String, _ message: String, metadata: [String: String] = [:]) {
+    public func info(_ event: String, _ message: String, metadata: [String: String] = [:]) {
         write(level: "INFO", event: event, message: message, metadata: metadata)
     }
 
-    func warning(_ event: String, _ message: String, metadata: [String: String] = [:]) {
+    public func warning(_ event: String, _ message: String, metadata: [String: String] = [:]) {
         write(level: "WARN", event: event, message: message, metadata: metadata)
     }
 
@@ -64,7 +66,7 @@ final class AppLogger: ObservableObject {
     ///   Diagnostics toggle is off. Reserve for errors a user would need a trace
     ///   of after the fact (e.g. iCloud sync failures). The file stays capped and
     ///   rotated, so these can't grow unbounded.
-    func error(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
+    public func error(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
         write(level: "ERROR", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 

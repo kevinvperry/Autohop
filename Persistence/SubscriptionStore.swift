@@ -167,7 +167,104 @@ public final class SubscriptionStore: ObservableObject {
         return subscription
     }
 
+    /// Recreates a subscription with a FIXED identity from a fresh feed fetch —
+    /// the tvOS purge-resilient bootstrap (proposal T2/§6) and the TV remote-
+    /// materialization path. Preserving `subscriptionID` is what lets synced
+    /// CloudKit records (EpisodeState/SubscriptionState, keyed by that UUID)
+    /// apply to the rebuilt rows; `add(parsedFeed:)` above deliberately mints a
+    /// NEW id and must not be used for rebuilds. Appends at the bottom; pass
+    /// `priorityRank` (e.g. from the survival kit) to restore ordering — ranks
+    /// are re-normalized after all rebuilds by the caller sorting its inserts.
+    /// No-op (returns the existing value) when the id is already present.
+    @discardableResult
+    public func materialize(
+        parsedFeed: ParsedFeed,
+        feedURL: URL,
+        subscriptionID: UUID,
+        priorityRank: Int? = nil
+    ) -> Subscription {
+        if let existing = subscriptions.first(where: { $0.id == subscriptionID }) {
+            return existing
+        }
+
+        // Placeholder uses max+1 (not count+1): guarantees it sorts AFTER every
+        // existing rank, however large, so a brand-new arrival never lands
+        // ahead of an already-correct synced rank before its OWN true rank is
+        // applied moments later by the caller's follow-up
+        // applyRemoteSubscriptionState call. See resortByCurrentPriorityRank's
+        // header for the full bug this — and the non-destructive resort below
+        // — fixes.
+        let placeholderRank = priorityRank ?? ((subscriptions.map(\.priorityRank).max() ?? 0) + 1)
+        var subscription = Subscription(
+            id: subscriptionID,
+            feedURL: feedURL,
+            title: parsedFeed.title,
+            author: parsedFeed.author,
+            artworkURL: parsedFeed.artworkURL,
+            priorityRank: placeholderRank,
+            categories: parsedFeed.categories,
+            isExplicit: parsedFeed.isExplicit
+        )
+        subscription.description = parsedFeed.description
+        subscription.subscribedAt = Date()
+        subscription.playbackPreference = seededDefaultPlaybackPreference
+        subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
+
+        let episodes = parsedFeed.episodes.compactMap {
+            episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
+        }.map { episode in
+            selfHealedEpisode(episode, subscriptionID: subscriptionID)
+        }
+        if !episodes.isEmpty {
+            subscription.latestEpisode = episodes.first
+            subscription.episodes = episodes
+            seedReleaseObservations(for: &subscription, episodes: episodes)
+        }
+
+        subscriptions.append(subscription)
+        resortByCurrentPriorityRank()
+        save()
+        return subscription
+    }
+
+    /// Self-heal: an `EpisodeSyncState` CloudKit record can arrive and cache
+    /// itself as a "stashed" projection (`applyRemoteEpisodeState`'s no-
+    /// local-episode-yet branch) BEFORE the episode it describes exists
+    /// locally — normal on a freshly-materializing device, since CloudKit
+    /// doesn't guarantee episode records arrive after their parent
+    /// subscription. Shared by `updateEpisodes` (iPhone feed refresh) and
+    /// `materialize` (tvOS/rebuild path). BUG FIXED HERE (found via tvOS
+    /// real-device testing, 2026-07-04): `materialize` used to build fresh
+    /// Episode objects with NO such check, so played/archived state that had
+    /// already synced down was silently never applied — every back-catalog
+    /// episode looked freshly unplayed, which is what caused Up Next to be
+    /// full of episodes already finished on iPhone.
+    private func selfHealedEpisode(_ episode: Episode, subscriptionID: UUID) -> Episode {
+        guard let projection = try? database?.episodeSyncState(subscriptionID: subscriptionID, guid: episode.guid) else {
+            return episode
+        }
+        var healed = episode
+        healed.playedState = projection.playedState
+        healed.wasCompleted = projection.wasCompleted
+        healed.lastPlayedAt = projection.lastPlayedAt
+        if projection.playedState == .archived || projection.playedState == .played {
+            healed.downloadState = .notDownloaded
+            healed.localFileURL = nil
+            healed.localFileName = nil
+        }
+        return healed
+    }
+
     /// Used by OPML import to add a subscription whose metadata came from a live feed fetch.
+    /// - Parameter reindexRanks: pass FALSE from remote-sync materialization
+    ///   (iPhone's AppState.materializeRemoteSubscription) so the insert does
+    ///   a non-destructive resort instead of compacting every subscription's
+    ///   rank to its array position. The compaction is correct for LOCAL adds
+    ///   (subscribe, OPML import — the array IS the whole truth there), but
+    ///   during a multi-subscription remote sync it collides compacted values
+    ///   (1..n) with later-arriving ABSOLUTE synced ranks, producing ties and
+    ///   arrival-order corruption — the same bug class fixed for the tvOS
+    ///   `materialize` path (see resortByCurrentPriorityRank's header).
     public func addSubscription(
         id: UUID,
         feedURL: URL,
@@ -178,7 +275,8 @@ public final class SubscriptionStore: ObservableObject {
         categories: [String] = [],
         isExplicit: Bool? = nil,
         latestEpisode: Episode,
-        insertAtBottom: Bool = false
+        insertAtBottom: Bool = false,
+        reindexRanks: Bool = true
     ) throws -> Subscription {
         guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
             throw SubscriptionStoreError.duplicateFeed
@@ -207,7 +305,11 @@ public final class SubscriptionStore: ObservableObject {
         } else {
             subscriptions.insert(subscription, at: 0)
         }
-        normalizePriorityOrder()
+        if reindexRanks {
+            normalizePriorityOrder()
+        } else {
+            resortByCurrentPriorityRank()
+        }
         save()
         return subscription
     }
@@ -462,6 +564,37 @@ public final class SubscriptionStore: ObservableObject {
         }
     }
 
+    /// Re-sorts by the CURRENT priorityRank values WITHOUT renumbering them —
+    /// unlike `normalizePriorityOrder()`, which compacts ranks to sequential
+    /// array-position integers. Use this for remote-sync-driven updates
+    /// (materialize / applyRemoteSubscriptionState / legacy recovery), where
+    /// the incoming priorityRank is a raw, meaningful value synced from
+    /// another device (SYNC_DESIGN.md's field-level LWW).
+    ///
+    /// BUG THIS FIXES (found via tvOS testing, 2026-07-04): a fresh device
+    /// receiving several subscriptions from CloudKit gets them in arbitrary
+    /// delivery order, not priority order. `normalizePriorityOrder()`
+    /// unconditionally overwrites EVERY subscription's rank with its current
+    /// array position — so the very next subscription to materialize (with
+    /// its own correct-but-not-yet-applied synced rank) triggers a reindex
+    /// that permanently clobbers the rank just set for the PREVIOUS one,
+    /// before all the true values are even known. The end result is
+    /// "whatever order things happened to arrive in," not the user's actual
+    /// Priority Stack order — which is exactly what looked like "random
+    /// order" on a freshly-synced Apple TV.
+    /// A non-destructive sort preserves each subscription's true rank
+    /// (possibly leaving numeric gaps, e.g. 1, 3, 12) until a genuine LOCAL
+    /// edit (drag-reorder, subscribe, unsubscribe) next calls
+    /// `normalizePriorityOrder()` and compacts them — cosmetic only (the
+    /// Priority Stack rank BADGE on iPhone reads the raw value), and it
+    /// self-heals on the next local edit. Order is what matters everywhere
+    /// else (Library, Up Next, iPhone's own queue), and order is correct
+    /// immediately with this approach.
+    private func resortByCurrentPriorityRank() {
+        subscriptions.sort { $0.priorityRank < $1.priorityRank }
+        enforceInactiveSubscriptionsAtBottom()
+    }
+
     private func normalizePriorityOrder() {
         subscriptions.sort { $0.priorityRank < $1.priorityRank }
         enforceInactiveSubscriptionsAtBottom()
@@ -530,7 +663,18 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func markEpisodePlaying(subscriptionID: UUID, episodeID: UUID) {
-        updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) { $0.playedState = .playing }
+        let now = Date()
+        updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            $0.playedState = .playing
+            // FIX (2026-07-04): historically only markEpisodePlayed stamped
+            // this, so multiple `.playing` episodes had nil lastPlayedAt and
+            // any recency comparison between them (e.g. picking the most
+            // recently started one across devices) was arbitrary. Starting
+            // playback IS "last played at" — and it's also what the
+            // auto-archive inactivity clock wants (it resets on recent play).
+            // Syncs via EpisodeSyncState.lastPlayedAt.
+            $0.lastPlayedAt = now
+        }
     }
 
     public func markEpisodePlayed(subscriptionID: UUID) {
@@ -554,6 +698,175 @@ public final class SubscriptionStore: ObservableObject {
             $0.wasCompleted = true
         }
         rememberPlayedEpisode(subscriptionID: subscriptionID, episodeID: episodeID)
+    }
+
+    // MARK: - Listening history write-back (tvOS Phase 3, §8 item 3)
+    //
+    // Playback position roams via the ListeningHistoryEntry sync record, whole-
+    // entry record-level LWW by `lastListenedAt` (SYNC_DESIGN.md) — NOT via
+    // EpisodeSyncState. Historically only the iOS app-target ListeningHistoryStore
+    // could write it. These two methods expose the same write path from
+    // AutohopCore so a streaming platform (TV, later watch) can participate in
+    // phone⇄device resume round-trips without a local history store of its own.
+    // Both use `PlaybackPositionStore.key(for:)` as the entry id — verified
+    // byte-for-byte identical to ListeningHistoryStore's private `historyKey(for:)`
+    // (same subscription-scoped guid/title-date/title-url fallback chain), so
+    // entries from either device collide on the SAME id and merge correctly
+    // instead of duplicating. Read-modify-write against any existing entry (not
+    // a bare overwrite) so a TV session's `listenedSeconds` ACCUMULATES onto
+    // whatever the phone already recorded, rather than shrinking the lifetime
+    // total on the next record-level-LWW resolution.
+
+    /// Periodic/position write during TV playback — the tvOS analog of
+    /// ListeningHistoryStore.recordProgress(). `listenedSecondsDelta` is
+    /// ADDED to the existing entry's total (0 for a brand-new entry).
+    public func recordListeningProgress(
+        episode: Episode,
+        podcastTitle: String,
+        artworkURL: URL?,
+        listenedSecondsDelta: TimeInterval,
+        positionSeconds: TimeInterval,
+        durationSeconds: TimeInterval?
+    ) {
+        guard let database else { return }
+        let key = PlaybackPositionStore.key(for: episode)
+        let now = Date()
+        var entry = (try? database.historyEntry(id: key)) ?? ListeningHistoryEntry(
+            id: key,
+            subscriptionID: episode.subscriptionID,
+            episodeID: episode.id,
+            episodeTitle: episode.title,
+            podcastTitle: podcastTitle,
+            artworkURL: artworkURL,
+            publishedAt: episode.publishedAt,
+            durationSeconds: durationSeconds ?? episode.durationSeconds,
+            listenedSeconds: 0,
+            lastPositionSeconds: 0,
+            lastListenedAt: now,
+            status: .listened
+        )
+        entry.episodeID = episode.id
+        entry.episodeTitle = episode.title
+        entry.podcastTitle = podcastTitle
+        entry.artworkURL = artworkURL
+        entry.publishedAt = episode.publishedAt
+        entry.durationSeconds = durationSeconds ?? episode.durationSeconds
+        entry.listenedSeconds += max(0, listenedSecondsDelta)
+        entry.lastPositionSeconds = positionSeconds
+        entry.lastListenedAt = now
+        // Status is intentionally left unchanged here — played/archived
+        // transitions go through markListeningHistoryFinished below.
+        try? database.recordHistoryEntry(entry)
+    }
+
+    /// Records the whole-entry status transition at natural finish — the tvOS
+    /// analog of ListeningHistoryStore.mark(status:completionKind:). Called
+    /// once when a streamed episode plays to the end.
+    public func markListeningHistoryFinished(
+        episode: Episode,
+        podcastTitle: String,
+        artworkURL: URL?,
+        finishedPositionSeconds: TimeInterval
+    ) {
+        guard let database else { return }
+        let key = PlaybackPositionStore.key(for: episode)
+        let now = Date()
+        var entry = (try? database.historyEntry(id: key)) ?? ListeningHistoryEntry(
+            id: key,
+            subscriptionID: episode.subscriptionID,
+            episodeID: episode.id,
+            episodeTitle: episode.title,
+            podcastTitle: podcastTitle,
+            artworkURL: artworkURL,
+            publishedAt: episode.publishedAt,
+            durationSeconds: episode.durationSeconds,
+            listenedSeconds: 0,
+            lastPositionSeconds: 0,
+            lastListenedAt: now,
+            status: .listened
+        )
+        entry.status = .played
+        entry.completionKind = .finishedNaturally
+        entry.lastPositionSeconds = finishedPositionSeconds
+        entry.listenedDurationSeconds = finishedPositionSeconds
+        entry.episodeDurationSeconds = episode.durationSeconds
+        entry.lastListenedAt = now
+        try? database.recordHistoryEntry(entry)
+    }
+
+    /// Cross-device resume position for an episode (tvOS Phase 3+ read side —
+    /// the counterpart of recordListeningProgress above). Reads the synced
+    /// ListeningHistoryEntry (position roams inside it, SYNC_DESIGN.md) and
+    /// normalizes: near-end / non-positive → nil ("start from the beginning"),
+    /// same rule as the iPhone's PlaybackPositionStore. Only `.listened`
+    /// entries resume — a `.played`/`.archived` entry means the episode was
+    /// finished, and resuming into the last 2 seconds of it would be wrong.
+    public func savedListeningPosition(for episode: Episode) -> TimeInterval? {
+        guard let database,
+              let entry = try? database.historyEntry(id: PlaybackPositionStore.key(for: episode)),
+              entry.status == .listened
+        else { return nil }
+        let normalized = PlaybackPositionStore.normalizedResumeTime(
+            entry.lastPositionSeconds,
+            duration: episode.durationSeconds ?? entry.durationSeconds
+        )
+        return normalized > 0 ? normalized : nil
+    }
+
+    /// The most recently listened-to, still-in-progress history entry across
+    /// ALL shows — the cross-device "Continue Listening" signal (tvOS Home
+    /// hero). History entries carry `lastListenedAt` from whichever device
+    /// last played, so this correctly surfaces e.g. the video podcast being
+    /// watched on iPhone right now, unlike the old `playedState == .playing`
+    /// heuristic (playedState has no reliable recency: `markEpisodePlaying`
+    /// historically never stamped `lastPlayedAt`, so multiple `.playing`
+    /// episodes compared as nil and the pick was effectively arbitrary).
+    /// Requires a meaningful position (> 0 after normalization) so a barely-
+    /// touched episode doesn't squat on the hero card.
+    public func mostRecentInProgressListeningEntry() -> ListeningHistoryEntry? {
+        guard let database, let entries = try? database.allHistoryEntries() else { return nil }
+        return entries
+            .filter { entry in
+                guard entry.status == .listened else { return false }
+                return PlaybackPositionStore.normalizedResumeTime(
+                    entry.lastPositionSeconds,
+                    duration: entry.durationSeconds
+                ) > 0
+            }
+            .max { $0.lastListenedAt < $1.lastListenedAt }
+    }
+
+    // MARK: - Synced queue snapshot (2026-07-04 — the Up Next queue roams)
+
+    /// Records THIS device's authored Up Next queue for sync. Called by the
+    /// iPhone (the queue's source of truth) whenever its queue recomputes;
+    /// dedupes on entry-list equality so routine recomputes with no actual
+    /// change never dirty the record or trigger a push.
+    public func updateLocalQueueSnapshot(entries: [QueueSnapshotEntry]) {
+        guard let database else { return }
+        if let existing = try? database.queueSnapshot(), existing.entries == entries {
+            return
+        }
+        let snapshot = QueueSnapshot(
+            entries: entries,
+            updatedAt: Date(),
+            sourceDeviceID: DeviceIdentity.current
+        )
+        do {
+            try database.recordLocalQueueSnapshot(snapshot)
+        } catch {
+            AppLogger.shared.error("sync.queueSnapshotWriteFailed", "Could not record queue snapshot for sync", metadata: [
+                "entries": "\(entries.count)",
+                "error": String(describing: error)
+            ], alwaysPersist: true)
+        }
+    }
+
+    /// The latest known queue snapshot (local-authored or synced), for
+    /// read-only surfaces (tvOS/watch) to render via QueueModel.resolvedQueue.
+    public func syncedQueueSnapshot() -> QueueSnapshot? {
+        guard let database else { return nil }
+        return try? database.queueSnapshot()
     }
 
     public func markEpisodeArchived(subscriptionID: UUID, episodeID: UUID) {
@@ -654,17 +967,10 @@ public final class SubscriptionStore: ObservableObject {
 
             // Self-heal: a remote episode-state may have arrived before this
             // episode existed locally (stashed as a sync projection). Now that
-            // the feed brings it in, apply that synced state.
-            if existingByGUID[newEpisode.guid] == nil,
-               let projection = try? database?.episodeSyncState(subscriptionID: subscriptionID, guid: newEpisode.guid) {
-                merged.playedState = projection.playedState
-                merged.wasCompleted = projection.wasCompleted
-                merged.lastPlayedAt = projection.lastPlayedAt
-                if projection.playedState == .archived || projection.playedState == .played {
-                    merged.downloadState = .notDownloaded
-                    merged.localFileURL = nil
-                    merged.localFileName = nil
-                }
+            // the feed brings it in, apply that synced state. Shared with
+            // materialize()'s selfHealedEpisode — keep them in sync.
+            if existingByGUID[newEpisode.guid] == nil {
+                merged = selfHealedEpisode(merged, subscriptionID: subscriptionID)
             }
             return merged
         }
@@ -852,7 +1158,12 @@ public final class SubscriptionStore: ObservableObject {
         sub.chapterFilter = merged.chapterFilter
         sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
-        normalizePriorityOrder()
+        // Non-destructive resort — see resortByCurrentPriorityRank's header.
+        // Using normalizePriorityOrder() here would discard merged.priorityRank
+        // (the true synced value) the moment another subscription's own remote
+        // apply/materialize runs, since that reindexes EVERY subscription by
+        // array position, not by this value.
+        resortByCurrentPriorityRank()
         save()
         return .applied
     }
@@ -901,7 +1212,8 @@ public final class SubscriptionStore: ObservableObject {
         // value carried through the merge (nil remote stamp = no opinion).
         sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
-        normalizePriorityOrder()
+        // Non-destructive resort — same reasoning as applyRemoteSubscriptionState.
+        resortByCurrentPriorityRank()
         save()
         return true
     }
@@ -1048,7 +1360,13 @@ public final class SubscriptionStore: ObservableObject {
         do {
             subscriptions = try database.loadSubscriptions()
                 .sorted { $0.priorityRank < $1.priorityRank }
-            normalizePriorityOrder()
+            // Non-destructive resort (2026-07-04 audit, same bug class as the
+            // materialization rank fix): compacting ranks at LOAD destroyed
+            // absolute synced values — if the app relaunched mid-initial-sync,
+            // later-arriving remote ranks tied against the freshly compacted
+            // 1..n and order corrupted. Gaps are cosmetic and the next LOCAL
+            // edit recompacts via normalizePriorityOrder as before.
+            resortByCurrentPriorityRank()
             persistedSnapshot = snapshotByID(subscriptions)
             // Heal any sync-state rows left by an older projection shape so they
             // re-seed and push on this launch, not only when next edited.

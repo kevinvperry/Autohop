@@ -32,7 +32,8 @@ CarPlay support would let users control that existing audio experience through t
 - Continue the automatic priority queue.
 - View a short Up Next list of downloaded episodes.
 - Select an already downloaded episode from Up Next.
-- Access a small library view limited to subscribed podcasts with downloaded, playable episodes.
+- Access a small library view limited to subscribed podcasts and their episodes.
+- Confirm before manually downloading an episode selected from that library for Play, Play Next, or Play Last.
 - Support lock screen, Control Center, steering wheel, and remote transport commands through the existing audio session and Now Playing integration.
 - Keep artwork, episode title, podcast title, duration, and progress visible where supported by CarPlay templates.
 

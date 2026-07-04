@@ -76,7 +76,12 @@ import Combine
 // server system fields/change tag but keeps the local full-day bucket dirty, so
 // the retry updates the current server record instead of fighting the same stale
 // change tag again.
-final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
+// PUBLIC since tvOS Phase 1: the TV app consumes AutohopCore as a library
+// import (unlike the iOS target, which compiles these sources directly), so
+// the engine's lifecycle surface (init/start/stop/toggle/flush + the three
+// materialization callbacks and the CKSyncEngineDelegate witnesses) is public.
+// Internals (queue passes, quarantine, conflict tracking) stay internal.
+public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     private let container: CKContainer
     private let subscriptionStore: SubscriptionStore
     private let database: AutohopDatabase?
@@ -117,15 +122,21 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// Invoked when a remote subscription record arrives for a podcast not on
     /// this device — the app layer fetches the feed and creates it, then
     /// re-applies the state. Set by AppState (which owns FeedService).
-    var onSubscriptionNeedsMaterialization: ((SubscriptionSyncState) async -> Void)?
+    public var onSubscriptionNeedsMaterialization: ((SubscriptionSyncState) async -> Void)?
 
     /// Invoked when a remote listening-history entry arrives — the app layer
     /// (ListeningHistoryStore) merges it with record-level LWW. Set by AppState.
-    var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
+    public var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
 
     /// Invoked after another device's stats partition was stored — the app layer
     /// (ListeningStatsStore) reloads its remote cache and refreshes. Set by AppState.
-    var onRemoteStatsChanged: (() async -> Void)?
+    public var onRemoteStatsChanged: (() async -> Void)?
+
+    /// Invoked after a NEWER remote queue snapshot was adopted (2026-07-04) —
+    /// NOTIFY-ONLY: persistence already happened in the engine
+    /// (saveSyncedQueueSnapshot, LWW by updatedAt). Read-only queue surfaces
+    /// (tvOS TVAppModel) refresh their rendered queue here.
+    public var onRemoteQueueSnapshotChanged: (() async -> Void)?
 
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
@@ -143,9 +154,20 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         super.init()
     }
 
+    /// Library-consumer entry point (tvOS Phase 1): the store's record database
+    /// is an internal type, so external targets construct the engine from the
+    /// SubscriptionStore facade and this pulls the database internally.
+    public convenience init(containerIdentifier: String, subscriptionStore: SubscriptionStore) {
+        self.init(
+            containerIdentifier: containerIdentifier,
+            subscriptionStore: subscriptionStore,
+            database: subscriptionStore.database
+        )
+    }
+
     // MARK: - Lifecycle
 
-    func start() {
+    public func start() {
         guard engine == nil, !isStarting else {
             logger.info("sync.startSkipped", "Sync start ignored — engine already running or starting")
             return
@@ -201,7 +223,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         }
     }
 
-    func stop() {
+    public func stop() {
         cancellables.removeAll()
         slowLanePushTask?.cancel()
         slowLanePushTask = nil
@@ -210,7 +232,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     }
 
     /// Call when AppSettings.iCloudSyncEnabled changes.
-    func syncEnabledChanged(_ enabled: Bool) {
+    public func syncEnabledChanged(_ enabled: Bool) {
         logger.info("sync.toggle", "iCloud sync setting changed", metadata: ["enabled": "\(enabled)"])
         if enabled { start() } else { stop() }
     }
@@ -229,10 +251,41 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// checkpoints — pause, scene backgrounding, resign-active — AFTER
     /// ListeningStatsStore has flushed its coalesced day buckets into the sync
     /// database, so the scan sees the freshest rows. No-op while stopped.
-    func flushDeferredPushes(reason: String) {
+    public func flushDeferredPushes(reason: String) {
         guard engine != nil else { return }
         Task { [weak self] in
             await self?.queuePendingLocalChanges(slowLane: .flush(reason: reason))
+        }
+    }
+
+    /// Targeted fetch of the single `queue:current` record, applied through the
+    /// normal pull path (`applyRemote`), bypassing the full CKSyncEngine delta
+    /// stream. Used by read-only queue surfaces (tvOS) at launch/foreground so
+    /// the Up Next queue mirrors the phone's within seconds instead of after
+    /// the whole change stream has drained (Kevin's real-device finding: the
+    /// TV queue cycled through stale episodes for ~10 min before the snapshot
+    /// surfaced). Requires an active account; a `.unknownItem` (nothing
+    /// authored yet) is expected and silent. Returns true when a snapshot was
+    /// fetched and applied.
+    @discardableResult
+    public func fetchQueueSnapshotNow(reason: String) async -> Bool {
+        guard engine != nil else { return false }
+        do {
+            let record = try await container.privateCloudDatabase.record(for: CloudKitSync.queueSnapshotRecordID)
+            await applyRemote(record: record)
+            logger.info("sync.queueSnapshotFetched", "Targeted queue-snapshot fetch applied", metadata: [
+                "reason": reason
+            ])
+            return true
+        } catch let error as CKError where error.code == .unknownItem {
+            // No queue authored yet — normal on a fresh account.
+            return false
+        } catch {
+            logger.warning("sync.queueSnapshotFetchFailed", "Targeted queue-snapshot fetch failed (will still arrive via the change stream)", metadata: [
+                "reason": reason,
+                "error": "\(error)"
+            ])
+            return false
         }
     }
 
@@ -307,6 +360,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let subscriptions = read("subscription sync states", database.pendingSubscriptionSyncStates)
         let history = read("history entries", database.pendingHistoryEntries)
         let stats = read("stats days", database.pendingStatsDays)
+        let pendingQueue = (try? database.pendingQueueSnapshot()) ?? nil
         let deviceID = DeviceIdentity.current
 
         let episodeChanges = episodes.map {
@@ -322,7 +376,14 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             CKSyncEngine.PendingRecordZoneChange.saveRecord(CloudKitSync.statsRecordID(deviceID: deviceID, dayKey: $0.dayKey))
         }.filter { !isQuarantined($0) }
 
-        let fastChanges = episodeChanges + subscriptionChanges
+        // Queue snapshot rides the FAST lane: it changes on discrete queue
+        // events (play/archive/pin/download-complete), and it's the record
+        // other devices' core surface renders from — freshness matters.
+        let queueChanges: [CKSyncEngine.PendingRecordZoneChange] = pendingQueue != nil
+            ? [.saveRecord(CloudKitSync.queueSnapshotRecordID)].filter { !isQuarantined($0) }
+            : []
+
+        let fastChanges = episodeChanges + subscriptionChanges + queueChanges
         let slowChanges = historyChanges + statsChanges
 
         if Self.shouldDeferSlowLane(slowLane, fastCount: fastChanges.count, slowCount: slowChanges.count) {
@@ -356,10 +417,11 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             "subscriptions": "\(subscriptionChanges.count)",
             "history": "\(historyChanges.count)",
             "stats": "\(statsChanges.count)",
+            "queue": "\(queueChanges.count)",
             "statsDayKeys": statsDayKeys.joined(separator: ","),
             "statsSystemFieldsCached": "\(cachedStatsSystemFieldCount)",
             "statsRecordNames": statsDayKeys.map { CloudKitSync.statsRecordName(deviceID: deviceID, dayKey: $0) }.joined(separator: ","),
-            "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count) - changes.count)",
+            "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count + (pendingQueue != nil ? 1 : 0)) - changes.count)",
             "slowLane": slowLaneLabel,
             "device": deviceID
         ])
@@ -454,7 +516,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
 
     // MARK: - CKSyncEngineDelegate
 
-    func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
+    public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         switch event {
         case .stateUpdate(let event):
             saveState(event.stateSerialization)
@@ -474,7 +536,7 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         }
     }
 
-    func nextRecordZoneChangeBatch(
+    public func nextRecordZoneChangeBatch(
         _ context: CKSyncEngine.SendChangesContext,
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
@@ -559,6 +621,17 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                     recordType: CloudKitSync.statsRecordType, recordID: recordID
                 )
                 CloudKitSync.populate(target.record, deviceID: DeviceIdentity.current, day: day)
+                return target.record
+            }
+
+            // Queue snapshot? (fixed recordName == queue:current — one per account).
+            if CloudKitSync.isQueueSnapshotRecordName(name),
+               let snapshot = try database.pendingQueueSnapshot() {
+                let target = cachedOrNewRecord(
+                    systemFields: try? database.queueSnapshotSystemFields(),
+                    recordType: CloudKitSync.queueSnapshotRecordType, recordID: recordID
+                )
+                CloudKitSync.populate(target.record, from: snapshot)
                 return target.record
             }
         } catch {
@@ -653,10 +726,47 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 logDecodeFailure(record)
                 return
             }
-            // App layer merges (record-level LWW) and persists the clean row.
-            await onRemoteHistoryEntry?(remote)
+            if let onRemoteHistoryEntry {
+                // iOS: the app layer (ListeningHistoryStore) merges with
+                // record-level LWW and persists the clean row itself.
+                await onRemoteHistoryEntry(remote)
+            } else {
+                // BUG FIX (found via tvOS real-device testing, 2026-07-04):
+                // history was the ONLY record type whose PERSISTENCE depended
+                // entirely on the app callback — episode/subscription/stats
+                // records are written by the engine/store directly. A platform
+                // that never wired the callback (the TV app) silently dropped
+                // every synced history entry, i.e. every cross-device resume
+                // position. Fall back to persisting the entry as clean
+                // synced state so no consumer can ever lose it; platforms with
+                // their own in-memory history store still use the callback.
+                runDB("saveSyncedHistoryEntry", metadata: ["id": remote.id]) {
+                    try self.database?.saveSyncedHistoryEntry(remote)
+                }
+            }
             runDB("storeHistorySystemFields", metadata: ["id": remote.id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
+            }
+
+        case CloudKitSync.queueSnapshotRecordType:
+            guard let remote = CloudKitSync.queueSnapshot(from: record) else {
+                logDecodeFailure(record)
+                return
+            }
+            // Persisted by the ENGINE directly (per the 2026-07-04 lesson from
+            // the history-record bug: never make a record type's persistence
+            // depend on an optional app callback). LWW-by-updatedAt inside
+            // saveSyncedQueueSnapshot protects a local author's newer pending
+            // queue. The callback is notify-only.
+            var adopted = false
+            runDB("saveSyncedQueueSnapshot") {
+                adopted = try self.database?.saveSyncedQueueSnapshot(remote) ?? false
+            }
+            runDB("storeQueueSnapshotSystemFields") {
+                try self.database?.storeQueueSnapshotSystemFields(Self.systemFields(of: record))
+            }
+            if adopted {
+                await onRemoteQueueSnapshotChanged?()
             }
 
         case CloudKitSync.statsRecordType:
@@ -959,6 +1069,11 @@ final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
                     try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: [dayKey])
                 }
+            }
+        case CloudKitSync.queueSnapshotRecordType:
+            runDB("markSaved.queueSnapshot") {
+                try self.database?.storeQueueSnapshotSystemFields(Self.systemFields(of: record))
+                try self.database?.markQueueSnapshotSynced()
             }
         default:
             break

@@ -22,7 +22,7 @@ import SwiftUI
 // or Inactive subscriptions (Download must not appear there) the far-right button
 // falls back to the original Archive/Unarchive. Unarchive is otherwise only on the
 // Episode Detail page. For an
-// real subscription, not-downloaded rows that Download Filters currently exclude
+// real subscription, not-downloaded rows that Download Feed Filters currently exclude
 // show the grey Skipped status pill while swipe/manual actions still work. The
 // feed-refresh button sits on the "Episodes" heading row
 // (small purple circular glass button, matching the Subscriptions page) and the

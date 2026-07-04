@@ -30,12 +30,85 @@ public struct QueuePins: Codable, Equatable {
 
 public enum QueueModel {
     /// Full Priority Stack: QueueService base ordering with pins applied.
+    /// DOWNLOAD-GATED — for the iPhone's download-first player. Do not use
+    /// this for a streaming platform (see `streamableQueue` below).
     public static func downloadedQueue(
         from subscriptions: [Subscription],
         pins: QueuePins,
         queueService: QueueServicing = QueueService()
     ) -> [Episode] {
         applyPins(queueService.downloadedQueue(from: subscriptions), pins: pins)
+    }
+
+    /// The Priority Stack for a STREAMING platform (tvOS Phase 2, later watch):
+    /// ascending priorityRank across shows, ONE episode per show — the oldest
+    /// still-unplayed one (matches QueueService's within-podcast ordering rule
+    /// and, in effect, what an iPhone user normally sees: only one episode per
+    /// show is ever downloaded/queued at a time). WITHOUT the "downloaded with
+    /// a local file" gate, since a streaming engine plays every episode from
+    /// its enclosure URL.
+    /// FIX (found via real-device tvOS testing, 2026-07-04): this used to
+    /// return EVERY unplayed episode per show, not just one. iPhone's queue
+    /// never visibly "groups" because the download gate normally limits each
+    /// show to a single queued episode; without that gate, a show with a full
+    /// back-catalog (e.g. 50 parsed episodes, all unplayed on a fresh
+    /// subscribe) dumped its entire backlog consecutively before the next
+    /// show ever appeared. Interleaving one-per-show across priority order is
+    /// what actually reads as "Up Next," not a per-show binge list — browsing
+    /// a show's full backlog is Library's job.
+    /// No pin overrides yet: Play Next/Play Last pins are local, per-device,
+    /// un-synced state on iPhone today (queue-pins.json), so a TV/watch
+    /// install has no pin data of its own to apply — this is the honest
+    /// current behavior, not an oversight. If pins are ever synced, layer
+    /// `applyPins` on top here the same way `downloadedQueue` does.
+    public static func streamableQueue(from subscriptions: [Subscription]) -> [Episode] {
+        subscriptions
+            .sorted { $0.priorityRank < $1.priorityRank }
+            .compactMap { subscription -> Episode? in
+                let episodes = subscription.episodes.isEmpty
+                    ? subscription.latestEpisode.map { [$0] } ?? []
+                    : subscription.episodes
+                guard let next = episodes
+                    .filter({ $0.playedState != .played && $0.playedState != .archived })
+                    .min(by: { ($0.publishedAt ?? .distantPast) < ($1.publishedAt ?? .distantPast) })
+                else { return nil }
+                var queuedEpisode = next
+                queuedEpisode.subscriptionID = subscription.id
+                return queuedEpisode
+            }
+    }
+
+    /// Resolves a synced QueueSnapshot (the iPhone's authored Up Next order —
+    /// see Models/QueueSnapshot.swift) against a reader's local catalog.
+    /// Snapshot ORDER is authoritative; entries that don't resolve to a local
+    /// episode are skipped (that show's catalog may still be fetching), and
+    /// episodes the READER already knows are played/archived are filtered as
+    /// stale protection (a snapshot authored before a local/newer-synced
+    /// completion must not resurrect a finished episode). This is what makes
+    /// "3 queued episodes of one show on the phone" mirror exactly on TV.
+    public static func resolvedQueue(
+        from snapshot: QueueSnapshot,
+        subscriptions: [Subscription]
+    ) -> [Episode] {
+        // Key every local episode once (subscriptions × episodes can be a few
+        // thousand; the snapshot is small — index the big side).
+        var episodesByKey: [String: Episode] = [:]
+        for subscription in subscriptions {
+            let episodes = subscription.episodes.isEmpty
+                ? subscription.latestEpisode.map { [$0] } ?? []
+                : subscription.episodes
+            for var episode in episodes {
+                episode.subscriptionID = subscription.id
+                episodesByKey[PlaybackPositionStore.key(for: episode)] = episode
+            }
+        }
+        return snapshot.entries.compactMap { entry in
+            guard let episode = episodesByKey[entry.episodeKey],
+                  episode.playedState != .played,
+                  episode.playedState != .archived
+            else { return nil }
+            return episode
+        }
     }
 
     /// Applies Play Next / Play Last pins to an already-ordered base queue.

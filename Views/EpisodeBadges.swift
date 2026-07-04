@@ -5,7 +5,7 @@ import SwiftUI
 //   • Video/Explicit pills (small + large)
 //   • EpisodeStatusKind + EpisodeStatusPill (colour-coded state capsule; each
 //     page supplies its own statusKind(for:) resolver; includes Skipped for
-//     not-downloaded episodes currently excluded by Download Filters)
+//     not-downloaded episodes currently excluded by Download Feed Filters)
 //   • glassCard(cornerRadius:) View modifier (glass content-card surface)
 // Pure presentation; shared across episode lists, preview, queue, and detail pages.
 

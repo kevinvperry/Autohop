@@ -9,8 +9,10 @@ import Foundation
 //
 // CURRENT SCOPE: Real-hardware CarPlay behavior adapter. Keep this as a thin
 // wrapper over AppState. It must not introduce separate CarPlay
-// queue/playback/settings state and must not start downloads, feed refresh,
-// search, browsing, notifications, or sleep flows.
+// queue/playback/settings state. It may route explicit driver-confirmed manual
+// downloads through AppState for subscription episode actions, but must not start
+// feed refresh, search, podcast discovery, notifications, subscription management,
+// or sleep flows.
 // ============================================================================
 
 @MainActor
@@ -19,6 +21,10 @@ struct CarPlayActionRouter {
 
     func play(_ episode: Episode) async {
         await appState.playEpisode(episode)
+    }
+
+    func downloadForAction(_ episode: Episode) async -> Episode? {
+        await appState.downloadEpisodeForCarPlayAction(episode)
     }
 
     func playNext(_ episode: Episode) async {

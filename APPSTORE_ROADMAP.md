@@ -216,7 +216,7 @@ ICLOUD SYNC
 Optional. Syncs subscriptions, queue, history, and playback position via the user's private CloudKit database. No Autohop server involved; developer cannot access this data.
 
 CARPLAY AUDIO APP
-CarPlay interface is audio-only: Now Playing and Up Next controls for downloaded episodes only. No search, browsing, feed refresh, downloads, streaming, settings, notifications, stats, OPML, or text entry.
+CarPlay interface is audio-only: Now Playing, downloaded-only Up Next, and Subscriptions controls for subscribed-show episodes. Undownloaded subscription episodes require confirmation before a manual download starts. No search, podcast discovery, feed refresh, streaming, settings, notifications, stats, OPML, or text entry.
 
 HOW TO TEST SLEEP SCHEDULE
 Menu → Sleep Schedule → enable, set active hours to cover now, set Ask Every to shortest interval, play any downloaded episode.
@@ -275,15 +275,16 @@ App Review note to paste with a CarPlay build:
 ```
 Autohop includes CarPlay support under the CarPlay Audio App entitlement.
 
-The CarPlay interface is audio-only and limited to safe playback controls for already downloaded podcast episodes:
+The CarPlay interface is audio-only and limited to safe playback controls for podcast episodes:
 - Now Playing for the current episode.
 - Up Next actions: Play Now, Play Next, Play Last, and Archive.
+- Subscriptions list: subscribed podcasts in priority order, each opening recent episodes like the phone podcast detail page. If an episode is not downloaded, Play Now, Play Next, and Play Last first ask for confirmation, then show a downloading state before completing.
 - Playback speed adjustment using Autohop's existing presets.
 - Shared Listening toggle and Shared Listening speed picker.
 
-CarPlay uses the same queue, playback, archive, speed, and Shared Listening state as the iPhone app. It does not create a separate CarPlay queue or separate playback system.
+CarPlay uses the same queue, manual download, playback, archive, speed, and Shared Listening state as the iPhone app. It does not create a separate CarPlay queue or separate playback system.
 
-CarPlay does not include search, podcast browsing, RSS entry, feed refresh, downloads, streaming, subscription management, settings, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, sharing, diagnostics, or text entry.
+CarPlay does not include search, podcast discovery, RSS entry, feed refresh, automatic/background downloads, streaming, subscription management, settings, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, sharing, diagnostics, or text entry.
 
 If there are no downloaded queue episodes, CarPlay shows a simple "No downloaded episodes" state.
 ```
@@ -296,4 +297,4 @@ Pre-submission checks:
 - Archive the release candidate and inspect the archived app entitlements for `com.apple.developer.carplay-audio = true`.
 - Run the full iPhone regression pass: launch, background audio, lock-screen controls, Control Centre controls, Sleep Schedule notifications, queue pin persistence, archive behavior, and normal download/refresh behavior.
 - Run the CarPlay simulator and hardware checklist in `Docs/CARPLAY_PHASE9_QA.md`.
-- Confirm no CarPlay route starts feed refresh, search, browsing, streaming, or downloads.
+- Confirm no CarPlay route starts feed refresh, search, podcast discovery, streaming, automatic downloads, or subscription management.

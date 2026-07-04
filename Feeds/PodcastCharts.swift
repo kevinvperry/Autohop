@@ -14,6 +14,12 @@ import Foundation
 // release-date enriched) for the "See All" Top Episodes child page
 // (Views/TopEpisodesView.swift) — loaded lazily so the main Discover page stays fast.
 // Consumed by DiscoverViewModel.
+// tvOS Phase 4 (2026-07-04): this file is now IN AutohopCore's Package.swift
+// sources (verified Foundation-only, no UIKit) but its types are still
+// `internal` — deliberately NOT publicized yet (a bigger surface than
+// PodcastSearch.swift's: genre rails, country picker, on-disk chart caching,
+// top-episodes paging). TV's Search tab does not use this file. Publicize
+// when the Discover/charts shelf is actually built for TV.
 
 // MARK: - Models
 

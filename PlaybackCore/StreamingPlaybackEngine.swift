@@ -31,27 +31,50 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public var onManualSkipForward: ((TimeInterval) -> Void)?
     public var onAutoSkip: ((TimeInterval) -> Void)?
     public var onTrimSilenceSaved: ((TimeInterval) -> Void)?
+    /// Fires true while the player is stalled waiting for enough buffered data
+    /// to play at the requested rate (streaming start-up, or a mid-stream
+    /// stall), false once it's actually playing. Drives the TV player's
+    /// buffering spinner (Kevin's request 2026-07-04). KVO on
+    /// `AVPlayer.timeControlStatus`.
+    public var onBufferingChanged: ((Bool) -> Void)?
 
     public private(set) var currentEpisode: Episode?
     public var isPlaying: Bool {
         guard let player else { return false }
         return player.rate != 0
     }
-    /// Exposed only for video episodes so a platform view (e.g. tvOS
-    /// AVPlayerViewController) can render the surface.
+    /// Exposed only for video episodes — matches PlaybackControlling's shared
+    /// semantic (iPhone's PlaybackEngine hosts audio via AVAudioEngine, so
+    /// `videoPlayer == nil` there means "no AVPlayerViewController surface
+    /// needed"). Do not change this gating; it's relied on by that contract.
     public var videoPlayer: AVPlayer? {
         currentEpisode?.mediaKind == .video ? player : nil
     }
+    /// tvOS Phase 3 (§8 item 1): the underlying AVPlayer regardless of media
+    /// kind — this engine is AVPlayer-only for BOTH audio and video, so a
+    /// platform using ONE `AVPlayerViewController` surface for both (per the
+    /// proposal's PC-derived pattern) needs the player even for audio
+    /// episodes, unlike `videoPlayer`. Not part of `PlaybackControlling` —
+    /// concrete-type-only, so this can never affect iPhone's `PlaybackEngine`.
+    public var avPlayer: AVPlayer? { player }
     public let capabilities: PlaybackCapabilities
+
+    public private(set) var isBuffering = false
 
     private var player: AVPlayer?
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
+    private var timeControlObservation: NSKeyValueObservation?
     private var speed: Double = 1.0
     private var endSkipSeconds: TimeInterval = 0
     private var didFinishCurrent = false
     private var chapters: [Chapter] = []
     private var chapterFilter = ChapterFilter()
+    /// A warm, paused player pre-buffering a likely-next asset (Continue
+    /// Listening) — see `preload`. Adopted directly by `play()` when its URL
+    /// matches, so playback starts near-instantly.
+    private var preloadPlayer: AVPlayer?
+    private var preloadURL: URL?
     /// App-layer hook that resolves an episode to an on-disk file (e.g. via the
     /// platform's DownloadManager). nil result = no local file.
     private let localFileResolver: (Episode) -> URL?
@@ -84,6 +107,42 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         return capabilities.streaming ? episode.audioURL : nil
     }
 
+    // MARK: - Preloading (warm the likely-next asset)
+
+    /// Starts pre-buffering an episode's asset in a paused, muted background
+    /// player so a later `play()` of the SAME episode starts almost instantly
+    /// (Kevin 2026-07-04: the Continue Listening episode is the one most
+    /// likely to be played next). Idempotent per URL; no-op when streaming
+    /// isn't permitted or the asset can't be resolved. Cheap to call on every
+    /// Home render — a matching URL is left untouched.
+    public func preload(_ episode: Episode) {
+        guard let assetURL = Self.resolvedAssetURL(
+            for: episode,
+            capabilities: capabilities,
+            localFileResolver: localFileResolver
+        ) else { return }
+
+        // Already warming this exact asset, or it's the one currently playing.
+        if preloadURL == assetURL || currentEpisode?.id == episode.id { return }
+
+        clearPreload()
+        let item = AVPlayerItem(url: assetURL)
+        // Ask AVFoundation to build a healthy forward buffer while paused.
+        item.preferredForwardBufferDuration = 30
+        let warm = AVPlayer(playerItem: item)
+        warm.automaticallyWaitsToMinimizeStalling = true
+        warm.isMuted = true
+        // A paused player with an item fills its forward buffer.
+        preloadPlayer = warm
+        preloadURL = assetURL
+    }
+
+    private func clearPreload() {
+        preloadPlayer?.pause()
+        preloadPlayer = nil
+        preloadURL = nil
+    }
+
     // MARK: - PlaybackControlling
 
     public func play(_ episode: Episode, preference: PlaybackPreference, filter: ChapterFilter) async throws {
@@ -98,8 +157,22 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         stop()
         activateAudioSessionIfAvailable()
 
-        let item = AVPlayerItem(url: assetURL)
-        let newPlayer = AVPlayer(playerItem: item)
+        // Adopt the warm pre-buffered player when it matches (near-instant
+        // start); otherwise build a fresh one.
+        let newPlayer: AVPlayer
+        if let preloadPlayer, preloadURL == assetURL {
+            newPlayer = preloadPlayer
+            newPlayer.isMuted = false
+            self.preloadPlayer = nil
+            self.preloadURL = nil
+        } else {
+            clearPreload()
+            newPlayer = AVPlayer(playerItem: AVPlayerItem(url: assetURL))
+        }
+        guard let item = newPlayer.currentItem else {
+            throw StreamingPlaybackError.noPlayableSource
+        }
+
         player = newPlayer
         currentEpisode = episode
         speed = preference.speed
@@ -177,6 +250,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         currentEpisode = nil
         chapters = []
         didFinishCurrent = false
+        setBuffering(false)
     }
 
     public func setVolume(_ volume: Float) {
@@ -218,6 +292,16 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             }
         }
 
+        // Buffering: `.waitingToPlayAtSpecifiedRate` = stalled waiting for
+        // data. Report the transition so the UI can show/hide its spinner.
+        // Seed the initial value immediately (KVO only fires on change).
+        setBuffering(player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] observedPlayer, _ in
+            Task { @MainActor in
+                self?.setBuffering(observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+            }
+        }
+
         endObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.didPlayToEndTimeNotification,
             object: item,
@@ -235,6 +319,12 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         onEpisodeFinished?(episode)
     }
 
+    private func setBuffering(_ value: Bool) {
+        guard value != isBuffering else { return }
+        isBuffering = value
+        onBufferingChanged?(value)
+    }
+
     private func removeObservers() {
         if let timeObserverToken, let player {
             player.removeTimeObserver(timeObserverToken)
@@ -244,6 +334,8 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+        timeControlObservation?.invalidate()
+        timeControlObservation = nil
     }
 
     private func activateAudioSessionIfAvailable() {

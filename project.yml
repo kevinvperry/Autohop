@@ -48,6 +48,15 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift.git
     from: 6.29.0
+  # tvOS Phase 1: the TV target consumes AutohopCore as a LIBRARY product from
+  # the local SwiftPM package at the repo root (Package.swift) — per the tvOS
+  # proposal §6, NOT the iOS source glob. The iOS target keeps compiling core
+  # sources directly and does NOT depend on this package (no duplicate symbols).
+  # If Xcode misbehaves with a local package rooted at the project directory,
+  # the documented fallback is compiling the Package.swift `sources:` list
+  # directly into AutohopTV.
+  AutohopCore:
+    path: .
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +89,7 @@ targets:
           - "DownloadManagerSmokeTests/**"   # contains main.swift
           - "StatsSmokeTests/**"             # contains main.swift
           - "Tests/**"                       # picked up by AutohopTests target instead
+          - "TV/**"                          # tvOS target sources — never in the iPhone app
 
     settings:
       base:
@@ -223,6 +233,76 @@ targets:
       gatherCoverageData: false
       testTargets:
         - AutohopTests
+
+  # ── Apple TV app (tvOS Phase 1 scaffolding) ────────────────────────────────
+  # Streaming-first lean-back surface (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md).
+  # Sources are TV/ + the AutohopCore package product ONLY. The database lives
+  # in Caches (purgeable, T2); durable state is the UserDefaults survival kit +
+  # CloudKit. App icon: the tvOS layered brand-assets stack (parallax layers
+  # derived from Design/AppIcon/autohop-icon-v1.svg) is DELIBERATELY not
+  # scaffolded here — add it in Xcode when the art is ready, then set
+  # ASSETCATALOG_COMPILER_APPICON_NAME on this target.
+
+  AutohopTV:
+    type: application
+    platform: tvOS
+    # CORRECTED in Phase 2 (2026-07-04) from the Phase 1 scaffold's "17.0":
+    # §7 item 1's own navigation shell (`.tabViewStyle(.sidebarAdaptable)`,
+    # the tvOS 18 `Tab(_:systemImage:value:)` builder) needs tvOS 18+, and the
+    # Pocket Casts reference target itself ships tvOS 18. tvOS 17 support
+    # would mean either a second, older navigation code path or dropping the
+    # proposal's own chosen APIs — not worth it for a brand-new 2026 TV app.
+    deploymentTarget: "18.0"
+    sources:
+      - TV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.tv
+        TARGETED_DEVICE_FAMILY: "3"          # Apple TV
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QT3N6256FG
+        # Set 2026-07-04 once Kevin created the tvOS App Icon & Top Shelf
+        # Image asset in Xcode (TV/Media.xcassets) — Xcode named it "Brand
+        # Assets". Front layer populated (flat icon, no parallax); Top Shelf
+        # images deferred (need separate wide-banner art).
+        ASSETCATALOG_COMPILER_APPICON_NAME: "Brand Assets"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+    info:
+      path: TV/Info.plist
+      properties:
+        CFBundleDisplayName: Autohop
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        # Audio keeps playing when the TV UI sleeps (PC precedent, proposal §2.3).
+        UIBackgroundModes:
+          - audio
+        # Lean-back media surface — dark only.
+        UIUserInterfaceStyle: Dark
+        # Same unbounded-podcast-hosts ATS rationale as the iOS target above.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        ITSAppUsesNonExemptEncryption: false
+    entitlements:
+      path: TV/AutohopTV.entitlements
+      properties:
+        # Same private CloudKit container as iPhone — the TV reads the user's
+        # existing synced library.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.kevinperry.autohop
+        com.apple.developer.icloud-services:
+          - CloudKit
+        aps-environment: development
+    dependencies:
+      - package: AutohopCore
+        product: AutohopCore
+      - sdk: CloudKit.framework
+      - sdk: AVFoundation.framework
 
   # ── Unit tests ─────────────────────────────────────────────────────────────
 

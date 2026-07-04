@@ -11,7 +11,7 @@ Date: 2026-06-26
 - Xcode package resolution completed for the `Autohop` scheme.
 - The generated Xcode project builds successfully for the booted iOS Simulator.
 - The focused CarPlay behavior tests pass in the Xcode app test target.
-- `CarPlayBehaviorTests` cover downloaded-only queue projection, empty queue projection, Play Next with and without a current episode, current-episode archive advance/clear behavior, playback speed cycling, and Shared Listening toggle/speed updates.
+- `CarPlayBehaviorTests` cover downloaded-only queue projection, subscription projection including undownloaded episodes, empty queue projection, download-before-action helper behavior, Play Next with and without a current episode, current-episode archive advance/clear behavior, playback speed cycling, and Shared Listening toggle/speed updates.
 - XcodeGen regeneration preserves the test target Info.plist generation needed for Xcode test execution.
 
 ## Environment Limits
@@ -31,6 +31,14 @@ Date: 2026-06-26
 - Confirm no current episode opens Up Next.
 - Confirm an empty queue shows the native `No downloaded episodes` empty state.
 - Open Up Next, tap a row, and confirm the action page shows Play Now, Play Next, Play Last, and Archive.
+- Open Subscriptions from the Now Playing button.
+- Open Subscriptions from the Up Next top button.
+- Confirm Subscriptions are listed in priority order and exclude browse/search previews.
+- Open a subscription and confirm the recent episode list mirrors the phone podcast detail page, including played, archived, and not-downloaded episodes.
+- Tap a subscription episode and confirm the action page shows Play Now, Play Next, Play Last, and Archive.
+- Tap Play Now, Play Next, and Play Last on an undownloaded subscription episode and confirm each asks before downloading.
+- Confirm CarPlay shows a loading/downloading state while the episode downloads.
+- Confirm a completed Play Now download starts playback, while completed Play Next/Play Last downloads update queue order.
 - Confirm Now Playing Archive advances to the next downloaded episode.
 - Confirm the speed button opens a slower/faster page that stays open after each adjustment.
 - Confirm Shared Listening can be toggled and its speed picker works.
@@ -47,7 +55,7 @@ Date: 2026-06-26
 - Confirm steering wheel play, pause, and skip controls work.
 - Disconnect and reconnect during playback.
 - Change audio routes during playback.
-- Test poor or unavailable network and confirm CarPlay does not start downloads, feed refresh, search, browsing, or streaming.
+- Test poor or unavailable network and confirm CarPlay only attempts downloads after explicit Play Now/Next/Last confirmation from a subscription episode row, and does not start feed refresh, search, browsing, or streaming.
 
 ## Phase 9 Gate Status
 
