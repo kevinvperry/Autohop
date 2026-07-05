@@ -20,7 +20,7 @@ struct TVQueueView: View {
         // with the content, like Home's. Plain Text, not `.navigationTitle` —
         // this tab has no NavigationStack (see TVMainTabView's header).
         Group {
-            if model.upNextEpisodes.isEmpty {
+            if model.upNextItems.isEmpty {
                 ContentUnavailableView(
                     "Up Next is empty",
                     systemImage: "square.stack",
@@ -32,11 +32,15 @@ struct TVQueueView: View {
                         Text("Up Next")
                             .font(.largeTitle.bold())
                             .padding(.bottom, 8)
-                        ForEach(model.upNextEpisodes) { episode in
+                        // Render from the synced snapshot's items so the queue is
+                        // stable during a cold sync; an item whose catalog hasn't
+                        // materialized yet (episode == nil) shows a not-yet-
+                        // playable placeholder row (churn fix 2026-07-05).
+                        ForEach(model.upNextItems) { item in
                             TVQueueRow(
-                                episode: episode,
-                                podcastTitle: model.subscription(for: episode)?.title,
-                                onPlay: { onPlay(episode) }
+                                item: item,
+                                podcastTitle: model.subscription(id: item.subscriptionID)?.title,
+                                onPlay: { if let episode = item.episode { onPlay(episode) } }
                             )
                         }
                     }
@@ -52,17 +56,21 @@ struct TVQueueView: View {
 /// full-width focusable row — the tvOS analog of the iPhone's
 /// "ListRow-Up Next Episode Row" pattern.
 struct TVQueueRow: View {
-    let episode: Episode
+    let item: QueueModel.ResolvedQueueItem
     let podcastTitle: String?
     let onPlay: () -> Void
+
+    /// nil until this item's catalog has materialized locally — until then the
+    /// row is a non-playable placeholder showing the synced title + order.
+    private var episode: Episode? { item.episode }
 
     var body: some View {
         Button(action: onPlay) {
             HStack(spacing: 24) {
-                TVArtworkImage(url: episode.artworkURL, cornerRadius: 12)
+                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 12)
                     .frame(width: 140, height: 140)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(episode.title)
+                    Text(item.title)
                         .font(.headline)
                         .lineLimit(2)
                     if let podcastTitle {
@@ -70,8 +78,12 @@ struct TVQueueRow: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    if let duration = episode.durationSeconds {
+                    if let episode, let duration = episode.durationSeconds {
                         Text(formattedDuration(duration))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else if episode == nil {
+                        Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -83,6 +95,7 @@ struct TVQueueRow: View {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.card)
+        .disabled(episode == nil)
     }
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {

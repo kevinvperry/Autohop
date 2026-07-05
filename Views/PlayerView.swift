@@ -98,6 +98,7 @@ struct PlayerView: View {
 
     private var episode: Episode? { appState.currentPlayerEpisode }
     private var isVideoEpisode: Bool { episode?.mediaKind == .video && appState.currentVideoPlayer != nil }
+    private var shouldAttachVideoSurfaces: Bool { scenePhase != .background }
 
     /// True when there is genuinely nothing to play — no loaded episode and an
     /// empty downloaded queue. Matches the transport controls' own disabled
@@ -227,7 +228,11 @@ struct PlayerView: View {
         }
         .background {
             if isVideoEpisode, let videoPlayer = appState.currentVideoPlayer {
-                VideoPictureInPictureHost(player: videoPlayer, startToken: pictureInPictureStartToken)
+                VideoPictureInPictureHost(
+                    player: videoPlayer,
+                    startToken: pictureInPictureStartToken,
+                    attached: shouldAttachVideoSurfaces
+                )
                     .frame(width: 1, height: 1)
                     .opacity(0.01)
             }
@@ -235,7 +240,7 @@ struct PlayerView: View {
         .fullScreenCover(isPresented: $showFullScreenVideo) {
             if let videoPlayer = appState.currentVideoPlayer {
                 ZStack(alignment: .topLeading) {
-                    NativeVideoPlayerView(player: videoPlayer)
+                    NativeVideoPlayerView(player: videoPlayer, attached: shouldAttachVideoSurfaces)
                         .ignoresSafeArea()
 
                     Button {
@@ -675,7 +680,9 @@ struct PlayerView: View {
             )
 
             Group {
-                if episode?.mediaKind == .video, let videoPlayer = appState.currentVideoPlayer {
+                if episode?.mediaKind == .video,
+                   let videoPlayer = appState.currentVideoPlayer,
+                   shouldAttachVideoSurfaces {
                     ZStack(alignment: .bottomTrailing) {
                         VideoPlayer(player: videoPlayer)
                             .background(Color.black)

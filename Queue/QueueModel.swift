@@ -86,10 +86,35 @@ public enum QueueModel {
     /// stale protection (a snapshot authored before a local/newer-synced
     /// completion must not resurrect a finished episode). This is what makes
     /// "3 queued episodes of one show on the phone" mirror exactly on TV.
-    public static func resolvedQueue(
+    /// One entry of a resolved queue snapshot. `episode` is `nil` when the
+    /// snapshot references an episode whose subscription/catalog has NOT yet
+    /// materialized locally — the caller can still render a stable placeholder
+    /// row (correct title + order) from `title`, rather than falling back to a
+    /// churny locally-derived queue while catalogs trickle in over a cold sync.
+    public struct ResolvedQueueItem: Equatable, Identifiable {
+        public let episodeKey: String
+        public let title: String
+        public let subscriptionID: UUID
+        public let episode: Episode?
+        public var id: String { episodeKey }
+        public init(episodeKey: String, title: String, subscriptionID: UUID, episode: Episode?) {
+            self.episodeKey = episodeKey
+            self.title = title
+            self.subscriptionID = subscriptionID
+            self.episode = episode
+        }
+    }
+
+    /// Resolves a snapshot into ordered display items, preserving the phone's
+    /// exact queue order. An entry whose episode IS materialized locally but is
+    /// already played/archived is dropped (stale-snapshot protection); an entry
+    /// whose episode hasn't materialized yet is kept as a placeholder (episode
+    /// == nil) so Up Next stays stable and correct during a cold sync instead
+    /// of churning through the locally-derived fallback.
+    public static func resolvedQueueItems(
         from snapshot: QueueSnapshot,
         subscriptions: [Subscription]
-    ) -> [Episode] {
+    ) -> [ResolvedQueueItem] {
         // Key every local episode once (subscriptions × episodes can be a few
         // thousand; the snapshot is small — index the big side).
         var episodesByKey: [String: Episode] = [:]
@@ -103,12 +128,32 @@ public enum QueueModel {
             }
         }
         return snapshot.entries.compactMap { entry in
-            guard let episode = episodesByKey[entry.episodeKey],
-                  episode.playedState != .played,
-                  episode.playedState != .archived
-            else { return nil }
-            return episode
+            if let episode = episodesByKey[entry.episodeKey] {
+                guard episode.playedState != .played,
+                      episode.playedState != .archived
+                else { return nil } // locally finished → gone from the queue
+                return ResolvedQueueItem(
+                    episodeKey: entry.episodeKey,
+                    title: episode.title,
+                    subscriptionID: entry.subscriptionID,
+                    episode: episode
+                )
+            }
+            // Not materialized yet — keep a placeholder so the row is stable.
+            return ResolvedQueueItem(
+                episodeKey: entry.episodeKey,
+                title: entry.episodeTitle,
+                subscriptionID: entry.subscriptionID,
+                episode: nil
+            )
         }
+    }
+
+    public static func resolvedQueue(
+        from snapshot: QueueSnapshot,
+        subscriptions: [Subscription]
+    ) -> [Episode] {
+        resolvedQueueItems(from: snapshot, subscriptions: subscriptions).compactMap(\.episode)
     }
 
     /// Applies Play Next / Play Last pins to an already-ordered base queue.

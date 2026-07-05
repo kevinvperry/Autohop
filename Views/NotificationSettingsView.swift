@@ -235,7 +235,7 @@ private struct NotificationPodcastRow: View {
 // Permission), and reconciles the schedule via NotificationService.scheduleRecaps
 // (idempotent recurring calendar notifications — see that method). onAppear also
 // reschedules to self-heal after a reinstall. Mechanism B: the notifications are
-// evergreen teasers; tapping one deep-links into the Stats "Last" view (Phase 3).
+// evergreen teasers; tapping one deep-links into the matching Stats "Last" view.
 struct RecapSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss

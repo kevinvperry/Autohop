@@ -47,6 +47,12 @@ final class TVPlaybackModel {
     /// Supplied by TVAppModel post-init: resolves an episode's owning
     /// subscription (title/artwork/playback preference/chapter filter).
     var subscriptionProvider: ((UUID) -> Subscription?)?
+    /// Supplied by TVAppModel post-init: force-push the just-written position to
+    /// CloudKit NOW (bypassing the engine's ~60 s slow-lane debounce) so a pause
+    /// or player exit reaches the phone promptly instead of up to a minute late.
+    /// Safe to call right after a progress write — `recordListeningProgress`
+    /// persists synchronously, so the pending row is on disk before the flush.
+    var onPlaybackCheckpoint: (() -> Void)?
 
     private var currentSubscriptionID: UUID?
     private var lastHistoryWriteAt: Date?
@@ -132,7 +138,7 @@ final class TVPlaybackModel {
         if isPlaying {
             engine.pause()
             isPlaying = false
-            flushProgress()
+            checkpoint()
         } else {
             engine.resume()
             isPlaying = true
@@ -146,9 +152,19 @@ final class TVPlaybackModel {
 
     /// Called when the player cover is dismissed (Menu / onExitCommand).
     /// Audio keeps playing in the background (UIBackgroundModes: audio);
-    /// this just flushes the position so a phone pickup is current.
+    /// this flushes the position AND force-pushes it so a phone pickup is
+    /// current right away.
     func dismissedCover() {
+        checkpoint()
+    }
+
+    /// Persist the current position locally, then force-push it to CloudKit
+    /// immediately. Used on pause, player exit, and app backgrounding so a
+    /// TV-side position reaches the phone within seconds rather than sitting on
+    /// the engine's slow-lane debounce.
+    func checkpoint() {
         flushProgress()
+        onPlaybackCheckpoint?()
     }
 
     func stopAndClear() {

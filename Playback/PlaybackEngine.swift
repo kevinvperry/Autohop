@@ -94,6 +94,9 @@ final class PlaybackEngine: PlaybackControlling {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var finishObserver: NSObjectProtocol?
+    private var timeControlStatusObservation: NSKeyValueObservation?
+    private var playerRateObservation: NSKeyValueObservation?
+    private var playerItemStatusObservation: NSKeyValueObservation?
 
     // MARK: - AVAudioEngine (engine path: strong vocal boost and/or trim silence)
 
@@ -152,6 +155,8 @@ final class PlaybackEngine: PlaybackControlling {
     private var routeRestartGeneration = 0
     private var hasPendingRouteLossPause = false
     private var routeRestartDeferredByRouteLoss: (reason: String, output: String)?
+    private let engineRenderStallThreshold: TimeInterval = 2.5
+    private let engineReadFinishedEndTolerance: TimeInterval = 3.0
     private let routeLossPauseDelay: TimeInterval = 0.9
     private let routeRestartStabilizationDelay: TimeInterval = 0.75
 
@@ -347,6 +352,41 @@ final class PlaybackEngine: PlaybackControlling {
             "episode": currentEpisode?.title ?? "none",
             "seconds": "\(Int(pausedAtSeconds))"
         ])
+    }
+
+    /// Drops a paused AVPlayer and its item before the app is suspended. Paused
+    /// video players can hold sizeable decoder/display buffers; AppState keeps
+    /// the user-visible episode and position, then starts a fresh player on the
+    /// next resume.
+    @discardableResult
+    func releasePausedPlayerResourcesForBackground(reason: String) -> TimeInterval? {
+        guard !isPlaying else { return nil }
+        guard !engineUsesEngine, let player else { return nil }
+
+        let seconds = currentPlaybackTime()
+        let episode = currentEpisode
+        cancelPendingRouteLossPause(reason: "backgroundRelease", output: currentOutputPortName())
+        routeRestartDeferredByRouteLoss = nil
+        cancelPendingRouteRestart()
+        player.pause()
+        removePlayerObservers()
+        player.replaceCurrentItem(with: nil)
+        self.player = nil
+        pausedAtSeconds = seconds
+        durationSeconds = 0
+        didFinishCurrentEpisode = false
+        currentEpisode = nil
+        currentFilter = nil
+        currentPreference = nil
+
+        logger.info("playback.backgroundRelease", "Paused AVPlayer resources released for background", metadata: [
+            "reason": reason,
+            "backend": "AVPlayer",
+            "episode": episode?.title ?? "none",
+            "mediaKind": episode?.mediaKind.rawValue ?? "unknown",
+            "seconds": String(format: "%.1f", seconds)
+        ])
+        return seconds
     }
 
     func resume() {
@@ -561,7 +601,8 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func installPlayerObservers(for item: AVPlayerItem) {
         removePlayerObservers()
-        timeObserver = player?.addPeriodicTimeObserver(
+        let observedPlayer = player
+        timeObserver = observedPlayer?.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
@@ -574,6 +615,24 @@ final class PlaybackEngine: PlaybackControlling {
         ) { [weak self] _ in
             self?.finishCurrentEpisode()
         }
+        timeControlStatusObservation = observedPlayer?.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.player === player else { return }
+                self.logAVPlayerStateChange(reason: "timeControlStatus")
+            }
+        }
+        playerRateObservation = observedPlayer?.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.player === player else { return }
+                self.logAVPlayerStateChange(reason: "rate")
+            }
+        }
+        playerItemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            DispatchQueue.main.async { [weak self, weak item] in
+                guard let self, let item, self.player?.currentItem === item else { return }
+                self.logAVPlayerStateChange(reason: "itemStatus")
+            }
+        }
     }
 
     private func removePlayerObservers() {
@@ -585,6 +644,12 @@ final class PlaybackEngine: PlaybackControlling {
             NotificationCenter.default.removeObserver(observer)
             finishObserver = nil
         }
+        timeControlStatusObservation?.invalidate()
+        timeControlStatusObservation = nil
+        playerRateObservation?.invalidate()
+        playerRateObservation = nil
+        playerItemStatusObservation?.invalidate()
+        playerItemStatusObservation = nil
     }
 
     // MARK: - AVAudioEngine setup
@@ -843,7 +908,7 @@ final class PlaybackEngine: PlaybackControlling {
                         self.logger.warning("engine.bufferStall.timeout", "Buffer slot timeout — engine appears stuck, requesting restart", metadata: [
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
                         ])
-                        DispatchQueue.main.async { [weak self] in self?.recoverSilentEngine() }
+                        DispatchQueue.main.async { [weak self] in self?.recoverSilentEngine(reason: "bufferStall") }
                         break
                     }
                     if self.engineReadCancelled { sem.signal(); break }
@@ -905,20 +970,87 @@ final class PlaybackEngine: PlaybackControlling {
         resumedAt = 0
     }
 
+    private func engineLastRenderedAge(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) -> TimeInterval? {
+        guard lastRenderedAt > 0 else { return nil }
+        return now - max(lastRenderedAt, resumedAt)
+    }
+
+    private func engineLikelyProducingAudio(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) -> Bool {
+        guard engineUsesEngine, engineIsPlaying else { return false }
+        return audioEngine?.isRunning == true
+            && audioPlayerNode?.isPlaying == true
+            && (engineLastRenderedAge(now: now).map { $0 < engineRenderStallThreshold } ?? false)
+    }
+
+    private func engineSecondsFromEnd(at position: TimeInterval) -> TimeInterval? {
+        guard durationSeconds > 0 else { return nil }
+        return durationSeconds - position
+    }
+
+    private func enginePositionIsNearNaturalEnd(_ position: TimeInterval) -> Bool {
+        guard let secondsFromEnd = engineSecondsFromEnd(at: position) else { return false }
+        return secondsFromEnd <= engineReadFinishedEndTolerance
+    }
+
+    private func engineRecoveryMetadata(
+        reason: String,
+        position: TimeInterval,
+        now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    ) -> [String: String] {
+        let lastRenderedAgeMs = engineLastRenderedAge(now: now).map { $0 * 1_000 }
+        var metadata = [
+            "reason": reason,
+            "episode": currentEpisode?.title ?? "none",
+            "positionSecs": String(format: "%.1f", position),
+            "durationSecs": durationSeconds > 0 ? String(format: "%.1f", durationSeconds) : "unknown",
+            "audioEngineRunning": "\(audioEngine?.isRunning ?? false)",
+            "audioPlayerNodePlaying": "\(audioPlayerNode?.isPlaying ?? false)",
+            "engineReadFinished": "\(engineReadFinished)",
+            "engineReadPaused": "\(engineReadPaused)",
+            "lastRenderedAgeMs": lastRenderedAgeMs.map { String(format: "%.0f", $0) } ?? "unknown",
+            "playbackLikelyProducingAudio": "\(engineLikelyProducingAudio(now: now))"
+        ]
+        metadata["secondsFromEnd"] = engineSecondsFromEnd(at: position)
+            .map { String(format: "%.1f", $0) } ?? "unknown"
+        return metadata
+    }
+
+    @discardableResult
+    private func finishReadFinishedEngineIfNearEnd(
+        reason: String,
+        position: TimeInterval,
+        now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    ) -> Bool {
+        guard engineUsesEngine, engineIsPlaying, engineReadFinished else { return false }
+        guard !engineLikelyProducingAudio(now: now) else { return false }
+        guard enginePositionIsNearNaturalEnd(position) else { return false }
+
+        logger.warning(
+            "engine.readFinishedSilentFinish",
+            "Engine read loop finished near EOF but output stopped; finishing episode",
+            metadata: engineRecoveryMetadata(reason: reason, position: position, now: now)
+        )
+        finishCurrentEpisode()
+        return true
+    }
+
     /// Restart the buffer loop from the current position when the engine is running but silent.
     /// Guards against rapid repeated calls (at most once every 3 s).
-    private func recoverSilentEngine() {
-        guard engineUsesEngine, engineIsPlaying, !engineReadFinished else { return }
+    private func recoverSilentEngine(reason: String = "silentEngine") {
+        guard engineUsesEngine, engineIsPlaying else { return }
         let now = CFAbsoluteTimeGetCurrent()
+        let position = currentPlaybackTime()
+        if finishReadFinishedEngineIfNearEnd(reason: reason, position: position, now: now) { return }
         guard now - lastRecoveryAt > 3.0 else { return }  // debounce rapid recovery attempts
         lastRecoveryAt = now
 
-        logger.warning("engine.silentRecovery", "Engine silent — restarting buffer loop from current position", metadata: [
-            "episode": currentEpisode?.title ?? "none",
-            "positionSecs": String(format: "%.1f", pausedAtSeconds)
-        ])
+        let event = engineReadFinished ? "engine.readFinishedSilentRecover" : "engine.silentRecovery"
+        logger.warning(
+            event,
+            "Engine silent — restarting buffer loop from current position",
+            metadata: engineRecoveryMetadata(reason: reason, position: position, now: now)
+        )
 
-        let position = pausedAtSeconds
         audioPlayerNode?.stop()
         stopEngineBufferLoop()
 
@@ -1081,6 +1213,85 @@ final class PlaybackEngine: PlaybackControlling {
         return mix
     }
 
+    // MARK: - Playback diagnostics
+
+    func playbackDiagnosticMetadata(reason: String) -> [String: String] {
+        let session = AVAudioSession.sharedInstance()
+        let output = session.currentRoute.outputs.first
+        let now = CFAbsoluteTimeGetCurrent()
+        var metadata: [String: String] = [
+            "playbackDiagnosticReason": reason,
+            "playbackBackend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
+            "playbackEngineIsPlaying": "\(isPlaying)",
+            "engineUsesEngine": "\(engineUsesEngine)",
+            "engineEpisode": currentEpisode?.title ?? "none",
+            "engineMediaKind": currentEpisode?.mediaKind.rawValue ?? "unknown",
+            "enginePositionSecs": String(format: "%.1f", currentPlaybackTime()),
+            "audioSessionCategory": session.category.rawValue,
+            "audioSessionMode": session.mode.rawValue,
+            "audioSessionOutput": output?.portName ?? "none",
+            "audioSessionOutputType": output?.portType.rawValue ?? "none",
+            "audioSessionOutputVolume": String(format: "%.2f", session.outputVolume),
+            "audioSessionSecondarySilenced": "\(session.secondaryAudioShouldBeSilencedHint)",
+            "audioSessionSampleRate": String(format: "%.0f", session.sampleRate),
+            "audioSessionIOBufferMs": String(format: "%.1f", session.ioBufferDuration * 1000)
+        ]
+
+        if engineUsesEngine {
+            let lastRenderedAgeMs = engineLastRenderedAge(now: now).map { $0 * 1_000 }
+            metadata.merge([
+                "audioEngineRunning": "\(audioEngine?.isRunning ?? false)",
+                "audioPlayerNodePlaying": "\(audioPlayerNode?.isPlaying ?? false)",
+                "engineReadFinished": "\(engineReadFinished)",
+                "engineReadPaused": "\(engineReadPaused)",
+                "lastRenderedAgeMs": lastRenderedAgeMs.map { String(format: "%.0f", $0) } ?? "unknown",
+                "playbackLikelyProducingAudio": "\(engineLikelyProducingAudio(now: now))"
+            ]) { _, new in new }
+        } else if let player {
+            let currentTime = player.currentTime().seconds
+            let likelyProducingAudio = player.rate > 0 && player.timeControlStatus == .playing
+            metadata.merge([
+                "avPlayerRate": String(format: "%.2f", player.rate),
+                "avPlayerTimeControlStatus": timeControlStatusLabel(player.timeControlStatus),
+                "avPlayerWaitingReason": player.reasonForWaitingToPlay?.rawValue ?? "none",
+                "avPlayerItemStatus": player.currentItem.map { playerItemStatusLabel($0.status) } ?? "none",
+                "avPlayerCurrentTimeSecs": String(format: "%.1f", currentTime.isFinite ? currentTime : pausedAtSeconds),
+                "avPlayerItemError": player.currentItem?.error?.localizedDescription ?? "none",
+                "avPlayerError": player.error?.localizedDescription ?? "none",
+                "playbackLikelyProducingAudio": "\(likelyProducingAudio)"
+            ]) { _, new in new }
+        } else {
+            metadata["playbackLikelyProducingAudio"] = "false"
+            metadata["avPlayerRate"] = "none"
+            metadata["avPlayerTimeControlStatus"] = "none"
+        }
+
+        return metadata
+    }
+
+    private func logAVPlayerStateChange(reason: String) {
+        guard player != nil else { return }
+        logger.info("playback.avPlayerState", "AVPlayer playback state changed", metadata: playbackDiagnosticMetadata(reason: reason))
+    }
+
+    private func timeControlStatusLabel(_ status: AVPlayer.TimeControlStatus) -> String {
+        switch status {
+        case .paused: return "paused"
+        case .waitingToPlayAtSpecifiedRate: return "waitingToPlayAtSpecifiedRate"
+        case .playing: return "playing"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private func playerItemStatusLabel(_ status: AVPlayerItem.Status) -> String {
+        switch status {
+        case .unknown: return "unknown"
+        case .readyToPlay: return "readyToPlay"
+        case .failed: return "failed"
+        @unknown default: return "unknown"
+        }
+    }
+
     // MARK: - Audio session
 
     private func configureAudioSession(vocalBoostLevel: VocalBoostLevel) {
@@ -1117,11 +1328,12 @@ final class PlaybackEngine: PlaybackControlling {
         switch type {
         case .began:
             wasPlayingBeforeInterruption = isPlaying
-            let metadata = [
+            var metadata = [
                 "episode": currentEpisode?.title ?? "none",
                 "positionSecs": String(format: "%.1f", currentPlaybackTime()),
                 "wasPlaying": "\(wasPlayingBeforeInterruption)"
             ]
+            metadata.merge(playbackDiagnosticMetadata(reason: "interruptionBegan")) { existing, _ in existing }
 
             if hasPendingRouteLossPause {
                 logger.info(
@@ -1149,16 +1361,26 @@ final class PlaybackEngine: PlaybackControlling {
             // (feed refresh, downloads) that briefly touch the audio session can cause iOS to
             // fire interruptionEnded(.shouldResume) and restart playback the user had paused.
             if options.contains(.shouldResume), wasPlayingBeforeInterruption, !pausedByRouteChange {
-                try? AVAudioSession.sharedInstance().setActive(true)
-                resume()
-                onPlaybackResumed?()
-            } else {
-                logger.info("audio.interruptionEnded", "Audio session interruption ended, no resume", metadata: [
+                var metadata = [
                     "episode": currentEpisode?.title ?? "none",
                     "shouldResume": "\(options.contains(.shouldResume))",
                     "wasPlaying": "\(wasPlayingBeforeInterruption)",
                     "suppressedByRouteChange": "\(pausedByRouteChange)"
-                ])
+                ]
+                metadata.merge(playbackDiagnosticMetadata(reason: "interruptionEndedResume")) { existing, _ in existing }
+                logger.info("audio.interruptionEnded", "Audio session interruption ended, resuming playback", metadata: metadata)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                resume()
+                onPlaybackResumed?()
+            } else {
+                var metadata = [
+                    "episode": currentEpisode?.title ?? "none",
+                    "shouldResume": "\(options.contains(.shouldResume))",
+                    "wasPlaying": "\(wasPlayingBeforeInterruption)",
+                    "suppressedByRouteChange": "\(pausedByRouteChange)"
+                ]
+                metadata.merge(playbackDiagnosticMetadata(reason: "interruptionEndedNoResume")) { existing, _ in existing }
+                logger.info("audio.interruptionEnded", "Audio session interruption ended, no resume", metadata: metadata)
             }
         @unknown default:
             break
@@ -1182,7 +1404,7 @@ final class PlaybackEngine: PlaybackControlling {
         let reasonLabel = routeChangeReasonLabel(reason)
         let outputChanged = routeOutputIdentifier(output) != routeOutputIdentifier(previousOutput)
 
-        logger.warning("audio.routeChange", "Audio route changed", metadata: [
+        var metadata = [
             "reason": reasonLabel,
             "newOutput": newPort,
             "newOutputType": newPortType,
@@ -1194,7 +1416,9 @@ final class PlaybackEngine: PlaybackControlling {
             "pendingRouteLoss": "\(hasPendingRouteLossPause)",
             "episode": currentEpisode?.title ?? "none",
             "positionSecs": String(format: "%.1f", currentPlaybackTime())
-        ])
+        ]
+        metadata.merge(playbackDiagnosticMetadata(reason: "routeChange")) { existing, _ in existing }
+        logger.warning("audio.routeChange", "Audio route changed", metadata: metadata)
 
         switch reason {
         case .oldDeviceUnavailable:
@@ -1309,7 +1533,7 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     private func scheduleEngineRestartAfterRouteSettles(reason: String, output: String) {
-        guard engineUsesEngine, engineIsPlaying, !engineReadFinished else { return }
+        guard engineUsesEngine, engineIsPlaying else { return }
         guard !hasPendingRouteLossPause else {
             routeRestartDeferredByRouteLoss = (reason, output)
             logger.info("engine.routeRestartDeferred", "Route restart deferred while route loss is pending", metadata: [
@@ -1361,8 +1585,15 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     private func restartEngineAfterRouteChangeIfNeeded(reason: String, output: String) {
-        guard engineUsesEngine, engineIsPlaying, !engineReadFinished else { return }
+        guard engineUsesEngine, engineIsPlaying else { return }
         let now = CFAbsoluteTimeGetCurrent()
+        let position = currentPlaybackTime()
+        if finishReadFinishedEngineIfNearEnd(
+            reason: "routeRestart.\(reason)",
+            position: position,
+            now: now
+        ) { return }
+
         guard now - lastRouteRestartAt > 1.0 else {
             logger.info("engine.routeRestartSkipped", "Skipped route restart during debounce window", metadata: [
                 "reason": reason,
@@ -1372,7 +1603,6 @@ final class PlaybackEngine: PlaybackControlling {
             return
         }
         lastRouteRestartAt = now
-        let position = currentPlaybackTime()
 
         logger.info("engine.routeRestart", "Restarting engine buffer loop after route change", metadata: [
             "reason": reason,
@@ -1432,11 +1662,11 @@ final class PlaybackEngine: PlaybackControlling {
         // Render watchdog: if the engine is supposedly playing but no .dataRendered callback
         // has fired for 2.5 s since the last resume, the engine is silently stuck (e.g. after
         // a route change that stopped it without a proper notification). Recover immediately.
-        if engineUsesEngine, engineIsPlaying, !engineReadFinished {
+        if engineUsesEngine, engineIsPlaying {
             let now = CFAbsoluteTimeGetCurrent()
             let baseline = max(lastRenderedAt, resumedAt)
-            if now - baseline > 2.5 {
-                recoverSilentEngine()
+            if now - baseline > engineRenderStallThreshold {
+                recoverSilentEngine(reason: "renderWatchdog")
             }
         }
     }

@@ -128,6 +128,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// (ListeningHistoryStore) merges it with record-level LWW. Set by AppState.
     public var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
 
+    /// Invoked AFTER a remote history entry was applied (whichever branch) —
+    /// NOTIFY-ONLY, persistence already happened. Read-only history surfaces
+    /// (tvOS Continue Watching, which reads the sync DB directly and isn't
+    /// Observation-tracked) refresh here so a landing resume position appears
+    /// without waiting for some other sync event to re-render. Set by the TV.
+    public var onRemoteHistoryChanged: (() async -> Void)?
+
     /// Invoked after another device's stats partition was stored — the app layer
     /// (ListeningStatsStore) reloads its remote cache and refreshes. Set by AppState.
     public var onRemoteStatsChanged: (() async -> Void)?
@@ -286,6 +293,102 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
                 "error": "\(error)"
             ])
             return false
+        }
+    }
+
+    /// True once the underlying CKSyncEngine has been activated (the async
+    /// account-status check passed). Targeted primes/fetches are no-ops until
+    /// then, so callers poll this before priming at launch.
+    public var isActivated: Bool { engine != nil }
+
+    /// Targeted fetch of EVERY current subscription record in the zone, applied
+    /// immediately — bypassing CKSyncEngine's cold-start delta stream, which can
+    /// take minutes to surface the initial record set on a fresh install (the
+    /// "No Library Yet" blank Kevin saw for ~5 min). Each applied subscription
+    /// routes through `applyRemote` → `applyRemoteSubscriptionState`, which
+    /// kicks off local materialisation (feed fetch) right away, so the Library
+    /// populates in seconds. Legacy unprefixed records are skipped (the normal
+    /// namespace-repair path owns those). Returns the number applied; 0 is a
+    /// normal result on a brand-new account with nothing synced yet.
+    @discardableResult
+    public func fetchAllSubscriptionsNow(reason: String) async -> Int {
+        guard engine != nil else { return 0 }
+        let query = CKQuery(recordType: CloudKitSync.subscriptionRecordType, predicate: NSPredicate(value: true))
+        let database = container.privateCloudDatabase
+        var applied = 0
+        var cursor: CKQueryOperation.Cursor?
+        do {
+            repeat {
+                let page: (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?)
+                if let cursor {
+                    page = try await database.records(continuingMatchFrom: cursor, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
+                } else {
+                    page = try await database.records(matching: query, inZoneWith: CloudKitSync.zoneID, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
+                }
+                for (_, result) in page.matchResults {
+                    guard case .success(let record) = result else { continue }
+                    // Skip legacy unprefixed records — namespace repair owns them.
+                    if CloudKitSync.isLegacySubscriptionRecordName(record.recordID.recordName) { continue }
+                    await applyRemote(record: record)
+                    applied += 1
+                }
+                cursor = page.queryCursor
+            } while cursor != nil
+            logger.info("sync.subscriptionsPrimed", "Targeted subscription prime applied", metadata: [
+                "reason": reason, "count": "\(applied)"
+            ])
+            return applied
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+            // Nothing synced yet / zone not created — normal on a fresh account.
+            return 0
+        } catch {
+            logger.warning("sync.subscriptionsPrimeFailed", "Targeted subscription prime failed (records will still arrive via the change stream)", metadata: [
+                "reason": reason, "error": "\(error)"
+            ])
+            return applied
+        }
+    }
+
+    /// Targeted fetch of EVERY listening-history record in the zone, applied
+    /// immediately — the Continue Watching / cross-device resume surface. Same
+    /// motivation as `fetchAllSubscriptionsNow`: history rides the SLOW lane and
+    /// surfaces late in the cold change stream, so the paused-on-iPhone episode
+    /// could take many minutes (or, with no re-render trigger, never) to appear
+    /// on the TV. Each record routes through `applyRemote`, which persists it
+    /// (LWW) and fires `onRemoteHistoryChanged` so the UI refreshes.
+    @discardableResult
+    public func fetchAllHistoryNow(reason: String) async -> Int {
+        guard engine != nil else { return 0 }
+        let query = CKQuery(recordType: CloudKitSync.historyRecordType, predicate: NSPredicate(value: true))
+        let database = container.privateCloudDatabase
+        var applied = 0
+        var cursor: CKQueryOperation.Cursor?
+        do {
+            repeat {
+                let page: (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?)
+                if let cursor {
+                    page = try await database.records(continuingMatchFrom: cursor, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
+                } else {
+                    page = try await database.records(matching: query, inZoneWith: CloudKitSync.zoneID, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
+                }
+                for (_, result) in page.matchResults {
+                    guard case .success(let record) = result else { continue }
+                    await applyRemote(record: record)
+                    applied += 1
+                }
+                cursor = page.queryCursor
+            } while cursor != nil
+            logger.info("sync.historyPrimed", "Targeted history prime applied", metadata: [
+                "reason": reason, "count": "\(applied)"
+            ])
+            return applied
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+            return 0
+        } catch {
+            logger.warning("sync.historyPrimeFailed", "Targeted history prime failed (records will still arrive via the change stream)", metadata: [
+                "reason": reason, "error": "\(error)"
+            ])
+            return applied
         }
     }
 
@@ -747,6 +850,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             runDB("storeHistorySystemFields", metadata: ["id": remote.id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
             }
+            await onRemoteHistoryChanged?()
 
         case CloudKitSync.queueSnapshotRecordType:
             guard let remote = CloudKitSync.queueSnapshot(from: record) else {

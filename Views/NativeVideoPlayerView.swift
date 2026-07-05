@@ -89,24 +89,28 @@ enum VideoOrientationController {
 
 struct NativeVideoPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
+    let attached: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = player
+        controller.player = attached ? player : nil
         controller.showsPlaybackControls = true
         controller.allowsPictureInPicturePlayback = true
         if #available(iOS 14.2, *) {
             controller.canStartPictureInPictureAutomaticallyFromInline = true
         }
         controller.updatesNowPlayingInfoCenter = false
+        context.coordinator.recordAttachment(attached, surface: "AVPlayerViewController")
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        if controller.player !== player {
-            controller.player = player
+        let desiredPlayer = attached ? player : nil
+        if controller.player !== desiredPlayer {
+            controller.player = desiredPlayer
+            context.coordinator.recordAttachment(attached, surface: "AVPlayerViewController")
         }
         // Establish the parent-child UIViewController relationship so
         // canStartPictureInPictureAutomaticallyFromInline actually fires on background.
@@ -118,6 +122,7 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
 
     final class Coordinator {
         private weak var attached: AVPlayerViewController?
+        private var lastAttachmentState: Bool?
 
         func attachIfNeeded(_ controller: AVPlayerViewController) {
             guard attached !== controller else { return }
@@ -131,6 +136,16 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
             parent.addChild(controller)
             controller.didMove(toParent: parent)
             attached = controller
+        }
+
+        func recordAttachment(_ isAttached: Bool, surface: String) {
+            guard lastAttachmentState != isAttached else { return }
+            lastAttachmentState = isAttached
+            AppLogger.shared.info(
+                isAttached ? "video.surfaceAttached" : "video.surfaceDetached",
+                isAttached ? "Video surface attached to AVPlayer" : "Video surface detached from AVPlayer",
+                metadata: ["surface": surface]
+            )
         }
 
         private func findHostingController(for view: UIView?) -> UIViewController? {
@@ -147,6 +162,7 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
 struct VideoPictureInPictureHost: UIViewRepresentable {
     let player: AVPlayer
     let startToken: Int
+    let attached: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -154,20 +170,25 @@ struct VideoPictureInPictureHost: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
-        view.playerLayer.player = player
+        view.playerLayer.player = attached ? player : nil
         context.coordinator.configure(with: view.playerLayer)
+        context.coordinator.recordAttachment(attached, surface: "AVPlayerLayer")
         return view
     }
 
     func updateUIView(_ view: PlayerLayerView, context: Context) {
-        view.playerLayer.player = player
+        view.playerLayer.player = attached ? player : nil
         context.coordinator.configure(with: view.playerLayer)
-        context.coordinator.startIfNeeded(token: startToken)
+        context.coordinator.recordAttachment(attached, surface: "AVPlayerLayer")
+        if attached {
+            context.coordinator.startIfNeeded(token: startToken)
+        }
     }
 
     final class Coordinator: NSObject, AVPictureInPictureControllerDelegate {
         private var pictureInPictureController: AVPictureInPictureController?
         private var lastToken = 0
+        private var lastAttachmentState: Bool?
 
         func configure(with playerLayer: AVPlayerLayer) {
             guard pictureInPictureController == nil,
@@ -185,6 +206,16 @@ struct VideoPictureInPictureHost: UIViewRepresentable {
                   !controller.isPictureInPictureActive
             else { return }
             controller.startPictureInPicture()
+        }
+
+        func recordAttachment(_ isAttached: Bool, surface: String) {
+            guard lastAttachmentState != isAttached else { return }
+            lastAttachmentState = isAttached
+            AppLogger.shared.info(
+                isAttached ? "video.surfaceAttached" : "video.surfaceDetached",
+                isAttached ? "Video surface attached to AVPlayer" : "Video surface detached from AVPlayer",
+                metadata: ["surface": surface]
+            )
         }
     }
 }

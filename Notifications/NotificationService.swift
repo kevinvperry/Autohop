@@ -30,14 +30,25 @@ import UserNotifications
 // opt-in recurring local calendar notifications (Mon 9am / 1st 9am / Jan 1 9am)
 // against AppSettings.recap*Enabled — idempotent (remove-then-add), called on
 // toggle change, on RecapSettingsView appear, and at launch from RootView. The
-// body is an evergreen teaser; the real figures are shown in-app on tap (the
-// userInfo recapUserInfoKey carries which period, for a later deep-link into the
-// Stats "Last" view). Mechanism B — see FEATURES.md §14.1.
+// body is an evergreen teaser; the real figures are shown in-app on tap. The
+// userInfo recapUserInfoKey carries which period, and the delegate routes it
+// into the matching Stats "Last" view. Mechanism B — see FEATURES.md §14.1.
 //
 // Artwork thumbnails for new-episode notifications use ArtworkImageCache.sourceData
 // rather than a separate URLSession download, so notification art shares the same
 // response validation, source-byte disk cache, failure cooldown, and pruning rules
 // as visible episode/podcast artwork.
+
+enum ListeningRecapPeriod: String, Hashable {
+    case weekly
+    case monthly
+    case yearly
+
+    init?(userInfoValue: Any?) {
+        guard let rawValue = userInfoValue as? String else { return nil }
+        self.init(rawValue: rawValue)
+    }
+}
 
 /// Wraps `UNUserNotificationCenter` for Autohop-specific notifications.
 ///
@@ -64,6 +75,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Set true if a "Still Listening" tap arrives before `onStillListening` is
     /// wired (e.g. a cold launch via the action). Flushed when the handler lands.
     private var pendingStillListening = false
+
+    /// Invoked (on the main actor) when the user taps a Listening Recap
+    /// notification. Wired by RootView so the app opens the correct Stats period.
+    var onListeningRecap: ((ListeningRecapPeriod) -> Void)?
+
+    /// Stores a recap tap that arrives before RootView has installed the handler
+    /// during cold launch from a notification.
+    private var pendingListeningRecap: ListeningRecapPeriod?
 
     // MARK: - Permission & setup
 
@@ -110,6 +129,16 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Allows RootView to flush a recap notification tap that arrived during cold
+    /// launch before SwiftUI navigation was ready.
+    func setListeningRecapHandler(_ handler: @escaping (ListeningRecapPeriod) -> Void) {
+        onListeningRecap = handler
+        if let pendingListeningRecap {
+            self.pendingListeningRecap = nil
+            DispatchQueue.main.async { handler(pendingListeningRecap) }
+        }
+    }
+
     // MARK: - Sleep Schedule prompt
 
     /// Posts the lock-screen "Are you still listening?" prompt with a "Still
@@ -141,7 +170,20 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        if response.actionIdentifier == Self.stillListeningActionID {
+        let userInfo = response.notification.request.content.userInfo
+        if let recapPeriod = ListeningRecapPeriod(userInfoValue: userInfo[Self.recapUserInfoKey]) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                AppLogger.shared.info("notification.recapTapped", "Listening recap notification tapped", metadata: [
+                    "period": recapPeriod.rawValue
+                ])
+                if let handler = self.onListeningRecap {
+                    handler(recapPeriod)
+                } else {
+                    self.pendingListeningRecap = recapPeriod
+                }
+            }
+        } else if response.actionIdentifier == Self.stillListeningActionID {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if let handler = self.onStillListening {
@@ -203,7 +245,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - Listening Recaps (opt-in periodic stats summaries)
 
     /// userInfo key carrying which recap a tapped notification belongs to, so the
-    /// delegate can deep-link into the matching Stats "Last" period (Phase 3).
+    /// delegate can deep-link into the matching Stats "Last" period.
     static let recapUserInfoKey = "autohopRecap"
 
     private static let recapWeeklyID = "recap.weekly"
@@ -218,21 +260,21 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     func scheduleRecaps(weekly: Bool, monthly: Bool, yearly: Bool) {
         // Weekly — Monday 09:00 (Gregorian weekday 2 = Monday), for the prior week.
         reconcileRecap(
-            id: Self.recapWeeklyID, enabled: weekly, recapKey: "weekly",
+            id: Self.recapWeeklyID, enabled: weekly, recapKey: ListeningRecapPeriod.weekly.rawValue,
             components: DateComponents(hour: 9, minute: 0, weekday: 2),
             title: "Your week in listening 📊",
             body: "Tap to see how you listened last week."
         )
         // Monthly — the 1st at 09:00, for the prior month.
         reconcileRecap(
-            id: Self.recapMonthlyID, enabled: monthly, recapKey: "monthly",
+            id: Self.recapMonthlyID, enabled: monthly, recapKey: ListeningRecapPeriod.monthly.rawValue,
             components: DateComponents(day: 1, hour: 9, minute: 0),
             title: "Your month in listening 📊",
             body: "Tap to see your month in podcasts."
         )
         // Yearly — Jan 1 at 09:00, for the year just gone.
         reconcileRecap(
-            id: Self.recapYearlyID, enabled: yearly, recapKey: "yearly",
+            id: Self.recapYearlyID, enabled: yearly, recapKey: ListeningRecapPeriod.yearly.rawValue,
             components: DateComponents(month: 1, day: 1, hour: 9, minute: 0),
             title: "Your year in listening 🎧",
             body: "Tap to see your year in podcasts."

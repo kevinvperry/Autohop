@@ -7,6 +7,7 @@ struct DiagnosticLogView: View {
     @ObservedObject private var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss
     @State private var logLines: [String] = []
+    @State private var exportURL: URL?
     @State private var showClearConfirmation = false
 
     private var pageBackground: Color {
@@ -50,13 +51,15 @@ struct DiagnosticLogView: View {
 
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
-                    loadLog()
+                    refresh()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
 
-                ShareLink(item: logger.redactedExportURL()) {
-                    Image(systemName: "square.and.arrow.up")
+                if let exportURL {
+                    ShareLink(item: exportURL) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
                 }
 
                 Button(role: .destructive) {
@@ -70,13 +73,13 @@ struct DiagnosticLogView: View {
         .confirmationDialog("Clear diagnostic log?", isPresented: $showClearConfirmation) {
             Button("Delete Log History", role: .destructive) {
                 logger.clear()
-                loadLog()
+                refresh()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This deletes the current diagnostic log and starts a fresh one for the next build or test run.")
         }
-        .onAppear(perform: loadLog)
+        .onAppear(perform: refresh)
         .onChange(of: logger.lastUpdated) { _, _ in
             loadLog()
         }
@@ -84,5 +87,14 @@ struct DiagnosticLogView: View {
 
     private func loadLog() {
         logLines = logger.recentLines(limit: 500)
+    }
+
+    /// Reload the visible lines AND regenerate the redacted export file. Kept off the
+    /// per-write `lastUpdated` path (only onAppear / the refresh button / after clear)
+    /// so the now-larger log isn't re-read and re-redacted on the main thread on every
+    /// log line while this view is open.
+    private func refresh() {
+        loadLog()
+        exportURL = logger.redactedExportURL()
     }
 }

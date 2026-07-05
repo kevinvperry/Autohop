@@ -131,6 +131,22 @@ as played/archived — Up Next was full of "already finished" episodes. Fixed
 by extracting the self-heal logic into a shared
 `SubscriptionStore.selfHealedEpisode`, called from both paths now.
 
+**Settings-clobber on materialize (found + fixed 2026-07-05, tvOS real-device
+pass).** Same root-cause class again — materialising a subscription BEFORE its
+synced projection is reflected in the created object. The engine adopts a CLEAN
+remote `SubscriptionSyncState` (real user settings: playback speed, auto-archive,
+chapter/download filters, notifications) into the DB, then asks the app to
+materialise the feed. `materialize` used to seed DEFAULT settings; the following
+`save() → recordSubscriptionSyncState` then re-`apply`'d those defaults over the
+clean projection, marking each field dirty at `now`. Field-level LWW let those
+fresh-default timestamps BEAT the phone's older real values and pushed them back
+— "loading older info on the TV clobbers newer info on the phone." Fixed by
+having `materialize` ADOPT every synced field from the existing clean projection
+(when present) instead of seeding defaults, so `apply` sees no change and the
+projection stays clean → nothing is pushed → the phone is preserved, and the TV
+shows correct settings immediately. Guarded by
+`Tests/MaterializeSettingsPreservationTests.swift`.
+
 **2026-07-04 audit findings (second real-device pass):**
 - **History persistence depended on an app callback (FIXED).** The engine's
   fetch path persisted episode/subscription/stats records directly, but
@@ -179,9 +195,49 @@ by extracting the self-heal logic into a shared
   through stale episodes for ~10 min after launch. `CloudSyncEngine.fetchQueueSnapshotNow`
   does a TARGETED single-record fetch (`CKDatabase.record(for: queue:current)`)
   through the normal `applyRemote` path (so LWW + notify still apply), called
-  by `TVAppModel.refreshQueueFromCloudSoon` at launch and on foreground (with
-  a short retry loop covering the engine's async activation). `.unknownItem`
-  (nothing authored yet) is silent.
+  at launch and on foreground (with a short retry loop covering the engine's
+  async activation). `.unknownItem` (nothing authored yet) is silent.
+  **Cold-start speedup + churn fix (2026-07-05, Kevin's round-4 findings —
+  ~5-min "No Library Yet" blank AND ~10-min Up Next churn):**
+  - *Blank:* `CloudSyncEngine.fetchAllSubscriptionsNow` does a targeted
+    paginated ZONE query for every current subscription record and applies each
+    immediately (kicking off feed materialisation), bypassing CKSyncEngine's
+    cold delta stream. `TVAppModel.primeLibraryFromCloudSoon` (replaces the old
+    queue-only `refreshQueueFromCloudSoon`) primes subscriptions + the queue
+    snapshot once `engine.isActivated`, at launch and on foreground.
+  - *Churn:* the churn was `upNextEpisodes` falling back to the locally-derived
+    Priority Stack whenever the snapshot didn't fully resolve — showing wrong /
+    already-finished episodes until every catalog trickled in. Now
+    `QueueModel.resolvedQueueItems` returns ordered items with an OPTIONAL
+    `episode` (nil = referenced but not yet materialised), and `upNextItems`
+    renders STRICTLY from the snapshot (placeholder "Syncing…" rows for
+    unresolved entries, non-playable until their catalog lands) — never the
+    local fallback while a snapshot exists. `resolvedQueue` (episodes-only, for
+    auto-advance) is now derived from `resolvedQueueItems`. The Priority-Stack
+    fallback survives only for the genuinely-no-snapshot case (fresh install /
+    standalone). Tested: `Tests/QueueSnapshotSyncTests.swift`.
+  - *Continue Watching never populated (2026-07-05):* the paused-on-iPhone
+    episode's resume position rides the SLOW lane (listening history) and, on
+    TV, had no re-render trigger — `continueListening` reads the sync DB
+    directly and isn't Observation-tracked, so a lone history record landing
+    changed nothing on screen. Two fixes: (1) `CloudSyncEngine.fetchAllHistoryNow`
+    is added to the launch/foreground prime so history arrives fast; (2) a new
+    NOTIFY-ONLY `onRemoteHistoryChanged` fires after each history apply, wired on
+    TV to `refreshLibrary` so Continue Watching appears the moment the position
+    syncs. (Resolution itself was already correct — `episodeMatching` matches on
+    the stable `PlaybackPositionStore.key`, identical on both devices.)
+  - *Prompt position hand-off both ways (2026-07-05):* a mid-episode PAUSE
+    writes a position on the SLOW lane, which the engine holds ~60 s before
+    pushing. To make a pause/exit reach the other device in seconds, both
+    platforms now force-flush on pause + player-exit + app-background:
+    iPhone already did (`AppState.togglePlayPause`/scene-background →
+    `flushDeferredSyncPushes`; pause now also `persistCurrentPlaybackPosition`
+    first so the exact pause point is pushed); TV now mirrors it
+    (`TVPlaybackModel.checkpoint` → `onPlaybackCheckpoint` →
+    `CloudSyncEngine.flushDeferredPushes`, wired on pause, `dismissedCover`, and
+    the scene leaving `.active`). Playback FINISH already went out on the fast
+    lane. The receiving side still uses the normal change stream (fast when the
+    app is foregrounded); only the SEND side's debounce is bypassed.
 - **Rank-corruption family closed out (same day):** (a) iPhone's
   `materializeRemoteSubscription` now passes `reindexRanks: false` to
   `addSubscription` (new parameter; local subscribe/OPML keep the default

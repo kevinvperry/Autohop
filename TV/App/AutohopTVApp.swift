@@ -57,12 +57,17 @@ struct AutohopTVApp: App {
                 .preferredColorScheme(.dark)
                 .task { await model.bootstrap() }
                 .onChange(of: scenePhase) { _, phase in
-                    // Returning to the foreground: pull the latest queue
-                    // snapshot directly so Up Next reflects any phone-side
-                    // changes made while the TV app was backgrounded, without
-                    // waiting for the change stream to drain.
+                    // Returning to the foreground: re-prime the library + queue
+                    // snapshot directly so the Library and Up Next reflect any
+                    // phone-side changes (new subscriptions, reordered queue)
+                    // made while the TV app was backgrounded, without waiting
+                    // for the change stream to drain.
                     if phase == .active {
-                        Task { await model.refreshQueueFromCloudSoon(reason: "foreground") }
+                        Task { await model.primeLibraryFromCloudSoon(reason: "foreground") }
+                    } else {
+                        // Leaving the foreground: persist + force-push the
+                        // current position so it reaches the phone promptly.
+                        model.handleBackgrounded()
                     }
                 }
         }
@@ -114,6 +119,18 @@ final class TVAppModel {
 
         playbackModel.upNextProvider = { [weak self] in self?.upNextEpisodes ?? [] }
         playbackModel.subscriptionProvider = { [weak self] id in self?.subscription(id: id) }
+        // Force-push a just-written position immediately (pause / player exit),
+        // so a TV-side pause reaches the phone in seconds instead of waiting out
+        // the engine's ~60 s slow-lane debounce.
+        playbackModel.onPlaybackCheckpoint = { [weak self] in
+            self?.cloudSyncEngine?.flushDeferredPushes(reason: "tv.playbackCheckpoint")
+        }
+    }
+
+    /// Called when the TV app backgrounds/resigns active: persist the current
+    /// position and force-push it, mirroring the iPhone's scene-background flush.
+    func handleBackgrounded() {
+        playbackModel.checkpoint()
     }
 
     /// Starts playback of an episode, resolving its owning subscription for
@@ -147,13 +164,15 @@ final class TVAppModel {
         startCloudSync()
         observeStoreForKitWrites()
 
-        // Pull the Up Next queue snapshot DIRECTLY (targeted single-record
-        // fetch) rather than waiting for it to surface in the full change
-        // stream — Kevin's real-device finding was the TV queue cycling stale
-        // episodes for ~10 min before the snapshot arrived. Runs in the
-        // background (retries until the engine has activated) so it never
-        // blocks the launch path; refreshes Up Next the moment it lands.
-        Task { await refreshQueueFromCloudSoon(reason: "launch") }
+        // Prime the library DIRECTLY (targeted zone queries) rather than
+        // waiting for CKSyncEngine's cold-start delta stream — Kevin's
+        // real-device findings were a ~5-min "No Library Yet" blank AND the Up
+        // Next queue cycling stale episodes for ~10 min. This fetches every
+        // subscription record (kicking off feed materialisation immediately)
+        // and the Up Next queue snapshot the moment the engine activates. Runs
+        // in the background (retries until activation) so it never blocks the
+        // launch path.
+        Task { await primeLibraryFromCloudSoon(reason: "launch") }
 
         // Fast path: the survival-kit rebuild (or a database that already
         // survived from a previous launch) may already have real content —
@@ -303,6 +322,12 @@ final class TVAppModel {
         engine.onRemoteQueueSnapshotChanged = { [weak self] in
             await self?.refreshLibrary()
         }
+        // Notify-only: re-render Home when a listening-history entry lands, so
+        // Continue Watching populates the moment the paused-on-iPhone episode's
+        // resume position syncs (it's read from the DB, not Observation-tracked).
+        engine.onRemoteHistoryChanged = { [weak self] in
+            await self?.refreshLibrary()
+        }
         cloudSyncEngine = engine
         engine.start()
     }
@@ -313,20 +338,49 @@ final class TVAppModel {
         refreshLibrary()
     }
 
-    /// Targeted queue-snapshot fetch, retried until the engine has finished
-    /// its async activation (account status check). Call at launch and on
-    /// foreground so Up Next mirrors the phone quickly. `refreshLibrary` runs
-    /// after a successful fetch to re-render Up Next immediately.
-    func refreshQueueFromCloudSoon(reason: String) async {
-        // ~10 s of retries at 1 s intervals — enough for the account check +
+    /// Targeted library prime, retried until the engine has finished its async
+    /// activation (account status check). Fetches all subscription records
+    /// (kicking off materialisation) AND the Up Next queue snapshot directly,
+    /// bypassing the cold-start delta stream. Call at launch and on foreground
+    /// so the Library populates fast and Up Next mirrors the phone quickly.
+    /// Idempotent — re-priming on foreground also picks up subscriptions added
+    /// on the phone since the last launch.
+    func primeLibraryFromCloudSoon(reason: String) async {
+        // ~15 s of retries at 1 s intervals — enough for the account check +
         // activation; gives up quietly if sync never comes up (e.g. no iCloud).
-        for _ in 0..<10 {
-            if let engine = cloudSyncEngine, await engine.fetchQueueSnapshotNow(reason: reason) {
-                refreshLibrary()
-                return
+        for _ in 0..<15 {
+            guard let engine = cloudSyncEngine, engine.isActivated else {
+                try? await Task.sleep(for: .seconds(1))
+                continue
             }
-            try? await Task.sleep(for: .seconds(1))
+            await engine.fetchAllSubscriptionsNow(reason: reason)
+            _ = await engine.fetchQueueSnapshotNow(reason: reason)
+            // Pull listening history too, so Continue Watching (the paused-on-
+            // iPhone episode) appears fast instead of waiting on the slow lane.
+            await engine.fetchAllHistoryNow(reason: reason)
+            refreshLibrary()
+            // Then bring each feed's episodes up to date (see refreshFeeds).
+            await refreshFeeds(reason: reason)
+            return
         }
+    }
+
+    /// Re-fetches each subscription's feed and merges the latest episodes, so
+    /// "Latest" and the episode lists match the phone. The TV otherwise only
+    /// fetches a feed at materialize time and never refreshes, leaving those
+    /// surfaces frozen at first-sighting. Sequential + best-effort: a failed
+    /// feed is skipped (the next launch/foreground retries), and the merge
+    /// preserves local + synced played/download state by guid. Runs in the
+    /// background after the cloud prime so it never blocks launch.
+    func refreshFeeds(reason: String) async {
+        let feeds = subscriptionStore.subscriptions
+            .filter { $0.browseDate == nil }
+            .map { ($0.id, $0.feedURL) }
+        for (subscriptionID, feedURL) in feeds {
+            guard let parsed = try? await EpisodeFeedLoader().fetch(feedURL: feedURL) else { continue }
+            subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
+        }
+        refreshLibrary()
     }
 
     // MARK: - Library state + kit write-back
@@ -362,21 +416,38 @@ final class TVAppModel {
 
     // MARK: - Home/Queue/Library derived state (Phase 2, §7)
 
-    /// Up Next (2026-07-04): renders the SYNCED QUEUE SNAPSHOT — the iPhone's
-    /// authored queue order, exactly (including multiple episodes from one
-    /// show, mirroring Kevin's core goal). Falls back to the locally-derived
-    /// streaming Priority Stack only while no snapshot has synced yet (fresh
-    /// install, or sync disabled — T7's standalone mode).
-    var upNextEpisodes: [Episode] {
+    /// Up Next display items (2026-07-05 churn fix): renders the SYNCED QUEUE
+    /// SNAPSHOT — the iPhone's authored queue order, exactly (including multiple
+    /// episodes from one show, mirroring Kevin's core goal). CRUCIALLY, when a
+    /// snapshot exists we render STRICTLY from it — including placeholder rows
+    /// for entries whose catalog hasn't materialized yet (`episode == nil`) —
+    /// and never fall back to the locally-derived Priority Stack. That fallback
+    /// was the source of the ~10-min "old episodes appearing and disappearing"
+    /// churn on a cold sync: it showed locally-derived episodes (wrong/already
+    /// finished on the phone) until every catalog trickled in. Rendering from
+    /// the snapshot's own entries makes Up Next correct and STABLE the moment
+    /// the snapshot lands; placeholder rows fill in artwork/duration + become
+    /// playable as their subscription materializes. The Priority Stack fallback
+    /// is used ONLY when there is genuinely no synced snapshot (fresh install
+    /// with sync still cold, or sync disabled — T7's standalone mode).
+    var upNextItems: [QueueModel.ResolvedQueueItem] {
         if let snapshot = subscriptionStore.syncedQueueSnapshot(), !snapshot.entries.isEmpty {
-            let resolved = QueueModel.resolvedQueue(from: snapshot, subscriptions: librarySubscriptions)
-            if !resolved.isEmpty { return resolved }
-            // Snapshot exists but nothing resolves yet (catalogs still
-            // fetching on a fresh install) — fall through rather than show
-            // an empty queue when local derivation can do better.
+            return QueueModel.resolvedQueueItems(from: snapshot, subscriptions: librarySubscriptions)
         }
-        return QueueModel.streamableQueue(from: librarySubscriptions)
+        return QueueModel.streamableQueue(from: librarySubscriptions).map { episode in
+            QueueModel.ResolvedQueueItem(
+                episodeKey: PlaybackPositionStore.key(for: episode),
+                title: episode.title,
+                subscriptionID: episode.subscriptionID,
+                episode: episode
+            )
+        }
     }
+
+    /// Playable Up Next episodes (resolved only) — for auto-advance on finish.
+    /// Placeholder (not-yet-materialized) items are excluded since they can't
+    /// be played until their catalog lands.
+    var upNextEpisodes: [Episode] { upNextItems.compactMap(\.episode) }
 
     /// Newest episode per subscription, newest-published first.
     var latestEpisodes: [Episode] {

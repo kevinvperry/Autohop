@@ -824,7 +824,10 @@ private struct SkipDurationEditSheet: View {
 // Menu or App Settings → Subscriptions). Searchable log of ListeningHistoryStore
 // entries grouped by date (Today/Yesterday/older); entries with < 60 s listened
 // AND < 60 s position are hidden (the threshold rule lives here in the view).
-// Header cards: total listening time and finished-episode count.
+// Header cards: total listening time and finished-episode count. Swipe actions
+// mirror PodcastDetailView: the far-right trailing action is Download for
+// not-yet-downloaded episodes on active real subscriptions, otherwise it falls
+// back to Archive/Unarchive.
 struct ListeningHistoryView: View {
     @EnvironmentObject private var appState: AppState
     @State private var searchText = ""
@@ -938,18 +941,10 @@ struct ListeningHistoryView: View {
                                 }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if let episode, !isCurrent {
-                                    if episode.playedState == .archived || episode.playedState == .played {
-                                        Button {
-                                            appState.unarchiveEpisode(episode)
-                                        } label: { Label("Unarchive", systemImage: "arrow.uturn.backward.circle") }
-                                        .tint(.purple)
-                                    } else {
-                                        Button {
-                                            Task { await appState.archiveEpisode(episode) }
-                                        } label: { Label("Archive", systemImage: "archivebox") }
-                                        .tint(.purple)
-                                    }
+                                if let episode,
+                                   let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID),
+                                   !isCurrent {
+                                    historyPrimaryTrailingSwipe(episode: episode, subscription: subscription)
 
                                     Button {
                                         Task {
@@ -974,6 +969,39 @@ struct ListeningHistoryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .glassCard(cornerRadius: 16)
+    }
+
+    @ViewBuilder
+    private func historyPrimaryTrailingSwipe(episode: Episode, subscription: Subscription) -> some View {
+        if episode.downloadState == .downloaded {
+            Button {
+                Task { await appState.archiveEpisode(episode) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .tint(.purple)
+        } else if subscription.browseDate == nil, !subscription.excludeFromAutoFeedRefresh {
+            Button {
+                Task { await appState.downloadEpisodeForQueue(episode) }
+            } label: {
+                Label("Download", systemImage: "arrow.down.circle")
+            }
+            .tint(.teal)
+        } else if episode.playedState == .archived || episode.playedState == .played {
+            Button {
+                appState.unarchiveEpisode(episode)
+            } label: {
+                Label("Unarchive", systemImage: "arrow.uturn.backward.circle")
+            }
+            .tint(.purple)
+        } else {
+            Button {
+                Task { await appState.archiveEpisode(episode) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .tint(.purple)
+        }
     }
 }
 

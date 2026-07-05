@@ -312,6 +312,7 @@ final class AppState: ObservableObject {
     private let resourceMonitor = ResourceMonitor.shared
     private let autoArchiveInterval: TimeInterval = 30 * 60
     private var lastAutoArchiveSkipLogAt: Date?
+    private var backgroundPlaybackDiagnosticsGeneration = 0
 
     // Network path monitor — tracks current interface type for download enforcement.
     private let networkMonitor = NWPathMonitor()
@@ -1279,6 +1280,10 @@ final class AppState: ObservableObject {
             playbackEngine.pause()
             isPlaying = false
             listeningStatsStore.save()
+            // Capture the freshest position + history row (mirrors the
+            // scene-background path) so the flush pushes the exact pause point,
+            // not the last periodic progress tick.
+            persistCurrentPlaybackPosition()
             flushDeferredSyncPushes(reason: "playback.pause")
             if let ep = currentPlayerEpisode,
                let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
@@ -4017,13 +4022,16 @@ final class AppState: ObservableObject {
                 for episode in allEpisodes {
                     guard episode.playedState == .unplayed,
                           episode.id != playingID,
-                          !archivedIDs.contains(episode.id),
-                          !isPreSubscriptionBacklog(episode)
+                          !archivedIDs.contains(episode.id)
                     else { continue }
 
                     // Only downloaded episodes are eligible — an episode that has
                     // never been downloaded has never been "touched" and should not
-                    // be archived by this rule.
+                    // be archived by this rule. A non-nil downloadedAt is itself
+                    // proof of user engagement, so it overrides the backlog
+                    // exemption above (bug fix 2026-07-05: an old backlog episode
+                    // the user explicitly downloaded was being permanently
+                    // protected from the inactive-timeout rule by publish date).
                     guard let downloadedAt = episode.downloadedAt else { continue }
 
                     // "Last activity" = the most recent of: download date, play date.
@@ -4594,6 +4602,110 @@ final class AppState: ObservableObject {
         isSceneActive = active
     }
 
+    func handleScenePhaseChange(phaseName: String, isActive: Bool, isBackground: Bool) {
+        let previousSceneActive = isSceneActive
+        isSceneActive = isActive
+        if isActive {
+            backgroundPlaybackDiagnosticsGeneration += 1
+        }
+
+        var metadata = resourceContext([
+            "phase": phaseName,
+            "previousSceneActive": "\(previousSceneActive)",
+            "applicationState": applicationStateLabel(UIApplication.shared.applicationState)
+        ])
+        if !isActive {
+            metadata["backgroundTimeRemainingSecs"] = backgroundTimeRemainingLabel()
+        }
+        logger.info("scene.phase", "Scene phase changed", metadata: metadata)
+        resourceMonitor.logSnapshot(
+            reason: "scene.\(phaseName)",
+            context: metadata,
+            force: isBackground || !isActive
+        )
+
+        guard isBackground else { return }
+        scheduleBackgroundPlaybackDiagnostics(reason: "scene.background")
+        let released = releasePausedPlaybackResourcesForBackground(reason: "scene.background")
+        metadata["releasedPausedPlayerResources"] = "\(released)"
+        logger.info("scene.background", "Scene entered background", metadata: metadata)
+    }
+
+    @discardableResult
+    func releasePausedPlaybackResourcesForBackground(reason: String) -> Bool {
+        guard currentPlayerEpisode != nil || playbackEngine.currentEpisode != nil else { return false }
+
+        var metadata = resourceContext([
+            "reason": reason,
+            "engineEpisode": playbackEngine.currentEpisode?.title ?? "none",
+            "engineIsPlaying": "\(playbackEngine.isPlaying)"
+        ])
+        guard !isPlaying, !playbackEngine.isPlaying else {
+            logger.info("player.backgroundReleaseSkipped", "Playback is active; keeping playback resources", metadata: metadata)
+            return false
+        }
+        guard let engine = playbackEngine as? PlaybackEngine else {
+            logger.info("player.backgroundReleaseSkipped", "Playback engine does not support background resource release", metadata: metadata)
+            return false
+        }
+        guard let releasedPosition = engine.releasePausedPlayerResourcesForBackground(reason: reason) else {
+            logger.info("player.backgroundReleaseSkipped", "No paused AVPlayer resources to release", metadata: metadata)
+            return false
+        }
+
+        currentPlayerTime = releasedPosition
+        persistCurrentPlaybackPosition()
+        metadata["releasedPositionSecs"] = String(format: "%.1f", releasedPosition)
+        logger.info("player.backgroundRelease", "Released paused AVPlayer resources for background", metadata: metadata)
+        resourceMonitor.logSnapshot(reason: "player.backgroundRelease", context: metadata, force: true)
+        return true
+    }
+
+    func logActivePlaybackDiagnostics(reason: String, extra: [String: String] = [:]) {
+        guard currentPlayerEpisode != nil || playbackEngine.currentEpisode != nil else { return }
+
+        var metadata = resourceContext(extra)
+        metadata["backgroundTimeRemainingSecs"] = backgroundTimeRemainingLabel()
+        metadata.merge(playbackEngineDiagnosticMetadata(reason: reason)) { _, new in new }
+        logger.info("playback.backgroundHealth", "Active playback background health", metadata: metadata)
+    }
+
+    private func scheduleBackgroundPlaybackDiagnostics(reason: String) {
+        backgroundPlaybackDiagnosticsGeneration += 1
+        let generation = backgroundPlaybackDiagnosticsGeneration
+        logActivePlaybackDiagnostics(reason: "\(reason).entry", extra: [
+            "backgroundElapsedSecs": "0"
+        ])
+
+        for delaySeconds in [5, 20] {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(delaySeconds))
+                guard let self,
+                      self.backgroundPlaybackDiagnosticsGeneration == generation,
+                      !self.isAppForeground,
+                      self.currentPlayerEpisode != nil || self.playbackEngine.currentEpisode != nil
+                else { return }
+
+                self.logActivePlaybackDiagnostics(reason: "\(reason).+\(delaySeconds)s", extra: [
+                    "backgroundElapsedSecs": "\(delaySeconds)"
+                ])
+            }
+        }
+    }
+
+    func logResourceSnapshot(reason: String, extra: [String: String] = [:], force: Bool = true) {
+        resourceMonitor.logSnapshot(reason: reason, context: resourceContext(extra), force: force)
+    }
+
+    func logResourceWarningSnapshot(event: String, message: String, reason: String, extra: [String: String] = [:]) {
+        resourceMonitor.logWarningSnapshot(
+            event: event,
+            message: message,
+            reason: reason,
+            context: resourceContext(extra)
+        )
+    }
+
     /// Due-feed poller: ticks every 30 seconds and refreshes only the feeds whose
     /// adaptive due date has arrived. Conditional requests (304s) make each check
     /// nearly free, so an hourly news feed is picked up within a minute or two of
@@ -4636,6 +4748,36 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    private func applicationStateLabel(_ state: UIApplication.State) -> String {
+        switch state {
+        case .active: return "active"
+        case .inactive: return "inactive"
+        case .background: return "background"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private func backgroundTimeRemainingLabel() -> String {
+        let remaining = UIApplication.shared.backgroundTimeRemaining
+        guard remaining.isFinite else { return "unknown" }
+        if remaining > 1_000_000 { return "unlimited" }
+        return String(format: "%.1f", remaining)
+    }
+
+    private func playbackEngineDiagnosticMetadata(reason: String) -> [String: String] {
+        if let engine = playbackEngine as? PlaybackEngine {
+            return engine.playbackDiagnosticMetadata(reason: reason)
+        }
+
+        return [
+            "playbackDiagnosticReason": reason,
+            "playbackBackend": "unknown",
+            "playbackEngineIsPlaying": "\(playbackEngine.isPlaying)",
+            "engineEpisode": playbackEngine.currentEpisode?.title ?? "none",
+            "playbackLikelyProducingAudio": "unknown"
+        ]
     }
 
     private func startResourceMonitoring() {
@@ -4736,6 +4878,12 @@ final class AppState: ObservableObject {
                 "lastPlaybackTickPositionSaved": "\(lastPlaybackTickDiagnostics.positionSaved)",
                 "lastPlaybackTickStatsCredited": "\(lastPlaybackTickDiagnostics.statsCredited)"
             ]) { _, new in new }
+        }
+        if UIApplication.shared.applicationState != .active {
+            context["backgroundTimeRemainingSecs"] = backgroundTimeRemainingLabel()
+            if currentPlayerEpisode != nil || playbackEngine.currentEpisode != nil {
+                context.merge(playbackEngineDiagnosticMetadata(reason: "resourceContext")) { existing, _ in existing }
+            }
         }
         extra.forEach { context[$0.key] = $0.value }
         return context

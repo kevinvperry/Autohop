@@ -210,6 +210,35 @@ public final class SubscriptionStore: ObservableObject {
         subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
 
+        // DATA-INTEGRITY FIX (2026-07-05, found via tvOS real-device testing):
+        // when a remote subscription is materialised (TV/rebuild path), the
+        // engine has already adopted a CLEAN remote sync projection carrying the
+        // user's real settings (playback speed, auto-archive, chapter/download
+        // filters, notifications). If we seed DEFAULTS here, the subsequent
+        // save() → recordSubscriptionSyncState re-applies those defaults over the
+        // clean projection, marking each field dirty at `now`; field-level LWW
+        // then lets those fresh-default timestamps BEAT the phone's older real
+        // values and pushes them back — silently clobbering the phone's settings
+        // ("loading older info in the TV app damages newer info on the phone").
+        // Adopting the projection's settings up front means the projection stays
+        // clean → nothing is pushed → the phone is preserved, and the TV shows
+        // the correct settings immediately instead of defaults. We adopt EVERY
+        // synced field (not just the user-tuned settings) so recordSubscriptionSyncState's
+        // apply() sees no change at all and leaves hasPendingChanges false —
+        // otherwise the placeholder priorityRank / feed-derived title would
+        // re-dirty the projection and push those over the phone's synced values.
+        if let projection = try? database?.subscriptionSyncState(id: subscriptionID) {
+            subscription.title = projection.title
+            subscription.priorityRank = projection.priorityRank
+            subscription.notificationsEnabled = projection.notificationsEnabled
+            subscription.excludeFromAutoFeedRefresh = projection.excludeFromAutoFeedRefresh
+            subscription.autoFeedRefreshReturnPriorityRank = projection.autoFeedRefreshReturnPriorityRank
+            subscription.playbackPreference = projection.playbackPreference
+            subscription.autoArchiveSettings = projection.autoArchiveSettings
+            subscription.chapterFilter = projection.chapterFilter
+            subscription.downloadFilterSettings = projection.downloadFilterSettings
+        }
+
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
         }.map { episode in
@@ -913,6 +942,20 @@ public final class SubscriptionStore: ObservableObject {
             subscriptions[index].episodes.insert(episode, at: 0)
         }
         save()
+    }
+
+    /// Convenience refresh entry point: converts a freshly-fetched `ParsedFeed`
+    /// into episodes (same conversion as `materialize`/`add`) and merges them
+    /// via `updateEpisodes`, preserving local + synced state by guid. Used by
+    /// the tvOS feed refresh so "Latest" and episode lists track the phone
+    /// (the TV otherwise only fetches a feed once, at materialize time).
+    public func updateEpisodes(subscriptionID: UUID, from parsedFeed: ParsedFeed) {
+        guard subscriptions.contains(where: { $0.id == subscriptionID }) else { return }
+        let episodes = parsedFeed.episodes.compactMap {
+            episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
+        }
+        guard !episodes.isEmpty else { return }
+        updateEpisodes(subscriptionID: subscriptionID, episodes: episodes)
     }
 
     public func updateEpisodes(subscriptionID: UUID, episodes newEpisodes: [Episode]) {

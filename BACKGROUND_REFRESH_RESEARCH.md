@@ -233,6 +233,20 @@ the scheduled task. Every refresh that day was `trigger=foregroundTimer` with th
 open. Root cause was app termination, not a code/config fault (registration, Info.plist
 identifiers, and scheduling were all correct).
 
+> **Export must cover the night, or §9 is unusable (fixed 2026-07-06).** The signals
+> above only help if they're *in the exported file*. `AppLogger` rotates the log to a
+> single `.previous.log` segment when the current file hits the cap; the share/export
+> path used to read the current segment only. A long background-audio session logs
+> densely enough to rotate mid-session, so a morning-after export could contain just the
+> post-rotation tail (observed: a 2-minute export at 04:25 while the overnight data sat
+> unread in `.previous.log`) — hiding the very `app.launch` / `background.launch` markers
+> this section depends on. Three changes fixed it: (1) the export now stitches
+> `.previous.log` + current (`AppLogger.combinedContents`); (2) the cap went 1 MB → 5 MB;
+> (3) routine `resources.snapshot` writes are throttled to 45 s while the scene is
+> inactive (`ResourceMonitor.minimumBackgroundSnapshotInterval`), the biggest single
+> byte source during background playback. Net: a full night of falling-asleep-to-audio
+> now fits the two retained segments instead of rotating away in ~30 min.
+
 ## 10. Sources
 
 - Apple — [BGTaskScheduler](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler),

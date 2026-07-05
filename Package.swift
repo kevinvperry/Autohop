@@ -83,6 +83,7 @@ let package = Package(
                 "Models/Synced.swift",
                 "Models/SyncState.swift",
                 "Models/QueueSnapshot.swift",
+                "Models/ArtworkURL.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Models/SilenceGapAccounting.swift",

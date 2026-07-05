@@ -139,7 +139,7 @@ private struct TVPlayerPage: View {
                     .buttonStyle(.bordered)
                 }
             } else {
-                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 24)
+                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 24, targetPixels: 1000)
                     .frame(width: 440, height: 440)
                     .shadow(radius: 30)
                     .overlay { bufferingOverlay(cornerRadius: 24) }

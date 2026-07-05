@@ -2,28 +2,30 @@ import SwiftUI
 import Charts
 
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
-// FEATURES.md §12). Period selector — This Week / current month / current year /
-// Lifetime — drives every section, all data from ListeningStatsStore.summary().
-// The page opens in This Week (the `range` @State default; resets to it each open).
+// FEATURES.md §12). Period selector — 7 Days / month / year / Lifetime —
+// drives every section, all data from ListeningStatsStore.summary().
+// The page opens in 7 Days (the `range` @State default; resets to it each open).
 // A "This / Last" toggle (StatsRangeSelector, bound to `showingLast`) switches
 // week/month/year to the previous concluded period (StatsPeriod.previous*); it's
 // disabled for Lifetime. `isLast = showingLast && range.supportsLast`. Last mode
-// re-labels the pills (Last Week / May / 2025), bounds the per-show history detail
-// with sinceDate(last:)/untilDate(last:), and hides the present-tense "Drifting
-// From" section. Everything else is summary-driven so it follows automatically.
+// re-labels the selected month/year pill (May / 2025), bounds the per-show history
+// detail with sinceDate(last:)/untilDate(last:), and hides the present-tense
+// "Drifting From" section. Everything else is summary-driven so it follows
+// automatically.
 // This toggle is the in-app surface the weekly/monthly/yearly Listening Recap
-// notifications will deep-link into (Phase 2/3).
+// notifications deep-link into.
 // "Shows You're Drifting From" only considers real active subscriptions:
 // browse previews and Inactive podcasts (exclude-from-auto-refresh) are omitted
 // because the user has intentionally paused feed attention for them.
 // All but Lifetime are calendar-anchored and reset at the start of each period:
-// This Week = Monday 00:00 → now (Monday-first, locale-independent); the month
-// pill (dynamic label, e.g. "June") = 1st → now; the year pill ("2026") = Jan 1
-// → now. Sections (top to bottom): hero card (time listened, time saved,
+// 7 Days = Monday 00:00 → now (Monday-first, locale-independent); the month
+// pill (dynamic label, e.g. "June"/"May") = 1st → now or previous month; the
+// year pill ("2026"/"2025") = Jan 1 → now or previous year. Sections (top to
+// bottom): hero card (time listened, time saved,
 // episodes finished, streak), Top Shows (+ Show All page with rank-movement
 // badges vs. the previous comparable period — prior week / calendar month /
 // calendar year), "Shows You're Drifting From" (ShowEngagementAnalyzer, heatmap
-// ranges only, omitted when empty), listening heatmap (This Week + current month,
+// ranges only, omitted when empty), listening heatmap (7 Days + month,
 // Monday-aligned columns) or monthly Swift Charts trend (year/Lifetime), 24-hour
 // listening clock (Canvas rose chart), data-downloaded card (total bytes +
 // episode count / average size, forward-only from June 2026), time-saved
@@ -36,11 +38,17 @@ import Charts
 
 struct StatsView: View {
     @EnvironmentObject private var appState: AppState
+    private let initialRecapPeriod: ListeningRecapPeriod?
+
+    init(initialRecapPeriod: ListeningRecapPeriod? = nil) {
+        self.initialRecapPeriod = initialRecapPeriod
+    }
 
     var body: some View {
         StatsContentView(
             store: appState.listeningStatsStore,
-            historyStore: appState.listeningHistoryStore
+            historyStore: appState.listeningHistoryStore,
+            initialRecapPeriod: initialRecapPeriod
         )
     }
 }
@@ -78,13 +86,13 @@ private enum StatsRange: CaseIterable, Identifiable {
         }
     }
 
-    /// Pill label, reflecting the current This/Last selection. Month and year are
+    /// Pill label. The week range is branded as "7 Days"; month and year are
     /// dynamic — current ("June" / "2026") or previous ("May" / "2025") in Last mode.
     func title(last: Bool) -> String {
         let calendar = Calendar.current
         switch self {
         case .thisWeek:
-            return last ? "Last Week" : "This Week"
+            return "7 Days"
         case .thisMonth:
             let date = last ? (calendar.date(byAdding: .month, value: -1, to: Date()) ?? Date()) : Date()
             return date.formatted(.dateTime.month(.wide))
@@ -165,19 +173,30 @@ private enum StatsRange: CaseIterable, Identifiable {
         let daysSinceMonday = (weekday - 2 + 7) % 7
         return calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfDay) ?? startOfDay
     }
+
+    static func range(for recapPeriod: ListeningRecapPeriod?) -> StatsRange {
+        switch recapPeriod {
+        case .some(.weekly):  return .thisWeek
+        case .some(.monthly): return .thisMonth
+        case .some(.yearly):  return .thisYear
+        case .none:           return .thisWeek
+        }
+    }
 }
 
 private struct StatsContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
-    // Stats opens in This Week by default (showingLast = false ⇒ the current week,
+    private let forcedLastRange: StatsRange?
+    // Stats opens in 7 Days by default (showingLast = false ⇒ the current week,
     // not Last Week). Changing this default is the only thing that sets the initial
     // period — `range` is in-memory @State, so the page resets to it on every open.
-    @State private var range: StatsRange = .thisWeek
+    // Recap notification taps initialise this to the matching period in Last mode.
+    @State private var range: StatsRange
     /// This/Last toggle — when true, show the previous concluded period. Ignored
     /// for Lifetime (see `isLast`). Deep-linked from the Listening Recap notifications.
-    @State private var showingLast = false
+    @State private var showingLast: Bool
     @State private var showRecaps = false
     @State private var driftShowToUnsubscribe: ShowEngagement?
     @State private var showDriftUnsubscribeConfirm = false
@@ -188,12 +207,29 @@ private struct StatsContentView: View {
     /// Comma-joined subscription UUIDs the user muted from the drifting list.
     @AppStorage("stats.hiddenDriftShowIDs") private var hiddenDriftShowIDsRaw: String = ""
 
+    init(
+        store: ListeningStatsStore,
+        historyStore: ListeningHistoryStore,
+        initialRecapPeriod: ListeningRecapPeriod? = nil
+    ) {
+        self.store = store
+        self.historyStore = historyStore
+        let initialRange = StatsRange.range(for: initialRecapPeriod)
+        self.forcedLastRange = initialRecapPeriod == nil ? nil : initialRange
+        _range = State(initialValue: initialRange)
+        _showingLast = State(initialValue: initialRecapPeriod != nil)
+    }
+
     /// Whether the previous period has any listening to show.
     private var hasLastData: Bool {
         range.supportsLast && store.summary(for: range.period(last: true)).wallClockSeconds > 0
     }
-    /// Effective Last state — only when supported AND there's data for it.
-    private var isLast: Bool { showingLast && hasLastData }
+    private var canShowLast: Bool {
+        range.supportsLast && (hasLastData || forcedLastRange == range)
+    }
+    /// Effective Last state — normally requires previous data; recap notification
+    /// deep links can still show their intended previous period when it is empty.
+    private var isLast: Bool { showingLast && canShowLast }
 
     var body: some View {
         let summary = store.summary(for: range.period(last: isLast))
@@ -257,7 +293,7 @@ private struct StatsContentView: View {
     // MARK: - Range selector
 
     private var rangeSelector: some View {
-        StatsRangeSelector(range: $range, showingLast: $showingLast, canShowLast: hasLastData)
+        StatsRangeSelector(range: $range, showingLast: $showingLast, canShowLast: canShowLast)
     }
 
     // MARK: - Hero card
@@ -326,7 +362,7 @@ private struct StatsContentView: View {
         days == 1 ? "1 day" : "\(days) days"
     }
 
-    // MARK: - Heatmap (This Week / current month)
+    // MARK: - Heatmap (7 Days / month)
 
     private func heatmapSection(_ summary: ListeningStatsSummary) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -883,9 +919,9 @@ private struct StatsContentView: View {
 private struct StatsRangeSelector: View {
     @Binding var range: StatsRange
     @Binding var showingLast: Bool
-    /// Whether the previous period actually has data to show. The This/Last bar
-    /// is hidden entirely when false (or on Lifetime), so we never offer an
-    /// empty "Last" view.
+    /// Whether the Last segment is available. Usually this means the previous
+    /// period has data; recap notification deep links also allow the intended
+    /// empty previous period to be shown.
     var canShowLast: Bool
 
     var body: some View {
@@ -910,8 +946,10 @@ private struct StatsRangeSelector: View {
         Button {
             withAnimation(.easeInOut(duration: 0.15)) { range = item }
         } label: {
-            // Pills always show the current-period label; the bar carries This/Last.
-            let pill = Text(item.title(last: false))
+            // The selected month/year pill mirrors the active This/Last bar so
+            // "Last Month" displays the previous month name, and likewise year.
+            let useLastLabel = item == range && showingLast && canShowLast
+            let pill = Text(item.title(last: useLastLabel))
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(range == item ? Color.white : Color.secondary)
                 .padding(.horizontal, 13)

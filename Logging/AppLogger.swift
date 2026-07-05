@@ -3,7 +3,13 @@ import Foundation
 // AI CONTEXT — Logging/AppLogger.swift
 // Singleton diagnostic logger writing structured lines (ISO8601 timestamp,
 // level, event key, message, key=value metadata) to autohop-diagnostic.log on
-// a serial queue, capped at ~1 MB with truncation. isEnabled mirrors the
+// a serial queue, capped at ~5 MB then rotated to a single .previous.log segment
+// (see rotateIfNeeded / archivedLogFileURL). A manual export (redactedContents →
+// combinedContents) stitches .previous.log + the current file, oldest first, so it
+// spans the last two rotations instead of only the post-rotation tail. This matters
+// for overnight captures: a long background-audio session can rotate mid-session,
+// and without the archived segment the export would hide the app.launch /
+// background.launch markers that BACKGROUND_REFRESH_RESEARCH §9 relies on. isEnabled mirrors the
 // hidden Diagnostics toggle (Settings → About → tap version 5×); when off,
 // writes are no-ops — EXCEPT errors logged with alwaysPersist:true, which are
 // always recorded (used by CloudSyncEngine so a sync failure that happens
@@ -33,7 +39,7 @@ public final class AppLogger: ObservableObject {
     /// and reopened lazily across rotation/clear. nil = not currently open.
     private var fileHandle: FileHandle?
     private let fileManager: FileManager
-    private let maxFileSizeBytes = 1_000_000
+    private let maxFileSizeBytes = 5_000_000
     private let dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -70,12 +76,32 @@ public final class AppLogger: ObservableObject {
         write(level: "ERROR", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 
+    /// The single rotated (older) log segment produced by `rotateIfNeeded`. Defined
+    /// once here so the rotation and the export always agree on the path.
+    private var archivedLogFileURL: URL {
+        logFileURL.deletingPathExtension().appendingPathExtension("previous.log")
+    }
+
+    /// Current log segment only — cheap, used by the live in-app viewer.
     func contents() -> String {
         (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? ""
     }
 
+    /// The rotated (older) segment followed by the current one, oldest first, so a
+    /// manual export spans the last two rotations rather than only the tail left after
+    /// a mid-session rotation. The live viewer deliberately stays on `contents()` to
+    /// avoid reading up to two full segments on every update.
+    func combinedContents() -> String {
+        let previous = (try? String(contentsOf: archivedLogFileURL, encoding: .utf8)) ?? ""
+        let current = contents()
+        if previous.isEmpty { return current }
+        if current.isEmpty { return previous }
+        let joiner = previous.hasSuffix("\n") ? "" : "\n"
+        return previous + joiner + current
+    }
+
     func redactedContents() -> String {
-        Self.redactSensitiveText(contents())
+        Self.redactSensitiveText(combinedContents())
     }
 
     func redactedExportURL() -> URL {
@@ -100,6 +126,9 @@ public final class AppLogger: ObservableObject {
             guard let self else { return }
             self.closeHandle()
             try? self.fileManager.removeItem(at: self.logFileURL)
+            // Also drop the rotated segment, otherwise it would resurface in the next
+            // export (which now stitches .previous.log + current) despite the clear.
+            try? self.fileManager.removeItem(at: self.archivedLogFileURL)
             let resetLine = "\(self.dateFormatter.string(from: Date())) [INFO] log.cleared: Diagnostic log history cleared\n"
             try? self.fileManager.createDirectory(at: self.logFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? resetLine.data(using: .utf8)?.write(to: self.logFileURL, options: [.atomic])
@@ -169,7 +198,7 @@ public final class AppLogger: ObservableObject {
         // Release the handle before moving the file so the next append reopens the
         // fresh (post-rotation) log rather than writing into the archived copy.
         closeHandle()
-        let archivedURL = logFileURL.deletingPathExtension().appendingPathExtension("previous.log")
+        let archivedURL = archivedLogFileURL
         try? fileManager.removeItem(at: archivedURL)
         try? fileManager.moveItem(at: logFileURL, to: archivedURL)
     }

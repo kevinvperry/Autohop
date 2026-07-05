@@ -56,7 +56,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Badge-RankPill` | Liquid glass capsule pill centred below artwork on Priority page, stacked vertically below VideoPillSmall and ExplicitPillLarge |
 | `Button-DownloadInline` | Bordered small "Download" button inline in the metadata row for undownloaded episodes |
 | `Badge-Pin` | `pin.fill` icon in trailing stack: blue = Play Next, orange = Play Last |
-| `SwipeActions-EpisodeRow` | Swipe actions on episode rows: Play / Play Next (leading), and trailing far-right Download/Archive · Play Last. The trailing far-right button is state-driven: downloaded → Archive; not-downloaded on a subscribed + active feed → Download (teal); on non-subscribed previews or Inactive subs it falls back to Archive/Unarchive. Download is Subscription-page only; Unarchive is otherwise on the Episode Detail page. |
+| `SwipeActions-EpisodeRow` | Swipe actions on episode rows: Play / Play Next (leading), and trailing far-right Download/Archive · Play Last. The trailing far-right button is state-driven: downloaded → Archive; not-downloaded on a subscribed + active feed → Download (teal); on non-subscribed previews or Inactive subs it falls back to Archive/Unarchive. Episode Detail uses the same primary-action rule in its fourth circle button. |
 | `SwipeColor-Semantics` | green=play, blue=promote, teal=download/queue, purple=primary action, orange=demote, red=destructive |
 | `Header-SubscriptionPage` | Centred channel header: 120pt artwork · title · Video+Explicit pills · description · bold author + bold categories |
 | `Toolbar-SubscriptionPage` | Individual Subscription toolbar: Return to Player leading, Refresh Feed + Settings trailing |
@@ -94,12 +94,12 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
-| `Buttons-EpisodePage` | Four equal-width circle buttons in one row: Play (green) · Play Next (blue) · Play Last (orange) · Archive/Unarchive (purple) |
+| `Buttons-EpisodePage` | Four equal-width circle buttons in one row: Play (green) · Play Next (blue) · Play Last (orange) · state-driven Download (teal) / Archive / Unarchive (purple) |
 | `Description-EpisodePage` | HTMLDescriptionText inside a `white.opacity(0.08)` card, with `Section-Heading` label above |
 | `MetaGrid-EpisodePage` | Two-column MetaCard-Details grid: Published · Duration · File Size · Classification · File Status · Priority Rank |
 | `Toolbar-EpisodePage` | Episode page toolbar: Return to Player leading only, empty nav title |
 | `Selector-PeriodPills` | Stats page period selector: glass capsule pill row, purple-tinted glass selected / plain glass unselected |
-| `Selector-ThisLast` | Stats This/Last bar (`StatsView.swift`): a **solid** two-segment capsule — flat `white.opacity(0.10)` track + 3pt inset, purple sliding chip on the active side — deliberately *unlike* the glass `Selector-PeriodPills`. Content-width (narrow), centered, contextual labels ("This Week / Last Week"). Hidden on Lifetime or when the previous period has no data |
+| `Selector-ThisLast` | Stats This/Last bar (`StatsView.swift`): a **solid** two-segment capsule — flat `white.opacity(0.10)` track + 3pt inset, purple sliding chip on the active side — deliberately *unlike* the glass `Selector-PeriodPills`. Content-width (narrow), centered, contextual labels ("This Week / Last Week", "This Month / Last Month", "This Year / Last Year"). Hidden on Lifetime or when the previous period has no data, except recap notification deep links still show their intended Last period |
 | `Card-StatsHero` | Stats hero card: big purple time-listened number + three stat columns (time saved teal) |
 | `Chart-Heatmap` | GitHub-style listening heatmap (30/90d) or Swift Charts monthly bars (1y/lifetime) |
 | `Chart-ListeningClock` | 24-hour rose chart in Canvas — wedge radius scales with listening per hour |
@@ -1565,7 +1565,7 @@ For an unsubscribed preview, a browse subscription is created automatically in t
 **Episode list** — a `List` in a `RoundedRectangle(cornerRadius: 16)` card with `Color.white.opacity(0.08)` background, using `ListRow-EpisodeRow` (Video/Explicit badges as a top-trailing overlay per DESIGN.md):
 - `NavigationLink` to `EpisodeDetailView` for each row
 - Leading swipe: Play (green), Play Next (blue)
-- Trailing swipe: Archive/Unarchive (purple), Play Last (orange) — **no Share swipe**
+- Trailing swipe: far-right Download (teal) / Archive / Unarchive (purple), Play Last (orange) — **no Share swipe**
 - Download progress bar
 - **Load Older Episodes** button at ≥50 episodes — calls `appState.loadFullEpisodeHistory(for:)`
 
@@ -2248,10 +2248,11 @@ Colours and icons match `SwipeColor-Semantics` and `SwipeActions-EpisodeRow` exa
 | **Play** | `play.fill` | `.green` | Downloads first if not on device (`downloadEpisodeForQueue`), then fetches the refreshed episode object and calls `playEpisode(_:)` |
 | **Play Next** | `text.line.first.and.arrowtriangle.forward` | `.blue` | Downloads first if not on device, then calls `playEpisodeNext(_:)` to pin to top of queue |
 | **Play Last** | `text.line.last.and.arrowtriangle.forward` | `.orange` | Downloads first if not on device, then calls `playEpisodeLast(_:)` to pin to bottom of queue |
-| **Archive** | `archivebox` | `.purple` | Calls `archiveEpisode(_:)`. Shown when `playedState != .archived && playedState != .played` |
-| **Unarchive** | `arrow.uturn.backward.circle` | `.purple` | Calls `unarchiveEpisode(_:)`. Replaces Archive when `playedState == .archived || playedState == .played` |
+| **Download** | `arrow.down.circle` | `.teal` | Calls `downloadEpisodeForQueue(_:)`. Shown for not-downloaded episodes on active real subscriptions |
+| **Archive** | `archivebox` | `.purple` | Calls `archiveEpisode(_:)`. Shown for downloaded episodes, and as the fallback for unplayed preview/inactive episodes |
+| **Unarchive** | `arrow.uturn.backward.circle` | `.purple` | Calls `unarchiveEpisode(_:)`. Fallback for archived/played preview/inactive episodes |
 
-Archive/Unarchive occupy the same fourth slot — only one is shown at a time.
+Download/Archive/Unarchive occupy the same fourth slot — only one is shown at a time.
 
 ```swift
 private func swipeStyleButton(
@@ -2368,7 +2369,7 @@ Empty navigation title (`.navigationTitle("")`) — the episode title is shown i
 
 # Stats Page
 
-`Views/StatsView.swift`, reached via Menu → Stats. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`. Every section card uses the shared `Glass-Card` modifier (`.glassCard(cornerRadius: 16)` — iOS 26 glass, `.ultraThinMaterial` fallback) rather than a flat `white.opacity(0.08)` fill. Card-internal dividers, axis grid lines, progress-bar tracks, and the nested expanded-show card stay on `white.opacity(…)` insets. All sections respond to the period selector.
+`Views/StatsView.swift`, reached via Menu → Stats or directly from a Listening Recap notification. Follows the standard dark scheme (`ColorScheme-Dark`), `Accent-Purple`, `NavTitle-Inline`. Every section card uses the shared `Glass-Card` modifier (`.glassCard(cornerRadius: 16)` — iOS 26 glass, `.ultraThinMaterial` fallback) rather than a flat `white.opacity(0.08)` fill. Card-internal dividers, axis grid lines, progress-bar tracks, and the nested expanded-show card stay on `white.opacity(…)` insets. All sections respond to the period selector.
 
 Sections stack in a `VStack(spacing: 32)`: period selector · Hero · Top Shows · Drifting Shows · Heatmap/Trend · Listening Clock · **Data Downloaded** · Time Saved By · Privacy Footer.
 
@@ -2376,7 +2377,7 @@ Sections stack in a `VStack(spacing: 32)`: period selector · Hero · Top Shows 
 
 **Label: `Selector-PeriodPills`**
 
-A centred `HStack(spacing: 8)` of capsule buttons (This Week / [current month] / [current year] / Lifetime). The four ranges are calendar-anchored, each resetting at the start of its period: This Week = Monday 00:00 → now (resets Monday); the month pill (dynamically labelled, e.g. "June") = 1st 00:00 → now (resets monthly); the year pill (e.g. "2026") = Jan 1 → now (resets yearly); Lifetime = all history. Pills use the same glass treatment as the Priority page reorder toggle: the selected pill is purple-tinted glass (`.glassEffect(.regular.tint(.purple), in: Capsule())`) with a white `.footnote.weight(.semibold)` label; unselected pills are plain glass (`.glassEffect(in: Capsule())`) with a `.secondary` label. Below iOS 26 the fallback is the original solid `Color.purple` / `Color.white.opacity(0.08)` capsule. Switching animates with `.easeInOut(duration: 0.15)`.
+A centred `HStack(spacing: 8)` of capsule buttons (7 Days / [displayed month] / [displayed year] / Lifetime). The four ranges are calendar-anchored, each resetting at the start of its period: 7 Days = Monday 00:00 → now (resets Monday); the month pill is dynamically labelled from the active This/Last state (e.g. "July" in This Month, "June" in Last Month); the year pill likewise shows the active year (e.g. "2026" in This Year, "2025" in Last Year); Lifetime = all history. Pills use the same glass treatment as the Priority page reorder toggle: the selected pill is purple-tinted glass (`.glassEffect(.regular.tint(.purple), in: Capsule())`) with a white `.footnote.weight(.semibold)` label; unselected pills are plain glass (`.glassEffect(in: Capsule())`) with a `.secondary` label. Below iOS 26 the fallback is the original solid `Color.purple` / `Color.white.opacity(0.08)` capsule. Switching animates with `.easeInOut(duration: 0.15)`.
 
 ## Stats Page — Hero Card
 
@@ -2392,7 +2393,7 @@ A centred `HStack(spacing: 8)` of capsule buttons (This Week / [current month] /
 
 **Label: `Chart-Heatmap`**
 
-GitHub-style contribution grid (This Week and the current-month periods only): columns are Monday-aligned weeks, rows are weekdays, leading/trailing nil-padded for weekday alignment (Monday = first day, independent of locale). Cell fill: `Color.clear` (pad), `white.opacity(0.06)` (zero), or `Color.purple.opacity(0.25 + 0.75 × √fraction)` scaled against the period's busiest day. Cell size 30 pt (≤7 weeks) or 19 pt. Caption below: "Busiest day: …" (`.caption`, `.secondary`). On the year and Lifetime views the card is replaced by a Swift Charts monthly `BarMark` chart (purple bars, `cornerRadius 3`, y-axis in hours, height 170).
+GitHub-style contribution grid (7 Days and month periods only): columns are Monday-aligned weeks, rows are weekdays, leading/trailing nil-padded for weekday alignment (Monday = first day, independent of locale). Cell fill: `Color.clear` (pad), `white.opacity(0.06)` (zero), or `Color.purple.opacity(0.25 + 0.75 × √fraction)` scaled against the period's busiest day. Cell size 30 pt (≤7 weeks) or 19 pt. Caption below: "Busiest day: …" (`.caption`, `.secondary`). On the year and Lifetime views the card is replaced by a Swift Charts monthly `BarMark` chart (purple bars, `cornerRadius 3`, y-axis in hours, height 170).
 
 ## Stats Page — Listening Clock
 
@@ -2406,7 +2407,7 @@ GitHub-style contribution grid (This Week and the current-month periods only): c
 
 A `Glass-Card` whose contents are, top to bottom:
 1. **Headline row** — big cyan total (`size 36, weight .bold`, `.cyan`, `contentTransition(.numericText())`) + "total downloaded" caption on the left; on the right, two trailing mini-stats (`downloadMiniStat`: `.title3.bold.monospacedDigit` value over `.caption .secondary` label) — episode count and average size per episode. Mini-stats are hidden when nothing was downloaded.
-2. **Download chart** — a Swift Charts `BarMark` of download volume over time, **cyan** (`Color.cyan.gradient`, `cornerRadius 3`, height 150) to distinguish it from the purple listening charts. Bucketing mirrors the trend chart: per-day bars on heatmap ranges (This Week / current month), per-month bars on year/Lifetime. X-axis labels `.day()` or `.month(.narrow)`; y-axis labels formatted via `formattedBytes` (3 marks). Hidden when no bytes were recorded in the period.
+2. **Download chart** — a Swift Charts `BarMark` of download volume over time, **cyan** (`Color.cyan.gradient`, `cornerRadius 3`, height 150) to distinguish it from the purple listening charts. Bucketing mirrors the trend chart: per-day bars on heatmap ranges (7 Days / month), per-month bars on year/Lifetime. X-axis labels `.day()` or `.month(.narrow)`; y-axis labels formatted via `formattedBytes` (3 marks). Hidden when no bytes were recorded in the period.
 3. **Empty state** — when nothing was downloaded, the chart is replaced by "No episodes downloaded in this period" (`.subheadline`, `.secondary`).
 
 ## Stats Page — Top Show Row
@@ -2474,7 +2475,7 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 - **Stat tiles** — `HistoryStatView`: uppercase `.caption2.bold` `.secondary` title over a `.title3.bold` primary value, in a `Glass-Card` (`.glassCard(cornerRadius: 12)`).
 - **History list** — a `.plain` `List` with `.scrollContentBackground(.hidden)` wrapped in a single `Glass-Card` (`.glassCard(cornerRadius: 16)`), like `PodcastDetailView`'s episode list. Rows are clear so the one glass surface shows behind them; the currently-playing row gets `Color.purple.opacity(0.08)`. Sections are date groups (Today / Yesterday / abbreviated date) with `.caption.bold` `.secondary` headers.
 - **Row** (`ListeningHistoryRow`) — 54 pt artwork (`cornerRadius 9`, purple-gradient `Artwork-Placeholder` fallback) · podcast title (caption bold secondary, uppercased) · episode title (`.body.semibold`) · metadata line (status label + listened duration + remaining, caption secondary).
-- **Swipe actions** (`SwipeActions-EpisodeRow`) — mirrors `PodcastDetailView`: leading **Play** (green) / **Play Next** (blue); trailing **Archive** (purple, → **Unarchive** when the episode is archived/played) / **Play Last** (orange). Each resolves the entry to its `Episode` via `subscriptionStore.episode(subscriptionID:episodeID:)`, downloads first if not on device, and is hidden when the entry's episode can't be resolved or is the currently-playing episode.
+- **Swipe actions** (`SwipeActions-EpisodeRow`) — mirrors `PodcastDetailView`: leading **Play** (green) / **Play Next** (blue); trailing far-right **Download** (teal) for not-yet-downloaded episodes on active real subscriptions, otherwise **Archive** (purple, → **Unarchive** when the episode is archived/played), plus **Play Last** (orange). Each resolves the entry to its `Episode` via `subscriptionStore.episode(subscriptionID:episodeID:)`, downloads first if not on device, and is hidden when the entry's episode can't be resolved or is the currently-playing episode.
 
 ## Settings Pages — Form Style
 

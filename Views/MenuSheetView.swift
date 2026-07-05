@@ -6,6 +6,8 @@ import SwiftUI
 // RootView pushes DiscoverView as a full page on the main stack), Stats, Sleep
 // Schedule, Listening History, Downloads, App Settings, and Support (last item —
 // the in-app User Guide, SupportView, which mirrors the website Support page).
+// The Menu also dismisses when a Listening Recap notification posts
+// .autohopOpenStats, so the app-level Stats route is visible immediately.
 // NavRules: one path per page; Find Podcasts lives behind + only; OPML import
 // lives in Settings → Subscriptions.
 struct MenuSheetView: View {
@@ -112,6 +114,9 @@ struct MenuSheetView: View {
         .onReceive(NotificationCenter.default.publisher(for: .autohopOpenSubscriptions)) { _ in
             // Settings → Manage podcasts: close the Menu (Settings is pushed
             // inside it) to reveal the Subscriptions page beneath.
+            dismiss()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenStats)) { _ in
             dismiss()
         }
     }

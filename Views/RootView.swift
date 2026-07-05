@@ -30,8 +30,11 @@ import SwiftUI
 // LISTENING RECAPS: a launch .task re-arms the opt-in recap notifications from
 // saved settings (NotificationService.scheduleRecaps, idempotent) so they
 // survive relaunch/reinstall even if the user never reopens the Recaps screen.
+// Notification taps are routed through .autohopOpenStats and open Stats directly
+// on the matching Last Week / Last Month / Last Year view.
 enum AppRoute: Hashable {
     case podcasts
+    case stats(ListeningRecapPeriod?)
     case sleepSchedule
     case discover
 }
@@ -41,6 +44,9 @@ extension Notification.Name {
     /// Posted by the Menu to push Discover as a full page on the main stack
     /// (rather than inside the Menu sheet).
     static let autohopOpenDiscover = Notification.Name("autohopOpenDiscover")
+    /// Posted by NotificationService when a Listening Recap notification is tapped.
+    /// `object` is an optional ListeningRecapPeriod; nil opens the default Stats page.
+    static let autohopOpenStats = Notification.Name("autohopOpenStats")
     /// Posted by Settings → Manage podcasts. Subscriptions (PodcastsView) is the
     /// app home page sitting beneath the Menu sheet, so this just dismisses the
     /// Menu to reveal it as a full page — never a duplicate pushed inside the sheet.
@@ -190,6 +196,7 @@ struct RootView: View {
     @State private var showWelcome = false
     @State private var firstSubscribeContext: FirstSubscribeContext?
     @State private var navigationPath = NavigationPath()
+    @State private var handledExplicitLaunchRoute = false
 
     var body: some View {
         ZStack {
@@ -201,6 +208,8 @@ struct RootView: View {
                         switch route {
                         case .podcasts:
                             PodcastsView()
+                        case .stats(let recapPeriod):
+                            StatsView(initialRecapPeriod: recapPeriod)
                         case .sleepSchedule:
                             SleepScheduleView()
                         case .discover:
@@ -249,6 +258,11 @@ struct RootView: View {
             FirstSubscribeCard(subscriptionID: context.id)
         }
         .task {
+            NotificationService.shared.setListeningRecapHandler { period in
+                NotificationCenter.default.post(name: .autohopOpenStats, object: period)
+            }
+        }
+        .task {
             // Re-arm Listening Recap notifications from saved settings at launch
             // (idempotent), so an opted-in user's recaps survive relaunch/reinstall
             // even if they never reopen the Recaps screen.
@@ -265,7 +279,7 @@ struct RootView: View {
             // is already in place when the splash fades.
             if appState.isFirstRunNoSubscriptions {
                 showWelcome = true
-            } else {
+            } else if !handledExplicitLaunchRoute {
                 // Honour the user's chosen launch screen (App Settings → Startup).
                 // Discover/Subscriptions are pushed above the always-alive Player
                 // root, so the back chevron unwinds Discover → Subscriptions → Player.
@@ -290,6 +304,10 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .autohopOpenDiscover)) { _ in
             navigationPath.append(AppRoute.discover)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenStats)) { note in
+            let recapPeriod = note.object as? ListeningRecapPeriod
+            openStats(recapPeriod: recapPeriod)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .autohopFirstSubscription)) { note in
             // Posted by AppState on the user's first deliberate subscribe. Present
             // the "You're all set" card (ONBOARDING_PLAN.md Phase 3).
@@ -297,6 +315,14 @@ struct RootView: View {
                 firstSubscribeContext = FirstSubscribeContext(id: id)
             }
         }
+    }
+
+    private func openStats(recapPeriod: ListeningRecapPeriod?) {
+        handledExplicitLaunchRoute = true
+        showWelcome = false
+        firstSubscribeContext = nil
+        navigationPath = NavigationPath()
+        navigationPath.append(AppRoute.stats(recapPeriod))
     }
 
     /// Maps a Welcome choice to a route, recording that Welcome is done so it

@@ -140,4 +140,37 @@ final class QueueSnapshotSyncTests: XCTestCase {
         XCTAssertEqual(resolved.map(\.guid), ["playable"],
                        "Finished-locally episodes are stale-filtered; unresolvable keys are skipped, not fatal")
     }
+
+    // Churn fix (2026-07-05): resolvedQueueItems keeps not-yet-materialized
+    // entries as placeholders (episode == nil) in snapshot order, so Up Next is
+    // stable during a cold sync instead of falling back to a churny local queue.
+    func testResolvedQueueItemsKeepsUnresolvedEntriesAsPlaceholders() {
+        let subID = UUID()
+        var sub = Subscription(id: subID, feedURL: URL(string: "https://f.com/a")!, title: "Show", priorityRank: 1)
+        var playable = Episode(subscriptionID: subID, guid: "playable", title: "Playable Title", audioURL: URL(string: "https://e.com/p.mp3")!)
+        playable.subscriptionID = subID
+        sub.episodes = [playable]
+
+        let snapshot = QueueSnapshot(
+            entries: [
+                makeEntry(key: "\(subID.uuidString)|guid:not-fetched-yet", subscriptionID: subID, title: "Coming Soon"),
+                makeEntry(key: PlaybackPositionStore.key(for: playable), subscriptionID: subID, title: "ignored-when-resolved")
+            ],
+            updatedAt: Date(), sourceDeviceID: "phone"
+        )
+
+        let items = QueueModel.resolvedQueueItems(from: snapshot, subscriptions: [sub])
+        XCTAssertEqual(items.count, 2, "Order is preserved; the unresolved entry is a placeholder, not dropped")
+
+        // Placeholder: no episode, title from the snapshot entry.
+        XCTAssertNil(items[0].episode)
+        XCTAssertEqual(items[0].title, "Coming Soon")
+
+        // Resolved: carries the local episode + its real title.
+        XCTAssertEqual(items[1].episode?.guid, "playable")
+        XCTAssertEqual(items[1].title, "Playable Title")
+
+        // resolvedQueue (episodes-only, for playback) still excludes placeholders.
+        XCTAssertEqual(QueueModel.resolvedQueue(from: snapshot, subscriptions: [sub]).map(\.guid), ["playable"])
+    }
 }

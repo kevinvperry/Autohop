@@ -977,7 +977,10 @@ struct DownloadFiltersView: View {
 
 // AI CONTEXT — EpisodeDetailView ("Episode Detail" page). Full single-episode
 // view: description, chapter list with artwork, play/download/share/archive
-// actions. Reached from episode lists (subscribed or preview).
+// actions. The fourth action mirrors PodcastDetailView's far-right trailing
+// swipe: downloaded -> Archive; not-downloaded on an active real subscription ->
+// Download; preview/inactive rows fall back to Archive/Unarchive. Reached from
+// episode lists (subscribed or preview).
 struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID
@@ -1098,7 +1101,6 @@ struct EpisodeDetailView: View {
     @ViewBuilder
     private func actionButtons(ep: Episode, sub: Subscription) -> some View {
         let isDownloading = ep.downloadState == .downloading
-        let isArchivedOrPlayed = ep.playedState == .archived || ep.playedState == .played
 
         VStack(spacing: 10) {
             HStack(spacing: 0) {
@@ -1134,21 +1136,7 @@ struct EpisodeDetailView: View {
                     }
                 }
 
-                if isArchivedOrPlayed {
-                    swipeStyleButton(
-                        label: "Unarchive", icon: "arrow.uturn.backward.circle", color: .purple,
-                        disabled: isDownloading
-                    ) {
-                        appState.unarchiveEpisode(ep)
-                    }
-                } else {
-                    swipeStyleButton(
-                        label: "Archive", icon: "archivebox", color: .purple,
-                        disabled: isDownloading
-                    ) {
-                        Task { await appState.archiveEpisode(ep) }
-                    }
-                }
+                episodePrimaryActionButton(ep: ep, sub: sub, isDownloading: isDownloading)
 
             }
 
@@ -1156,6 +1144,39 @@ struct EpisodeDetailView: View {
                 ProgressView(value: progress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: progress)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func episodePrimaryActionButton(ep: Episode, sub: Subscription, isDownloading: Bool) -> some View {
+        if ep.downloadState == .downloaded {
+            swipeStyleButton(
+                label: "Archive", icon: "archivebox", color: .purple,
+                disabled: isDownloading
+            ) {
+                Task { await appState.archiveEpisode(ep) }
+            }
+        } else if sub.browseDate == nil, !sub.excludeFromAutoFeedRefresh {
+            swipeStyleButton(
+                label: "Download", icon: "arrow.down.circle", color: .teal,
+                disabled: isDownloading
+            ) {
+                Task { await appState.downloadEpisodeForQueue(ep) }
+            }
+        } else if ep.playedState == .archived || ep.playedState == .played {
+            swipeStyleButton(
+                label: "Unarchive", icon: "arrow.uturn.backward.circle", color: .purple,
+                disabled: isDownloading
+            ) {
+                appState.unarchiveEpisode(ep)
+            }
+        } else {
+            swipeStyleButton(
+                label: "Archive", icon: "archivebox", color: .purple,
+                disabled: isDownloading
+            ) {
+                Task { await appState.archiveEpisode(ep) }
             }
         }
     }

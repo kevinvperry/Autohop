@@ -225,6 +225,7 @@ targets:
       - sdk: CarPlay.framework
       - sdk: MediaPlayer.framework
       - sdk: BackgroundTasks.framework
+      - sdk: MetricKit.framework
       - sdk: UserNotifications.framework
       - sdk: CloudKit.framework
       - package: GRDB

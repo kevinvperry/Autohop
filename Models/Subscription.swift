@@ -129,11 +129,15 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     public enum AfterInactive: String, CaseIterable, Codable, Sendable {
         case never
         case hours4
+        case hours6
         case hours8
+        case hours12
         case hours16
         case hours24
         case days2
         case days3
+        case days4
+        case days5
         case days7
         case days14
         case days30
@@ -143,11 +147,15 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
             switch self {
             case .never:   return "Never"
             case .hours4:  return "4 Hours"
+            case .hours6:  return "6 Hours"
             case .hours8:  return "8 Hours"
+            case .hours12: return "12 Hours"
             case .hours16: return "16 Hours"
             case .hours24: return "24 Hours"
             case .days2:   return "2 Days"
             case .days3:   return "3 Days"
+            case .days4:   return "4 Days"
+            case .days5:   return "5 Days"
             case .days7:   return "1 Week"
             case .days14:  return "2 Weeks"
             case .days30:  return "30 Days"
@@ -159,11 +167,15 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
             switch self {
             case .never:   return nil
             case .hours4:  return 4 * 3600
+            case .hours6:  return 6 * 3600
             case .hours8:  return 8 * 3600
+            case .hours12: return 12 * 3600
             case .hours16: return 16 * 3600
             case .hours24: return 24 * 3600
             case .days2:   return 2 * 24 * 3600
             case .days3:   return 3 * 24 * 3600
+            case .days4:   return 4 * 24 * 3600
+            case .days5:   return 5 * 24 * 3600
             case .days7:   return 7 * 24 * 3600
             case .days14:  return 14 * 24 * 3600
             case .days30:  return 30 * 24 * 3600

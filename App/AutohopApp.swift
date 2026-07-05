@@ -50,7 +50,11 @@ private struct AutohopRootBootstrapView: View {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }
                     .onChange(of: scenePhase) { _, phase in
-                        appState.setSceneActive(phase == .active)
+                        appState.handleScenePhaseChange(
+                            phaseName: scenePhaseLabel(phase),
+                            isActive: phase == .active,
+                            isBackground: phase == .background
+                        )
                         if phase == .active {
                             Task { await appState.runAutoArchiveIfNeeded(reason: "app.foreground") }
                             // Retry auto-downloads whose BG-wake intent never
@@ -75,6 +79,15 @@ private struct AutohopRootBootstrapView: View {
                         appState = state
                     }
             }
+        }
+    }
+
+    private func scenePhaseLabel(_ phase: ScenePhase) -> String {
+        switch phase {
+        case .active: return "active"
+        case .inactive: return "inactive"
+        case .background: return "background"
+        @unknown default: return "unknown"
         }
     }
 }

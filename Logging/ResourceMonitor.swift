@@ -6,7 +6,10 @@ import Darwin.Mach
 // Captures device/process resource snapshots (Mach task memory, battery,
 // thermal state, low-power mode) for diagnostic log context. AppState attaches
 // a snapshot's metadata to significant log events and runs a periodic sampling
-// timer while diagnostics are enabled.
+// timer while diagnostics are enabled. Routine logSnapshot calls are throttled
+// (8 s foreground, 45 s while the scene is inactive) so a background-audio night
+// fits the capped diagnostic file; the forced 60 s periodic heartbeat and warning
+// snapshots (thermal/power/memory/hang) bypass the throttle.
 // BATTERY/THERMAL DIAGNOSTICS: each snapshot also carries `cpuPercent` (app CPU as
 // a % of one core, summed over live non-idle threads via task_threads/thread_info —
 // the primary "warm phone" signal; sustained high values with the app backgrounded /
@@ -202,8 +205,15 @@ final class ResourceMonitor {
     private let logger = AppLogger.shared
     private let watchdog = MainThreadWatchdog(logger: AppLogger.shared)
     private var samplingTask: Task<Void, Never>?
+    private var contextProvider: (@MainActor () -> [String: String])?
     private var lastSnapshotTime: Date?
     private let minimumManualSnapshotInterval: TimeInterval = 8
+    /// While the scene is inactive (background audio overnight is the case that matters),
+    /// routine non-forced snapshots are throttled harder so the ~5 MB diagnostic log can
+    /// span a whole night of playback instead of rotating every ~30 min. The forced 60 s
+    /// periodic heartbeat and all warning snapshots (thermal/power/memory/hang) bypass this,
+    /// so escalations are still timestamped promptly.
+    private let minimumBackgroundSnapshotInterval: TimeInterval = 45
     /// Anchor for the battery drain-rate calc: the last level (0…1) and when it was
     /// observed. Held until the level actually changes so the rate spans a real 1%
     /// drop rather than 60 s of unchanged reading.
@@ -232,10 +242,24 @@ final class ResourceMonitor {
                 monitor.logger.info("resources.powerModeChange", "Low Power Mode changed", metadata: monitor.snapshot().metadata)
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                let monitor = ResourceMonitor.shared
+                monitor.logWarningSnapshot(
+                    event: "resources.memoryWarning",
+                    message: "Memory warning received",
+                    reason: "memoryWarning",
+                    context: monitor.contextProvider?() ?? [:]
+                )
+            }
+        }
     }
 
     func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
         guard samplingTask == nil else { return }
+        contextProvider = context
         logger.info("resources.monitorStart", "Resource monitor started")
         samplingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -247,10 +271,14 @@ final class ResourceMonitor {
     }
 
     func logSnapshot(reason: String, context: [String: String] = [:], force: Bool = false) {
-        if !force,
-           let lastSnapshotTime,
-           Date().timeIntervalSince(lastSnapshotTime) < minimumManualSnapshotInterval {
-            return
+        if !force, let lastSnapshotTime {
+            // Background (scene-inactive) sessions log far more sparsely so the capped
+            // file can cover a whole night; foreground keeps the tighter 8 s cadence.
+            let sceneInactive = context["sceneActive"] == "false"
+            let minimumInterval = sceneInactive ? minimumBackgroundSnapshotInterval : minimumManualSnapshotInterval
+            if Date().timeIntervalSince(lastSnapshotTime) < minimumInterval {
+                return
+            }
         }
 
         lastSnapshotTime = Date()
@@ -258,6 +286,14 @@ final class ResourceMonitor {
         metadata["reason"] = reason
         context.forEach { metadata[$0.key] = $0.value }
         logger.info("resources.snapshot", "Resource snapshot", metadata: metadata)
+    }
+
+    func logWarningSnapshot(event: String, message: String, reason: String, context: [String: String] = [:]) {
+        lastSnapshotTime = Date()
+        var metadata = snapshot().metadata
+        metadata["reason"] = reason
+        context.forEach { metadata[$0.key] = $0.value }
+        logger.warning(event, message, metadata: metadata)
     }
 
     // MARK: - Device Snapshot

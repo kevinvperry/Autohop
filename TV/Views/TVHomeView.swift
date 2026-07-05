@@ -6,16 +6,15 @@ import AutohopCore
 // Three sections in order: Continue Listening hero, Up Next shelf (the
 // streaming Priority Stack — QueueModel.streamableQueue, via
 // TVAppModel.upNextEpisodes), Latest shelf (newest episode per subscription).
-// KNOWN SIMPLIFICATION (documented, not an oversight): Continue Listening
-// identifies an in-progress episode via Episode.playedState == .playing (this
-// DOES sync across devices — EpisodeSyncState.playedState is a synced field),
-// but has no resume-position bar yet. Actual position roams inside the
-// listening-history record (SYNC_DESIGN.md), and there is no core-level
-// history reader TV can reach yet (ListeningHistoryStore lives in the iOS app
-// target). Wire a real position bar when Phase 0 item 5 (LibraryModel) or a
-// dedicated history-core exposure lands. Phase 3 (§8): tapping Continue
-// Listening or any card calls `onPlay`, which TVMainTabView wires to
-// `TVAppModel.beginPlayback` + presenting TVPlayerView.
+// Continue Listening / "Continue Watching" (video): driven by the SYNCED
+// listening-history record (TVAppModel.continueListening → mostRecentInProgressListeningEntry),
+// which carries the true cross-device resume position — NOT the old
+// playedState==.playing heuristic. The header label switches to "Continue
+// Watching" when the hero episode's mediaKind == .video. History lands fast via
+// the launch/foreground prime (CloudSyncEngine.fetchAllHistoryNow) and the view
+// re-renders on onRemoteHistoryChanged (SYNC_DESIGN.md, 2026-07-05). Phase 3
+// (§8): tapping Continue Listening or any card calls `onPlay`, which
+// TVMainTabView wires to `TVAppModel.beginPlayback` + presenting TVPlayerView.
 struct TVHomeView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
@@ -55,12 +54,12 @@ struct TVHomeView: View {
     @ViewBuilder
     private func continueListeningSection(_ episode: Episode, positionSeconds: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader("Continue Listening")
+            sectionHeader(episode.mediaKind == .video ? "Continue Watching" : "Continue Listening")
             Button {
                 onPlay(episode)
             } label: {
                 HStack(spacing: 24) {
-                    TVArtworkImage(url: episode.artworkURL, cornerRadius: 16)
+                    TVArtworkImage(url: episode.artworkURL, cornerRadius: 16, targetPixels: 800)
                         .frame(width: 220, height: 220)
                     VStack(alignment: .leading, spacing: 8) {
                         Text(episode.title)
