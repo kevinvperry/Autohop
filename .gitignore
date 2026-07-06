@@ -36,3 +36,7 @@ fastlane/test_output
 # Xcode Playground
 timeline.xctimeline
 playground.xcworkspace
+
+# Vim swap files
+*.swp
+.*.swp
