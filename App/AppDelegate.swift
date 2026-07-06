@@ -20,7 +20,10 @@ import MetricKit
 //     source (BGAppRefreshTask / BGProcessingTask / foreground / background-audio).
 //  2. Background URLSession wake: bootstraps AppState on demand, then stores the
 //     system completion handler on DownloadManager so it fires after
-//     urlSessionDidFinishEvents.
+//     urlSessionDidFinishEvents. Logs `download.backgroundWake` (alwaysPersist) at
+//     the wake and `download.backgroundEventsFinished` (alwaysPersist) at hand-off —
+//     both fire before diagnostics is enabled, and together they're the direct
+//     evidence that a download actually completed off-screen in the background.
 //  3. OPML/.xml file-open events → AppState.importOPML, bootstrapping on demand
 //     because AppState is no longer created in AutohopApp.init.
 //  4. Orientation lock: delegates to VideoOrientationController so landscape
@@ -39,12 +42,24 @@ import MetricKit
 //     the Background App Refresh authorisation. The BG task entry logs
 //     (background.launch / background.processingLaunch) also carry the
 //     authorisation, so a refresh review can tell "iOS never fired the task"
-//     (no entry log) from "fired but not permitted".
+//     (no entry log) from "fired but not permitted". ALL THREE are logged with
+//     alwaysPersist: they fire before AppState turns diagnostics logging on
+//     (AppState sets AppLogger.isEnabled during bootstrap), so without it the
+//     launch/wake markers are silently dropped on exactly the cold-start and
+//     cold-BGTask-wake paths a background review most needs them.
 // GOTCHA: a BGAppRefreshTask run with "no feeds due" still reports success —
 // reporting failure teaches iOS to deprioritise future background wakes.
 // GOTCHA: iOS never runs BGTasks for a user-force-quit app; an app.launch with
 // launchState=foreground on every start (never background) is the log signature
 // of that — the app is only ever coming back because the user reopened it.
+//  8. MetricKit subscriber (logMetricPayloads / logDiagnosticPayloads): records
+//     app-exit metrics AND per-crash / per-hang detail. A crash logs `metrics.crash`
+//     (alwaysPersist, so it survives the Diagnostics toggle being off) with
+//     exceptionType/code/signal, terminationReason, virtualMemoryRegionInfo, and a
+//     compact `binaryName+offsetIntoBinaryTextSegment` call stack (compactCallStack)
+//     that symbolicates against that build's dSYM; hangs log `metrics.hang` with
+//     duration + stack. MetricKit delivers these on a later launch via
+//     pastDiagnosticPayloads, so a background crash is pinpointed after the fact.
 final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
 
     weak var appState: AppState?
@@ -66,10 +81,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         case .active, .inactive: launchState = "foreground"
         @unknown default: launchState = "unknown"
         }
+        // alwaysPersist: this fires before AppState enables diagnostics logging, so
+        // without it the launch marker (and its launchState) is dropped every launch.
         AppLogger.shared.info("app.launch", "App launched", metadata: [
             "launchState": launchState,
             "backgroundRefreshStatus": BackgroundTaskCoordinator.backgroundRefreshStatusLabel
-        ])
+        ], alwaysPersist: true)
         // Install the notification-center delegate before launch returns so
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()
@@ -180,6 +197,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             completionHandler()
             return
         }
+        // alwaysPersist: iOS woke the app specifically to service finished background
+        // downloads. This fires before AppState enables diagnostics, so without it the
+        // wake is invisible in the log (like app.launch was) — and it's the direct
+        // evidence that background downloading actually reaches completion off-screen.
+        AppLogger.shared.info("download.backgroundWake", "Woken to finish background downloads", metadata: [
+            "identifier": identifier
+        ], alwaysPersist: true)
         // Hand the completion handler to DownloadManager so it can call it after
         // urlSessionDidFinishEvents(forBackgroundURLSession:) fires.
         Task { @MainActor [weak self] in
@@ -247,7 +271,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             "backgroundRefreshStatus": refreshStatus,
             "taskKind": "BGAppRefreshTask"
         ]
-        AppLogger.shared.info("background.launch", "Background app refresh task started", metadata: startMetadata)
+        // alwaysPersist: logged before AppState bootstraps enables diagnostics, and on a
+        // cold BGTask wake that ordering would otherwise drop the one marker that proves
+        // iOS actually fired the task (vs. never firing it).
+        AppLogger.shared.info("background.launch", "Background app refresh task started", metadata: startMetadata, alwaysPersist: true)
         MainActor.assumeIsolated {
             ResourceMonitor.shared.logSnapshot(reason: "background.appRefresh.start", context: startMetadata, force: true)
         }
@@ -319,7 +346,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             "backgroundRefreshStatus": refreshStatus,
             "taskKind": "BGProcessingTask"
         ]
-        AppLogger.shared.info("background.processingLaunch", "Background processing task started", metadata: startMetadata)
+        // alwaysPersist: same reasoning as background.launch — a cold BGProcessingTask
+        // wake logs this before diagnostics is enabled, so it must bypass the toggle.
+        AppLogger.shared.info("background.processingLaunch", "Background processing task started", metadata: startMetadata, alwaysPersist: true)
         MainActor.assumeIsolated {
             ResourceMonitor.shared.logSnapshot(reason: "background.processing.start", context: startMetadata, force: true)
         }
@@ -465,7 +494,81 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             } else {
                 AppLogger.shared.info("metrics.diagnostics", "MetricKit diagnostic payload received", metadata: metadata)
             }
+
+            // Per-crash detail so the NEXT crash is pinpointed, not just counted. Each
+            // frame is `binaryName+offsetIntoBinaryTextSegment`, symbolicatable against
+            // the crashing build's dSYM; crashIndex ties a stack to the summary counts.
+            for (crashIndex, crash) in (payload.crashDiagnostics ?? []).enumerated() {
+                var crashMeta: [String: String] = [
+                    "source": source,
+                    "payloadIndex": "\(index)",
+                    "crashIndex": "\(crashIndex)",
+                    "appVersion": crash.applicationVersion,
+                    "buildVersion": crash.metaData.applicationBuildVersion,
+                    "osVersion": crash.metaData.osVersion,
+                    "deviceType": crash.metaData.deviceType
+                ]
+                if let exceptionType = crash.exceptionType { crashMeta["exceptionType"] = "\(exceptionType)" }
+                if let exceptionCode = crash.exceptionCode { crashMeta["exceptionCode"] = "\(exceptionCode)" }
+                if let signal = crash.signal { crashMeta["signal"] = "\(signal)" }
+                if let terminationReason = crash.terminationReason { crashMeta["terminationReason"] = terminationReason }
+                if let vmRegion = crash.virtualMemoryRegionInfo { crashMeta["vmRegion"] = vmRegion }
+                crashMeta["stack"] = compactCallStack(crash.callStackTree, frameLimit: 32)
+                // alwaysPersist: a crash trace must survive even if the Diagnostics toggle is off.
+                AppLogger.shared.error("metrics.crash", "MetricKit crash diagnostic", metadata: crashMeta, alwaysPersist: true)
+            }
+
+            // Hangs use the same call-stack mechanism and were also observed on Monday,
+            // so attribute their main-thread stack too.
+            for (hangIndex, hang) in (payload.hangDiagnostics ?? []).enumerated() {
+                let hangMs = Int(hang.hangDuration.converted(to: .milliseconds).value.rounded())
+                var hangMeta: [String: String] = [
+                    "source": source,
+                    "payloadIndex": "\(index)",
+                    "hangIndex": "\(hangIndex)",
+                    "appVersion": hang.applicationVersion,
+                    "buildVersion": hang.metaData.applicationBuildVersion,
+                    "osVersion": hang.metaData.osVersion,
+                    "hangDurationMs": "\(hangMs)"
+                ]
+                hangMeta["stack"] = compactCallStack(hang.callStackTree, frameLimit: 32)
+                AppLogger.shared.warning("metrics.hang", "MetricKit hang diagnostic", metadata: hangMeta)
+            }
         }
+    }
+
+    /// Compact, symbolicatable summary of a MetricKit call-stack tree: the attributed
+    /// (crashing/hanging) thread's frames as `binaryName+offsetIntoBinaryTextSegment`,
+    /// which symbolicate against the build's dSYM. Depth-capped so a single crash can't
+    /// blow the log budget. Returns "unavailable" when the JSON can't be parsed.
+    private static func compactCallStack(_ tree: MXCallStackTree, frameLimit: Int) -> String {
+        guard
+            let object = try? JSONSerialization.jsonObject(with: tree.jsonRepresentation()),
+            let json = object as? [String: Any],
+            let stacks = json["callStacks"] as? [[String: Any]]
+        else {
+            return "unavailable"
+        }
+
+        let attributed = stacks.first { ($0["threadAttributed"] as? Bool) == true }
+        guard let roots = (attributed ?? stacks.first)?["callStackRootFrames"] as? [[String: Any]] else {
+            return "empty"
+        }
+
+        var frames: [String] = []
+        func walk(_ frame: [String: Any]) {
+            guard frames.count < frameLimit else { return }
+            let name = (frame["binaryName"] as? String) ?? "?"
+            let offset = (frame["offsetIntoBinaryTextSegment"] as? NSNumber)?.intValue
+                ?? (frame["address"] as? NSNumber)?.intValue
+                ?? 0
+            frames.append("\(name)+\(offset)")
+            if let subFrames = frame["subFrames"] as? [[String: Any]] {
+                for sub in subFrames { walk(sub) }
+            }
+        }
+        for root in roots { walk(root) }
+        return frames.isEmpty ? "empty" : frames.joined(separator: ">")
     }
 
     private static func elapsedMilliseconds(since start: Date) -> String {

@@ -13,7 +13,9 @@ import Foundation
 // and starts fresh.
 // HANDLES: resume-data save/restore on pause/cancel/failure; a stall watchdog
 // (no progress bytes for 10 min → cancel with resume data, notify AppState via
-// onWatchdogCancelled to schedule a retry); progress throttling (≤1/s/task);
+// onWatchdogCancelled to schedule a retry) — the watchdog detects app suspension
+// from its own tick gap and grants a fresh window instead of false-cancelling
+// background transfers that ran out-of-process while suspended; progress throttling (≤1/s/task);
 // background relaunch completion (onBackgroundDownloadCompleted, when the app
 // was killed and iOS relaunched it to deliver a finished download — there is
 // no live continuation in that case); file storage under the app's Downloads
@@ -76,8 +78,15 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // Watchdog: track last time each episode received any progress bytes.
     private var progressLastReceivedAt: [UUID: Date] = [:]
     private var downloadWatchdogTimer: Timer?
+    /// Wall-clock time of the last watchdog tick. The timer only fires while the app is
+    /// running, so a gap far larger than `watchdogInterval` means the app was suspended
+    /// in between — during which a background URLSession keeps transferring out-of-process
+    /// but delivers no progress callbacks, staling `progressLastReceivedAt` through no
+    /// fault of the download. Used to grant a grace window instead of false-cancelling.
+    private var lastWatchdogTickAt = Date()
     private let progressThrottleInterval: TimeInterval = 1.0
     private let downloadStallThreshold: TimeInterval = 10 * 60
+    private let watchdogInterval: TimeInterval = 2 * 60
 
     private let fileManager: FileManager
     private let downloadDirectoryOverride: URL?
@@ -623,7 +632,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         DispatchQueue.main.async { [weak self] in
-            self?.logger.info("download.backgroundEventsFinished", "Background download events finished")
+            // alwaysPersist: fires on a background-download wake, before AppState enables
+            // diagnostics, so without it this "iOS finished handing us downloads" marker
+            // is silently dropped (as app.launch was).
+            self?.logger.info("download.backgroundEventsFinished", "Background download events finished", alwaysPersist: true)
             self?.backgroundEventsCompletionHandler?()
             self?.backgroundEventsCompletionHandler = nil
         }
@@ -723,13 +735,33 @@ private extension DownloadManager {
     // MARK: - Watchdog
 
     private func startDownloadWatchdog() {
-        downloadWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 2 * 60, repeats: true) { [weak self] _ in
+        lastWatchdogTickAt = Date()
+        downloadWatchdogTimer = Timer.scheduledTimer(withTimeInterval: watchdogInterval, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.checkForStalledDownloads() }
         }
     }
 
     private func checkForStalledDownloads() {
         let now = Date()
+        // The watchdog Timer only fires while the app is running. A gap far larger than
+        // its interval means the app was suspended in between — during which a background
+        // URLSession keeps transferring out-of-process but delivers no progress callbacks,
+        // staling `progressLastReceivedAt` through no fault of the download. Grant every
+        // in-flight task a fresh window and skip this tick rather than cancelling healthy
+        // background downloads the moment the app resumes.
+        let sinceLastTick = now.timeIntervalSince(lastWatchdogTickAt)
+        lastWatchdogTickAt = now
+        if sinceLastTick > watchdogInterval * 1.5 {
+            if !progressLastReceivedAt.isEmpty {
+                let count = progressLastReceivedAt.count
+                progressLastReceivedAt = progressLastReceivedAt.mapValues { _ in now }
+                logger.info("download.watchdogResumeGrace", "App resumed after suspension — reset download stall timers", metadata: [
+                    "suspendedSeconds": "\(Int(sinceLastTick.rounded()))",
+                    "activeDownloads": "\(count)"
+                ])
+            }
+            return
+        }
         let stalled = progressLastReceivedAt.filter { now.timeIntervalSince($0.value) > downloadStallThreshold }
         guard !stalled.isEmpty else { return }
         for (episodeID, _) in stalled {

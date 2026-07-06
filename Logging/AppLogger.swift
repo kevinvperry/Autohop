@@ -60,12 +60,17 @@ public final class AppLogger: ObservableObject {
         logFileURL = directory.appendingPathComponent("autohop-diagnostic.log")
     }
 
-    public func info(_ event: String, _ message: String, metadata: [String: String] = [:]) {
-        write(level: "INFO", event: event, message: message, metadata: metadata)
+    /// - Parameter alwaysPersist: when true, the entry is written even if the
+    ///   Diagnostics toggle is off. Reserve for events that happen before diagnostics
+    ///   can be enabled and are needed after the fact — e.g. `app.launch`, which fires
+    ///   in `didFinishLaunching` before AppState turns logging on, so without this it
+    ///   is silently dropped on every launch.
+    public func info(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
+        write(level: "INFO", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 
-    public func warning(_ event: String, _ message: String, metadata: [String: String] = [:]) {
-        write(level: "WARN", event: event, message: message, metadata: metadata)
+    public func warning(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
+        write(level: "WARN", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 
     /// - Parameter alwaysPersist: when true, the entry is written even if the
