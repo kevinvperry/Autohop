@@ -80,6 +80,9 @@ targets:
           - project.yml
           - README.md
           - "**/*.md"
+          - "**/*.swp"                        # Vim swap files — never bundle as resources
+          - "**/.*.swp"                        # hidden Vim swap files (e.g. .PAGES.md.swp)
+          - ".*.swp"                           # root-level hidden swap file (glob safety)
           - ".build/**"
           - ".git/**"                        # git internals — never bundle as app resources
                                              # (branch/tag/log basenames can collide → "duplicate output file")
