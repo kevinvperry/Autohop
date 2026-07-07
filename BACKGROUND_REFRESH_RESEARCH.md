@@ -225,6 +225,28 @@ Three log signals answer "why didn't background refresh run?" without a debugger
   paired `background.notPermitted` implies the permission is on. Confirm against the
   explicit `backgroundRefreshStatus` label (also stamped into the Release Radar export
   header).
+- **`audio.backgroundAssertionLow`** (WARN, alwaysPersist) — the app believes it's playing
+  (`isPlaying=true`) but `UIApplication.backgroundTimeRemaining` is a small finite number
+  (< 60 s) instead of the effectively-unlimited value it holds while the audio assertion is
+  granted. This is the state that precedes an unexpected background termination during
+  "active" playback (observed ~6 s before an `app.willTerminate` in the 2026-07-07 log). The
+  line carries the full session/engine snapshot — check `playbackLikelyProducingAudio`,
+  `lastRenderedAgeMs` (silent/read-finished engine?), `audioSessionOtherAudioPlaying`
+  (another app took audio?), and the route fields to attribute WHY the keep-alive dropped.
+
+> **The real reason background refresh never ran: a crash on task entry (found + fixed
+> 2026-07-07).** The instrumentation above finally caught it. MetricKit `metrics.crash`
+> (SIGTRAP / EXC_CRASH) symbolicated to `MainActor.assumeIsolated` in the BGTask launch
+> handlers. Both tasks were registered with `using: nil`, which delivers the launch
+> handler on a **background queue**; the sync prelude's `assumeIsolated` main-actor reads
+> then trapped **on entry** — before `background.launch` / `background.processingLaunch`
+> could be logged. So every wake iOS granted crashed the app instantly, which is exactly
+> why those markers were always absent and why refresh looked like it "never fired" (§9's
+> "no entry log ⇒ never fired" heuristic was misreading a crash as a no-show). Fixed by
+> registering both tasks with `using: DispatchQueue.main` in
+> `AppDelegate.registerBackgroundTasks`, so the handler runs on main where `assumeIsolated`
+> is valid. Two independent reviews (this session + Codex, which symbolicated the offsets
+> to `handleFeedProcessing`) converged on the same cause.
 
 Worked example (2026-07-01 log): activity only 03:24–03:43 then a **cold launch** at
 07:47 (`app.bootstrap`, `autoArchive.start reason=app.startup`) — the process was

@@ -4665,9 +4665,28 @@ final class AppState: ObservableObject {
         guard currentPlayerEpisode != nil || playbackEngine.currentEpisode != nil else { return }
 
         var metadata = resourceContext(extra)
+        let backgroundRemaining = UIApplication.shared.backgroundTimeRemaining
         metadata["backgroundTimeRemainingSecs"] = backgroundTimeRemainingLabel()
         metadata.merge(playbackEngineDiagnosticMetadata(reason: reason)) { _, new in new }
         logger.info("playback.backgroundHealth", "Active playback background health", metadata: metadata)
+
+        // Keep-alive anomaly: the app believes it's playing, yet iOS granted only a short,
+        // finite background allowance (tens of seconds) instead of the "unlimited" audio
+        // assertion. This is the state that immediately precedes the unexpected ~6 s
+        // background kill. Flag it loudly (WARN + alwaysPersist), with the full session/engine
+        // snapshot already in `metadata`, so the next log shows WHY the assertion was lost —
+        // e.g. a silent / read-finished engine (stale lastRenderedAgeMs, playbackLikely
+        // ProducingAudio=false), another app taking audio (audioSessionOtherAudioPlaying=true),
+        // a deactivated session, or a route change. `backgroundTimeRemaining` is DBL_MAX (huge)
+        // while the assertion is held, so a value under a minute means it is NOT held.
+        if isPlaying, backgroundRemaining.isFinite, backgroundRemaining < 60 {
+            logger.warning(
+                "audio.backgroundAssertionLow",
+                "Playing but iOS granted only limited background time — audio keep-alive not held",
+                metadata: metadata,
+                alwaysPersist: true
+            )
+        }
     }
 
     private func scheduleBackgroundPlaybackDiagnostics(reason: String) {

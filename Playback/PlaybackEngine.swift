@@ -1233,6 +1233,9 @@ final class PlaybackEngine: PlaybackControlling {
             "audioSessionOutputType": output?.portType.rawValue ?? "none",
             "audioSessionOutputVolume": String(format: "%.2f", session.outputVolume),
             "audioSessionSecondarySilenced": "\(session.secondaryAudioShouldBeSilencedHint)",
+            // Keep-alive diagnostics: if another app owns audio, iOS won't grant us the
+            // background audio assertion even while our engine reports "playing".
+            "audioSessionOtherAudioPlaying": "\(session.isOtherAudioPlaying)",
             "audioSessionSampleRate": String(format: "%.0f", session.sampleRate),
             "audioSessionIOBufferMs": String(format: "%.1f", session.ioBufferDuration * 1000)
         ]
