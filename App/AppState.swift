@@ -1435,7 +1435,9 @@ final class AppState: ObservableObject {
     // MARK: - Download
 
     func downloadLatestEpisode(for subscription: Subscription) async {
-        guard let episode = subscription.latestEpisode else {
+        // Use newestEpisode (episode list) not the denormalised latestEpisode, which can
+        // lag — otherwise the Subscriptions row's Download button would fetch a stale episode.
+        guard let episode = subscription.newestEpisode else {
             downloadMessage = "No latest episode available for \(subscription.title)."
             logger.warning("download.latest", "No latest episode available", metadata: [
                 "podcast": subscription.title

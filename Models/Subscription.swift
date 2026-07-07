@@ -2694,6 +2694,15 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     public var chapterFilter: ChapterFilter
     public var latestEpisode: Episode?
     public var episodes: [Episode]
+
+    /// The newest episode for display/download. Derives from `episodes` — the same source
+    /// the Podcast Detail page renders (newest first), kept fresh by every merge/sync path —
+    /// rather than the denormalised `latestEpisode`, which can lag behind and show a stale
+    /// "Updated" date/status on the Subscriptions row. Falls back to `latestEpisode` only
+    /// when the episode list is empty.
+    public var newestEpisode: Episode? {
+        episodes.first ?? latestEpisode
+    }
     public var playedEpisodeKeys: Set<String>
     public var archivedEpisodeKeys: Set<String>
     public var notificationsEnabled: Bool

@@ -329,8 +329,10 @@ struct PodcastsView: View {
 
             }
 
-            // Bottom band: rank pill (under artwork) + metadata row (under titles)
-            if let episode = sub.latestEpisode {
+            // Bottom band: rank pill (under artwork) + metadata row (under titles).
+            // Derive from `newestEpisode` (the episode list) not the denormalised
+            // `latestEpisode`, which can lag and show a stale "Updated:" date/status.
+            if let episode = sub.newestEpisode {
                 HStack(alignment: .center, spacing: 12) {
                     // Rank pill — centred under the artwork; min width 44pt so it
                     // stays aligned with the artwork above for single-digit numbers,
