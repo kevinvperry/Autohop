@@ -2557,9 +2557,17 @@ public enum FeedRefreshPrioritizer {
             factors.append("priority rank \(normalizedRank)")
         }
 
+        // Surveillance / unreliable / fallback feeds have no real predicted schedule, so
+        // "overdue" doesn't mean an episode is waiting and accumulated staleness shouldn't let
+        // a dormant no-pattern feed climb above genuinely-fresh release-window feeds. Otherwise
+        // a short window (esp. an uncapped BGProcessing sweep that iOS grants only seconds of)
+        // gets spent polling backlog ahead of real content. Suppress overdue entirely and cap
+        // staleness hard for these states so release-window feeds always sort first.
+        let lowValueSurveillance = isSurveillanceState(prediction.state)
+
         if let lastFetchedAt {
             let hoursSinceFetch = max(0, now.timeIntervalSince(lastFetchedAt) / 3600)
-            let stalenessBoost = min(18, hoursSinceFetch / 2)
+            let stalenessBoost = min(lowValueSurveillance ? 6 : 18, hoursSinceFetch / 2)
             if stalenessBoost >= 1 {
                 score += stalenessBoost
                 factors.append("stale for \(Int(hoursSinceFetch.rounded()))h")
@@ -2570,7 +2578,7 @@ public enum FeedRefreshPrioritizer {
         }
 
         let overdueMinutes = max(0, now.timeIntervalSince(prediction.nextDueAt) / 60)
-        let overdueBoost = min(25, overdueMinutes / 5)
+        let overdueBoost = lowValueSurveillance ? 0 : min(25, overdueMinutes / 5)
         if overdueBoost >= 1 {
             score += overdueBoost
             factors.append("overdue by \(Int(overdueMinutes.rounded()))m")
@@ -2582,6 +2590,18 @@ public enum FeedRefreshPrioritizer {
             reason: factors.joined(separator: ", "),
             factors: factors
         )
+    }
+
+    /// Low-value states with no reliable predicted schedule. Their staleness/overdue boosts
+    /// are suppressed (see `priority`) so a dormant no-pattern feed can't outrank genuinely-
+    /// fresh release-window feeds and consume a short/constrained refresh window ahead of them.
+    private static func isSurveillanceState(_ state: FeedRefreshWindowState) -> Bool {
+        switch state {
+        case .randomSurveillance, .unreliableDates, .fallback:
+            return true
+        case .missedRelease, .activeWindow, .preWindow, .learning, .quiet:
+            return false
+        }
     }
 
     private static func baseScore(for state: FeedRefreshWindowState) -> Double {

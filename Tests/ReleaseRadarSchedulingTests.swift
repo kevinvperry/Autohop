@@ -175,6 +175,65 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertGreaterThan(dailyPriority.score, randomPriority.score)
     }
 
+    /// Regression for the surveillance-boost suppression: a dormant no-pattern feed that is
+    /// very stale, very "overdue", and highly user-ranked must NOT climb above a genuinely-
+    /// fresh release-window feed — otherwise a short/uncapped BGProcessing window gets spent
+    /// polling backlog ahead of real content. Without the suppression the random feed would
+    /// score ~118 (rank + staleness + overdue) vs the fresh window's ~98; the assert would fail.
+    func testStaleOverdueRandomSurveillanceStaysBelowFreshReleaseWindow() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let freshActive = FeedRefreshPrediction(
+            nextDueAt: now,
+            state: .activeWindow,
+            profileKind: .dailyWeekdays,
+            expectedWindowStart: now.addingTimeInterval(-5 * 60),
+            expectedWindowEnd: now.addingTimeInterval(55 * 60),
+            recheckInterval: 60,
+            reason: "fresh release window"
+        )
+        let staleRandom = FeedRefreshPrediction(
+            nextDueAt: now.addingTimeInterval(-10 * 60 * 60),
+            state: .randomSurveillance,
+            profileKind: .random,
+            recheckInterval: 30 * 60,
+            reason: "dormant random backlog"
+        )
+
+        let activeScore = FeedRefreshPrioritizer.priority(
+            prediction: freshActive,
+            profile: FeedScheduleProfile(
+                kind: .dailyWeekdays,
+                confidence: 0.6,
+                observationCount: 40,
+                reliableDateCount: 40,
+                activeWeekdays: [3],
+                typicalMinuteOfDay: 8 * 60,
+                reason: "fresh"
+            ),
+            priorityRank: 12,
+            lastFetchedAt: now,
+            now: now
+        ).score
+
+        let randomScore = FeedRefreshPrioritizer.priority(
+            prediction: staleRandom,
+            profile: FeedScheduleProfile(
+                kind: .random,
+                confidence: 0.9,
+                observationCount: 40,
+                reliableDateCount: 40,
+                activeWeekdays: [3],
+                typicalMinuteOfDay: 8 * 60,
+                reason: "random"
+            ),
+            priorityRank: 1,
+            lastFetchedAt: now.addingTimeInterval(-48 * 60 * 60),
+            now: now
+        ).score
+
+        XCTAssertLessThan(randomScore, activeScore)
+    }
+
     // MARK: - Weekly classification with variable publish times
 
     /// A produced weekly show whose publish time drifts must still classify as `.weekly`
