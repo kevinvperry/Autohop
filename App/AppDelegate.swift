@@ -8,7 +8,11 @@ import MetricKit
 // (see AutohopApp.swift). Handles the five things SwiftUI cannot:
 //  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (BGAppRefreshTask,
 //     short ~30 s wake) AND "com.autohop.feedprocessing" (BGProcessingTask, a longer
-//     charging+Wi-Fi catch-up) — both registered before didFinishLaunching returns.
+//     charging+Wi-Fi catch-up) — both registered before didFinishLaunching returns,
+//     ON THE MAIN QUEUE (using: DispatchQueue.main). This is load-bearing: the launch
+//     handlers' sync prelude calls MainActor.assumeIsolated, which traps (SIGTRAP) if
+//     the handler is delivered on a background queue (the `using: nil` default) — that
+//     was the BGProcessingTask crash on every wake, fixed 2026-07-07.
 //     The refresh handler calls refreshSubscriptionsForBackground(taskIdentifier:);
 //     the processing handler calls refreshSubscriptionsForProcessing(taskIdentifier:)
 //     for a fuller, uncapped due-feed sweep that drains the backlog (e.g. overnight).
@@ -218,7 +222,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
     private func registerBackgroundTasks() {
         let registered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BackgroundTaskCoordinator.feedRefreshIdentifier,
-            using: nil
+            // MUST be the main queue: handleFeedRefresh's prelude calls
+            // MainActor.assumeIsolated, which traps (SIGTRAP) on a background queue.
+            using: DispatchQueue.main
         ) { task in
             guard let task = task as? BGAppRefreshTask else { return }
             AppDelegate.handleFeedRefresh(task)
@@ -230,7 +236,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
         let processingRegistered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BackgroundTaskCoordinator.feedProcessingIdentifier,
-            using: nil
+            // MUST be the main queue: handleFeedProcessing's prelude calls
+            // MainActor.assumeIsolated, which traps (SIGTRAP) on a background queue.
+            using: DispatchQueue.main
         ) { task in
             guard let task = task as? BGProcessingTask else { return }
             AppDelegate.handleFeedProcessing(task)
@@ -261,8 +269,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
         let startedAt = Date()
-        // Delivered on the main queue (register(using: nil)), so assumeIsolated is
-        // safe for the main-actor status read.
+        // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
+        // this launch handler runs on the main queue and the MainActor.assumeIsolated
+        // reads below are valid. DO NOT change the registration back to `using: nil`:
+        // that delivers the handler on a background queue, where assumeIsolated traps
+        // (SIGTRAP) on entry — the crash that made background tasks never run, before
+        // this launch marker could even be logged.
         let refreshStatus = MainActor.assumeIsolated {
             BackgroundTaskCoordinator.backgroundRefreshStatusLabel
         }
@@ -336,8 +348,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
     private static func handleFeedProcessing(_ task: BGProcessingTask) {
         let startedAt = Date()
-        // Delivered on the main queue (register(using: nil)), so assumeIsolated is
-        // safe for the main-actor status read.
+        // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
+        // this launch handler runs on the main queue and the MainActor.assumeIsolated
+        // reads below are valid. DO NOT change the registration back to `using: nil`:
+        // that delivers the handler on a background queue, where assumeIsolated traps
+        // (SIGTRAP) on entry — the crash that made background tasks never run, before
+        // this launch marker could even be logged.
         let refreshStatus = MainActor.assumeIsolated {
             BackgroundTaskCoordinator.backgroundRefreshStatusLabel
         }
