@@ -81,7 +81,11 @@ import UIKit
 //    drainAutoDownloadIntents retries at launch/foreground/BG-task end — so a
 //    BG-wake suspension after the feed cycle can never silently lose a
 //    discovered episode (deep-scan AH-2026-06-28-01). Keep intents settled only
-//    via resolveAutoDownloadIntentIfSettled.
+//    via resolveAutoDownloadIntentIfSettled. A permanently-broken enclosure (server
+//    5xx/404 every attempt) is NOT retried on every drain: recordDownloadFailure sets
+//    an exponential per-guid cooldown (downloadFailureBackoff) that runAutoDownloadAfterRefresh
+//    honours (download.backoffSkipped); a success clears it. The intent stays until the
+//    cooldown lapses, so recovery still happens — just not as per-drain churn.
 //    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
 //    scheduled media transfer re-validates subscription state, browse previews,
 //    current DownloadFilterSettings eligibility, scheduled-episode staleness,
@@ -1926,6 +1930,7 @@ final class AppState: ObservableObject {
                 episodeID: episode.id,
                 localFileURL: localFileURL
             )
+            downloadFailureBackoff.removeValue(forKey: episode.guid)
             if let fileDuration {
                 subscriptionStore.updateEpisodeDuration(
                     subscriptionID: subscriptionID,
@@ -2018,6 +2023,7 @@ final class AppState: ObservableObject {
                 return
             }
             subscriptionStore.markEpisodeDownloadFailed(subscriptionID: subscriptionID, episodeID: episode.id)
+            recordDownloadFailure(guid: episode.guid, title: episode.title)
             downloadProgress.removeValue(forKey: episode.id)
             downloadMessage = "Download failed for \(episode.title)."
             downloadActivityStore.fail(
@@ -2929,6 +2935,29 @@ final class AppState: ObservableObject {
     /// runAutoDownloadAfterRefresh, whose guards re-validate eligibility.
     /// Called at launch (after reconcileOrphanedDownloads), on scene-foreground,
     /// and (unawaited) at the end of both BG task handlers.
+    /// Per-episode auto-download failure backoff, keyed by the episode's stable `guid`
+    /// (identity across feed refreshes). A permanently-broken enclosure — e.g. a server
+    /// returning HTTP 500 on every attempt — would otherwise be retried on every intent
+    /// drain (launch / foreground / BG-task end). Track consecutive failures + an
+    /// exponential cooldown so it's skipped until the cooldown passes. In-memory: a fresh
+    /// launch grants one more attempt (the server may have recovered) and a successful
+    /// download clears the entry.
+    private var downloadFailureBackoff: [String: (failures: Int, retryAfter: Date)] = [:]
+
+    /// Records a genuine download failure and schedules an exponential cooldown before the
+    /// episode is eligible for another AUTO attempt: 2, 8, 32, then 120 min (capped).
+    private func recordDownloadFailure(guid: String, title: String) {
+        guard !guid.isEmpty else { return }
+        let failures = (downloadFailureBackoff[guid]?.failures ?? 0) + 1
+        let cooldownMinutes = min(2.0 * pow(4.0, Double(failures - 1)), 120.0)
+        downloadFailureBackoff[guid] = (failures, Date().addingTimeInterval(cooldownMinutes * 60))
+        logger.info("download.backoffScheduled", "Backing off repeated download failure", metadata: [
+            "episode": title,
+            "failures": "\(failures)",
+            "retryAfterMinutes": String(format: "%.0f", cooldownMinutes)
+        ])
+    }
+
     func drainAutoDownloadIntents(reason: String) async {
         guard !isDrainingAutoDownloadIntents else { return }
         let pending = autoDownloadIntentStore.intents
@@ -2989,6 +3018,16 @@ final class AppState: ObservableObject {
                 "podcast": subscription.title,
                 "scheduledEpisode": episode.title,
                 "scheduledEpisodeID": episode.id.uuidString
+            ])
+            return
+        }
+
+        if let backoff = downloadFailureBackoff[candidateEpisode.guid], Date() < backoff.retryAfter {
+            logger.info("download.backoffSkipped", "Auto-download skipped — backing off after repeated failures", metadata: [
+                "podcast": subscription.title,
+                "episode": candidateEpisode.title,
+                "failures": "\(backoff.failures)",
+                "retryAfterSecs": String(format: "%.0f", backoff.retryAfter.timeIntervalSinceNow)
             ])
             return
         }
