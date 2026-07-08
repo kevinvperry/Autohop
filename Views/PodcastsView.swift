@@ -266,7 +266,7 @@ struct PodcastsView: View {
     private var priorityListCard: some View {
         let list = List {
             ForEach(visibleSubscriptions) { subscription in
-                let isPlaying = subscription.latestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
+                let isPlaying = subscription.newestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)
                 } label: {
@@ -393,7 +393,7 @@ struct PodcastsView: View {
         }
         .padding(.vertical, 6)
         .overlay(alignment: .topTrailing) {
-            if let episode = sub.latestEpisode,
+            if let episode = sub.newestEpisode,
                episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {
                     if episode.mediaKind == .video { VideoPillSmall() }
