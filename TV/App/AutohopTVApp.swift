@@ -449,10 +449,12 @@ final class TVAppModel {
     /// be played until their catalog lands.
     var upNextEpisodes: [Episode] { upNextItems.compactMap(\.episode) }
 
-    /// Newest episode per subscription, newest-published first.
+    /// Newest episode per subscription, newest-published first. Uses `newestEpisode`
+    /// (derived from the episode list) rather than the denormalised `latestEpisode`,
+    /// which can drift behind and surface a stale episode — matches the iOS fix.
     var latestEpisodes: [Episode] {
         librarySubscriptions
-            .compactMap(\.latestEpisode)
+            .compactMap(\.newestEpisode)
             .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
     }
 
