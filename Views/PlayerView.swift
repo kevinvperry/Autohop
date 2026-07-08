@@ -911,9 +911,10 @@ struct PlayerView: View {
                     let currentID = appState.currentPlayerEpisode?.id
                     Task { await appState.playNextEpisode(excluding: currentID.map { [$0] } ?? []) }
                 } else {
-                    let target = appState.currentPlayerTime + skip
-                    sliderValue = target
-                    appState.seek(to: target)
+                    sliderValue = appState.currentPlayerTime + skip
+                    // Routes through skipForward (not seek) so the manual-skip time-saved
+                    // stat is credited; the overshoot branch above is an episode advance, not a skip.
+                    appState.skipForward(seconds: skip)
                 }
             } label: {
                 SkipIntervalIcon(direction: .forward, seconds: appState.settingsStore.appSettings.skipForwardSeconds)

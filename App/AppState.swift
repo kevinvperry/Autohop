@@ -1172,7 +1172,7 @@ final class AppState: ObservableObject {
         NowPlayingService.shared.configure(
             onPlayPause:    { Task { @MainActor in await state.togglePlayPause() } },
             onSeek:         { t in Task { @MainActor in state.seek(to: t) } },
-            onSkipForward:  { s in Task { @MainActor in state.seek(to: state.currentPlayerTime + s) } },
+            onSkipForward:  { s in Task { @MainActor in state.skipForward(seconds: s) } },
             onSkipBackward: { s in Task { @MainActor in state.seek(to: max(0, state.currentPlayerTime - s)) } },
             onNextTrack: {
                 Task { @MainActor in
@@ -1382,6 +1382,22 @@ final class AppState: ObservableObject {
         }
 
         logger.info("player.carplayLaunch", "No restored episode available for CarPlay launch")
+    }
+
+    /// Manual skip-forward: credits the skipped seconds to the "Skipping" time-saved stat,
+    /// then seeks. Both the Player skip button and the lock-screen / AirPods skip command
+    /// route through here — previously they called `seek(to:)` directly, so the manual-skip
+    /// stat (onManualSkipForward → addManualSkipForward) never ran and the Stats "Skipping"
+    /// row was permanently 0s. `seek(to:)` keeps its own side effects (sleep-schedule
+    /// "still listening", logging, position persistence).
+    func skipForward(seconds: TimeInterval) {
+        if seconds > 0 {
+            listeningStatsStore.addManualSkipForward(
+                seconds,
+                subscriptionID: currentPlayerEpisode?.subscriptionID
+            )
+        }
+        seek(to: currentPlayerTime + seconds)
     }
 
     func seek(to seconds: TimeInterval) {
