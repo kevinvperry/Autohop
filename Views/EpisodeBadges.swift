@@ -220,10 +220,13 @@ extension View {
 // conflate it with the meta-card "Published" formatter (that's why a same-day
 // episode reads "11 hours ago" in a list but "Today" on the Published card).
 
-/// Tiered relative publish label used across every episode list for consistency:
-/// "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" / an
-/// abbreviated exact date for anything older (year shown only when it isn't the
-/// current year, e.g. "12 Jun" / "28 Dec 2024").
+/// Canonical tiered relative label used across every episode list AND point-in-time
+/// timestamp (publish dates, plus the Downloads page's downloaded/archived times) so
+/// they all read the same as the Subscriptions page:
+/// "Just now" / "15 mins ago" (< 1h) / "2 hours ago" (< 24h) / "Yesterday" /
+/// "N days ago" (2–6 days) / an abbreviated exact date for anything older (year shown
+/// only when it isn't the current year, e.g. "12 Jun" / "28 Dec 2024"). For day-BUCKET
+/// grouping (History headers, the "Published" meta-card) use relativePublishedDateLabel.
 func relativePublishedLabel(_ date: Date) -> String {
     let now = Date()
     let elapsed = now.timeIntervalSince(date)
@@ -238,7 +241,13 @@ func relativePublishedLabel(_ date: Date) -> String {
         let hours = Int(elapsed / 3600)
         return "\(hours) hour\(hours == 1 ? "" : "s") ago"
     }
-    if calendar.isDateInYesterday(date) { return "Yesterday" }
+    let days = calendar.dateComponents(
+        [.day],
+        from: calendar.startOfDay(for: date),
+        to: calendar.startOfDay(for: now)
+    ).day ?? 0
+    if days == 1 { return "Yesterday" }
+    if (2...6).contains(days) { return "\(days) days ago" }
     let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
     return sameYear
         ? date.formatted(.dateTime.day().month(.abbreviated))

@@ -612,7 +612,7 @@ HStack(alignment: .top, spacing: 12) {
         // Metadata row: "Updated: <relative age>" · Spacer · status pill
         // (no episode length)
         HStack(spacing: 4) {
-            Text("Updated: \(latestEpisodeRelativeLabel(date))")
+            Text("Updated: \(relativePublishedLabel(date))")
             Spacer(minLength: 8)
             EpisodeStatusPill(kind: statusKind)   // or Button("Download")
         }
@@ -2332,7 +2332,7 @@ Fields shown (when available):
 
 | Field | Source | Always shown |
 |---|---|---|
-| Published | `relativePublishedLabel(ep.publishedAt)` — shared tiered relative date ("Just now" / "15 mins ago" / "2 hours ago" / "Yesterday" / abbreviated date) | Only when non-nil |
+| Published | `relativePublishedLabel(ep.publishedAt)` — the canonical tiered relative date used by every episode list, the Subscriptions "Updated" row, and the Downloads page's downloaded/archived times ("Just now" / "15 mins ago" / "2 hours ago" / "Yesterday" / "N days ago" (2–6) / abbreviated date, year only when not the current year) | Only when non-nil |
 | Released | `relativeReleasedLabel(ep.publishedAt)` — elapsed since publish, e.g. "2 days ago" | Only when non-nil |
 | Duration | `ep.durationSeconds`, formatted `"Xh Ym"` / `"Ym"` | Only when non-nil |
 | File Size | `ep.fileSizeBytes`, formatted `"X MB"` / `"X.X GB"` | Only when non-nil |

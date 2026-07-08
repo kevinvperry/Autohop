@@ -227,11 +227,11 @@ struct PodcastDetailView: View {
             // match the Subscriptions page. The toolbar keeps Share + Settings.
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.latestEpisode
+                    episodeToShare = subscription?.newestEpisode
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.latestEpisode == nil)
+                .disabled(subscription?.newestEpisode == nil)
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -246,11 +246,11 @@ struct PodcastDetailView: View {
         } else {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.latestEpisode
+                    episodeToShare = subscription?.newestEpisode
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.latestEpisode == nil)
+                .disabled(subscription?.newestEpisode == nil)
             }
         }
     }
@@ -345,7 +345,7 @@ struct PodcastDetailView: View {
         let author: String? = sub?.author ?? (fallback?.author.isEmpty == false ? fallback?.author : nil)
         let description: String? = sub?.description
         let categories: [String] = sub?.categories ?? (fallback?.genre).map { $0.isEmpty ? [] : [$0] } ?? []
-        let showVideo: Bool = sub?.latestEpisode?.mediaKind == .video
+        let showVideo: Bool = sub?.newestEpisode?.mediaKind == .video
         let showExplicit: Bool = sub?.isExplicit == true
 
         return VStack(alignment: .leading, spacing: 16) {

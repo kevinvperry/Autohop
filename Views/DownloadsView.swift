@@ -205,7 +205,7 @@ private struct ArchivedEpisodeRow: View {
     }
 
     private var archivedMetadata: String {
-        let dateStr = entry.lastListenedAt.formatted(date: .abbreviated, time: .shortened)
+        let dateStr = relativePublishedLabel(entry.lastListenedAt)
         if let pct = entry.completionPercent {
             let pctStr = "\(Int((pct * 100).rounded()))%"
             return "Archived \(dateStr) · Listened \(pctStr)"
@@ -453,7 +453,7 @@ private struct DownloadActivityRow: View {
     }
 
     private var metadataText: String {
-        let date = activity.updatedAt.formatted(date: .abbreviated, time: .shortened)
+        let date = relativePublishedLabel(activity.updatedAt)
         let size = byteText(activity.expectedBytes)
         return "\(size) • \(date)"
     }

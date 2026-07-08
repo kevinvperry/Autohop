@@ -155,7 +155,7 @@ struct SubscriptionSettingsView: View {
                     downloadFeedFiltersSection(sub)
                     playbackSection(sub)
                     automationSection(sub)
-                    if let episode = sub.latestEpisode, !episode.chapters.isEmpty {
+                    if let episode = sub.newestEpisode, !episode.chapters.isEmpty {
                         chapterSection(sub, episode: episode)
                     }
                     feedSection(sub)
@@ -201,11 +201,11 @@ struct SubscriptionSettingsView: View {
 
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.latestEpisode
+                    episodeToShare = subscription?.newestEpisode
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.latestEpisode == nil)
+                .disabled(subscription?.newestEpisode == nil)
             }
         }
         .miniPlayerBar()

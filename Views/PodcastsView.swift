@@ -343,7 +343,7 @@ struct PodcastsView: View {
                     // Metadata: "Updated: <relative date>" · Spacer · status pill
                     HStack(spacing: 4) {
                         if let date = episode.publishedAt {
-                            Text("Updated: \(latestEpisodeRelativeLabel(date))")
+                            Text("Updated: \(relativePublishedLabel(date))")
                                 .lineLimit(1)
                         }
 
@@ -446,31 +446,6 @@ struct PodcastsView: View {
     /// line: mins → hours → "Yesterday" → "2…6 days ago" → an abbreviated exact date
     /// (year shown only when it isn't the current year). Days are counted by calendar
     /// day (not elapsed seconds) so "Yesterday"/"N days ago" match the wall clock.
-    private func latestEpisodeRelativeLabel(_ date: Date) -> String {
-        let now = Date()
-        let calendar = Calendar.current
-        let elapsed = now.timeIntervalSince(date)
-        if elapsed < 60 { return "just now" }
-        if elapsed < 3600 {
-            let mins = Int(elapsed / 60)
-            return "\(mins) min\(mins == 1 ? "" : "s") ago"
-        }
-        if elapsed < 86_400 {
-            let hours = Int(elapsed / 3600)
-            return "\(hours) hour\(hours == 1 ? "" : "s") ago"
-        }
-        let dayDiff = calendar.dateComponents(
-            [.day],
-            from: calendar.startOfDay(for: date),
-            to: calendar.startOfDay(for: now)
-        ).day ?? 0
-        if dayDiff == 1 { return "Yesterday" }
-        if (2...6).contains(dayDiff) { return "\(dayDiff) days ago" }
-        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        return sameYear
-            ? date.formatted(.dateTime.day().month(.abbreviated))
-            : date.formatted(.dateTime.day().month(.abbreviated).year())
-    }
 
     private func artwork(url: URL?) -> some View {
         CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {

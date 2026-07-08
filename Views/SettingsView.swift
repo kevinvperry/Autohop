@@ -847,11 +847,11 @@ struct ListeningHistoryView: View {
     }
 
     private func groupByDate(_ entries: [ListeningHistoryEntry]) -> [(String, [ListeningHistoryEntry])] {
-        let calendar = Calendar.current
+        // Day-bucket header shared with the "Published" meta-card so History reads
+        // Today / Yesterday / "N Days Ago" (2–6) / abbreviated date (year only when not
+        // this year) — consistent with the app's relative date style.
         let grouped = Dictionary(grouping: entries) { entry -> String in
-            if calendar.isDateInToday(entry.lastListenedAt) { return "Today" }
-            if calendar.isDateInYesterday(entry.lastListenedAt) { return "Yesterday" }
-            return entry.lastListenedAt.formatted(date: .abbreviated, time: .omitted)
+            relativePublishedDateLabel(entry.lastListenedAt)
         }
         return grouped
             .map { ($0.key, $0.value.sorted { $0.lastListenedAt > $1.lastListenedAt }) }

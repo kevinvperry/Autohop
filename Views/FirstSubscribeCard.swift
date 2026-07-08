@@ -29,7 +29,7 @@ struct FirstSubscribeCard: View {
     private var subscription: Subscription? {
         appState.subscriptionStore.subscription(id: subscriptionID)
     }
-    private var latestEpisode: Episode? { subscription?.latestEpisode }
+    private var latestEpisode: Episode? { subscription?.newestEpisode }
     private var isDownloaded: Bool { latestEpisode?.downloadState == .downloaded }
     private var progress: Double? {
         guard let id = latestEpisode?.id else { return nil }
