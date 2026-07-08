@@ -137,7 +137,13 @@ struct FeedRefreshScheduleView: View {
         .miniPlayerBar()
         .preferredColorScheme(.dark)
         .onAppear { rebuildEntries() }
-        .refreshable { rebuildEntries() }
+        .refreshable {
+            // Real feed refresh (same as the Subscriptions refresh-all) so the diagnostic
+            // reflects freshly-fetched feeds and any newly-learned observations — then
+            // recompute the table. Awaited, so the pull-to-refresh spinner stays until done.
+            await appState.refreshAllSubscriptions(includeBackoffFeeds: true)
+            rebuildEntries()
+        }
         .overlay(alignment: .bottom) {
             if let resultMessage {
                 Text(resultMessage)
