@@ -1,0 +1,52 @@
+{
+  "identifier" : "A1B2C3D4",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "6F1A9C22",
+      "localizations" : [
+
+      ],
+      "name" : "Autohop Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "2.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "8D4E17B0",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Reliable background episode downloads and faster cross-device sync, powered by Autohop Relay.",
+              "displayName" : "Autohop Pro",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "autohop_pro_monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Autohop Pro Monthly",
+          "subscriptionGroupID" : "6F1A9C22",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 2,
+    "minor" : 0
+  }
+}

@@ -17,11 +17,16 @@ import AutohopCore
 //   (UIBackgroundModes: audio). onPlayPauseCommand toggles from anywhere.
 // FAILURE UX unchanged: `TVPlaybackModel.errorMessage` renders a focusable
 // retry card instead of the player (§8 item 5).
-// CHAPTER MARKERS still NOT wired (see the 2026-07-04 build-break note in
-// git history / proposal doc): the fullscreen AVPlayerViewController's
-// speed menu via transportBarCustomMenuItems IS wired; chapter
-// navigationMarkerGroups needs its exact AVPlayerItem API confirmed in Xcode
-// before a second attempt. TVPlaybackModel.currentChapters remains ready.
+// CHAPTERS (round 9, 2026-07-11): the WINDOWED page now has full chapter
+// navigation — prev/next chapter buttons in the unified transport row (shown
+// only when the episode has chapters) + the current chapter title above the
+// position bar, via TVPlaybackModel.currentChapter/skipTo{Next,Previous}Chapter
+// (PlaybackSessionPolicy prev/next-start logic). The FULLSCREEN
+// AVPlayerViewController's chapter navigationMarkerGroups remain NOT wired
+// (2026-07-04 build-break note — exact AVPlayerItem API needs Xcode
+// confirmation); its speed menu via transportBarCustomMenuItems IS wired.
+// Round 9 also unified the windowed controls into ONE focus row (Full Screen
+// moved into it; the standalone button forced vertical focus hops).
 struct TVPlayerView: View {
     let playbackModel: TVPlaybackModel
     let onExit: () -> Void
@@ -120,27 +125,34 @@ private struct TVPlayerPage: View {
         }
     }
 
-    /// Video → small live window + Full Screen button; audio → large artwork.
+    /// Video → small live window (Full Screen moved INTO the unified
+    /// transport row, 2026-07-11 round 9 — the standalone button above the
+    /// controls forced awkward vertical focus hops); audio → large artwork.
     @ViewBuilder
     private var mediaSurface: some View {
         Group {
             if isVideo, let player = playbackModel.avPlayer {
-                VStack(spacing: 16) {
-                    TVVideoSurface(player: player)
-                        .frame(width: 832, height: 468)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 1))
-                        .overlay { bufferingOverlay(cornerRadius: 16) }
-                    Button {
-                        onEnterFullscreen()
-                    } label: {
-                        Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .buttonStyle(.bordered)
-                }
+                TVVideoSurface(player: player)
+                    .frame(width: 832, height: 468)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 1))
+                    .overlay { bufferingOverlay(cornerRadius: 16) }
             } else {
-                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 24, targetPixels: 1000)
+                // 1200 px decoded for the 440 pt player hero — ~2.5× density
+                // on the 4K composite (see TVArtworkImage's targetPixels note).
+                // Purple radial glow behind the artwork = the phone's
+                // Artwork-Player token (DESIGN.md), ported 2026-07-11.
+                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 24, targetPixels: 1200)
                     .frame(width: 440, height: 440)
+                    .background {
+                        RadialGradient(
+                            colors: [Color.purple.opacity(0.45), .clear],
+                            center: .center,
+                            startRadius: 60,
+                            endRadius: 420
+                        )
+                        .frame(width: 840, height: 840)
+                    }
                     .shadow(radius: 30)
                     .overlay { bufferingOverlay(cornerRadius: 24) }
             }
@@ -171,6 +183,14 @@ private struct TVPlayerPage: View {
 
     private var positionBar: some View {
         VStack(spacing: 8) {
+            // Current chapter (2026-07-11, round 9): windowed chapter context,
+            // paired with the prev/next chapter buttons in the transport row.
+            if let chapter = playbackModel.currentChapter {
+                Text(chapter.title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             ProgressView(value: progressFraction)
                 .tint(.purple)
             HStack {
@@ -191,8 +211,22 @@ private struct TVPlayerPage: View {
         return min(max(playbackModel.currentTime / duration, 0), 1)
     }
 
+    /// ONE unified control row (2026-07-11, round 9 — "playback controls are
+    /// not easy to navigate in the windowed view; chapter control only in
+    /// full screen"): everything is a single left-to-right focus pass —
+    /// [prev chapter] · skip back · play/pause · skip forward · [next
+    /// chapter] · speed · [Full Screen]. Chapter buttons appear only when the
+    /// episode has chapters; Full Screen only for video. No vertical hops.
     private var transportControls: some View {
-        HStack(spacing: 48) {
+        HStack(spacing: 40) {
+            if playbackModel.currentChapter != nil {
+                Button {
+                    playbackModel.skipToPreviousChapter()
+                } label: {
+                    Image(systemName: "backward.end.alt")
+                }
+            }
+
             Button {
                 playbackModel.skipBackward()
             } label: {
@@ -212,6 +246,14 @@ private struct TVPlayerPage: View {
                 Image(systemName: "goforward.30")
             }
 
+            if playbackModel.currentChapter != nil {
+                Button {
+                    playbackModel.skipToNextChapter()
+                } label: {
+                    Image(systemName: "forward.end.alt")
+                }
+            }
+
             Menu {
                 ForEach(PlaybackPreference.speedOptions, id: \.self) { speed in
                     Button(PlaybackPreference.speedLabel(speed)) {
@@ -220,6 +262,14 @@ private struct TVPlayerPage: View {
                 }
             } label: {
                 Label("Speed", systemImage: "gauge.with.needle")
+            }
+
+            if isVideo {
+                Button {
+                    onEnterFullscreen()
+                } label: {
+                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
             }
         }
         .buttonStyle(.bordered)

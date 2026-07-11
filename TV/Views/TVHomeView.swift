@@ -3,15 +3,19 @@ import AutohopCore
 
 // AI CONTEXT — TV/Views/TVHomeView.swift
 // Phase 2 (tvOS proposal §7 item 2): Home's shelf grammar (PC HomeView, §2.1).
-// Three sections in order: Continue Listening hero, Up Next shelf (the
-// streaming Priority Stack — QueueModel.streamableQueue, via
-// TVAppModel.upNextEpisodes), Latest shelf (newest episode per subscription).
+// Two sections in order: Continue Listening hero, Up Next shelf. The Latest
+// shelf was REMOVED 2026-07-11 (Kevin: irrelevant on TV — Up Next is the
+// point; the space goes to queue metadata instead).
 // Continue Listening / "Continue Watching" (video): driven by the SYNCED
-// listening-history record (TVAppModel.continueListening → mostRecentInProgressListeningEntry),
-// which carries the true cross-device resume position — NOT the old
-// playedState==.playing heuristic. The header label switches to "Continue
-// Watching" when the hero episode's mediaKind == .video. History lands fast via
-// the launch/foreground prime (CloudSyncEngine.fetchAllHistoryNow) and the view
+// listening-history record (TVAppModel.continueListening →
+// mostRecentInProgressListeningEntry). REWORKED 2026-07-11: renders from the
+// ENTRY's denormalized fields (title/podcast/artwork/duration/position), so
+// the phone's true current episode shows even before its catalog materializes
+// locally — the Resume affordance appears only once `episode` resolves (see
+// TVContinueListening + computeContinueListening's header for the two stale-
+// hero root causes this fixed). The header label switches to "Continue
+// Watching" when the hero's mediaKind == .video. History lands fast via the
+// launch/foreground prime (CloudSyncEngine.fetchAllHistoryNow) and the view
 // re-renders on onRemoteHistoryChanged (SYNC_DESIGN.md, 2026-07-05). Phase 3
 // (§8): tapping Continue Listening or any card calls `onPlay`, which
 // TVMainTabView wires to `TVAppModel.beginPlayback` + presenting TVPlayerView.
@@ -28,15 +32,12 @@ struct TVHomeView: View {
                 Text("Home")
                     .font(.largeTitle.bold())
                 if let continueItem = model.continueListening {
-                    continueListeningSection(continueItem.episode, positionSeconds: continueItem.positionSeconds)
+                    continueListeningSection(continueItem)
                 }
                 if !model.upNextEpisodes.isEmpty {
                     shelf(title: "Up Next", episodes: model.upNextEpisodes)
                 }
-                if !model.latestEpisodes.isEmpty {
-                    shelf(title: "Latest", episodes: model.latestEpisodes)
-                }
-                if model.continueListening == nil && model.upNextEpisodes.isEmpty && model.latestEpisodes.isEmpty {
+                if model.continueListening == nil && model.upNextEpisodes.isEmpty {
                     ContentUnavailableView(
                         "Nothing to play yet",
                         systemImage: "play.slash",
@@ -52,28 +53,34 @@ struct TVHomeView: View {
     // MARK: - Continue Listening (TVCard-Hero pattern, DESIGN.md)
 
     @ViewBuilder
-    private func continueListeningSection(_ episode: Episode, positionSeconds: TimeInterval) -> some View {
+    private func continueListeningSection(_ item: TVContinueListening) -> some View {
+        let entry = item.entry
+        let isVideo = item.episode?.mediaKind == .video
+        let positionSeconds = entry.lastPositionSeconds
+        let duration = entry.durationSeconds ?? item.episode?.durationSeconds
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(episode.mediaKind == .video ? "Continue Watching" : "Continue Listening")
+            sectionHeader(isVideo ? "Continue Watching" : "Continue Listening")
             Button {
-                onPlay(episode)
+                if let episode = item.episode { onPlay(episode) }
             } label: {
                 HStack(spacing: 24) {
-                    TVArtworkImage(url: episode.artworkURL, cornerRadius: 16, targetPixels: 800)
-                        .frame(width: 220, height: 220)
+                    TVArtworkImage(
+                        url: item.episode?.artworkURL ?? entry.artworkURL,
+                        cornerRadius: 16,
+                        targetPixels: 800
+                    )
+                    .frame(width: 220, height: 220)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(episode.title)
+                        Text(entry.episodeTitle)
                             .font(.title2.bold())
                             .lineLimit(2)
-                        if let podcast = model.subscription(for: episode)?.title {
-                            Text(podcast)
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(entry.podcastTitle)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
                         // Cross-device resume position bar (synced via the
                         // listening-history record — the same value playback
                         // resumes from).
-                        if positionSeconds > 0, let duration = episode.durationSeconds, duration > 0 {
+                        if positionSeconds > 0, let duration, duration > 0 {
                             ProgressView(value: min(positionSeconds / duration, 1.0))
                                 .tint(.purple)
                                 .frame(maxWidth: 420)
@@ -81,17 +88,33 @@ struct TVHomeView: View {
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
-                        Label("Resume", systemImage: "play.fill")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
+                        if item.episode != nil {
+                            Label("Resume", systemImage: "play.fill")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            // Entry synced but its catalog hasn't materialized
+                            // locally yet — same placeholder posture as the
+                            // queue snapshot's "Syncing…" rows.
+                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.headline)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     Spacer()
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                // Brand-purple tinted card (2026-07-11 theme pass) — material
+                // base with a purple wash, echoing the phone's purple accent
+                // semantics for the primary/active surface.
+                .background {
+                    RoundedRectangle(cornerRadius: 20).fill(.thinMaterial)
+                    RoundedRectangle(cornerRadius: 20).fill(Color.purple.opacity(0.12))
+                }
             }
             .buttonStyle(.card)
+            .disabled(item.episode == nil)
         }
         .focusSection()
     }

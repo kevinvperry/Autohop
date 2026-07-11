@@ -751,6 +751,22 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    /// The N most-recent history entries by the `lastListenedAt` COLUMN —
+    /// decodes only those N payloads. Added 2026-07-11 (TV round-8b): the
+    /// Continue Listening query used allHistoryEntries(), decoding the WHOLE
+    /// table (1,783 rows on Kevin's account) on every recompute — the single
+    /// biggest per-pass cost in the TV's refresh treadmill. Recency consumers
+    /// only ever need the newest handful.
+    func historyEntriesNewestFirst(limit: Int) throws -> [ListeningHistoryEntry] {
+        try dbQueue.read { db in
+            try HistorySyncRow
+                .order(Column("lastListenedAt").desc)
+                .limit(limit)
+                .fetchAll(db)
+                .compactMap { try? decoder.decode(ListeningHistoryEntry.self, from: $0.payload) }
+        }
+    }
+
     func historySystemFields(id: String) throws -> Data? {
         try dbQueue.read { db in
             try HistorySyncRow.fetchOne(db, key: id)?.systemFields

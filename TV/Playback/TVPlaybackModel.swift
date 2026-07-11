@@ -30,6 +30,16 @@ import AutohopCore
 final class TVPlaybackModel {
     private let engine = StreamingPlaybackEngine()
     private let subscriptionStore: SubscriptionStore
+    /// TV LISTENING STATS (2026-07-11): every playback tick's forward delta is
+    /// recorded via addListeningTime (same call the iPhone makes), plus episode
+    /// started/completed and manual skip-forward events. DayStats sync is
+    /// additive per (deviceID, dayKey) — the phone's Stats page sums this TV's
+    /// partition in automatically (SYNC_DESIGN.md 5b). The store internally
+    /// coalesces sync-DB writes (~10 s throttle), so per-tick calls are cheap;
+    /// checkpoint() flushes buckets BEFORE the CloudKit force-push so the
+    /// engine's queue scan sees the freshest day rows (same ordering rule as
+    /// iOS's lifecycle flush).
+    private let statsStore: ListeningStatsStore
 
     private(set) var currentEpisode: Episode?
     private(set) var currentSubscriptionTitle: String = ""
@@ -58,6 +68,9 @@ final class TVPlaybackModel {
     private var lastHistoryWriteAt: Date?
     private var sessionListenedSeconds: TimeInterval = 0
     private let historyWriteInterval: TimeInterval = 20
+    /// Effective playback speed for the stats time-saved calculation — seeded
+    /// from the subscription's playbackPreference on play, updated by setSpeed.
+    private var currentSpeed: Double = 1.0
 
     /// The underlying AVPlayer for ANY media kind (audio included) — see
     /// StreamingPlaybackEngine.avPlayer's header for why this differs from
@@ -66,8 +79,9 @@ final class TVPlaybackModel {
     var currentChapters: [Chapter] { engine.currentChapters }
     var capabilities: PlaybackCapabilities { engine.capabilities }
 
-    init(subscriptionStore: SubscriptionStore) {
+    init(subscriptionStore: SubscriptionStore, statsStore: ListeningStatsStore) {
         self.subscriptionStore = subscriptionStore
+        self.statsStore = statsStore
         engine.onTimeUpdate = { [weak self] time in
             self?.handleTimeUpdate(time)
         }
@@ -96,7 +110,9 @@ final class TVPlaybackModel {
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
         errorMessage = nil
+        currentSpeed = subscription.playbackPreference.speed
         subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: episode.id)
+        statsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
         do {
             try await engine.play(episode, preference: subscription.playbackPreference, filter: subscription.chapterFilter)
             // Cross-device RESUME (fix, 2026-07-04 — previously never
@@ -146,9 +162,50 @@ final class TVPlaybackModel {
         updateNowPlayingInfo()
     }
 
-    func skipForward(_ seconds: TimeInterval = 30) { engine.skipForward(seconds: seconds) }
+    // MARK: - Chapters (windowed-player navigation, 2026-07-11 — Kevin's
+    // round 9: "chapter control is only available in full screen view").
+    // Uses PlaybackSessionPolicy's prev/next-start logic (Phase 0) over the
+    // engine's active (filter-applied) chapter list.
+
+    /// The active chapter at the current playhead, nil when the episode has
+    /// no chapters (drives whether the windowed player shows chapter controls).
+    var currentChapter: Chapter? {
+        currentChapters.last { $0.startSeconds <= currentTime }
+            ?? currentChapters.first
+    }
+
+    func skipToNextChapter() {
+        guard let current = currentChapter,
+              let target = PlaybackSessionPolicy.nextChapterStart(from: current, in: currentChapters)
+        else { return }
+        engine.seek(to: target)
+    }
+
+    func skipToPreviousChapter() {
+        guard let current = currentChapter else { return }
+        // Standard player semantics: mid-chapter goes back to the CURRENT
+        // chapter's start; near the start (< 3 s in) goes to the previous one.
+        if currentTime - current.startSeconds > 3 {
+            engine.seek(to: current.startSeconds)
+            return
+        }
+        guard let target = PlaybackSessionPolicy.previousChapterStart(from: current, in: currentChapters) else {
+            engine.seek(to: current.startSeconds)
+            return
+        }
+        engine.seek(to: target)
+    }
+
+    func skipForward(_ seconds: TimeInterval = 30) {
+        engine.skipForward(seconds: seconds)
+        // Same stats semantics as iPhone: a deliberate skip forward is time saved.
+        statsStore.addManualSkipForward(seconds, subscriptionID: currentSubscriptionID)
+    }
     func skipBackward(_ seconds: TimeInterval = 15) { engine.skipBackward(seconds: seconds) }
-    func setSpeed(_ speed: Double) { engine.updatePlaybackSpeed(speed) }
+    func setSpeed(_ speed: Double) {
+        engine.updatePlaybackSpeed(speed)
+        currentSpeed = speed
+    }
 
     /// Called when the player cover is dismissed (Menu / onExitCommand).
     /// Audio keeps playing in the background (UIBackgroundModes: audio);
@@ -164,6 +221,10 @@ final class TVPlaybackModel {
     /// the engine's slow-lane debounce.
     func checkpoint() {
         flushProgress()
+        // Stats buckets flush BEFORE the force-push so the engine's queue scan
+        // sees the freshest day rows (same ordering as iOS's lifecycle flush).
+        statsStore.flushPendingStatsDays(reason: "tv.checkpoint")
+        statsStore.save()
         onPlaybackCheckpoint?()
     }
 
@@ -180,7 +241,22 @@ final class TVPlaybackModel {
     // MARK: - Progress + auto-advance
 
     private func handleTimeUpdate(_ time: TimeInterval) {
-        if time > currentTime { sessionListenedSeconds += (time - currentTime) }
+        if time > currentTime {
+            let delta = time - currentTime
+            sessionListenedSeconds += delta
+            // A forward tick is genuine listened time — record it into the
+            // synced day bucket. The < 5 s guard keeps a forward SEEK's jump
+            // (skip-30 lands here as one big delta) out of the wall-clock
+            // stats; real ticks arrive every ~0.5 s.
+            if delta < 5, let subscriptionID = currentSubscriptionID {
+                statsStore.addListeningTime(
+                    delta,
+                    speed: currentSpeed,
+                    subscriptionID: subscriptionID,
+                    showTitle: currentSubscriptionTitle
+                )
+            }
+        }
         currentTime = time
         if let lastHistoryWriteAt, Date().timeIntervalSince(lastHistoryWriteAt) >= historyWriteInterval {
             flushProgress()
@@ -217,6 +293,7 @@ final class TVPlaybackModel {
         )
         sessionListenedSeconds = 0
         subscriptionStore.markEpisodePlayed(subscriptionID: subscription.id, episodeID: episode.id)
+        statsStore.recordEpisodeCompleted(subscriptionID: subscription.id)
 
         // Auto-advance through the streaming Priority Stack — same policy
         // shape as iPhone's mark-played-then-advance, minus download gating.

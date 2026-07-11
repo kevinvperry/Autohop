@@ -116,6 +116,48 @@ public final class SubscriptionStore: ObservableObject {
         load()
     }
 
+    /// DEFERRED-LOAD variant (2026-07-11, tvOS launch-freeze fix): opens the
+    /// database but does NOT decode the library — the caller must await
+    /// `completeDeferredLoad()` before reading `subscriptions`. Added because
+    /// the synchronous `load()` decode of a large library (113 shows × 50
+    /// episode payloads) blocks the main actor for seconds, which on the TV
+    /// froze the launch splash into a static image and stalled remote
+    /// navigation right after launch. iOS keeps using the synchronous init
+    /// above (its launch sequencing depends on the store being ready
+    /// immediately after construction).
+    public init(deferredLoadDatabasePath: String?) {
+        self.legacyFileURL = nil
+        self.database = try? AutohopDatabase(path: deferredLoadDatabasePath ?? Self.defaultDatabasePath())
+    }
+
+    /// Finishes a deferred-load init: the row fetch + payload decode (the
+    /// expensive part) runs OFF the main actor — AutohopDatabase is
+    /// thread-safe by design (CloudSyncEngine already reads it off-main) —
+    /// and only the cheap array assignment/sort happens back here. Safe to
+    /// call once, before anything reads `subscriptions`.
+    public func completeDeferredLoad() async {
+        guard let database else { return }
+        // The legacy-JSON import path only applies to iOS (TV never had a
+        // subscriptions.json); with a nil legacyFileURL decodeLegacyFileIfPresent
+        // is a no-op, so plain load() semantics reduce to the DB branch below.
+        let loaded = await Task.detached(priority: .userInitiated) { [database] in
+            guard let rows = try? database.loadSubscriptions() else { return nil as [Subscription]? }
+            // The projection-heal pass also reads/decodes sync rows — keep it
+            // off-main with the load (2026-07-11, TV launch-hang follow-up).
+            try? database.reseedUndecodableSyncState(for: rows)
+            return rows
+        }.value
+        guard let loaded else {
+            subscriptions = []
+            persistedSnapshot = [:]
+            return
+        }
+        subscriptions = loaded.sorted { $0.priorityRank < $1.priorityRank }
+        // Non-destructive resort — same reasoning as load()'s note.
+        resortByCurrentPriorityRank()
+        persistedSnapshot = snapshotByID(subscriptions)
+    }
+
     /// Test seam: a store backed entirely by an in-memory database (no disk).
     public static func inMemory() -> SubscriptionStore {
         SubscriptionStore(inMemoryDatabase: try? AutohopDatabase())
@@ -237,6 +279,27 @@ public final class SubscriptionStore: ObservableObject {
             subscription.autoArchiveSettings = projection.autoArchiveSettings
             subscription.chapterFilter = projection.chapterFilter
             subscription.downloadFilterSettings = projection.downloadFilterSettings
+        } else {
+            // SECOND DATA-INTEGRITY FIX, SAME BUG CLASS (2026-07-11, found via
+            // real cross-device damage on Kevin's iPhone): the adopt branch
+            // above only protects materialisations that happen AFTER the synced
+            // projection landed locally. The survival-kit PURGE REBUILD runs
+            // against a freshly-purged (EMPTY) database — no projections exist
+            // yet — so this fell through, seeded defaults, and the follow-up
+            // save() → recordSubscriptionSyncState's "first sighting seeds a
+            // fully-dirty projection" rule (right for a genuine local
+            // subscribe, wrong here) pushed ALL 113 subscriptions' DEFAULT
+            // settings with fresh stamps that beat the phone's older real
+            // values under field-LWW — resetting settings across Kevin's phone.
+            // Fix: pre-seed the projection CLEAN (markClean = every field "no
+            // local opinion"), so recordSubscriptionSyncState's apply() sees no
+            // change, nothing pushes, and the real settings win when the
+            // CloudKit record arrives moments later. A materialized-by-identity
+            // subscription NEVER originates settings; only add(parsedFeed:)
+            // (a genuine new local subscribe) should seed dirty.
+            var seed = SubscriptionSyncState(subscription: subscription, subscribed: true)
+            seed.markClean()
+            try? database?.saveSubscriptionSyncState(seed)
         }
 
         let episodes = parsedFeed.episodes.compactMap {
@@ -254,6 +317,30 @@ public final class SubscriptionStore: ObservableObject {
         resortByCurrentPriorityRank()
         save()
         return subscription
+    }
+
+    /// REPAIR (2026-07-11, companion to the clean-seed fix in `materialize`
+    /// above): de-dirties every pending subscription projection WITHOUT pushing
+    /// it. For the tvOS one-shot launch repair: a TV database that was rebuilt
+    /// from the survival kit BEFORE that fix shipped still holds fully-dirty
+    /// DEFAULT-settings projections, which the engine would re-push (and
+    /// re-clobber the phone) on its next activation. The TV NEVER authors
+    /// subscription settings (it has no per-podcast settings UI), so clearing
+    /// ALL pending subscription-projection dirt there is safe; the only
+    /// TV-authored subscription event is subscribe-on-TV, and losing a pending
+    /// push of one of those (worst case) means that show simply doesn't roam —
+    /// vastly better than clobbering settings account-wide. Returns the number
+    /// of projections cleaned, for logging. NOT for iOS: the phone legitimately
+    /// authors settings and its pending dirt must survive.
+    @discardableResult
+    public func markAllPendingSubscriptionProjectionsClean() -> Int {
+        guard let database, let pending = try? database.pendingSubscriptionSyncStates(), !pending.isEmpty else { return 0 }
+        for state in pending {
+            var cleaned = state
+            cleaned.markClean()
+            try? database.saveSubscriptionSyncState(cleaned)
+        }
+        return pending.count
     }
 
     /// Self-heal: an `EpisodeSyncState` CloudKit record can arrive and cache
@@ -853,15 +940,29 @@ public final class SubscriptionStore: ObservableObject {
     /// Requires a meaningful position (> 0 after normalization) so a barely-
     /// touched episode doesn't squat on the hero card.
     public func mostRecentInProgressListeningEntry() -> ListeningHistoryEntry? {
-        guard let database, let entries = try? database.allHistoryEntries() else { return nil }
+        guard let database else { return nil }
+        func qualifies(_ entry: ListeningHistoryEntry) -> Bool {
+            guard entry.status == .listened else { return false }
+            return PlaybackPositionStore.normalizedResumeTime(
+                entry.lastPositionSeconds,
+                duration: entry.durationSeconds
+            ) > 0
+        }
+        // FAST PATH (2026-07-11, TV round-8b): the winner is by definition the
+        // newest qualifying entry, so scan a newest-first LIMITed slice instead
+        // of decoding the whole table (1,783 rows) — the rows are ordered by
+        // the same lastListenedAt the recency comparison uses, so the first
+        // qualifying hit IS the answer. The full-scan fallback only runs in
+        // the degenerate case where none of the newest 50 qualify (e.g. a long
+        // run of completed-episode entries with no usable position).
+        if let recent = try? database.historyEntriesNewestFirst(limit: 50) {
+            if let winner = recent.first(where: qualifies(_:)) { return winner }
+            // Fewer rows than the limit = that WAS the whole table; done.
+            if recent.count < 50 { return nil }
+        }
+        guard let entries = try? database.allHistoryEntries() else { return nil }
         return entries
-            .filter { entry in
-                guard entry.status == .listened else { return false }
-                return PlaybackPositionStore.normalizedResumeTime(
-                    entry.lastPositionSeconds,
-                    duration: entry.durationSeconds
-                ) > 0
-            }
+            .filter(qualifies(_:))
             .max { $0.lastListenedAt < $1.lastListenedAt }
     }
 

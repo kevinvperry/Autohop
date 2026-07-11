@@ -75,4 +75,60 @@ final class MaterializeSettingsPreservationTests: XCTestCase {
             "materialize must not re-dirty the adopted clean projection (would push defaults over the phone's settings)"
         )
     }
+
+    /// Regression guard for the SECOND fix in this bug class (2026-07-11,
+    /// found via real cross-device damage): a survival-kit PURGE REBUILD
+    /// materialises into an EMPTY database — no projection exists to adopt —
+    /// and the "first sighting seeds a fully-dirty projection" rule then
+    /// pushed DEFAULT settings over the phone's real values for every
+    /// subscription. materialize must seed a CLEAN projection in that case:
+    /// a materialized-by-identity subscription never originates settings.
+    func testMaterializeWithNoProjectionSeedsCleanNotDirty() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        // No seeded projection — the post-purge rebuild case.
+
+        _ = store.materialize(parsedFeed: feed(), feedURL: URL(string: "https://f.com/feed")!, subscriptionID: id)
+        await store.flushPendingSaves()
+
+        let pending = try store.database?.pendingSubscriptionSyncStates() ?? []
+        XCTAssertFalse(
+            pending.contains { $0.subscriptionID == id },
+            "a purge-rebuild materialize must not create a dirty default-settings projection (would push defaults over the phone's settings)"
+        )
+        // The projection should exist (clean), so later remote state merges
+        // into it rather than re-seeding dirty on the next local save.
+        let projection = try store.database?.subscriptionSyncState(id: id)
+        XCTAssertNotNil(projection, "materialize should seed a clean projection when none exists")
+        XCTAssertEqual(projection?.hasPendingChanges, false)
+    }
+
+    /// The genuine new-local-subscribe path must still seed DIRTY — that's how
+    /// a subscription made ON this device reaches other devices at all.
+    func testAddStillSeedsDirtyProjection() async throws {
+        let store = SubscriptionStore.inMemory()
+
+        let sub = try store.add(parsedFeed: feed(), feedURL: URL(string: "https://f.com/feed")!)
+        await store.flushPendingSaves()
+
+        let pending = try store.database?.pendingSubscriptionSyncStates() ?? []
+        XCTAssertTrue(
+            pending.contains { $0.subscriptionID == sub.id },
+            "a genuine local subscribe must push its full projection"
+        )
+    }
+
+    /// The one-shot TV launch repair: pre-fix dirty default projections are
+    /// de-dirtied without being pushed.
+    func testMarkAllPendingSubscriptionProjectionsClean() async throws {
+        let store = SubscriptionStore.inMemory()
+        _ = try store.add(parsedFeed: feed(), feedURL: URL(string: "https://f.com/feed")!)
+        await store.flushPendingSaves()
+        XCTAssertFalse(try XCTUnwrap(store.database?.pendingSubscriptionSyncStates()).isEmpty)
+
+        let cleaned = store.markAllPendingSubscriptionProjectionsClean()
+
+        XCTAssertEqual(cleaned, 1)
+        XCTAssertTrue(try XCTUnwrap(store.database?.pendingSubscriptionSyncStates()).isEmpty)
+    }
 }

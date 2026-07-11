@@ -1,4 +1,5 @@
 import AVFoundation
+import CloudKit
 import Combine
 import Foundation
 import Network
@@ -128,6 +129,12 @@ import UIKit
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
+//    DRIVEN BY the 30-second foreground poller (startForegroundPolling,
+//    reason: "poll.tick") so it runs on its own cadence whenever the app is
+//    alive (foreground OR background-audio) — NOT only at cold launch and at a
+//    completed feed-refresh cycle's tail, which left it barely running for
+//    long-lived processes (fixed 2026-07-11). Also runs at app.startup and at
+//    the end of a completed performRefreshCycle, plus the two manual buttons.
 //    The inactive/limit passes skip a subscription's pre-existing back-catalogue
 //    (episodes published on/before Subscription.subscribedAt) so subscribing to a
 //    show never archives its whole backlog on day one.
@@ -244,6 +251,25 @@ final class AppState: ObservableObject {
     private let cloudSyncEngine: CloudSyncEngine
     static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
     let downloadActivityStore = DownloadActivityStore()
+
+    /// Autohop Pro entitlement (StoreKit 2) + the relay client it gates. See
+    /// Docs/RELAY_TIER1_IMPLEMENTATION.md §4. autohopProStore owns purchase/
+    /// entitlement state only; AppState owns WHEN to call the relay (register on
+    /// entitlement gain, unregister on loss, feed-sync on subscription changes,
+    /// dispatch wake-pushes) — wired in init() and relayTokenReceived(_:) below.
+    let autohopProStore = AutohopProStore()
+    private let relayClient = RelayClient.shared
+    private var relayAPNsToken: String?
+    private var relayFeedSyncDebounceTask: Task<Void, Never>?
+    private var relayFeedSyncInFlight = false
+    /// CKContainer.fetchUserRecordID(), cached — the anonymous per-USER (not
+    /// per-device) id the relay's Glossary calls `sync_group_id`, used to fan
+    /// sync-nudge between a user's own devices (§6.4). Resolved lazily and
+    /// cached in-memory only (re-fetches each cold launch — cheap, no local
+    /// account-status caching needed since CloudKit already caches internally).
+    private var relaySyncGroupID: String?
+    private var relaySyncNudgeDebounceTask: Task<Void, Never>?
+    private var relaySyncNudgeInFlight = false
 
     // Player state
     @Published var currentPlayerEpisode: Episode? {
@@ -543,6 +569,12 @@ final class AppState: ObservableObject {
         case foregroundTimer
         case backgroundRefreshTask = "BGAppRefreshTask"
         case backgroundProcessingTask = "BGProcessingTask"
+        // Autohop Pro silent push (RELAY_TIER1_IMPLEMENTATION.md §4.4) — tagged
+        // separately from the BGTask triggers so a log review can finally answer
+        // "did the relay actually cause this refresh, or would the on-device
+        // poller have found it anyway" — the question the whole feature exists
+        // to answer, previously unanswerable from diagnostics.
+        case relayPush = "AutohopRelay"
     }
 
     private enum FeedRefreshExecutionContext: String, Sendable {
@@ -551,6 +583,7 @@ final class AppState: ObservableObject {
         case backgroundRefreshTask
         case backgroundAudioAlive
         case backgroundProcessingTask
+        case relayPush
     }
 
     private struct RefreshCycleDiagnostics: Sendable {
@@ -684,6 +717,11 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
             await MainActor.run { self?.listeningStatsStore.reloadRemoteStats() }
         }
+        // Relay sync-nudge send-side (§6.4) — see AppState's "Autohop Relay" MARK
+        // section for scheduleRelaySyncNudge()'s debounce/gating.
+        cloudSyncEngine.onLocalChangesPushed = { [weak self] in
+            await MainActor.run { self?.scheduleRelaySyncNudge() }
+        }
         // Active-player-wins: tell the store which episode is loaded in the
         // player so a remote played/archived change can't interrupt it.
         subscriptionStore.nowPlayingEpisodeSyncKeyProvider = { [weak self] in
@@ -721,6 +759,26 @@ final class AppState: ObservableObject {
                     self.objectWillChange.send()
                     let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
                     NotificationService.shared.updateBadge(count: badgeCount)
+                    self.scheduleRelayFeedSync()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Autohop Pro gate (§4.1): register with the relay the moment BOTH an
+        // active entitlement and an APNs token are available; unregister the
+        // instant entitlement lapses so a lapsed subscriber's feeds/token stop
+        // being crawled/pushed. relayTokenReceived(_:) drives the other half of
+        // this (token arriving after entitlement is already active).
+        autohopProStore.$isPro
+            .removeDuplicates()
+            .sink { [weak self] isPro in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if isPro {
+                        await self.registerWithRelayIfPossible()
+                    } else if self.relayClient.isRegistered {
+                        _ = try? await self.relayClient.unregister()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -2529,6 +2587,27 @@ final class AppState: ObservableObject {
             historyTrackingLastTime = currentPlayerTime
             playbackMessage = nil
 
+            // CROSS-DEVICE "NOW PLAYING" FRESHNESS (2026-07-11, Kevin's TV
+            // round 7: the TV's Continue Listening hero was "a show behind").
+            // Seed/stamp this episode's history entry NOW and force-push it —
+            // previously the entry only went dirty at the first playback
+            // progress tick and then sat out the engine's ~60 s slow-lane
+            // debounce, so another device had no idea a new episode had
+            // started for the first minute-plus. listenedSeconds: 0 accrues
+            // nothing; the write's only job is the fresh lastListenedAt stamp
+            // (which wins the hero's recency comparison everywhere) and the
+            // starting position. max(…, 1) because the TV-side hero filter
+            // requires a usable (> 0) resume position.
+            listeningHistoryStore.recordProgress(
+                episode: playableEpisode,
+                podcastTitle: subscription.title,
+                artworkURL: playableEpisode.artworkURL ?? subscription.artworkURL,
+                listenedSeconds: 0,
+                positionSeconds: max(start.reportedStartTime, 1),
+                durationSeconds: playableEpisode.durationSeconds
+            )
+            flushDeferredSyncPushes(reason: "playback.start")
+
             // Chapters from an external `podcast:chapters` feed are fetched AFTER
             // playback has started (P7) so a slow/hung endpoint never delays the
             // first audio frame; they are applied live to the store, the now-
@@ -4331,6 +4410,227 @@ final class AppState: ObservableObject {
         cloudSyncEngine.flushDeferredPushes(reason: reason)
     }
 
+    // MARK: - Autohop Relay (Autohop Pro — RELAY_TIER1_IMPLEMENTATION.md §4)
+
+    /// Forwarded from AppDelegate.didRegisterForRemoteNotificationsWithDeviceToken.
+    /// Called on every launch (registerForRemoteNotifications runs unconditionally),
+    /// so this is frequently a no-op token refresh; registerWithRelayIfPossible
+    /// only actually calls the relay when isPro is also true.
+    func relayTokenReceived(_ token: String) {
+        relayAPNsToken = token
+        Task { await registerWithRelayIfPossible() }
+    }
+
+    private func registerWithRelayIfPossible() async {
+        guard autohopProStore.isPro,
+              let token = relayAPNsToken,
+              let jws = autohopProStore.latestTransactionJWS
+        else { return }
+        let syncGroupID = await resolveRelaySyncGroupID()
+        do {
+            let (_, requestID) = try await relayClient.register(jws: jws, apnsToken: token, syncGroupId: syncGroupID)
+            logger.info("relay.registered", "Registered device with Autohop Relay", metadata: [
+                "requestID": requestID,
+                "hasSyncGroupID": "\(syncGroupID != nil)"
+            ])
+            await syncRelayFeedsIfRegistered()
+        } catch {
+            logger.warning("relay.registerFailed", "Autohop Relay registration failed", metadata: [
+                "error": "\(error)",
+                "requestID": (error as? RelayError)?.requestID ?? "none"
+            ])
+        }
+    }
+
+    /// Debounced entry point for §4.3 feed-list sync — call this, not
+    /// syncRelayFeedsIfRegistered() directly, from anything that fires on
+    /// subscriptionStore.objectWillChange. A single feed refresh sweep fires
+    /// that publisher once per subscription/episode merged (seen hammering the
+    /// relay 60+ times/sec during a live refresh, 2026-07-10 diagnostic review —
+    /// AH-01-style storm). 2 s of quiet coalesces a whole sweep into one POST.
+    private func scheduleRelayFeedSync() {
+        relayFeedSyncDebounceTask?.cancel()
+        relayFeedSyncDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await self?.syncRelayFeedsIfRegistered()
+        }
+    }
+
+    /// Sends the full subscribed-feed set (§4.3 — idempotent). No-op for non-Pro,
+    /// not-yet-registered, or already-in-flight (debounce coalesces the CALLS;
+    /// this guards against a slow request still running when the next one lands).
+    /// Callers: scheduleRelayFeedSync() (debounced) and registerWithRelayIfPossible()
+    /// (one deliberate call right after a fresh registration — fine undebounced).
+    private func syncRelayFeedsIfRegistered() async {
+        guard autohopProStore.isPro, relayClient.isRegistered, !relayFeedSyncInFlight else { return }
+        relayFeedSyncInFlight = true
+        defer { relayFeedSyncInFlight = false }
+        let urls = subscriptionStore.subscriptions
+            .filter { $0.browseDate == nil }
+            .map(\.feedURL)
+        do {
+            let (count, requestID) = try await relayClient.setFeeds(urls)
+            // Success was previously invisible — only relay.feedSyncFailed existed,
+            // so a log review could count failures but never tell "mostly working"
+            // from "never worked." requestID lets a review grep the Worker's own
+            // Cloudflare Workers Logs for the same request (§12 OBSERVABILITY).
+            logger.info("relay.feedSyncSucceeded", "Autohop Relay feed sync succeeded", metadata: [
+                "sentCount": "\(urls.count)",
+                "acknowledgedCount": "\(count)",
+                "requestID": requestID
+            ])
+        } catch {
+            logger.warning("relay.feedSyncFailed", "Autohop Relay feed sync failed", metadata: [
+                "error": "\(error)",
+                "requestID": (error as? RelayError)?.requestID ?? "none"
+            ])
+        }
+    }
+
+    /// Resolves the anonymous per-user CloudKit record ID used as the relay's
+    /// `sync_group_id` (§1 Glossary — identical across this user's devices,
+    /// unlike DeviceIdentity.current which is per-DEVICE and would never match
+    /// between an iPhone and its paired TV). Cached in-memory for the process
+    /// lifetime; nil (register proceeds without a sync group — feed-updated
+    /// push still works, only sync-nudge fan-out is unavailable) if iCloud
+    /// isn't available, matching this app's existing graceful-degradation
+    /// posture around CloudSyncEngine itself.
+    /// CKContainer has NO async-throws overload of fetchUserRecordID — only the
+    /// completion-handler form (confirmed by an actual build failure, not
+    /// assumed) — so this bridges it via withCheckedContinuation.
+    private func resolveRelaySyncGroupID() async -> String? {
+        if let relaySyncGroupID { return relaySyncGroupID }
+        let container = CKContainer(identifier: AppState.cloudKitContainerID)
+        let recordID: CKRecord.ID? = await withCheckedContinuation { continuation in
+            container.fetchUserRecordID { recordID, _ in
+                continuation.resume(returning: recordID)
+            }
+        }
+        guard let recordID else { return nil }
+        relaySyncGroupID = recordID.recordName
+        return recordID.recordName
+    }
+
+    /// Debounced entry point for §6.4's sync-nudge SEND side — call this, not
+    /// sendRelaySyncNudge() directly, from CloudSyncEngine.onLocalChangesPushed.
+    /// That fires on every successful CK push, which during active use can be
+    /// bursty (documented in this file's own CloudSyncEngine header: "8 CK
+    /// pushes in ~2 min of playback") — undebounced, this would repeat the
+    /// exact feed-sync storm bug fixed 2026-07-10. 5 s of quiet (longer than
+    /// feed-sync's 2 s: a sync-nudge is lower-urgency than a new episode) before
+    /// actually notifying the relay.
+    private func scheduleRelaySyncNudge() {
+        relaySyncNudgeDebounceTask?.cancel()
+        relaySyncNudgeDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            await self?.sendRelaySyncNudge()
+        }
+    }
+
+    /// No-op for non-Pro, not-yet-registered, or already-in-flight devices. The
+    /// Worker itself is a further, coarser safety net regardless of how often
+    /// this fires: it fans out to OTHER devices, not this one, and PUSH_QUEUE's
+    /// per-device coalescing (§6.3, COALESCE_WINDOW=15m) caps how often any
+    /// single target device is actually woken — this guard only protects the
+    /// relay's REQUEST volume from this device, not push volume to the TV.
+    private func sendRelaySyncNudge() async {
+        guard autohopProStore.isPro, relayClient.isRegistered, !relaySyncNudgeInFlight else { return }
+        relaySyncNudgeInFlight = true
+        defer { relaySyncNudgeInFlight = false }
+        do {
+            let requestID = try await relayClient.syncNudge()
+            logger.info("relay.syncNudgeSent", "Autohop Relay sync-nudge sent", metadata: [
+                "requestID": requestID
+            ])
+        } catch {
+            logger.warning("relay.syncNudgeFailed", "Autohop Relay sync-nudge failed", metadata: [
+                "error": "\(error)",
+                "requestID": (error as? RelayError)?.requestID ?? "none"
+            ])
+        }
+    }
+
+    /// §4.5 heartbeat send-side. Called from AppDelegate.applicationDidBecomeActive
+    /// (the documented trigger — "on foreground, ≤1/day"). Persisted via
+    /// UserDefaults (NOT an in-memory Task/timestamp like the debounces above) —
+    /// a relaunch must NOT reset the ≤1/day budget, or a user who force-quits and
+    /// reopens the app often would heartbeat every launch instead of daily.
+    private static let lastHeartbeatKey = "com.autohop.relay.lastHeartbeatAt"
+    private static let heartbeatInterval: TimeInterval = 24 * 3600
+
+    func sendRelayHeartbeatIfDue() async {
+        guard autohopProStore.isPro, relayClient.isRegistered else { return }
+        let lastSent = UserDefaults.standard.double(forKey: Self.lastHeartbeatKey)
+        let elapsed = Date().timeIntervalSince1970 - lastSent
+        guard elapsed >= Self.heartbeatInterval else { return }
+        do {
+            let (entitlement, requestID) = try await relayClient.heartbeat(
+                apnsToken: relayAPNsToken,
+                syncGroupId: await resolveRelaySyncGroupID()
+            )
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastHeartbeatKey)
+            logger.info("relay.heartbeatSent", "Autohop Relay heartbeat sent", metadata: [
+                "requestID": requestID,
+                "entitlementStatus": entitlement.status
+            ])
+            // A heartbeat that comes back non-active/grace means the server no
+            // longer considers this device entitled (e.g. a webhook the app
+            // never saw) — refresh local StoreKit state so isPro catches up
+            // rather than staying stuck showing "Active" indefinitely.
+            if entitlement.status != "active" && entitlement.status != "grace" {
+                await autohopProStore.refreshEntitlement()
+            }
+        } catch {
+            // Deliberately does NOT update lastHeartbeatKey on failure — retries
+            // next foreground instead of waiting a full day after a transient error.
+            logger.warning("relay.heartbeatFailed", "Autohop Relay heartbeat failed", metadata: [
+                "error": "\(error)",
+                "requestID": (error as? RelayError)?.requestID ?? "none"
+            ])
+        }
+    }
+
+    /// Dispatches a relay silent push (§4.4) by its `type` payload key. Must
+    /// return quickly — called from AppDelegate's fetchCompletionHandler path,
+    /// the same no-stall contract as the BGTask handlers. Returns whether real
+    /// work was kicked off (maps to .newData vs .noData for iOS's wake-budget).
+    @discardableResult
+    func handleRelayPush(type: String) async -> Bool {
+        switch type {
+        case "feed-updated":
+            // Tagged .relayPush (not .manualButton, what refreshAllSubscriptions()
+            // uses) so a log review can finally tell whether the relay caused this
+            // refresh or the on-device poller would have found it anyway — the
+            // question this whole feature exists to answer (diagnostic-log
+            // improvement pass, 2026-07-10). The wake payload is generic (§14
+            // DECISIONS — no specific feed_url), so — like a manual pull-to-refresh —
+            // every subscription is checked; the relay's own conditional-GET keeps
+            // the 112 unchanged feeds cheap (304s) server-side.
+            await refreshSubscriptions(
+                reason: "relay",
+                trigger: .relayPush,
+                executionContext: .relayPush,
+                maxSubscriptions: nil,
+                includeBackoffFeeds: true,
+                onlyDueFeeds: false,
+                joinActiveCycle: true
+            )
+            return true
+        case "sync-nudge":
+            // Immediate CloudKit pull — same primitives TV's launch/foreground
+            // prime uses (TV/App/AutohopTVApp.swift primeLibraryFromCloudSoon),
+            // just without its retry loop (a background push has no time for
+            // 15 s of activation retries; a not-yet-activated engine is a no-op).
+            await cloudSyncEngine.fetchAllSubscriptionsNow(reason: "relay.syncNudge")
+            await cloudSyncEngine.fetchAllHistoryNow(reason: "relay.syncNudge")
+            return true
+        default:
+            return false
+        }
+    }
+
     private func saveQueuePins() {
         guard let url = Self.queuePinsFileURL else { return }
         let pins = SavedQueuePins(overrideIDs: queueOverrideEpisodeIDs, demotedIDs: queueDemotedEpisodeIDs)
@@ -4805,6 +5105,24 @@ final class AppState: ObservableObject {
                 // Run when visible, or when background audio playback is keeping the
                 // process alive (active listening). Skip only when truly idle.
                 guard self.isAppForeground || self.isPlaying else { continue }
+
+                // Auto-archive on its OWN cadence, decoupled from feed refresh.
+                // BUG FIX (2026-07-11, Kevin: "auto-archive is simply not running
+                // regularly" — an 8-hour Inactive setting leaving episodes for
+                // weeks). runAutoArchive was ONLY ever driven by (a) cold launch
+                // and (b) the tail of a COMPLETED feed-refresh cycle
+                // (performRefreshCycle, ~line 3500). Both are unreliable: a
+                // podcast app's process stays alive for hours (background audio +
+                // suspension) so cold launch is rare, and the refresh cycle skips
+                // auto-archive entirely whenever nothing is due (early return at
+                // the onlyDueFeeds/no-selection guard) or the cycle is cancelled
+                // by the background time budget. So the inactive-timeout clock was
+                // serviced only by chance. This tick services it every poll while
+                // the app is alive; runAutoArchiveIfNeeded's built-in 30-min gate
+                // keeps the actual pass to "at most every 30 minutes" (the promise
+                // the Settings footer makes) regardless of how often we call it.
+                await self.runAutoArchiveIfNeeded(reason: "poll.tick")
+
                 let now = Date()
                 let dueCount = self.subscriptionStore.subscriptions.filter { subscription in
                     !subscription.excludeFromAutoFeedRefresh

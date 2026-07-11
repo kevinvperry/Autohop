@@ -31,6 +31,16 @@ public final class AppLogger: ObservableObject {
     @Published private(set) var lastUpdated = Date()
     var isEnabled: Bool = false
 
+    /// Library-consumer switch (2026-07-11, TV diagnostics): `isEnabled` is
+    /// internal (iOS sets it directly from the hidden Diagnostics toggle), but
+    /// the TV target imports AutohopCore as a library and previously had NO
+    /// way to turn logging on — every non-alwaysPersist TV log line was
+    /// silently dropped. The TV enables logging unconditionally at TVAppModel
+    /// init (the file is capped + rotated, and TV has no user-facing toggle).
+    public func setEnabled(_ enabled: Bool) {
+        isEnabled = enabled
+    }
+
     let logFileURL: URL
 
     private let queue = DispatchQueue(label: "com.autohop.diagnostic-log")
@@ -157,6 +167,15 @@ public final class AppLogger: ObservableObject {
                 .joined(separator: " ")
         let cleanMessage = Self.redactSensitiveText(message.replacingOccurrences(of: "\n", with: " "))
         let line = "\(timestamp) [\(level)] \(event): \(cleanMessage)\(metadataText)\n"
+
+        #if DEBUG
+        // Console mirror (2026-07-11, TV diagnostics): debug builds echo every
+        // persisted line to stdout so a device run launched from Xcode streams
+        // the diagnostic log live in the console — the fastest way to watch
+        // tv.mainThreadHang / tv.perf events while reproducing UI stutter.
+        // Release builds are file-only, exactly as before.
+        print(line, terminator: "")
+        #endif
 
         queue.async { [weak self] in
             guard let self else { return }

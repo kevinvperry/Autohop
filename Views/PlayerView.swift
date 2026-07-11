@@ -1184,6 +1184,7 @@ struct PlayerView: View {
             if let date = ep.publishedAt {
                 metaCard("Published", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
+                metaCard("Distributed", releasedWeekdayLabel(date))
             }
             if let dur = ep.durationSeconds {
                 metaCard("Duration", formatDurationLong(dur))

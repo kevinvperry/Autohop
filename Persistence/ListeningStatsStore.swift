@@ -305,6 +305,16 @@ public final class ListeningStatsStore: ObservableObject {
     var syncDatabase: AutohopDatabase? {
         didSet { reloadRemoteStats() }
     }
+
+    /// Library-consumer wiring (tvOS, 2026-07-11): AutohopDatabase is internal
+    /// to AutohopCore, so external targets (the TV app imports AutohopCore as a
+    /// library) can't assign `syncDatabase` directly — this pulls it from the
+    /// SubscriptionStore facade instead, mirroring CloudSyncEngine's public
+    /// convenience init. iOS (which compiles these sources into the app target)
+    /// keeps assigning `syncDatabase` directly; both paths are equivalent.
+    public func attachSyncDatabase(from store: SubscriptionStore) {
+        syncDatabase = store.database
+    }
     /// Other devices' day partitions (dayKey → list), summed with local buckets
     /// on every read. Never merged into `data.days` (that would double-count).
     private var remoteByDayKey: [String: [DayStats]] = [:]

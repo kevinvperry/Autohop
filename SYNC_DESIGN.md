@@ -226,7 +226,72 @@ shows correct settings immediately. Guarded by
     TV to `refreshLibrary` so Continue Watching appears the moment the position
     syncs. (Resolution itself was already correct — `episodeMatching` matches on
     the stable `PlaybackPositionStore.key`, identical on both devices.)
-  - *Prompt position hand-off both ways (2026-07-05):* a mid-episode PAUSE
+  - *ROUND-6b DATA-DAMAGE POSTMORTEM (2026-07-11, same day as round 6 below —
+    Kevin: "sync has caused damage to my subscriptions on my phone. A large
+    number of individual settings have been reset to defaults").* Root cause:
+    the 2026-07-05 materialize adopt-fix only protects materialisations that
+    happen AFTER the synced projection landed locally. A survival-kit PURGE
+    REBUILD (TV's Caches DB purged → bootstrap refetches all feeds) runs
+    against an EMPTY database — no projections — so `materialize` seeded
+    DEFAULT settings and `recordSubscriptionSyncState`'s "first sighting seeds
+    a fully-dirty projection" rule (correct for a genuine local subscribe)
+    created dirty default projections for ALL 113 subscriptions; engine
+    activation pushed them; field-LWW's fresh stamps beat the phone's older
+    real values → phone-wide settings reset. THREE-PART FIX: (1) `materialize`
+    now pre-seeds a CLEAN projection (markClean → "no local opinion" on every
+    field) when none exists — a materialized-by-identity subscription NEVER
+    originates settings; the real values win when the CloudKit record arrives.
+    (2) One-shot TV launch repair (`SubscriptionStore.
+    markAllPendingSubscriptionProjectionsClean`, called in TVAppModel.bootstrap
+    BEFORE startCloudSync, UserDefaults-flagged) de-dirties pre-fix default
+    projections still in the TV DB so they can't re-push. Safe on TV only —
+    the TV never authors subscription settings. (3) Regression tests
+    (MaterializeSettingsPreservationTests: purge-rebuild seeds clean; add()
+    still seeds dirty; repair clears pending). RECOVERY: the phone's old
+    values are unrecoverable (overwritten via LWW; CloudKit now holds the
+    defaults) — Kevin re-sets affected settings manually; his newer stamps
+    then win everywhere. NOTE for any future platform with a purgeable DB
+    (watch): use `materialize`, never `add`, and it now inherits this
+    protection automatically.
+    **(4) HARD ONE-WAY RULE (same day, Kevin's directive after the damage —
+    "there is no reason for the Apple TV app to be able to alter subscription
+    settings on the phone"):** `CloudSyncEngine.pushesSubscriptionState`
+    (constructor policy; the TV passes false). In read-only subscription-state
+    mode the engine STRUCTURALLY never pushes `SubscriptionState` — settings,
+    subscribed/unsubscribed, priority rank — enforced at all three push
+    points: dirty rows are never queued (queuePendingLocalChanges), pending
+    saves restored from persisted engine state are dropped and removed
+    (nextRecordZoneChangeBatch, `sync.subscriptionPushBlocked`), and the
+    legacy-recovery re-upload routine is skipped entirely. Receiving is
+    unchanged; episode played-state, history, stats, and the queue snapshot
+    still push (the TV's legitimate outputs). Consequence: subscribe-on-TV is
+    local-only and does not roam. iOS keeps the default (true) — the phone is
+    the settings author. Tested: CloudSyncEnginePermanentFailureTests'
+    isSubscriptionStateChange cases (239 total).
+  - *Round-6 fixes (2026-07-11, Kevin's real-device findings: ~30 s of stale Up
+    Next, a month-old "Resume Playing" hero that vanished, never showing the
+    phone's actual current episode):*
+    1. **Prime order flipped** — `primeLibraryFromCloudSoon` now fetches the
+       queue snapshot + history (one cheap targeted fetch each) and re-renders
+       BEFORE the paginated `fetchAllSubscriptionsNow` sweep (113 records), so
+       Up Next/Continue Listening are phone-correct within seconds.
+    2. **Continue Listening renders from the history ENTRY itself**
+       (`TVContinueListening`): the old code required the entry to resolve to a
+       locally-materialized episode first, silently discarding the phone's true
+       current episode on a cold/behind TV; and its `playedState == .playing`
+       local fallback was what surfaced the month-old stale hero. The fallback
+       is DELETED; the hero now shows the entry's denormalized
+       title/podcast/artwork/position immediately, with a "Syncing…"
+       placeholder (non-playable) until the catalog materializes — same
+       pattern as the queue-snapshot churn fix.
+    3. **TV listening stats now sync** — TV creates its own
+       `ListeningStatsStore` (Caches JSON; new public
+       `attachSyncDatabase(from:)` since AutohopDatabase is internal to the
+       library), and `TVPlaybackModel` records listening time (speed-aware),
+       episode started/completed, and manual skip-forward. DayStats' additive
+       per-(deviceID, dayKey) partitions mean the iPhone Stats page sums TV
+       consumption in with ZERO phone-side changes. Stats buckets flush before
+       the checkpoint force-push, matching iOS lifecycle-flush ordering. a mid-episode PAUSE
     writes a position on the SLOW lane, which the engine holds ~60 s before
     pushing. To make a pause/exit reach the other device in seconds, both
     platforms now force-flush on pause + player-exit + app-background:

@@ -55,6 +55,12 @@ import Combine
 // a remote subscription for a podcast not present here triggers
 // `onSubscriptionNeedsMaterialization` (AppState fetches the feed).
 //
+// Autohop Relay hook (added 2026-07-10): `onLocalChangesPushed` fires whenever
+// handleSentChanges sees ≥1 successfully saved record — the send-side of §6.4
+// sync-nudge. AppState debounces it into POST /v1/sync-nudge so this user's
+// OTHER devices (TV) wake and fetch immediately instead of waiting on CloudKit's
+// own lag. This engine has no relay awareness beyond firing that one callback.
+//
 // Cannot be exercised by `swift test` (CKSyncEngine needs a container,
 // entitlements, and a signed-in account) — verified by building and running on a
 // real device (Simulator can't trigger CloudKit sync). The pure mapping/merge it
@@ -81,12 +87,34 @@ import Combine
 // the engine's lifecycle surface (init/start/stop/toggle/flush + the three
 // materialization callbacks and the CKSyncEngineDelegate witnesses) is public.
 // Internals (queue passes, quarantine, conflict tracking) stay internal.
-public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
+// @unchecked Sendable: CKSyncEngineDelegate requires Sendable, and the compiler
+// (Swift 6 mode) rejects the stored non-Sendable `logger` and mutable `engine`/
+// task state. Actual confinement: all lifecycle mutation (start/stop/toggle,
+// engine assignment, slowLanePushTask) is driven from the main thread by
+// AppState/TVAppModel; AutohopDatabase is thread-safe by design (passed
+// explicitly so delegate callbacks can read it off-main); AppLogger is
+// internally serialized. Verified 2026-07-11 when silencing the Xcode warnings.
+public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked Sendable {
     private let container: CKContainer
     private let subscriptionStore: SubscriptionStore
     private let database: AutohopDatabase?
     private let stateURL: URL?
     private let logger = AppLogger.shared
+
+    /// READ-ONLY SUBSCRIPTION-STATE MODE (2026-07-11, after real cross-device
+    /// damage: a TV purge-rebuild pushed default settings over the phone's
+    /// real per-podcast settings account-wide). When false, this engine NEVER
+    /// pushes `SubscriptionState` records — settings, subscribed/unsubscribed,
+    /// priority rank — no matter what the local database says is dirty; it is
+    /// a hard structural guarantee, not a convention. Enforced at all three
+    /// push points: the queue pass, restored pending saves in
+    /// nextRecordZoneChangeBatch (dropped, so even pre-flag engine state can't
+    /// leak one out), and the one-shot legacy recovery re-upload. Receiving
+    /// remains fully enabled. The TV passes false (Kevin's directive: the TV
+    /// must have ZERO ability to alter subscription settings on the phone);
+    /// consequence: subscribe-on-TV stays local to the TV and does not roam.
+    /// iOS keeps the default true — the phone is the settings author.
+    public let pushesSubscriptionState: Bool
 
     private var engine: CKSyncEngine?
     private var isStarting = false
@@ -145,6 +173,17 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// (tvOS TVAppModel) refresh their rendered queue here.
     public var onRemoteQueueSnapshotChanged: (() async -> Void)?
 
+    /// Invoked after this device successfully pushed ≥1 local record to iCloud
+    /// (RELAY_TIER1_IMPLEMENTATION.md §6.4 sync-nudge send-side, added
+    /// 2026-07-10 — previously nothing called this). AppState debounces this
+    /// into a POST /v1/sync-nudge so the relay wakes this user's OTHER devices
+    /// (e.g. TV) to fetch immediately instead of waiting on CloudKit's own lag.
+    /// Fired unconditionally on any successful push — AppState's debounce, not
+    /// this engine, is what keeps that from becoming a request storm during
+    /// bursty local activity (same class of bug as the feed-sync storm fixed
+    /// the same day; see AppState.scheduleRelaySyncNudge()).
+    public var onLocalChangesPushed: (() async -> Void)?
+
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
     /// - Parameter database: the store's record database, passed explicitly so
@@ -152,23 +191,32 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     init(
         containerIdentifier: String,
         subscriptionStore: SubscriptionStore,
-        database: AutohopDatabase?
+        database: AutohopDatabase?,
+        pushesSubscriptionState: Bool = true
     ) {
         self.container = CKContainer(identifier: containerIdentifier)
         self.subscriptionStore = subscriptionStore
         self.database = database
         self.stateURL = Self.defaultStateURL()
+        self.pushesSubscriptionState = pushesSubscriptionState
         super.init()
     }
 
     /// Library-consumer entry point (tvOS Phase 1): the store's record database
     /// is an internal type, so external targets construct the engine from the
     /// SubscriptionStore facade and this pulls the database internally.
-    public convenience init(containerIdentifier: String, subscriptionStore: SubscriptionStore) {
+    /// `pushesSubscriptionState: false` = read-only subscription-state mode
+    /// (see the property's header) — what the TV passes.
+    public convenience init(
+        containerIdentifier: String,
+        subscriptionStore: SubscriptionStore,
+        pushesSubscriptionState: Bool = true
+    ) {
         self.init(
             containerIdentifier: containerIdentifier,
             subscriptionStore: subscriptionStore,
-            database: subscriptionStore.database
+            database: subscriptionStore.database,
+            pushesSubscriptionState: pushesSubscriptionState
         )
     }
 
@@ -356,6 +404,18 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     /// could take many minutes (or, with no re-render trigger, never) to appear
     /// on the TV. Each record routes through `applyRemote`, which persists it
     /// (LWW) and fires `onRemoteHistoryChanged` so the UI refreshes.
+    /// While true, applyRemote's history branch does NOT fire the per-record
+    /// onRemoteHistoryChanged callback — fetchAllHistoryNow batches it to ONE
+    /// call at the end. FOUND VIA THE TV HANG WATCHDOG (2026-07-11, round 8
+    /// log): with a few hundred history records, every launch prime and every
+    /// TV freshness poll fired the callback per record, and the TV's handler
+    /// (refreshLibrary, ~290 ms) ran back-to-back for MINUTES — a saturated
+    /// main thread and the "extreme stutter, unusable" remote navigation.
+    private var suppressPerRecordHistoryNotify = false
+    /// Set by applyRemote's history branch while suppressed, so the batching
+    /// caller knows whether ONE deferred notify is owed at the end.
+    private var historyChangedDuringSuppressedBatch = false
+
     @discardableResult
     public func fetchAllHistoryNow(reason: String) async -> Int {
         guard engine != nil else { return 0 }
@@ -363,6 +423,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         let database = container.privateCloudDatabase
         var applied = 0
         var cursor: CKQueryOperation.Cursor?
+        suppressPerRecordHistoryNotify = true
+        defer {
+            suppressPerRecordHistoryNotify = false
+            historyChangedDuringSuppressedBatch = false // this path notifies via `applied` below
+        }
         do {
             repeat {
                 let page: (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?)
@@ -381,6 +446,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             logger.info("sync.historyPrimed", "Targeted history prime applied", metadata: [
                 "reason": reason, "count": "\(applied)"
             ])
+            if applied > 0 { await onRemoteHistoryChanged?() } // batched — see suppress flag
             return applied
         } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
             return 0
@@ -388,6 +454,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             logger.warning("sync.historyPrimeFailed", "Targeted history prime failed (records will still arrive via the change stream)", metadata: [
                 "reason": reason, "error": "\(error)"
             ])
+            if applied > 0 { await onRemoteHistoryChanged?() } // partial batch still notifies once
             return applied
         }
     }
@@ -460,7 +527,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             }
         }
         let episodes = read("episode sync states", database.pendingEpisodeSyncStates)
-        let subscriptions = read("subscription sync states", database.pendingSubscriptionSyncStates)
+        // Read-only subscription-state mode (see pushesSubscriptionState):
+        // dirty subscription rows are simply never queued.
+        let subscriptions = pushesSubscriptionState
+            ? read("subscription sync states", database.pendingSubscriptionSyncStates)
+            : []
         let history = read("history entries", database.pendingHistoryEntries)
         let stats = read("stats days", database.pendingStatsDays)
         let pendingQueue = (try? database.pendingQueueSnapshot()) ?? nil
@@ -531,6 +602,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
     }
 
     private func recoverLegacySubscriptionSettingsIfNeeded() async {
+        // Read-only subscription-state mode: this routine both writes settings
+        // locally from legacy records AND queues subscription re-uploads —
+        // neither belongs on a device that must never author subscription
+        // state. iOS-only legacy repair; skip entirely.
+        guard pushesSubscriptionState else { return }
         guard !UserDefaults.standard.bool(forKey: Self.legacySubscriptionRecoveryCompletedKey) else { return }
 
         do {
@@ -647,10 +723,21 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         var pendingChanges: [CKSyncEngine.PendingRecordZoneChange] = []
         var retiredLegacyChanges: [CKSyncEngine.PendingRecordZoneChange] = []
 
+        var blockedSubscriptionChanges: [CKSyncEngine.PendingRecordZoneChange] = []
+
         for change in syncEngine.state.pendingRecordZoneChanges where scope.contains(change) {
             if isQuarantined(change) { continue }
             if Self.isRetiredLegacyPendingSave(change) {
                 retiredLegacyChanges.append(change)
+                continue
+            }
+            // Read-only subscription-state mode: even a pending save RESTORED
+            // from the engine's persisted state (queued before this mode was
+            // set, e.g. by a pre-fix build) must never go out. Removed from
+            // engine state, not just skipped — otherwise it re-surfaces on
+            // every batch.
+            if !pushesSubscriptionState, Self.isSubscriptionStateChange(change) {
+                blockedSubscriptionChanges.append(change)
                 continue
             }
             pendingChanges.append(change)
@@ -661,6 +748,12 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             logger.info("sync.legacyPendingDropped", "Dropped restored pre-namespace pending saves", metadata: [
                 "count": "\(retiredLegacyChanges.count)"
             ])
+        }
+        if !blockedSubscriptionChanges.isEmpty {
+            syncEngine.state.remove(pendingRecordZoneChanges: blockedSubscriptionChanges)
+            logger.warning("sync.subscriptionPushBlocked", "Dropped pending SubscriptionState pushes — this device is subscription-state read-only", metadata: [
+                "count": "\(blockedSubscriptionChanges.count)"
+            ], alwaysPersist: true)
         }
         guard !pendingChanges.isEmpty else { return nil }
 
@@ -781,8 +874,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         // main-thread hang burst right after cold launch). One notification at the
         // end is enough — views re-read the final state.
         await MainActor.run { subscriptionStore.beginChangeNotificationCoalescing() }
+        // Batch the history notify for the whole event too (round-8b follow-up,
+        // 2026-07-11): the first batching fix only covered fetchAllHistoryNow,
+        // but the cold delta stream delivers the same records in batches of
+        // ~200 — per-record onRemoteHistoryChanged from HERE kept the TV's
+        // refresh treadmill running the whole time the stream drained.
+        suppressPerRecordHistoryNotify = true
+        historyChangedDuringSuppressedBatch = false
         for modification in event.modifications {
             await applyRemote(record: modification.record)
+        }
+        suppressPerRecordHistoryNotify = false
+        if historyChangedDuringSuppressedBatch {
+            historyChangedDuringSuppressedBatch = false
+            await onRemoteHistoryChanged?()
         }
         await MainActor.run { subscriptionStore.endChangeNotificationCoalescing() }
         guard !event.modifications.isEmpty || !event.deletions.isEmpty else { return }
@@ -850,7 +955,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             runDB("storeHistorySystemFields", metadata: ["id": remote.id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
             }
-            await onRemoteHistoryChanged?()
+            if suppressPerRecordHistoryNotify {
+                historyChangedDuringSuppressedBatch = true
+            } else {
+                await onRemoteHistoryChanged?()
+            }
 
         case CloudKitSync.queueSnapshotRecordType:
             guard let remote = CloudKitSync.queueSnapshot(from: record) else {
@@ -1011,6 +1120,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
             logger.info("sync.pushed", "Pushed local records to iCloud", metadata: [
                 "saved": "\(event.savedRecords.count)"
             ])
+            await onLocalChangesPushed?()
         }
 
         for failure in event.failedRecordSaves {
@@ -1127,6 +1237,19 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate {
         @unknown default:
             return false
         }
+    }
+
+    /// True when a pending change targets a `SubscriptionState` record (save
+    /// OR delete) — used by read-only subscription-state mode to drop them.
+    /// Matches by the type-namespaced record name (`subscription:<uuid>`).
+    static func isSubscriptionStateChange(_ change: CKSyncEngine.PendingRecordZoneChange) -> Bool {
+        let recordID: CKRecord.ID
+        switch change {
+        case .saveRecord(let id): recordID = id
+        case .deleteRecord(let id): recordID = id
+        @unknown default: return false
+        }
+        return CloudKitSync.subscriptionID(fromRecordName: recordID.recordName) != nil
     }
 
     private struct QuarantinedRecordKey: Hashable {

@@ -72,7 +72,13 @@ builder — both explicitly called for in §7 item 1) need tvOS 18+, and the
 Pocket Casts reference target itself ships tvOS 18; bumped `AutohopTV` to
 18.0 rather than build a second, older navigation path. DONE: `TVMainTabView`
 (Home/Queue/Library `Tab` shell); `TVHomeView` (Continue Listening hero + Up
-Next + Latest shelves); `TVQueueView`; `TVLibraryView` (grid → episode-list
+Next shelf — the Latest shelf was REMOVED 2026-07-11 per Kevin's real-device
+round 5: irrelevant on TV, the space goes to the queue. Same round: hero
+reworked to render from the synced history entry, cloud-prime order flipped
+to queue/history-first, TV listening-stats recording added so TV consumption
+reaches the iPhone Stats page, animated splash `TVLaunchLoadingView`, higher
+artwork targetPixels — details in SYNC_DESIGN.md round-5 notes + file
+headers); `TVQueueView`; `TVLibraryView` (grid → episode-list
 push by subscription UUID, not the Subscription value, so pushed pages
 resolve live) + `TVEpisodeListView`; `TVArtworkImage` (own lightweight
 AsyncImage wrapper — Views/CachedArtworkImage.swift is iOS-app-target-only

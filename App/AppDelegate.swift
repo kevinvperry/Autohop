@@ -64,6 +64,31 @@ import MetricKit
 //     that symbolicates against that build's dSYM; hangs log `metrics.hang` with
 //     duration + stack. MetricKit delivers these on a later launch via
 //     pastDiagnosticPayloads, so a background crash is pinpointed after the fact.
+//  9. Autohop Relay wake-push (Autohop Pro only — RELAY_TIER1_IMPLEMENTATION.md §4.4):
+//     registerForRemoteNotifications() is called unconditionally at launch (cheap;
+//     a no-op token capture if the user never subscribes) so the raw APNs token is
+//     ready the moment AutohopProStore confirms entitlement — AppState.relay-
+//     TokenReceived(_:) forwards it and drives POST /v1/register when both the
+//     token AND an active entitlement are present. didReceiveRemoteNotification
+//     dispatches by the relay's own `type` payload key: "feed-updated" runs the
+//     existing background refresh path; "sync-nudge" triggers an immediate
+//     CloudKit pull. Must complete fast and call the completion handler — no UI,
+//     matches the BGTask handlers' no-stall rule.
+//     BONUS FIX (found 2026-07-09, not a separate code change): this same
+//     registerForRemoteNotifications() call also fixes CKSyncEngine's own native
+//     CloudKit push delivery, which had silently never worked — CKSyncEngine
+//     needs a valid APNs token to receive its CKDatabaseSubscription pushes at
+//     all, and nothing in this app called registerForRemoteNotifications() before
+//     today. No CKSyncEngine-side code changes: per WWDC23 "Sync to iCloud with
+//     CKSyncEngine" ("CKSyncEngine automatically listens for these push
+//     notifications in your app. When it receives a notification, it submits a
+//     task to the scheduler.") and Apple's own sample-cloudkit-sync-engine (which
+//     has NO didReceiveRemoteNotification code at all), CKSyncEngine listens for
+//     its own pushes independent of this delegate — Persistence/CloudSyncEngine.swift
+//     needs no forwarding call. This delegate method only handles OUR relay's
+//     "type"-keyed payload; any CloudKit-shaped push (no "type" key) falls through
+//     to the guard above and completes with .noData, which is correct — CKSyncEngine
+//     has already claimed it before this method's userInfo check even matters.
 final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
 
     weak var appState: AppState?
@@ -94,7 +119,50 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         // Install the notification-center delegate before launch returns so
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()
+        // Cheap unconditionally: obtains the raw APNs token so it's ready the
+        // instant AutohopProStore confirms an active entitlement (see item 9
+        // above). Users who never subscribe simply get a token nobody uses.
+        application.registerForRemoteNotifications()
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        Task { @MainActor [weak self] in
+            let state = AppState.sharedOrBootstrap()
+            self?.appState = state
+            state.relayTokenReceived(token)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        AppLogger.shared.warning("relay.apnsRegisterFailed", "Failed to register for remote notifications", metadata: [
+            "error": error.localizedDescription
+        ])
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard let type = userInfo["type"] as? String else {
+            completionHandler(.noData)
+            return
+        }
+        AppLogger.shared.info("relay.pushReceived", "Silent push received", metadata: ["type": type], alwaysPersist: true)
+        Task { @MainActor [weak self] in
+            let state = AppState.sharedOrBootstrap()
+            self?.appState = state
+            let didRun = await state.handleRelayPush(type: type)
+            completionHandler(didRun ? .newData : .noData)
+        }
     }
 
     func application(
@@ -132,6 +200,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         existingAppState()?.logResourceSnapshot(reason: "app.didBecomeActive", extra: [
             "applicationState": applicationStateLabel(application.applicationState)
         ], force: true)
+        // §4.5 heartbeat send-side (RELAY_TIER1_IMPLEMENTATION.md) — foreground is
+        // the documented trigger; AppState debounces to ≤1/day itself.
+        Task { @MainActor [weak self] in
+            let state = AppState.sharedOrBootstrap()
+            self?.appState = state
+            await state.sendRelayHeartbeatIfDue()
+        }
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

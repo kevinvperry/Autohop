@@ -535,7 +535,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 ### 10.4 Auto Archive section
 
-Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes, or immediately on demand via Settings → Run Auto Archive Now. New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
+Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes — it is driven by the 30-second foreground poller, so it runs on that cadence whenever the app is alive (foreground or background-audio playback), independent of feed refreshes — plus at app launch, at the end of a completed feed-refresh cycle, and immediately on demand via Settings → Run Auto Archive Now. (Before 2026-07-11 it was driven only by launch and completed refresh cycles, which for a long-lived process left it running rarely — an inactive-timeout that could take days to fire.) New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
 
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|

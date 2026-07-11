@@ -294,3 +294,15 @@ func relativeReleasedLabel(_ date: Date) -> String {
     }
     return date.formatted(.dateTime.hour().minute())
 }
+
+/// "Distributed" meta card value (added 2026-07-11, Kevin's request; pill
+/// title renamed from "Released Day" same day): the full weekday name the
+/// episode was released on, in the user's local timezone/calendar
+/// (`.formatted(.dateTime.weekday(.wide))` uses `Calendar.current` / the
+/// system locale, same as every other date formatting call in this file — no
+/// separate timezone handling needed). A standalone THIRD meta card alongside
+/// "Published"/"Released" — deliberately not folded into either existing
+/// label, since Kevin asked to leave those two untouched.
+func releasedWeekdayLabel(_ date: Date) -> String {
+    date.formatted(.dateTime.weekday(.wide))
+}

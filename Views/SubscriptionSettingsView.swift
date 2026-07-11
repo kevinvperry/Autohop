@@ -1247,6 +1247,7 @@ struct EpisodeDetailView: View {
             if let date = ep.publishedAt {
                 metaCard("Published", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
+                metaCard("Distributed", releasedWeekdayLabel(date))
             }
             if let duration = ep.durationSeconds {
                 metaCard("Duration", formatDuration(duration))

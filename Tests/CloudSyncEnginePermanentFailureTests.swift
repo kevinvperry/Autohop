@@ -73,4 +73,32 @@ final class CloudSyncEnginePermanentFailureTests: XCTestCase {
 
         XCTAssertFalse(CloudSyncEngine.isRetiredLegacyPendingSave(change))
     }
+
+    // MARK: - Read-only subscription-state mode (2026-07-11)
+    // The classifier behind `pushesSubscriptionState: false` — a device in
+    // that mode (the TV) drops every pending SubscriptionState change, save
+    // OR delete, and nothing else.
+
+    func testSubscriptionStateChangeIsDetectedForSaveAndDelete() {
+        let zone = CKRecordZone.ID(zoneName: "AutohopSync", ownerName: CKCurrentUserDefaultName)
+        let subscriptionRecordID = CKRecord.ID(recordName: "subscription:\(UUID().uuidString)", zoneID: zone)
+
+        XCTAssertTrue(CloudSyncEngine.isSubscriptionStateChange(.saveRecord(subscriptionRecordID)))
+        XCTAssertTrue(CloudSyncEngine.isSubscriptionStateChange(.deleteRecord(subscriptionRecordID)))
+    }
+
+    func testNonSubscriptionChangesAreNotBlockedByReadOnlyMode() {
+        let zone = CKRecordZone.ID(zoneName: "AutohopSync", ownerName: CKCurrentUserDefaultName)
+        let episodeID = CKRecord.ID(recordName: "episode:\(UUID().uuidString)|guid:abc", zoneID: zone)
+        let historyID = CKRecord.ID(recordName: "history:some-entry", zoneID: zone)
+        let statsID = CKRecord.ID(recordName: "stats:\(UUID().uuidString):2026-07-11", zoneID: zone)
+        let queueID = CKRecord.ID(recordName: "queue:current", zoneID: zone)
+
+        for id in [episodeID, historyID, statsID, queueID] {
+            XCTAssertFalse(
+                CloudSyncEngine.isSubscriptionStateChange(.saveRecord(id)),
+                "\(id.recordName) must still push from a subscription-state read-only device"
+            )
+        }
+    }
 }

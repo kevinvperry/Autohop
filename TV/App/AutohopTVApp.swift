@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CloudKit
 import Observation
 import AutohopCore
 
@@ -39,37 +40,83 @@ import AutohopCore
 // NOTE: librarySubscriptions is an Observation-tracked mirror of the store's
 // library (SubscriptionStore is ObservableObject; its @Published changes are
 // NOT tracked by @Observable views — always read the mirror in TV views).
-// PHASE 2 (§7): upNextEpisodes / latestEpisodes / continueListeningEpisode are
-// derived from that mirror on each access — cheap at real-library scale
-// (dozens of subscriptions), unlike the iPhone's cachedDownloadedQueue
-// memoization concern at hundreds. Revisit if a TV library ever grows large
-// enough to matter. subscription(for:)/subscription(id:) resolve live rather
-// than caching a stale snapshot per episode/id.
+// 2026-07-11 (Kevin's real-device round 5): Latest shelf REMOVED (latestEpisodes
+// deleted — Up Next is the point of the TV Home); Continue Listening reworked to
+// render from the synced history entry itself (see computeContinueListening);
+// prime order flipped to queue/history-first; TV now records listening stats
+// (listeningStatsStore) so TV consumption lands on the iPhone's Stats page;
+// animated splash (TVLaunchLoadingView) replaces the bare loading spinner.
+// PHASE 2 (§7): upNextItems/upNextEpisodes/continueListening and
+// the subscription(id:) lookup were originally derived from librarySubscriptions
+// on EVERY ACCESS (assumed cheap at "dozens of subscriptions" — the library grew
+// to 113, matching the iPhone, invalidating that; PERF FIX 2026-07-10, found
+// investigating a reported memory/CPU bug, see refreshLibrary()'s own note).
+// They're now cached: recomputed ONCE per refreshLibrary() call (real data
+// changes) via recomputeDerivedState(), read back as plain O(1) stored state —
+// same pattern as the iPhone's cachedDownloadedQueue, this file just didn't need
+// it until the library grew. refreshFeeds() (per-foreground RSS re-fetch of every
+// subscription) is now also throttled (minimumFeedsRefreshInterval) for the same
+// underlying reason — see its own header for specifics.
 
 @main
 struct AutohopTVApp: App {
-    @State private var model = TVAppModel()
+    // LAZY MODEL (2026-07-11, Kevin's round 6: "no splash, just a blank page
+    // for ~15 s"): TVAppModel's init synchronously loads the whole GRDB store
+    // (113 subscriptions × episodes decoded on the main actor). As a `@State
+    // = TVAppModel()` default it ran BEFORE SwiftUI could draw the first
+    // frame, so the window sat on the bare background colour until the load
+    // finished — the splash never had a chance to appear. Now the splash
+    // renders first and the model is created one frame later in .task.
+    // ROUND 7 (2026-07-11, "the start up animation does not have any
+    // movement — just a static image"): creating the model later wasn't
+    // enough — the synchronous decode then froze the main actor WHILE the
+    // splash was up, and SwiftUI animations are main-thread driven, so the
+    // splash showed but its bars never moved. The store now defers the
+    // decode (SubscriptionStore deferred-load init) and bootstrap() runs it
+    // off-main via completeDeferredLoad(), keeping the main actor free so
+    // the splash actually animates.
+    @State private var model: TVAppModel?
     @Environment(\.scenePhase) private var scenePhase
+    // Relay wake-push (§4.4/§6.4 sync-nudge receive-side, added 2026-07-10) —
+    // TVAppDelegate.swift, mirrors iOS's AppDelegate registration.
+    @UIApplicationDelegateAdaptor(TVAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
-            TVRootView(model: model)
-                .preferredColorScheme(.dark)
-                .task { await model.bootstrap() }
-                .onChange(of: scenePhase) { _, phase in
-                    // Returning to the foreground: re-prime the library + queue
-                    // snapshot directly so the Library and Up Next reflect any
-                    // phone-side changes (new subscriptions, reordered queue)
-                    // made while the TV app was backgrounded, without waiting
-                    // for the change stream to drain.
-                    if phase == .active {
-                        Task { await model.primeLibraryFromCloudSoon(reason: "foreground") }
-                    } else {
-                        // Leaving the foreground: persist + force-push the
-                        // current position so it reaches the phone promptly.
-                        model.handleBackgrounded()
-                    }
+            Group {
+                if let model {
+                    TVRootView(model: model)
+                } else {
+                    TVLaunchLoadingView(statusText: "Loading your library…")
                 }
+            }
+            .preferredColorScheme(.dark)
+            .task {
+                guard model == nil else { return }
+                // Give the splash one rendered frame before the heavy
+                // synchronous store load begins.
+                try? await Task.sleep(for: .milliseconds(50))
+                let created = TVAppModel()
+                model = created
+                await created.bootstrap()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard let model else { return }
+                model.isSceneActive = (phase == .active)
+                // Returning to the foreground: re-prime the library + queue
+                // snapshot directly so the Library and Up Next reflect any
+                // phone-side changes (new subscriptions, reordered queue)
+                // made while the TV app was backgrounded, without waiting
+                // for the change stream to drain.
+                if phase == .active {
+                    Task { await model.primeLibraryFromCloudSoon(reason: "foreground") }
+                    Task { await model.registerWithRelayIfPossible() }
+                } else {
+                    // Leaving the foreground: persist + force-push the
+                    // current position so it reaches the phone promptly.
+                    model.handleBackgrounded()
+                }
+            }
         }
     }
 }
@@ -97,12 +144,42 @@ final class TVAppModel {
     /// subscriptionProvider closures are wired below, AFTER subscriptionStore
     /// exists, avoiding an init-order back-reference to `self`.
     let playbackModel: TVPlaybackModel
+    /// TV listening stats (2026-07-11, Kevin's request): TV consumption must
+    /// contribute to the iPhone's Stats page. DayStats sync is ADDITIVE per
+    /// (deviceID, dayKey) partition and summed on read (SYNC_DESIGN.md 5b), so
+    /// all the TV has to do is record its own listening into a
+    /// ListeningStatsStore wired to the sync database — the engine pushes the
+    /// partitions and the phone folds them in with zero phone-side changes.
+    /// Local JSON lives in Caches (same purge posture as the TV database: the
+    /// synced CloudKit records are the durable copy). TV has no Stats UI, so
+    /// onRemoteStatsChanged stays unwired here.
+    let listeningStatsStore: ListeningStatsStore
     private let survivalKitStore = SurvivalKitStore()
     private var cloudSyncEngine: CloudSyncEngine?
     private var cancellables = Set<AnyCancellable>()
     private var didBootstrap = false
 
+    /// TVAppDelegate has no other path to the running model (tvOS has no
+    /// AppState.sharedOrBootstrap()-style composition root) — mirrors that
+    /// pattern with a weak static instead. Safe: @State in AutohopTVApp keeps
+    /// the one TVAppModel alive for the app's lifetime; weak just avoids a
+    /// retain cycle through the delegate, which never itself needs to own it.
+    private(set) static weak var shared: TVAppModel?
+    private var relaySyncGroupID: String?
+    private var relayAPNsToken: String?
+
     init() {
+        // TV DIAGNOSTICS (2026-07-11, round 8): logging is ALWAYS ON for the
+        // TV target (AppLogger.isEnabled defaults false and nothing on TV
+        // ever set it — every tv.* log line was being silently dropped). The
+        // file is capped/rotated at ~5 MB, and DEBUG builds mirror each line
+        // to the Xcode console, so an Xcode-launched device run streams the
+        // log live. TVHangWatchdog reports main-thread hangs ≥ 350 ms
+        // (tv.mainThreadHang / tv.mainThreadHangRecovered); correlate with
+        // the tv.perf.* stage timings scattered through this file.
+        AppLogger.shared.setEnabled(true)
+        TVHangWatchdog.shared.start()
+
         // T2: the database is a rebuildable cache — it belongs in Caches so the
         // system may purge it; durable truth is the survival kit + CloudKit.
         let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -110,12 +187,22 @@ final class TVAppModel {
         if let databaseDirectory {
             try? FileManager.default.createDirectory(at: databaseDirectory, withIntermediateDirectories: true)
         }
+        // Deferred load (2026-07-11 launch-freeze fix): opening the DB is
+        // cheap; the 113-show payload decode is NOT, and doing it here froze
+        // the splash into a static image (SwiftUI animations are main-thread
+        // driven — a blocked main actor stops them dead). bootstrap() awaits
+        // completeDeferredLoad(), which decodes off-main.
         let store = SubscriptionStore(
-            fileURL: nil,
-            databasePath: databaseDirectory?.appendingPathComponent("autohop-tv.sqlite").path
+            deferredLoadDatabasePath: databaseDirectory?.appendingPathComponent("autohop-tv.sqlite").path
         )
         subscriptionStore = store
-        playbackModel = TVPlaybackModel(subscriptionStore: store)
+        let statsStore = ListeningStatsStore(
+            fileURL: databaseDirectory?.appendingPathComponent("listening-stats.json"),
+            legacyFileURL: nil
+        )
+        statsStore.attachSyncDatabase(from: store)
+        listeningStatsStore = statsStore
+        playbackModel = TVPlaybackModel(subscriptionStore: store, statsStore: statsStore)
 
         playbackModel.upNextProvider = { [weak self] in self?.upNextEpisodes ?? [] }
         playbackModel.subscriptionProvider = { [weak self] id in self?.subscription(id: id) }
@@ -124,6 +211,15 @@ final class TVAppModel {
         // the engine's ~60 s slow-lane debounce.
         playbackModel.onPlaybackCheckpoint = { [weak self] in
             self?.cloudSyncEngine?.flushDeferredPushes(reason: "tv.playbackCheckpoint")
+        }
+
+        Self.shared = self
+
+        // Consume an APNs token that beat this model's (now-lazy) creation —
+        // see TVAppDelegate.pendingRelayToken.
+        if let buffered = TVAppDelegate.pendingRelayToken {
+            TVAppDelegate.pendingRelayToken = nil
+            relayAPNsToken = buffered
         }
     }
 
@@ -158,11 +254,40 @@ final class TVAppModel {
         guard !didBootstrap else { return }
         didBootstrap = true
 
+        // Finish the deferred store load FIRST (off-main decode — see init's
+        // note); everything below reads store.subscriptions.
+        let loadStartedAt = CFAbsoluteTimeGetCurrent()
+        await subscriptionStore.completeDeferredLoad()
+        AppLogger.shared.info("tv.perf", "Deferred store load finished", metadata: [
+            "stage": "storeLoad",
+            "ms": String(format: "%.0f", (CFAbsoluteTimeGetCurrent() - loadStartedAt) * 1000),
+            "subscriptions": "\(subscriptionStore.subscriptions.count)"
+        ], alwaysPersist: true)
+
         if let kit = survivalKitStore.load() {
             await rebuildMissingSubscriptions(from: kit)
         }
+        // ONE-SHOT REPAIR (2026-07-11) — MUST run before startCloudSync(): a TV
+        // database rebuilt from the survival kit before the materialize
+        // clean-seed fix holds fully-dirty DEFAULT-settings projections for
+        // every subscription; engine activation queues dirty state, so starting
+        // sync first would re-push the defaults and re-clobber the phone's real
+        // settings (the exact damage Kevin reported). Safe on TV because the TV
+        // never authors subscription settings — see the method's header.
+        let repairFlag = "com.autohop.tv.cleanDefaultProjectionDirt.v1"
+        if !UserDefaults.standard.bool(forKey: repairFlag) {
+            let cleaned = subscriptionStore.markAllPendingSubscriptionProjectionsClean()
+            UserDefaults.standard.set(true, forKey: repairFlag)
+            if cleaned > 0 {
+                AppLogger.shared.warning("sync.tvProjectionDirtRepaired", "Cleared pre-fix dirty subscription projections that would have pushed default settings", metadata: [
+                    "count": "\(cleaned)"
+                ], alwaysPersist: true)
+            }
+        }
         startCloudSync()
         observeStoreForKitWrites()
+        startForegroundFreshnessPolling()
+        Task { await registerWithRelayIfPossible() }
 
         // Prime the library DIRECTLY (targeted zone queries) rather than
         // waiting for CKSyncEngine's cold-start delta stream — Kevin's
@@ -292,7 +417,13 @@ final class TVAppModel {
     private func materializeFeed(url: URL, subscriptionID: UUID, priorityRank: Int?) async {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            let parsed = try RSSParser().parse(data: data, maxEpisodes: 50)
+            // Parse OFF the main actor (2026-07-11 nav-stall fix): this runs
+            // in a @MainActor context, so a bare parse() of each of 113 feeds
+            // during a purge rebuild serially blocked the main thread — one
+            // ingredient of the "focus feels stuck, then jumps" remote lag.
+            let parsed = try await Task.detached(priority: .userInitiated) {
+                try RSSParser().parse(data: data, maxEpisodes: 50)
+            }.value
             subscriptionStore.materialize(
                 parsedFeed: parsed,
                 feedURL: url,
@@ -310,23 +441,39 @@ final class TVAppModel {
     // MARK: - Sync
 
     private func startCloudSync() {
+        // pushesSubscriptionState: false — HARD one-way rule (2026-07-11,
+        // Kevin's directive after the purge-rebuild default-settings damage):
+        // the TV must have ZERO ability to alter subscription settings,
+        // subscribed state, or priority ranking on the phone. The engine
+        // structurally refuses to push SubscriptionState records in this mode
+        // (dirty rows never queued; restored pending saves dropped; legacy
+        // recovery skipped). Episode played-state, history, stats, and the
+        // queue snapshot still push — those are the TV's legitimate outputs.
+        // Consequence: subscribe-on-TV stays local to the TV.
         let engine = CloudSyncEngine(
             containerIdentifier: "iCloud.com.kevinperry.autohop",
-            subscriptionStore: subscriptionStore
+            subscriptionStore: subscriptionStore,
+            pushesSubscriptionState: false
         )
         engine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
         // Notify-only (persistence happens in the engine): re-render Up Next
-        // the moment a newer phone-authored queue snapshot lands.
+        // the moment a newer phone-authored queue snapshot lands. The hop back
+        // to the main actor is the await; refreshLibrary itself is synchronous.
         engine.onRemoteQueueSnapshotChanged = { [weak self] in
-            await self?.refreshLibrary()
+            await MainActor.run { self?.scheduleLibraryRefresh() }
         }
         // Notify-only: re-render Home when a listening-history entry lands, so
         // Continue Watching populates the moment the paused-on-iPhone episode's
         // resume position syncs (it's read from the DB, not Observation-tracked).
+        // COALESCED + history-cache invalidation — see scheduleLibraryRefresh's
+        // header and continueListeningCache below.
         engine.onRemoteHistoryChanged = { [weak self] in
-            await self?.refreshLibrary()
+            await MainActor.run {
+                self?.historyNeedsReload = true
+                self?.scheduleLibraryRefresh()
+            }
         }
         cloudSyncEngine = engine
         engine.start()
@@ -336,6 +483,62 @@ final class TVAppModel {
         await materializeFeed(url: state.feedURL, subscriptionID: state.subscriptionID, priorityRank: nil)
         subscriptionStore.applyRemoteSubscriptionState(state)
         refreshLibrary()
+    }
+
+    // MARK: - Autohop Relay (§6.4 sync-nudge receive-side, added 2026-07-10)
+    //
+    // TV has NO purchase of its own (§14.1 tvOS-gating still undecided) — it
+    // registers via POST /v1/register-paired, which trusts this device solely
+    // because it shares a sync_group_id with an already-registered device
+    // (the iPhone) that has an active Autohop Pro subscription. If that isn't
+    // true (no paired subscriber, or the subscription lapses), registration
+    // simply fails quietly — TV falls back to CloudKit's own (currently laggy)
+    // sync, exactly like today. No UI surfaces this yet (TV has no Settings
+    // page for it) — failures are logged, not shown, matching this model's
+    // existing posture of silent CloudKit degradation.
+
+    /// Forwarded from TVAppDelegate.didRegisterForRemoteNotificationsWithDeviceToken.
+    func relayTokenReceived(_ token: String) {
+        relayAPNsToken = token
+        Task { await registerWithRelayIfPossible() }
+    }
+
+    /// CKContainer.fetchUserRecordID() has no async-throws overload (confirmed
+    /// by a real Xcode build failure on the iPhone side, not assumed) — bridged
+    /// via withCheckedContinuation, matching AppState's own fix for the same gap.
+    private func resolveRelaySyncGroupID() async -> String? {
+        if let relaySyncGroupID { return relaySyncGroupID }
+        let container = CKContainer(identifier: "iCloud.com.kevinperry.autohop")
+        let recordID: CKRecord.ID? = await withCheckedContinuation { continuation in
+            container.fetchUserRecordID { recordID, _ in
+                continuation.resume(returning: recordID)
+            }
+        }
+        guard let recordID else { return nil }
+        relaySyncGroupID = recordID.recordName
+        return recordID.recordName
+    }
+
+    /// Called on bootstrap and on every foreground — cheap no-op if it's
+    /// already registered or a paired subscriber still isn't found; retrying
+    /// on each foreground is what picks up a fresh purchase made on the phone
+    /// without requiring the TV app to be relaunched.
+    func registerWithRelayIfPossible() async {
+        guard let token = relayAPNsToken else { return }
+        guard let syncGroupID = await resolveRelaySyncGroupID() else { return }
+        do {
+            let (_, requestID) = try await RelayClient.shared.registerPaired(syncGroupId: syncGroupID, apnsToken: token)
+            AppLogger.shared.info("relay.tvRegistered", "TV registered with Autohop Relay", metadata: [
+                "requestID": requestID
+            ])
+        } catch {
+            // Expected/frequent until the paired iPhone actually has an active
+            // subscription — info, not warning, to avoid alarm-fatigue in a
+            // diagnostic review over what's usually just "not entitled yet."
+            AppLogger.shared.info("relay.tvRegisterSkipped", "TV relay registration not available yet", metadata: [
+                "error": "\(error)"
+            ])
+        }
     }
 
     /// Targeted library prime, retried until the engine has finished its async
@@ -353,11 +556,19 @@ final class TVAppModel {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
-            await engine.fetchAllSubscriptionsNow(reason: reason)
+            // ORDER MATTERS (reordered 2026-07-11, Kevin's real-device round 5:
+            // "old shows in Up Next for ~30 s" + a stale Resume card): the queue
+            // snapshot and listening history are each ONE cheap targeted fetch,
+            // while fetchAllSubscriptionsNow paginates all 113 subscription
+            // records. Fetching the cheap, user-facing state FIRST and rendering
+            // immediately means Up Next and Continue Listening are phone-correct
+            // within a couple of seconds; the subscription sweep then fills in
+            // catalogs behind it (each landing record re-renders via the store
+            // observer).
             _ = await engine.fetchQueueSnapshotNow(reason: reason)
-            // Pull listening history too, so Continue Watching (the paused-on-
-            // iPhone episode) appears fast instead of waiting on the slow lane.
             await engine.fetchAllHistoryNow(reason: reason)
+            refreshLibrary()
+            await engine.fetchAllSubscriptionsNow(reason: reason)
             refreshLibrary()
             // Then bring each feed's episodes up to date (see refreshFeeds).
             await refreshFeeds(reason: reason)
@@ -372,38 +583,218 @@ final class TVAppModel {
     /// feed is skipped (the next launch/foreground retries), and the merge
     /// preserves local + synced played/download state by guid. Runs in the
     /// background after the cloud prime so it never blocks launch.
+    /// THROTTLED (2026-07-10, found investigating a reported memory/CPU bug):
+    /// this was called unconditionally from EVERY primeLibraryFromCloudSoon —
+    /// which fires on launch AND every foreground — so switching away from the
+    /// TV app and back within seconds re-fetched and re-parsed all 113 of
+    /// Kevin's subscriptions' RSS feeds sequentially, every single time. Real
+    /// per-episode freshness for cross-device state (played/queue/history)
+    /// already flows through CloudSyncEngine independently and near-real-time;
+    /// this function's only job is catching a genuinely NEW episode the phone
+    /// hasn't synced yet, which doesn't need faster than a few minutes'
+    /// cadence. `minimumFeedsRefreshInterval` skips the refetch entirely (no
+    /// network calls, no parsing, no store writes) when called again too soon
+    /// — cold launch always runs it (lastFeedsRefreshAt starts nil).
+    private var lastFeedsRefreshAt: Date?
+    private let minimumFeedsRefreshInterval: TimeInterval = 5 * 60
+
     func refreshFeeds(reason: String) async {
+        if let lastFeedsRefreshAt, Date().timeIntervalSince(lastFeedsRefreshAt) < minimumFeedsRefreshInterval {
+            AppLogger.shared.info("tv.feedRefreshThrottled", "Feed refresh skipped — too soon since the last one", metadata: [
+                "reason": reason,
+                "secondsSinceLast": "\(Int(Date().timeIntervalSince(lastFeedsRefreshAt)))"
+            ])
+            return
+        }
+        lastFeedsRefreshAt = Date()
+        // NAV-STALL FIX (2026-07-11, Kevin's round 7 "extremely slow to
+        // navigate; focus feels stuck, then jumps"): during this sweep every
+        // updateEpisodes store write fired the observeStoreForKitWrites sink
+        // (debounced 2 s), which re-captured the survival kit AND re-ran
+        // refreshLibrary — a full derived-state recompute + whole-view-tree
+        // re-render every ~2 s for the sweep's whole duration, fighting the
+        // focus engine the entire time the user was browsing. Two fixes:
+        // 1. Suppress the sink for the sweep's duration (one kit capture +
+        //    one refreshLibrary at the end instead of dozens).
+        // 2. Skip the store WRITE entirely when a feed's newest episode is
+        //    unchanged (the overwhelmingly common case) — the write, its
+        //    payload re-encodes, and its objectWillChange all happen on the
+        //    main actor, and 113 of them serially was the other half of the
+        //    remote lag.
+        suppressStoreObserver = true
+        var updated = 0
         let feeds = subscriptionStore.subscriptions
             .filter { $0.browseDate == nil }
             .map { ($0.id, $0.feedURL) }
         for (subscriptionID, feedURL) in feeds {
             guard let parsed = try? await EpisodeFeedLoader().fetch(feedURL: feedURL) else { continue }
-            subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
+            if let newestGuid = parsed.episodes.first?.guid,
+               let existing = subscription(id: subscriptionID),
+               existing.episodes.first?.guid == newestGuid {
+                continue // newest episode already known — no write needed
+            }
+            timed("updateEpisodes") {
+                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
+            }
+            updated += 1
         }
+        suppressStoreObserver = false
+        saveSurvivalKit()
+        AppLogger.shared.info("tv.feedRefreshFinished", "Feed sweep finished", metadata: [
+            "reason": reason,
+            "feeds": "\(feeds.count)",
+            "updated": "\(updated)"
+        ])
         refreshLibrary()
     }
 
     // MARK: - Library state + kit write-back
 
+    /// Mirrors scenePhase — set by AutohopTVApp's onChange. Gates the
+    /// freshness poll below so a backgrounded TV app isn't fetching.
+    var isSceneActive = true
+
+    /// CONTINUE-LISTENING FRESHNESS (2026-07-11, Kevin's round 7: the hero was
+    /// "often a show behind" and should mirror what the phone is playing NOW).
+    /// While the TV app is frontmost, re-fetch the two cheap targeted records
+    /// (history + queue snapshot) every 45 s and re-render on change. Paired
+    /// with the phone-side fix (AppState seeds + force-pushes the history
+    /// entry at playback START — see "playback.start" flush), a new episode
+    /// started on the phone appears on the TV hero within ~45 s worst case,
+    /// typically faster via the CloudKit change stream / relay nudge; this
+    /// poll is the reliable floor, not the primary path. refreshLibrary's
+    /// equality guards make a no-change poll completely render-free.
+    private func startForegroundFreshnessPolling() {
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .seconds(45))
+                guard let self else { return }
+                guard self.isSceneActive, let engine = self.cloudSyncEngine, engine.isActivated else { continue }
+                _ = await engine.fetchQueueSnapshotNow(reason: "tv.freshnessPoll")
+                await engine.fetchAllHistoryNow(reason: "tv.freshnessPoll")
+                self.refreshLibrary()
+            }
+        }
+    }
+
+    /// Stage-timing probe (TV diagnostics, 2026-07-11): runs `body` and logs a
+    /// `tv.perf` line when it took ≥ `thresholdMs` on the main actor. Cheap
+    /// enough to leave on permanently; the threshold keeps the log signal-only.
+    /// Cross-reference with tv.mainThreadHang timestamps to see WHICH stage
+    /// was blocking during a stutter.
+    @discardableResult
+    private func timed<T>(_ stage: String, thresholdMs: Double = 40, _ body: () -> T) -> T {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        let result = body()
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        if elapsedMs >= thresholdMs {
+            AppLogger.shared.info("tv.perf", "Main-actor stage was slow", metadata: [
+                "stage": stage,
+                "ms": String(format: "%.0f", elapsedMs)
+            ], alwaysPersist: true)
+        }
+        return result
+    }
+
+    /// True while refreshFeeds' sweep runs — see its NAV-STALL FIX note. The
+    /// sink below is a no-op during the sweep; the sweep does its own single
+    /// kit save + refreshLibrary at the end.
+    private var suppressStoreObserver = false
+
+    private func saveSurvivalKit() {
+        timed("kitCapture") {
+            survivalKitStore.save(SubscriptionSurvivalKit.capture(
+                from: subscriptionStore.subscriptions,
+                iCloudSyncEnabled: true
+            ))
+        }
+    }
+
     private func observeStoreForKitWrites() {
         subscriptionStore.objectWillChange
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.survivalKitStore.save(SubscriptionSurvivalKit.capture(
-                    from: self.subscriptionStore.subscriptions,
-                    iCloudSyncEnabled: true
-                ))
-                self.refreshLibrary()
+                guard let self, !self.suppressStoreObserver else { return }
+                self.saveSurvivalKit()
+                // A store change may include this device's own history writes
+                // (TVPlaybackModel progress flushes) — invalidate the cache.
+                self.historyNeedsReload = true
+                self.scheduleLibraryRefresh()
             }
             .store(in: &cancellables)
     }
 
+    // REFRESH COALESCER (2026-07-11, round-8 watchdog finding): the round-8
+    // log showed refreshLibrary running back-to-back at ~290 ms per pass for
+    // MINUTES — the engine's notify callbacks fired once per applied record
+    // (hundreds of history records per prime/poll), and each call did a full
+    // derived-state recompute on the main actor. The engine now batches its
+    // own notifies (fetchAllHistoryNow), and this coalescer is the TV-side
+    // guarantee: notify-driven refreshes collapse to AT MOST one pass per
+    // 500 ms window no matter how fast callbacks arrive. Direct callers with
+    // sequencing needs (bootstrap/prime tails) still call refreshLibrary().
+    private var pendingLibraryRefresh: Task<Void, Never>?
+    private var lastLibraryRefreshAt = Date.distantPast
+    private var lastLibraryRefreshDuration: TimeInterval = 0
+
+    private func scheduleLibraryRefresh() {
+        guard pendingLibraryRefresh == nil else { return }
+        // DUTY-CYCLE BOUND (round-8b second log): a fixed 500 ms window still
+        // let ~300 ms passes eat ~60% of the main thread while the cold sync
+        // stream churned. Spacing is now ≥6× the LAST pass's own duration, so
+        // however expensive a pass is, refreshes can never take more than
+        // ~15% of main-thread time — the focus engine keeps the rest.
+        let minimumSpacing = max(0.5, lastLibraryRefreshDuration * 6)
+        let sinceLast = Date().timeIntervalSince(lastLibraryRefreshAt)
+        let delay = max(minimumSpacing - sinceLast, 0.05)
+        pendingLibraryRefresh = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled else { return }
+            self.pendingLibraryRefresh = nil
+            self.refreshLibrary()
+        }
+    }
+
     private func refreshLibrary() {
-        librarySubscriptions = subscriptionStore.subscriptions
+        lastLibraryRefreshAt = Date()
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        timed("refreshLibrary") { refreshLibraryBody() }
+        lastLibraryRefreshDuration = CFAbsoluteTimeGetCurrent() - startedAt
+    }
+
+    private func refreshLibraryBody() {
+        // EQUALITY GUARDS (2026-07-11 nav-stall fix, part 3): @Observable
+        // fires on every SET regardless of value equality, and this method is
+        // called from several periodic paths (store observer, cloud prime, the
+        // foreground freshness poll) — unconditional reassignment re-rendered
+        // the whole Home/Queue tree even when nothing changed, disturbing the
+        // tvOS focus engine mid-navigation. A no-change refresh is now a
+        // genuine no-op: nothing is written, so nothing re-renders.
+        let newLibrary = subscriptionStore.subscriptions
             .filter { $0.browseDate == nil }
             .sorted { $0.priorityRank < $1.priorityRank }
-        rootState = librarySubscriptions.isEmpty ? .empty : .ready
+        if newLibrary != librarySubscriptions {
+            librarySubscriptions = newLibrary
+        }
+        let newRootState: RootState = newLibrary.isEmpty ? .empty : .ready
+        if newRootState != rootState { rootState = newRootState }
+
+        // PERF FIX (2026-07-10, found investigating a reported memory/CPU bug):
+        // subscriptionsByID + upNextItems/upNextEpisodes/
+        // continueListening were all previously COMPUTED properties, recomputed
+        // from scratch on every access — including subscription(id:)'s O(n)
+        // linear scan and continueListening's DB query + full flatMap/filter/max
+        // over every episode across every show. TVHomeView/TVQueueView read
+        // several of these MULTIPLE TIMES per body evaluation, and tvOS's
+        // focus-engine-driven navigation re-evaluates view bodies far more
+        // often than actual data changes — at Kevin's real library size (113
+        // shows, matching his iPhone; this file's own header previously assumed
+        // "dozens" and flagged "revisit if a TV library ever grows large enough
+        // to matter" — it has), that added up to real, repeated CPU/memory cost
+        // during ordinary remote-navigation, not just at sync/launch time.
+        // Fixed by computing all of this ONCE here — whenever the library
+        // actually changes — and reading it back as plain O(1) stored state.
+        recomputeDerivedState()
 
         // Pre-buffer the Continue Listening episode (the one most likely to be
         // played next) so resuming it starts near-instantly. Idempotent per
@@ -414,7 +805,32 @@ final class TVAppModel {
         }
     }
 
+    private func recomputeDerivedState() {
+        subscriptionsByID = Dictionary(uniqueKeysWithValues: librarySubscriptions.map { ($0.id, $0) })
+        // Same equality-guard rule as refreshLibrary: only assign on change so
+        // no-op refreshes never invalidate the view tree.
+        let newUpNextItems = computeUpNextItems()
+        if newUpNextItems != upNextItems {
+            upNextItems = newUpNextItems
+            upNextEpisodes = newUpNextItems.compactMap(\.episode)
+        }
+        let newContinueListening = computeContinueListening()
+        if newContinueListening != continueListening { continueListening = newContinueListening }
+    }
+
     // MARK: - Home/Queue/Library derived state (Phase 2, §7)
+    // Cached in refreshLibrary()/recomputeDerivedState() — see the PERF FIX note
+    // there. Read-only from outside; Views access these as plain stored state.
+
+    private(set) var upNextItems: [QueueModel.ResolvedQueueItem] = []
+    private(set) var upNextEpisodes: [Episode] = []
+    private(set) var continueListening: TVContinueListening?
+    /// O(1) id → subscription lookup, replacing the old `librarySubscriptions
+    /// .first { $0.id == id }` linear scan that subscription(id:) used to run —
+    /// on its own a modest cost, but TVQueueView/TVHomeView call it once PER ROW
+    /// PER RENDER, which at 113 subscriptions was a real O(rows × shows) tax on
+    /// every Up Next / Latest re-render.
+    private var subscriptionsByID: [UUID: AutohopCore.Subscription] = [:]
 
     /// Up Next display items (2026-07-05 churn fix): renders the SYNCED QUEUE
     /// SNAPSHOT — the iPhone's authored queue order, exactly (including multiple
@@ -430,7 +846,7 @@ final class TVAppModel {
     /// playable as their subscription materializes. The Priority Stack fallback
     /// is used ONLY when there is genuinely no synced snapshot (fresh install
     /// with sync still cold, or sync disabled — T7's standalone mode).
-    var upNextItems: [QueueModel.ResolvedQueueItem] {
+    private func computeUpNextItems() -> [QueueModel.ResolvedQueueItem] {
         if let snapshot = subscriptionStore.syncedQueueSnapshot(), !snapshot.entries.isEmpty {
             return QueueModel.resolvedQueueItems(from: snapshot, subscriptions: librarySubscriptions)
         }
@@ -444,49 +860,43 @@ final class TVAppModel {
         }
     }
 
-    /// Playable Up Next episodes (resolved only) — for auto-advance on finish.
-    /// Placeholder (not-yet-materialized) items are excluded since they can't
-    /// be played until their catalog lands.
-    var upNextEpisodes: [Episode] { upNextItems.compactMap(\.episode) }
+    /// Continue Listening, driven by SYNCED LISTENING HISTORY — REWORKED
+    /// 2026-07-11 (Kevin's real-device round 5: the hero showed a MONTH-OLD
+    /// stale episode for ~30 s, then vanished, and NEVER showed the episode he
+    /// was actually mid-way through on the phone). Two root causes, both fixed:
+    /// 1. The old code required the history entry to resolve to a LOCAL episode
+    ///    (episodeMatching) before showing anything. On a cold/behind TV the
+    ///    phone's current episode often isn't materialized yet (or has aged out
+    ///    of the 50-episode feed window), so the correct entry was silently
+    ///    discarded. Now the hero renders from the ENTRY ITSELF — it carries
+    ///    denormalized episodeTitle/podcastTitle/artworkURL/duration/position,
+    ///    everything the card needs — same "render the synced truth, placeholder
+    ///    until the catalog lands" pattern as the queue-snapshot churn fix
+    ///    (SYNC_DESIGN.md). `episode` is nil until materialization; the card is
+    ///    non-playable (no Resume affordance) exactly until then.
+    /// 2. The `playedState == .playing` local-heuristic FALLBACK was what
+    ///    surfaced the month-old episode (any stale .playing state, no real
+    ///    recency) before history synced, then disappeared when sync marked it
+    ///    played. Deleted outright: no history entry → no hero. Showing nothing
+    ///    briefly is correct; showing the wrong episode is not.
+    /// HISTORY-READ CACHE (2026-07-11, round-8 watchdog finding): the ~290 ms
+    /// refreshLibrary passes were dominated by mostRecentInProgressListeningEntry,
+    /// which decodes the ENTIRE synced history table on every call. The winning
+    /// entry only changes when history actually changes, so it's cached and
+    /// re-read only after a history invalidation (onRemoteHistoryChanged /
+    /// store-change sink set `historyNeedsReload`). Episode resolution stays
+    /// per-call — it's a cheap dictionary lookup and must re-run as catalogs
+    /// materialize.
+    private var historyNeedsReload = true
+    private var cachedContinueEntry: ListeningHistoryEntry?
 
-    /// Newest episode per subscription, newest-published first. Uses `newestEpisode`
-    /// (derived from the episode list) rather than the denormalised `latestEpisode`,
-    /// which can drift behind and surface a stale episode — matches the iOS fix.
-    var latestEpisodes: [Episode] {
-        librarySubscriptions
-            .compactMap(\.newestEpisode)
-            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
-    }
-
-    /// Continue Listening, driven by SYNCED LISTENING HISTORY (fix 2026-07-04;
-    /// previously used the `playedState == .playing` heuristic, which had no
-    /// reliable recency — see SubscriptionStore.mostRecentInProgressListeningEntry's
-    /// header — and therefore surfaced the wrong episode when several shows
-    /// were mid-progress across devices). The history entry carries the true
-    /// most-recently-listened episode from ANY device plus its resume
-    /// position (used for the hero card's progress bar). Falls back to the
-    /// old playedState heuristic only when no usable history entry resolves
-    /// to a local episode (e.g. history hasn't synced yet on a fresh install).
-    /// REACTIVITY NOTE: history rows are read straight from the sync database
-    /// (not Observation-tracked), so this refreshes when the tracked
-    /// `librarySubscriptions` mirror next changes — which any sync activity,
-    /// playback start, or tab re-render triggers — rather than the instant a
-    /// lone history record lands. Acceptable staleness (seconds-to-a-refresh),
-    /// noted so nobody "fixes" the fallback ordering chasing it.
-    var continueListening: (episode: Episode, positionSeconds: TimeInterval)? {
-        if let entry = subscriptionStore.mostRecentInProgressListeningEntry(),
-           let episode = episodeMatching(historyEntry: entry) {
-            return (episode, entry.lastPositionSeconds)
+    private func computeContinueListening() -> TVContinueListening? {
+        if historyNeedsReload {
+            historyNeedsReload = false
+            cachedContinueEntry = subscriptionStore.mostRecentInProgressListeningEntry()
         }
-        // Fallback: synced playedState (recency via lastPlayedAt — stamped on
-        // play start since the 2026-07-04 markEpisodePlaying fix).
-        if let playing = librarySubscriptions
-            .flatMap(\.episodes)
-            .filter({ $0.playedState == .playing })
-            .max(by: { ($0.lastPlayedAt ?? .distantPast) < ($1.lastPlayedAt ?? .distantPast) }) {
-            return (playing, 0)
-        }
-        return nil
+        guard let entry = cachedContinueEntry else { return nil }
+        return TVContinueListening(entry: entry, episode: episodeMatching(historyEntry: entry))
     }
 
     /// Resolves a history entry to its local episode. Primary match: the
@@ -506,11 +916,20 @@ final class TVAppModel {
         subscription(id: episode.subscriptionID)
     }
 
-    /// Resolves a subscription by id from the live library mirror (never a
-    /// stale snapshot — used by pushed detail pages).
+    /// Resolves a subscription by id — O(1) via subscriptionsByID (see PERF FIX
+    /// above), never a stale snapshot since it's rebuilt every refreshLibrary().
     func subscription(id: UUID) -> AutohopCore.Subscription? {
-        librarySubscriptions.first { $0.id == id }
+        subscriptionsByID[id]
     }
+}
+
+/// The Home hero's model (2026-07-11 rework — see computeContinueListening):
+/// the synced history entry is the authoritative, always-renderable truth;
+/// `episode` is the locally-materialized catalog episode when available (nil =
+/// render from the entry's denormalized fields, not yet playable).
+struct TVContinueListening: Equatable {
+    let entry: ListeningHistoryEntry
+    let episode: Episode?
 }
 
 // MARK: - Root state machine UI (Phase 1 placeholder)
@@ -521,12 +940,10 @@ struct TVRootView: View {
     var body: some View {
         switch model.rootState {
         case .loading:
-            VStack(spacing: 20) {
-                ProgressView()
-                Text(model.statusText)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
+            // Animated Autohop splash (2026-07-11, Kevin's request) — TV port
+            // of the iPhone's LaunchLoadingView, with the rotating first-sync
+            // status text underneath (TV/Views/TVLaunchLoadingView.swift).
+            TVLaunchLoadingView(statusText: model.statusText)
         case .empty:
             // Not a dead end: observeStoreForKitWrites's debounced sink keeps
             // watching in the background and flips to `.ready` automatically

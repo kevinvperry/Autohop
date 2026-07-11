@@ -235,6 +235,23 @@ targets:
 
     scheme:
       gatherCoverageData: false
+      # Local StoreKit Testing (Autohop.storekit) is DELIBERATELY NOT set here.
+      # BUG, FOUND 2026-07-10 (real device testing): this used to say
+      # `storeKitConfiguration: Autohop.storekit`. Every `xcodegen generate` run
+      # regenerates the scheme FROM project.yml, so Kevin manually switching the
+      # scheme's StoreKit Configuration to "None" in Xcode's UI (to test against
+      # real Sandbox/App Store Connect data — see RELAY_TIER1_IMPLEMENTATION.md
+      # §6.1) got SILENTLY REVERTED back to Autohop.storekit on the next regen,
+      # with no visible diff/warning — a real purchase kept showing
+      # `[Environment: Xcode]` instead of Sandbox despite the manual fix.
+      # To use local StoreKit Testing again for quick iteration: set it manually
+      # in Xcode (Product → Scheme → Edit Scheme → Run → Options → StoreKit
+      # Configuration → Autohop.storekit) — just know a future `xcodegen
+      # generate` will NOT persist that choice; it always regenerates to "None"
+      # now, matching this file. Do not put it back here without a stronger
+      # safeguard (e.g. a project.yml comment isn't enough, as this incident
+      # showed) — Kevin should be the one to decide when local testing is worth
+      # this footgun again, not a silent regeneration default.
       testTargets:
         - AutohopTests
 
@@ -284,14 +301,26 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         # Audio keeps playing when the TV UI sleeps (PC precedent, proposal §2.3).
+        # remote-notification: Autohop Relay sync-nudge wake-push (§6.4, added
+        # 2026-07-10) — without this, TVAppDelegate's didReceiveRemoteNotification
+        # is never invoked even with a valid APNs token/registration.
         UIBackgroundModes:
           - audio
+          - remote-notification
         # Lean-back media surface — dark only.
         UIUserInterfaceStyle: Dark
         # Same unbounded-podcast-hosts ATS rationale as the iOS target above.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
+    # Declared explicitly (2026-07-11) after the AutohopTV scheme vanished from
+    # Xcode's scheme picker: it was only ever an Xcode-AUTOCREATED scheme living
+    # in the project's user data, and any `xcodegen generate` that rewrites the
+    # project can reset it. A target-level scheme here is regenerated every time,
+    # like the iPhone target's above.
+    scheme:
+      gatherCoverageData: false
+
     entitlements:
       path: TV/AutohopTV.entitlements
       properties:

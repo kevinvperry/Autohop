@@ -44,6 +44,10 @@ struct TVMainTabView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        // Phone design tokens on TV (TVTheme.swift, 2026-07-11): Accent-Purple
+        // for focus/controls + the ambient brand-purple wash behind every tab.
+        .tint(.purple)
+        .background(TVBrandBackground())
         .fullScreenCover(isPresented: $isPlayerVisible) {
             TVPlayerView(playbackModel: model.playbackModel) {
                 model.playbackModel.dismissedCover()
