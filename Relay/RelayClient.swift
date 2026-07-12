@@ -11,6 +11,12 @@ import Foundation
 // directly via its source glob, unaffected. TV gets it via the AutohopCore package
 // product, hence `public` throughout). Zero UIKit dependency — pure Foundation/
 // URLSession — so this was a clean, no-duplication move for both targets.
+// PROTOCOL V2 (2026-07-12): setFeeds is the registration/recovery baseline;
+// updateFeeds is the ordinary add/remove path. Both return RelayFeedsResponse so
+// AppState can persist the server's normalized membership and opaque ID mapping.
+// Every request has a 15 s timeout; this type reports retryAfter but does NOT
+// retry internally. AppState owns coalescing and the persisted circuit breaker,
+// preventing URLSession retries from racing library mutations.
 //
 // Auth: every call except register()/registerPaired() attaches `Authorization:
 // Bearer <deviceId>.<deviceSecret>` from RelayCredentialsStore. Those two are the
@@ -108,21 +114,21 @@ public final class RelayClient {
     /// register and every subscription-list change (§4.3). iOS only (tvOS has
     /// no on-device downloads for the relay to wake it for).
     @discardableResult
-    public func setFeeds(_ urls: [URL]) async throws -> (count: Int, requestID: String) {
+    public func setFeeds(_ urls: [URL]) async throws -> (response: RelayFeedsResponse, requestID: String) {
         struct Body: Encodable { let set: [String] }
         let body = Body(set: urls.map(\.absoluteString))
         let (response, requestID): (RelayFeedsResponse, String) = try await send(path: "/v1/feeds", body: body, authenticated: true)
-        return (response.count, requestID)
+        return (response, requestID)
     }
 
     /// Delta variant for a single subscribe/unsubscribe (avoids resending the
     /// whole library on every change).
     @discardableResult
-    public func updateFeeds(add: [URL] = [], remove: [URL] = []) async throws -> (count: Int, requestID: String) {
+    public func updateFeeds(add: [URL] = [], remove: [URL] = []) async throws -> (response: RelayFeedsResponse, requestID: String) {
         struct Body: Encodable { let add: [String]; let remove: [String] }
         let body = Body(add: add.map(\.absoluteString), remove: remove.map(\.absoluteString))
         let (response, requestID): (RelayFeedsResponse, String) = try await send(path: "/v1/feeds", body: body, authenticated: true)
-        return (response.count, requestID)
+        return (response, requestID)
     }
 
     // MARK: - POST /v1/heartbeat
@@ -175,6 +181,11 @@ public final class RelayClient {
 
     private func buildRequest(path: String, bodyData: Data?, authenticated: Bool, requestID: String) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        // A relay request must never monopolize a silent-push/background-task
+        // budget. URLSession's shared default is much longer than the useful
+        // execution window, so fail promptly and let the caller's circuit
+        // breaker retry after pressure subsides.
+        request.timeoutInterval = 15
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(requestID, forHTTPHeaderField: "X-Request-Id")
@@ -198,7 +209,12 @@ public final class RelayClient {
         guard let http = response as? HTTPURLResponse else { return }
         guard !(200...299).contains(http.statusCode) else { return }
         if let envelope = try? JSONDecoder().decode(RelayErrorEnvelope.self, from: data) {
-            throw RelayError.server(requestID: requestID, code: envelope.error.code, message: envelope.error.message)
+            throw RelayError.server(
+                requestID: requestID,
+                code: envelope.error.code,
+                message: envelope.error.message,
+                retryAfter: envelope.error.retryAfter
+            )
         }
         throw RelayError.http(requestID: requestID, status: http.statusCode)
     }

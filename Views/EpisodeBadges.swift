@@ -1,8 +1,9 @@
 import SwiftUI
 
 // AI CONTEXT — Views/EpisodeBadges.swift. Shared presentation components for
-// episode rows/detail, all with iOS 26 glass + iOS 17–25 fallbacks:
-//   • Video/Explicit pills (small + large)
+// episode rows/detail:
+//   • Video/Explicit indicators (small icon-only variants for dense lists;
+//     glass text pills remain for large detail headers)
 //   • EpisodeStatusKind + EpisodeStatusPill (colour-coded state capsule; each
 //     page supplies its own statusKind(for:) resolver; includes Skipped for
 //     not-downloaded episodes currently excluded by Download Feed Filters)
@@ -11,21 +12,16 @@ import SwiftUI
 
 // MARK: - Video Pill (small)
 //
-// TV-icon pill shown in the top-trailing overlay of episode rows for video episodes.
+// Icon-only TV indicator shown in dense episode rows. Deliberately has no glass,
+// background, or capsule padding; callers own placement and spacing.
 
 struct VideoPillSmall: View {
     var body: some View {
-        let icon = Image(systemName: "tv.fill")
+        Image(systemName: "tv.fill")
             .font(.caption.bold())
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-
-        if #available(iOS 26, *) {
-            icon.glassEffect(in: Capsule())
-        } else {
-            icon.background(.ultraThinMaterial, in: Capsule())
-        }
+            .frame(minWidth: 14, minHeight: 14)
+            .accessibilityLabel("Video episode")
     }
 }
 
@@ -84,10 +80,11 @@ struct ExplicitPillLarge: View {
 
 // MARK: - Explicit Pill Small
 //
-// "E in a square" icon pill — small counterpart to ExplicitPillLarge, styled like the iTunes explicit badge.
+// Icon-only "E in a square" indicator — small counterpart to ExplicitPillLarge,
+// styled like the iTunes explicit badge with no surrounding material or capsule.
 
 struct ExplicitPillSmall: View {
-    private var badge: some View {
+    var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 2)
                 .fill(.white)
@@ -96,16 +93,9 @@ struct ExplicitPillSmall: View {
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.black)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-    }
-
-    var body: some View {
-        if #available(iOS 26, *) {
-            badge.glassEffect(in: Capsule())
-        } else {
-            badge.background(.ultraThinMaterial, in: Capsule())
-        }
+        .frame(minWidth: 14, minHeight: 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Explicit episode")
     }
 }
 

@@ -17,6 +17,9 @@ import Charts
 // "Shows You're Drifting From" only considers real active subscriptions:
 // browse previews and Inactive podcasts (exclude-from-auto-refresh) are omitted
 // because the user has intentionally paused feed attention for them.
+// Download-Filter Skipped episodes are also removed before drift analysis using
+// the same notDownloaded + filter-rejected predicate as episode status pills;
+// choosing not to receive an episode is not evidence of disengagement.
 // All but Lifetime are calendar-anchored and reset at the start of each period:
 // 7 Days = Monday 00:00 → now (Monday-first, locale-independent); the month
 // pill (dynamic label, e.g. "June"/"May") = 1st → now or previous month; the
@@ -569,6 +572,21 @@ private struct StatsContentView: View {
         Set(hiddenDriftShowIDsRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
     }
 
+    /// Episode IDs whose current library state is the deliberate grey "Skipped"
+    /// state produced by Download Feed Filters. Restrict this to `.notDownloaded`
+    /// so a manual download/play (which intentionally bypasses filters) remains
+    /// valid engagement evidence even when the feed rule itself would reject it.
+    private var downloadFilterSkippedEpisodeIDs: Set<UUID> {
+        Set(appState.subscriptionStore.subscriptions.flatMap { subscription in
+            subscription.episodes.compactMap { episode in
+                guard episode.downloadState == .notDownloaded,
+                      !subscription.downloadFilterSettings.evaluation(for: episode).isIncluded
+                else { return nil }
+                return episode.id
+            }
+        })
+    }
+
     /// "Shows You're Drifting From" — short ranges only: the 500-entry history cap
     /// silently truncates longer ranges, and a year-old struggle isn't actionable.
     @ViewBuilder
@@ -583,7 +601,8 @@ private struct StatsContentView: View {
             let shows = ShowEngagementAnalyzer.strugglingShows(
                 entries: historyStore.entries,
                 since: since,
-                excluding: hiddenDriftShowIDs
+                excluding: hiddenDriftShowIDs,
+                excludingEpisodeIDs: downloadFilterSkippedEpisodeIDs
             ).filter {
                 guard let sub = appState.subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
                 return sub.browseDate == nil && !sub.excludeFromAutoFeedRefresh

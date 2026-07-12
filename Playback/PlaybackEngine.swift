@@ -552,6 +552,20 @@ final class PlaybackEngine: PlaybackControlling {
         ])
     }
 
+    /// AI CONTEXT — Live settings bridge for episode trim. Updating end skip
+    /// changes the finish threshold read by handleEndSkipIfNeeded immediately;
+    /// start skip is stored for consistency but deliberately does not seek a
+    /// session that has already started.
+    func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval) {
+        currentPreference?.startSkipSeconds = max(0, startSkipSeconds)
+        currentPreference?.endSkipSeconds = max(0, endSkipSeconds)
+        logger.info("playback.episodeTrim", "Episode trim preference updated", metadata: [
+            "episode": currentEpisode?.title ?? "none",
+            "startSeconds": "\(Int(max(0, startSkipSeconds)))",
+            "endSeconds": "\(Int(max(0, endSkipSeconds)))"
+        ])
+    }
+
     func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {
         guard var episode = currentEpisode, episode.id == episodeID else { return }
         episode.chapters = chapters

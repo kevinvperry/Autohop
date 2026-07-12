@@ -20,8 +20,12 @@ import UniformTypeIdentifiers
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, Up Next badge, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
-// PlaybackControlsCard + start/end skip steppers; writes
-// AppSettings.defaultPlaybackPreference, never touches existing subs), Subscriptions
+// PlaybackControlsCard + shared, locally drafted start/end trim controls; their
+// 350 ms coalescing prevents an atomic settings-file write and Form rebuild per
+// tap, uses minute/second labels, and writes AppSettings.defaultPlaybackPreference
+// without touching existing subs. Each trim row receives cardBackground directly
+// so its custom content uses the same menu-card surface as every sibling section),
+// Subscriptions
 // (manage podcasts, add RSS, OPML import/export — Listening History moved to
 // the Menu sheet, OPML imports consume AppState.OPMLImportSummary so successful
 // imports can show the same count toast as Welcome/Podcasts, NavRules: one path
@@ -409,29 +413,26 @@ struct SettingsView: View {
         }
 
         Section {
-            Stepper(value: defaultStartSkipBinding, in: 0...300, step: 5) {
-                LabeledContent {
-                    Text(skipLabel(preference.startSkipSeconds))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    rowLabel("Start skip", systemImage: "forward.end")
-                }
-            }
+            EpisodeTrimControlRow(
+                title: "Start skip",
+                systemImage: "forward.end",
+                persistedSeconds: preference.startSkipSeconds,
+                onCommit: { appState.updateDefaultEpisodeTrim(startSkipSeconds: $0) }
+            )
+            .listRowBackground(cardBackground)
 
-            Stepper(value: defaultEndSkipBinding, in: 0...300, step: 5) {
-                LabeledContent {
-                    Text(skipLabel(preference.endSkipSeconds))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    rowLabel("End skip", systemImage: "backward.end")
-                }
-            }
+            EpisodeTrimControlRow(
+                title: "End skip",
+                systemImage: "backward.end",
+                persistedSeconds: preference.endSkipSeconds,
+                onCommit: { appState.updateDefaultEpisodeTrim(endSkipSeconds: $0) }
+            )
+            .listRowBackground(cardBackground)
         } header: {
             Text("Default Episode Trim")
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
-        .listRowBackground(cardBackground)
     }
 
     @ViewBuilder
@@ -715,24 +716,6 @@ struct SettingsView: View {
         )
     }
 
-    private var defaultStartSkipBinding: Binding<TimeInterval> {
-        Binding(
-            get: { appState.settingsStore.appSettings.defaultPlaybackPreference.startSkipSeconds },
-            set: { appState.updateDefaultStartSkip($0) }
-        )
-    }
-
-    private var defaultEndSkipBinding: Binding<TimeInterval> {
-        Binding(
-            get: { appState.settingsStore.appSettings.defaultPlaybackPreference.endSkipSeconds },
-            set: { appState.updateDefaultEndSkip($0) }
-        )
-    }
-
-    private func skipLabel(_ seconds: TimeInterval) -> String {
-        seconds == 0 ? "Off" : "\(Int(seconds))s"
-    }
-
     private func openSkipEditor(_ control: SkipControl) {
         draftSkipSeconds = switch control {
         case .back:
@@ -848,11 +831,15 @@ private struct SkipDurationEditSheet: View {
 // entries grouped by date (Today/Yesterday/older); entries with < 60 s listened
 // AND < 60 s position are hidden (the threshold rule lives here in the view).
 // Header cards: total listening time and finished-episode count. Swipe actions
-// mirror PodcastDetailView: the far-right trailing action is Download for
-// not-yet-downloaded episodes on active real subscriptions, otherwise it falls
-// back to Archive/Unarchive.
+// mirror PodcastDetailView exactly: Play / Play Next lead; the far-right trailing
+// action is Download for not-yet-downloaded episodes on active real subscriptions
+// (otherwise Archive/Unarchive), followed by Play Last. Active downloads render
+// the shared purple linear progress bar below the row, aligned past 54pt artwork.
 struct ListeningHistoryView: View {
     @EnvironmentObject private var appState: AppState
+    /// Dedicated progress publisher keeps download ticks separate from AppState's
+    /// broad UI state, matching PodcastDetailView and the other episode lists.
+    @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @State private var searchText = ""
 
     // When no search is active, read the pre-computed cache from AppState so this view
@@ -933,51 +920,21 @@ struct ListeningHistoryView: View {
                         )
                         let isCurrent = appState.currentPlayerEpisode?.id == entry.episodeID
 
-                        ListeningHistoryRow(entry: entry)
+                        ListeningHistoryRow(
+                            entry: entry,
+                            episode: episode,
+                            downloadProgress: episode.flatMap { downloadProgressModel.progress[$0.id] }
+                        )
                             .listRowBackground(isCurrent ? Color.purple.opacity(0.08) : Color.clear)
                             .listRowSeparator(.hidden)
                             .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                if let episode, !isCurrent {
-                                    Button {
-                                        Task {
-                                            if episode.downloadState != .downloaded {
-                                                await appState.downloadEpisodeForQueue(episode)
-                                            }
-                                            if let updated = appState.subscriptionStore.episode(
-                                                subscriptionID: episode.subscriptionID, episodeID: episode.id
-                                            ) {
-                                                await appState.playEpisode(updated)
-                                            }
-                                        }
-                                    } label: { Label("Play", systemImage: "play.fill") }
-                                    .tint(.green)
-
-                                    Button {
-                                        Task {
-                                            if episode.downloadState != .downloaded {
-                                                await appState.downloadEpisodeForQueue(episode)
-                                            }
-                                            appState.playEpisodeNext(episode)
-                                        }
-                                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                                    .tint(.blue)
-                                }
+                                if let episode, !isCurrent { historyLeadingSwipe(episode: episode) }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if let episode,
                                    let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID),
                                    !isCurrent {
-                                    historyPrimaryTrailingSwipe(episode: episode, subscription: subscription)
-
-                                    Button {
-                                        Task {
-                                            if episode.downloadState != .downloaded {
-                                                await appState.downloadEpisodeForQueue(episode)
-                                            }
-                                            appState.playEpisodeLast(episode)
-                                        }
-                                    } label: { Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") }
-                                    .tint(.orange)
+                                    historyTrailingSwipe(episode: episode, subscription: subscription)
                                 }
                             }
                     }
@@ -992,6 +949,61 @@ struct ListeningHistoryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .glassCard(cornerRadius: 16)
+    }
+
+    /// AI CONTEXT — Canonical `SwipeActions-EpisodeRow` leading edge. Keep this
+    /// behavior in lockstep with PodcastDetailView.leadingSwipe: manual actions
+    /// bypass Download Feed Filters and await any required download first.
+    @ViewBuilder
+    private func historyLeadingSwipe(episode: Episode) -> some View {
+        Button {
+            Task {
+                if episode.downloadState != .downloaded {
+                    await appState.downloadEpisodeForQueue(episode)
+                }
+                if let updated = appState.subscriptionStore.episode(
+                    subscriptionID: episode.subscriptionID,
+                    episodeID: episode.id
+                ) {
+                    await appState.playEpisode(updated)
+                }
+            }
+        } label: {
+            Label("Play", systemImage: "play.fill")
+        }
+        .tint(.green)
+
+        Button {
+            Task {
+                if episode.downloadState != .downloaded {
+                    await appState.downloadEpisodeForQueue(episode)
+                }
+                appState.playEpisodeNext(episode)
+            }
+        } label: {
+            Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+        }
+        .tint(.blue)
+    }
+
+    /// AI CONTEXT — Canonical trailing edge. Declaration order intentionally
+    /// matches Podcast Detail so the state-driven primary action is farthest from
+    /// the row edge and Play Last retains the same orange position/behavior.
+    @ViewBuilder
+    private func historyTrailingSwipe(episode: Episode, subscription: Subscription) -> some View {
+        historyPrimaryTrailingSwipe(episode: episode, subscription: subscription)
+
+        Button {
+            Task {
+                if episode.downloadState != .downloaded {
+                    await appState.downloadEpisodeForQueue(episode)
+                }
+                appState.playEpisodeLast(episode)
+            }
+        } label: {
+            Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
+        }
+        .tint(.orange)
     }
 
     @ViewBuilder
@@ -1081,42 +1093,58 @@ private enum SettingsStorageUsage {
 
 private struct ListeningHistoryRow: View {
     let entry: ListeningHistoryEntry
+    /// Nil when the retained history record can no longer resolve to a current
+    /// library episode; such rows remain readable but cannot show live progress.
+    let episode: Episode?
+    let downloadProgress: Double?
 
     var body: some View {
-        HStack(spacing: 12) {
-            CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 54, height: 54)) {
-                ZStack {
-                    LinearGradient(
-                        colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "waveform")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-            .frame(width: 54, height: 54)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.podcastTitle.uppercased())
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(entry.episodeTitle)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(2)
-                HStack(spacing: 16) {
-                    Label(entry.status.title, systemImage: statusIcon)
-                    Text("•")
-                    Text(formattedDuration(entry.listenedSeconds))
-                    if let remaining = remainingText {
-                        Text("•")
-                        Text(remaining)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 54, height: 54)) {
+                    ZStack {
+                        LinearGradient(
+                            colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        Image(systemName: "waveform")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .frame(width: 54, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(entry.podcastTitle.uppercased())
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(entry.episodeTitle)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(2)
+                    HStack(spacing: 16) {
+                        Label(entry.status.title, systemImage: statusIcon)
+                        Text("•")
+                        Text(formattedDuration(entry.listenedSeconds))
+                        if let remaining = remainingText {
+                            Text("•")
+                            Text(remaining)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if episode?.downloadState == .downloading, let downloadProgress {
+                ProgressView(value: downloadProgress, total: 1.0)
+                    .tint(.purple)
+                    .animation(.linear(duration: 0.3), value: downloadProgress)
+                    // 54pt artwork + 12pt gap: History's equivalent of the
+                    // canonical 56pt indent used by 44pt episode artwork rows.
+                    .padding(.leading, 66)
+                    .padding(.top, 6)
             }
         }
         .padding(.vertical, 6)

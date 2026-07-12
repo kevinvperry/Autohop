@@ -7,7 +7,15 @@ import SwiftUI
 // disabled while a real subscription is Inactive so its hidden return rank can
 // restore cleanly), Playback (speed
 // 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
-// AppState if this podcast is playing; the dark Speed/Trim/Vocal card is the
+// AppState if this podcast is playing; episode trim uses the shared stable
+// EpisodeTrimControlRow, which drafts taps locally and coalesces one store/live-
+// engine update after the user pauses, avoiding Form flicker and playback-time
+// UI stalls. Durations use the shared minute/second formatter and place the
+// longer text below the row title for narrow-phone readability. The dark
+// two trim controls are hosted in one glassCard with the same padding, divider,
+// clear Form row, and zero outer insets as the neighbouring Automation card.
+// This avoids separate rectangular Form glass surfaces around custom rows.
+// Speed/Trim/Vocal card is the
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
 // Default Playback panel), Download Feed Filters (per-feed auto-download
 // eligibility), Automation (per-podcast notifications, exclude from auto feed
@@ -311,29 +319,42 @@ struct SubscriptionSettingsView: View {
         }
 
         Section {
-            Stepper(value: startSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent {
-                    Text(skipLabel(sub.playbackPreference.startSkipSeconds))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    SettingsRowLabel(title: "Start skip", systemImage: "forward.end")
-                }
-            }
+            // AI CONTEXT — Podcast Settings uses the same one-card construction as
+            // Automation. Do not split these back into independently glass-backed
+            // Form rows: custom row glass resolves at a different shade on iOS 26.
+            VStack(spacing: 0) {
+                EpisodeTrimControlRow(
+                    title: "Start skip",
+                    systemImage: "forward.end",
+                    persistedSeconds: sub.playbackPreference.startSkipSeconds,
+                    onCommit: {
+                        appState.updateEpisodeTrim(for: sub.id, startSkipSeconds: $0)
+                    }
+                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
 
-            Stepper(value: endSkipBinding(sub), in: 0...300, step: 5) {
-                LabeledContent {
-                    Text(skipLabel(sub.playbackPreference.endSkipSeconds))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    SettingsRowLabel(title: "End skip", systemImage: "backward.end")
-                }
+                Divider().background(Color(white: 0.20)).padding(.leading, 60)
+
+                EpisodeTrimControlRow(
+                    title: "End skip",
+                    systemImage: "backward.end",
+                    persistedSeconds: sub.playbackPreference.endSkipSeconds,
+                    onCommit: {
+                        appState.updateEpisodeTrim(for: sub.id, endSkipSeconds: $0)
+                    }
+                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
+            .glassCard(cornerRadius: 12)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         } header: {
             Text("Episode Trim")
         } footer: {
             Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
         }
-        .listRowBackground(sectionRowBackground)
     }
 
     // MARK: - Sound Controls Card
@@ -547,37 +568,6 @@ struct SubscriptionSettingsView: View {
         )
     }
 
-    private func startSkipBinding(_ sub: Subscription) -> Binding<TimeInterval> {
-        Binding(
-            get: { sub.playbackPreference.startSkipSeconds },
-            set: { newVal in
-                var pref = sub.playbackPreference
-                pref.startSkipSeconds = newVal
-                appState.subscriptionStore.updatePlaybackPreference(
-                    subscriptionID: sub.id,
-                    preference: pref
-                )
-            }
-        )
-    }
-
-    private func endSkipBinding(_ sub: Subscription) -> Binding<TimeInterval> {
-        Binding(
-            get: { sub.playbackPreference.endSkipSeconds },
-            set: { newVal in
-                var pref = sub.playbackPreference
-                pref.endSkipSeconds = newVal
-                appState.subscriptionStore.updatePlaybackPreference(
-                    subscriptionID: sub.id,
-                    preference: pref
-                )
-            }
-        )
-    }
-
-    private func skipLabel(_ seconds: TimeInterval) -> String {
-        seconds == 0 ? "Off" : "\(Int(seconds))s"
-    }
 }
 
 private struct EditTitleSheet: View {

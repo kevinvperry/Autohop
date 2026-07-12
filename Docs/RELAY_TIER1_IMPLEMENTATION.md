@@ -1,5 +1,11 @@
 # Autohop Relay — Tier 1 Implementation Specification
 
+<!-- AI CONTEXT — Canonical cross-repository contract for the Autohop app and
+Cloudflare relay. Protocol v2 (2026-07-12) uses batched/diffed membership,
+opaque feed IDs, durable per-device change coalescing, targeted app refresh,
+and persisted client/server pressure guards. Implementation claims below must
+be kept synchronized with Relay/*.swift and ../autohop-relay/src + migrations. -->
+
 Status: BUILT — core loop + hardening complete, unverified against real Apple traffic.
 Worker live on Kevin's Cloudflare account: D1 schema migrated, all 4 queues + cron
 attached, all 7 secrets set, `/health` verified. App-side (§4): StoreKit product,
@@ -7,7 +13,9 @@ purchase flow, Settings UI entry point, register/feeds/heartbeat/sync-nudge all 
 end-to-end (2026-07-09/10). Server-side hardening landed 2026-07-10: real JWS x5c
 chain verification (pinned Apple Root CA G3 — see appleRoot.ts), SSRF per-hop redirect
 re-validation, rate limiting on /v1/register, daily reconciliation cron, orphan/expired
-sweep, App Store Server API client. REMAINING: real x5c verification is implemented but
+sweep, App Store Server API client. Protocol-v2 performance hardening landed 2026-07-12
+but has not been deployed in this workspace pass; deploy the compatible app first, then
+migration 0002, then Worker code. REMAINING: real x5c verification is implemented but
 UNTESTED against an actual Apple-signed transaction — no live purchase available this
 pass (local StoreKit Testing will now correctly FAIL it, since it signs with a test
 root, not Apple's real one — that's expected, not a regression). Also still open: Apple
@@ -167,24 +175,26 @@ Subsequent calls authenticate with `Authorization: Bearer <device_id>.<device_se
 ### 4.3 Feed-list sync
 App sends its current subscribed feed URL set (or add/remove deltas) via `POST /v1/feeds`.
 Send full set on register; deltas on subscription changes. Idempotent.
-- IMPL: `AppState.syncRelayFeedsIfRegistered()` sends the full set (excludes browse/preview
-  subs, `browseDate == nil` — same filter PodcastsView already uses for the real library count).
-  `RelayClient.updateFeeds(add:remove:)` exists for a delta variant but isn't called yet —
-  full-set resync was simpler to land first and the Worker route treats `set` as idempotent.
-- BUG FOUND + FIXED 2026-07-10 (live diagnostic log, first real device test): the original wiring
-  called this directly on every `subscriptionStore.objectWillChange`, which fires once per
-  subscription/episode a feed-refresh sweep merges — observed hammering `/v1/feeds` 60+ times/sec
-  during one refresh, the Worker answering `503`/`"internal"` under the self-inflicted load. Fixed
-  via `AppState.scheduleRelayFeedSync()`: a 2 s debounce (cancel-and-restart on each new change,
-  mirroring CloudSyncEngine's own fast-lane debounce for the identical problem) plus an in-flight
-  guard on `syncRelayFeedsIfRegistered()` so an overlapping call can't stack on a slow request.
+- IMPLEMENTED 2026-07-12: `AppState` compares the canonical real-subscription feed set after a
+  broad `SubscriptionStore` notification and does nothing for episode/metadata-only saves. A fresh
+  registration or missing baseline sends one full `set`; ordinary subscribe/unsubscribe changes
+  send only `add`/`remove`. The last server-acknowledged set and opaque ID mapping are persisted.
+- Cancellation safety: the 2 s debounce Task clears its stored reference before URLSession begins,
+  so a later store change can cancel only a pending sleep, never an in-flight request. A 15 s request
+  timeout plus persisted exponential retry/circuit state (30 s → 15 min cap, honoring server
+  `retryAfter`) prevents transport failures or relaunches from recreating the former request storm.
+- Worker: validates a bounded body/library, computes a set difference, writes additions/removals via
+  `env.DB.batch()`, recomputes all touched counts with set-based SQL, and deletes orphan feeds in the
+  same request. The response includes `{count,changed,revision,feeds:[{id,url}]}`; IDs are opaque.
 
 ### 4.4 Wake-push handling
-On silent push (`type=feed-updated`): run the EXISTING refresh path
-(`AppState.refreshAllSubscriptions(includeBackoffFeeds:true)` or a scoped variant) → background
-`URLSession` downloads proceed. On `type=sync-nudge`: trigger an immediate CloudKit fetch.
+On protocol-v2 silent push (`type=feed-updated`, `feed_ids:[...]`): resolve the opaque IDs through
+the last acknowledged membership response and refresh only those subscriptions. The relay never
+puts RSS URLs in APNs. A legacy v1 push without IDs runs a bounded, due-only eight-feed fallback
+that honors feed backoff; it never performs the former unbounded full-library sweep. On
+`type=sync-nudge`: trigger an immediate CloudKit fetch.
 MUST complete quickly and call the background completion handler. No UI.
-- IMPL: `AppState.handleRelayPush(type:)`, dispatched from `AppDelegate.didReceiveRemoteNotification`.
+- IMPL: `AppState.handleRelayPush(type:feedIDs:)`, dispatched from `AppDelegate.didReceiveRemoteNotification`.
   sync-nudge reuses `CloudSyncEngine.fetchAllSubscriptionsNow`/`fetchAllHistoryNow` — the same
   primitives TV's own launch/foreground prime uses (`AutohopTVApp.primeLibraryFromCloudSoon`) —
   without TV's 15 s activation-retry loop (no time budget for that in a background push).
@@ -314,16 +324,20 @@ NEVER whether a device is told — every subscriber of a changed feed is always 
 
 ### 6.2 Fan-out (FANOUT_QUEUE consumer)
 ```
-devices = SELECT d.* FROM feed_devices fd JOIN devices d USING(device_id)
+devices = SELECT d.device_id, f.feed_id FROM feed_devices fd JOIN feeds f USING(feed_url)
+          JOIN devices d USING(device_id)
           JOIN subscribers s USING(original_transaction_id)
           WHERE fd.feed_url = :feed_url AND s.status IN ('active','grace')
-for each device: enqueue PUSH_QUEUE { device_id }   // COALESCED per §6.3
+for each device: UPSERT pending_feed_changes(device_id, feed_id)
+for each device without an outstanding flush: enqueue PUSH_QUEUE { device_id }
 ```
 
 ### 6.3 Push coalescing (MANDATORY — iOS throttles background pushes ~2–3/hr/device)
 Do NOT send one push per changed feed. Per device, collapse to ≤1 wake push per `COALESCE_WINDOW`
-(default 15 min). Implementation: a Durable Object or D1 row `device_id → next_push_allowed_at`.
-Payload is a generic wake; the app refreshes all its (or all changed-since-last) feeds on wake.
+(default 15 min). D1's `pending_feed_changes` durably retains every coalesced opaque identity;
+`feed_push_state` guarantees at most one immediate/delayed queue flush per device. A push carries
+at most eight IDs. IDs are deleted only after APNs accepts that payload, and a change written while
+APNs is in flight survives the conditional delete for the next flush.
 
 ### 6.4 APNs send (PUSH_QUEUE consumer)
 ```
@@ -335,7 +349,8 @@ POST https://{endpoint}/3/device/{apns_token}
            apns-push-type: background
            apns-priority: 5                    // REQUIRED for content-available-only
            apns-expiration: {now + 3600}
-  body: {"aps":{"content-available":1},"type":"feed-updated","v":1}
+  body: {"aps":{"content-available":1},"type":"feed-updated","v":2,
+         "feed_ids":["opaque-id", ...]}
 handle response:
   200: ok
   410: delete device (token unregistered)
@@ -350,8 +365,10 @@ handle response:
   registration, so even the receive side would have no-op'd. Both fixed: `AppState.
   resolveRelaySyncGroupID()` fetches+caches `CKContainer.fetchUserRecordID()` and passes it to
   `/v1/register`; `CloudSyncEngine.onLocalChangesPushed` (fires on every successful CK push) drives
-  `AppState.scheduleRelaySyncNudge()` — a 5 s debounce (longer than feed-sync's 2 s; lower urgency)
-  into `RelayClient.syncNudge()`. End-to-end now: iPhone change → CK push succeeds → debounced
+  `AppState.scheduleRelaySyncNudge()` — a 5 s quiet period, persisted five-minute client minimum,
+  and exponential retry circuit — into `RelayClient.syncNudge()`. The Worker enforces a one-minute
+  source-device request minimum and coalesces several sources targeting the same device. End-to-end:
+  iPhone change → CK push succeeds → debounced
   POST /v1/sync-nudge → Worker fans to sync_group_id peers → TV's already-built receive path fetches.
 
 ---
@@ -436,7 +453,7 @@ APNs `.p8`, App Store `.p8` in Worker Secrets only; never shipped in the app. Ro
 
 ---
 
-## 9. API CONTRACTS (v1)
+## 9. API CONTRACTS (v2; v1 wake compatibility retained)
 
 All JSON; HTTPS; `Content-Type: application/json`. Errors: `{ "error": {code, message} }`.
 
@@ -445,12 +462,13 @@ All JSON; HTTPS; `Content-Type: application/json`. Errors: `{ "error": {code, me
 | POST | `/v1/register` | StoreKit JWS | `{jws, apnsToken, platform, bundleEnv, syncGroupId?}` → `{deviceId, deviceSecret, entitlement:{status,expiresAt}}` |
 | POST | `/v1/register-paired` | none (trust via syncGroupId) | `{syncGroupId, apnsToken, platform, bundleEnv}` → same shape as `/v1/register`. ADDED 2026-07-10 for tvOS (§4/§14.1) — no purchase of its own; succeeds IFF an already-registered device shares this `syncGroupId` AND has an active/grace subscriber. `402 not_entitled` otherwise. Same rate limiter as `/v1/register`. |
 | POST | `/v1/unregister` | Bearer | `{}` → `204` (deletes device + feed_devices) |
-| POST | `/v1/feeds` | Bearer | `{set?:[url], add?:[url], remove?:[url]}` → `{count}` (upserts feeds, feed_devices) |
+| POST | `/v1/feeds` | Bearer | `{set?:[url]}` or `{add?:[url], remove?:[url]}` → `{count,changed,revision,feeds:[{id,url}]}` (diffed + batched; 64 KiB body, 200-set/100-delta limits; 429 includes `retryAfter`) |
 | POST | `/v1/heartbeat` | Bearer | `{apnsToken?, syncGroupId?}` → `{entitlement}` (refresh token/group, last_seen) |
 | POST | `/v1/sync-nudge` | Bearer | `{recordType?}` → `202` (fan `sync-nudge` to same-group peers) |
 | POST | `/v1/asn` | Apple sig | Apple ASN v2 payload → `200` |
 
-Idempotency: `/v1/feeds` and `/v1/register` are idempotent by (deviceId, content).
+Idempotency: `/v1/feeds` diffs normalized membership; registration atomically reuses the existing
+device row for `(apnsToken,bundleEnv)` while rotating credentials, preserving crawler history.
 
 ---
 
@@ -502,10 +520,11 @@ feed error rates, ASN event counts. Alert on APNs auth failure, ASN signature fa
 
 - **Product**: `Autohop Pro`, auto-renewable monthly, **AUD $2.99**, **7-day free trial** (introductory offer).
 - **Defaults**: `CRAWL_TICK`=5m, `MIN_INTERVAL`=5m, `MAX_INTERVAL`=6h, `COALESCE_WINDOW`=15m.
-- **Coalescing store**: D1 row (`push_state.next_allowed_at`) for v1 (fewest bindings); migrate to a
-  Durable Object only if push contention grows.
-- **Wake payload**: generic (`{"type":"feed-updated"}`); the app refreshes all its feeds on wake.
-  Fewer, throttle-friendly pushes; no per-feed payload.
+- **Coalescing store**: D1 `pending_feed_changes` + `feed_push_state` for targeted feed wakes;
+  `push_state` coalesces identity-free sync nudges. Consider a Durable Object only if contention grows.
+- **Wake payload**: protocol v2 carries up to eight opaque relay feed IDs, never RSS URLs. Durable
+  per-device coalescing retains additional IDs for later windows. A v1 generic wake remains a
+  bounded due-only compatibility fallback in the app.
 - **Retention**: purge device rows 30 days after entitlement lapses with no activity.
   IMPLEMENTED 2026-07-10 as `last_seen_at < now - 30d` specifically (`sweep-
   ExpiredAndOrphans()`) — last_seen_at is only ever bumped by §4.5's heartbeat,

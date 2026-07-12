@@ -49,10 +49,10 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Text-MetadataAdaptive` | Duration shows "Xm left remaining" when partially played, full duration otherwise |
 | `Text-Duration` | Total duration: `.caption`, `.secondary`, `.monospacedDigit()` |
 | `EpisodeStatusPill` | Colour-coded capsule pill showing episode state — 8 states, each a unique colour |
-| `Badge-VideoPillSmall` | Small clear glass TV-icon pill — used in episode list rows via `.overlay(alignment: .topTrailing)` |
+| `Badge-VideoPillSmall` | Small icon-only TV indicator — no glass or capsule; used in dense episode list rows |
 | `Badge-VideoPillLarge` | Large clear glass "Video" text pill — used in detail page headers alongside `Badge-ExplicitPillLarge` |
 | `Badge-ExplicitPillLarge` | Large clear glass "Explicit" text pill — used in detail page headers alongside `Badge-VideoPillLarge` |
-| `Badge-ExplicitPillSmall` | Small clear glass "E in square" icon pill (iTunes-style) — used in episode list rows via `.overlay(alignment: .topTrailing)` |
+| `Badge-ExplicitPillSmall` | Small icon-only "E in square" indicator (iTunes-style) — no glass or capsule |
 | `Badge-RankPill` | Liquid glass capsule pill centred below artwork on Priority page, stacked vertically below VideoPillSmall and ExplicitPillLarge |
 | `Button-DownloadInline` | Bordered small "Download" button inline in the metadata row for undownloaded episodes |
 | `Badge-Pin` | `pin.fill` icon in trailing stack: blue = Play Next, orange = Play Last |
@@ -71,7 +71,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Button-ContextualShortcut` | Downloads button in the Up Next toolbar — navigates + pulses purple when a download is active |
 | `Indicator-PulsingIcon` | `easeInOut` 0.6s repeating scale pulse for active background state |
 | `EmptyState-ContentUnavailable` | `ContentUnavailableView` with system image + description for empty lists |
-| `ProgressBar-Download` | `ProgressView(value:total:)` tinted `.purple`, animated `.linear(0.3s)` — used on Priority rows, Subscription episode rows, and Downloads page |
+| `ProgressBar-Download` | `ProgressView(value:total:)` tinted `.purple`, animated `.linear(0.3s)` — used on Priority, Subscription episode, Listening History, and Downloads rows |
 | `Row-DownloadActivity` | Downloads page active/completed download row layout |
 | `Row-ArchivedEpisode` | Downloads page recently-archived row: artwork · text stack · re-download button |
 | `TopBar-Player` | Main Player top bar: Priority list icon · panel tabs · Up Next count pill |
@@ -80,7 +80,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Panel-Chapters` | Main Player chapters panel — chapter rows with skip toggle + All/None controls |
 | `Artwork-Player` | Dynamically sized artwork behind a purple radial glow; cornerRadius adapts for chapters |
 | `EpisodeCopy-Player` | Centred episode title (16pt bold) + tappable subscription name (12pt gray) |
-| `Scrubber-Player` | Purple `Slider` + elapsed (left) / remaining (right) time labels |
+| `Scrubber-Player` | Purple `Slider` + elapsed (left) / remaining (right) time labels, restored on first render from the canonical playback clock so a resumed episode opens at the correct thumb position |
 | `Controls-Player` | Skip-back icon · 76pt purple-tinted-glass play/pause button · skip-forward icon |
 | `AudioRow-Player` | Five-button row: Sound Settings · Sleep Timer · AirPlay route picker (centre) · Share · Archive |
 | `Button-PlayerAction` | Player action pill: purple icon on glass via `Player-GlassPill` (idle neutral glass, active purple-tinted). Used by audio-row buttons + top-bar Up Next / Sleep Schedule pills |
@@ -90,6 +90,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
 | `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`). iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background (callers pass `white.opacity(0.08)`). The `usesHostBackground` flag (default off) drops the card's own outer surface so it inherits the host Form section's row background instead — App Settings (§`Form-SettingsDark`) passes `true` so the Default Playback card matches its sibling sections; the per-podcast Playback section leaves it off. |
+| `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
 | `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the Default Playback card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; multi-line rows (e.g. the Automation toggles) are rendered as a single `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
@@ -382,7 +383,7 @@ The episode row used in the Individual Subscription episodes list. Differs from 
 Structure:
 - **Artwork column** — 44×44 pt artwork (`cornerRadius 9`, `episode.artworkURL ?? sub.artworkURL`, falls back to `Artwork-Placeholder`). No badges below artwork.
 - **Title** — plain `Text(episode.title)`, `.subheadline.weight(.semibold)`, `.primary`, `lineLimit(2)` — no inline pill.
-- **Status/Video/Explicit pills** — `VideoPillSmall` and/or `ExplicitPillSmall` float in the **top-right corner** of the row via `.overlay(alignment: .topTrailing)` on the outer `VStack`. This avoids compressing the text column.
+- **Status/media indicators** — icon-only `VideoPillSmall` and/or `ExplicitPillSmall` float in the **top-right corner** of the row via `.overlay(alignment: .topTrailing)` on the outer `VStack`. They have no glass capsule; the separate episode-status pill remains in the metadata row.
 - **Description preview** — `.caption`, `.secondary`, `lineLimit(3)`. HTML stripped via `stripHTML(_:)`. Hidden when empty.
 - **Metadata row** — date · `•` · adaptive duration (`Text-MetadataAdaptive`) · `Spacer` · `EpisodeStatusPill`. `.caption`, `.tertiary`.
 - **Download progress bar** (`ProgressBar-Download`) — shown below the HStack, indented 56 pt, only when `downloadState == .downloading`.
@@ -502,7 +503,7 @@ The standard episode row used in Up Next. Five horizontal zones left to right:
 2. **Artwork** — 44×44 pt, `cornerRadius 9`
 3. **Text stack** — leading-aligned, expands: podcast title (caption/secondary) · episode title (subheadline.bold/primary) · metadata row
 4. **Spacer**
-5. **Trailing metadata** — pin badge (if pinned) + duration
+5. **Trailing metadata** — icon-only Video/Explicit indicators (when applicable) + pin badge (if pinned) + duration. These are separately arranged in the stack, so media indicators never overlay the pin.
 
 **Expanded state:** tapping the episode title toggles `expandedEpisodeID`, unclamping the title and revealing the full plain-text description (indented to the artwork edge, `lineLimit 15`). A **small purple circular glass gear** (`gearshape`, the `refreshButton` treatment — 30×30, `glassEffect(in: Circle())` with a `.ultraThinMaterial` fallback, `.accessibilityLabel("Podcast settings")`) sits at the **bottom-right** of the expanded area; tapping it opens that podcast's `SubscriptionSettingsView` by dismissing the Up Next sheet and presenting Settings in its place ("replace Up Next", coordinated in `PlayerView` via the sheet's `onDismiss`).
 
@@ -583,7 +584,7 @@ Both use the relative time label (`relativeReleasedLabel`, "4 hours ago"). Tappi
 
 The row layout used on the Priority page. Differs from `ListRow-Standard` in three ways: (1) the podcast name is the **primary** title, (2) the secondary line is the show's **channel-level description** (2-line clamp, HTML-stripped) — NOT the latest episode title, (3) there is no trailing metadata stack — the status pill sits inline in the metadata row at the bottom. Title/description match PodcastDetailView's episode-row styling (subheadline-semibold / caption-secondary). Metadata line is `Updated: <relative age>` (mins/hours → "Yesterday" → "2…6 days ago" → exact date; no episode length).
 
-The left column has the artwork only. `VideoPillSmall` and `ExplicitPillSmall` float in the top-right corner via `.overlay(alignment: .topTrailing)` on the outer row `VStack`. `rankPill` sits in a separate bottom band row below the top HStack. Episode title is plain text (no inline pill).
+The left column has the artwork only. Icon-only `VideoPillSmall` and `ExplicitPillSmall` float in the top-right corner via `.overlay(alignment: .topTrailing)` on the outer row `VStack`. `rankPill` sits in a separate bottom band row below the top HStack. Episode title is plain text (no inline pill).
 
 ```swift
 HStack(alignment: .top, spacing: 12) {
@@ -823,7 +824,7 @@ private func statusKind(for episode: Episode) -> EpisodeStatusKind {
 
 **Label: `Badge-RankPill`**
 
-The priority rank number is displayed as a liquid glass capsule pill **centred below the artwork column** on the Priority page, rendered in the bottom band beneath the `VStack` containing the artwork and `Badge-VideoPillSmall` / `Badge-ExplicitPillLarge`. All three pills stack vertically: Video → Explicit → Rank.
+The priority rank number is displayed as a liquid glass capsule pill **centred below the artwork column** on the Priority page, rendered in the bottom band beneath the artwork row. The icon-only `Badge-VideoPillSmall` / `Badge-ExplicitPillSmall` remain in the row's top-trailing overlay; they do not share the rank pill's glass treatment.
 
 - **iOS 26+:** native `.glassEffect(in: Capsule())`
 - **iOS 17–25 fallback:** `.ultraThinMaterial` background
@@ -868,13 +869,15 @@ rankPill(sub.priorityRank)
 
 **Label: `Badge-VideoPillSmall`**
 
-The small variant of the video indicator. A TV-icon pill shown in the **top-right corner** of episode list rows when `episode.mediaKind == .video`. Placed via `.overlay(alignment: .topTrailing)` on the outer row container — never below artwork.
+The small variant of the video indicator. It is the existing `tv.fill` icon alone,
+with no glass, material, background, capsule, or decorative padding. Most episode
+lists place it in the **top-right corner** via an overlay; Up Next places it in
+the trailing metadata stack so it cannot collide with `Badge-Pin`.
 
-- **iOS 26+:** `.glassEffect(in: Capsule())`
-- **iOS 17–25 fallback:** `.ultraThinMaterial` background
 - **Icon:** `tv.fill`, `.caption.bold()`, white foreground
-- **Padding:** `.horizontal: 8, .vertical: 5`
-- **Placement:** `.overlay(alignment: .topTrailing)` on the row's outer view, in an `HStack(spacing: 3)` alongside `ExplicitPillSmall` when both apply.
+- **Surface:** none; minimum icon layout frame is 14×14 pt
+- **Placement:** normally `.overlay(alignment: .topTrailing)` in an `HStack`
+  alongside `ExplicitPillSmall`; Up Next uses its trailing metadata `VStack`.
 
 ```swift
 .overlay(alignment: .topTrailing) {
@@ -933,13 +936,14 @@ Pages covered (detail headers): Individual Subscription channel header, Individu
 
 **Label: `Badge-ExplicitPillSmall`**
 
-The small variant of the explicit indicator. An iTunes-style "E in a square" icon pill shown in the **top-right corner** of episode list rows when `episode.isExplicit == true`. Placed via `.overlay(alignment: .topTrailing)` alongside `VideoPillSmall`.
+The small variant of the explicit indicator. It is the existing iTunes-style
+"E in a square" icon alone, with no surrounding glass/material capsule or
+decorative padding.
 
-- **iOS 26+:** `.glassEffect(in: Capsule())`
-- **iOS 17–25 fallback:** `.ultraThinMaterial` background
 - **Icon:** 11×11 pt white `RoundedRectangle(cornerRadius: 2)` with a black bold "E" (`size: 8, weight: .bold`) overlaid
-- **Padding:** `.horizontal: 8, .vertical: 5`
-- **Placement:** same `.overlay(alignment: .topTrailing)` pattern as `Badge-VideoPillSmall` — see that section for the full snippet.
+- **Surface:** none; minimum icon layout frame is 14×14 pt
+- **Placement:** follows `Badge-VideoPillSmall`; in Up Next both icons occupy the
+  trailing metadata stack above the separately arranged pin and duration.
 
 Pages covered (list rows): Priority (PodcastsView), Queue (QueueSheetView), Individual Subscription (SubscriptionSettingsView), Downloads (both active and archived rows), Player Up Next row.
 
@@ -1113,6 +1117,7 @@ Purple, animated progress bar shown whenever an episode is actively downloading.
 |---|---|
 | Subscriptions | Below the metadata row, indented 56 pt (past artwork) |
 | Individual Subscription | Below the episode row HStack, indented 56 pt (past artwork) |
+| Listening History | Below the history row HStack, indented 66 pt (past its larger 54 pt artwork + 12 pt gap) |
 | Downloads page | Inside the activity row, below the text stack |
 
 Progress values publish in ≥1% steps (coalesced in AppState.onProgressUpdate) so
@@ -1136,6 +1141,12 @@ Only shown when `episode.downloadState == .downloading && appState.downloadProgr
 **Label: `SwipeActions-EpisodeRow`**
 
 Four swipe actions used on episode rows. Full-swipe is disabled on both edges. Applied on the **Up Next** sheet, **Podcast Detail** page, and **Listening History** page (the History rows resolve each entry to its `Episode` first and skip the actions when it can't be resolved).
+
+Listening History deliberately mirrors Podcast Detail's action implementation:
+Play and Play Next lead; the same state-driven Download/Archive/Unarchive primary
+action and Play Last trail. Play/Play Next/Play Last await a required manual
+download first, manual downloads bypass feed filters, the current episode has no
+swipes, and unresolved retained history records remain read-only.
 
 ### Leading (swipe right) — both pages
 | Action | Icon | Colour | Behaviour |
@@ -1802,7 +1813,7 @@ VStack(alignment: .center, spacing: 3) {
 
 **Label: `Scrubber-Player`**
 
-Purple `Slider` above a two-label time row. The slider value tracks `appState.currentPlayerTime` while not seeking; during seek the value is decoupled and committed on `onEditingChanged(false)`.
+Purple `Slider` above a two-label time row. The slider value tracks the canonical playback clock while not seeking; during seek the value is decoupled and committed on `onEditingChanged(false)`. On first appearance, the drag-local slider state is explicitly synchronised from the restored playback clock so a paused resumed episode does not render with the thumb stranded at the beginning.
 
 > **Glass:** the scrubber is a stock SwiftUI `Slider`, which on iOS 26 automatically renders with the system Liquid Glass thumb/track — there is no custom opacity/material surface to replace, so it carries only `.tint(.purple)`. No manual `.glassEffect` is applied (or needed).
 
@@ -1826,6 +1837,42 @@ VStack(spacing: 6) {
     }
     .font(.system(size: 13, weight: .semibold, design: .rounded))
 }
+```
+
+---
+
+## Settings Trim Control Row
+
+**Label: `ControlRow-EpisodeTrim`**
+
+The Start skip / End skip controls on both **Podcast Settings** and **App
+Settings → Default Playback** use the same shared row component:
+
+- Left side: purple `SettingsRowLabel` title with the current trim value below it
+- Value text: compact elapsed wording (`Off`, `45 secs`, `1 min`, `1 min 30 secs`)
+- Right side: fixed-width capsule with 44pt minus/plus buttons
+- Section surface: App Settings applies `cardBackground` directly to each native
+  Form row. Podcast Settings follows its custom-control sections: both trim rows
+  sit in one `glassCard(cornerRadius: 12)` with 20pt horizontal / 14pt vertical
+  row padding, a divider inset by 60pt, zero outer list insets, and a clear Form
+  row background. This exactly mirrors the neighbouring Automation card and
+  prevents iOS 26 from assigning custom trim rows a different glass shade.
+- Interaction: each tap updates the visible value immediately, then debounces the
+  persisted write so rapid adjustments do not thrash the store or active playback
+- Motion: the row disables inherited animations from playback-clock/store updates
+  so it stays stable while scrolling and while an episode from that subscription
+  is actively playing
+
+This row intentionally does **not** use native `Stepper` chrome because the
+system material was recompositing poorly in the scrolling settings forms.
+
+```swift
+EpisodeTrimControlRow(
+    title: "Start skip",
+    systemImage: "backward.end.fill",
+    persistedSeconds: ...,
+    onCommit: ...
+)
 ```
 
 ---
@@ -2426,6 +2473,12 @@ Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats a
 
 Horizontal stacked outcome bar used in the Stats page "Shows You're Drifting From" rows (`CompletionBar` in `Views/StatsView.swift`). 5 pt tall, `Capsule`-clipped `HStack` with 1 pt gaps; segment widths proportional to episode counts, minimum 3 pt so tiny counts stay visible.
 
+The underlying drift dataset excludes episodes in the current Download Feed
+Filters **Skipped** state (`downloadState == .notDownloaded` and filter evaluation
+rejected). These deliberate non-downloads contribute no finished, partial, or
+unplayed segment and cannot qualify a show through either drift or neglect.
+Manually downloaded episodes remain eligible because manual actions bypass filters.
+
 - **Teal** — episodes finished
 - **Orange** — stopped partway (abandoned)
 - **`white.opacity(0.25)`** — archived unplayed
@@ -2468,7 +2521,7 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 
 # Listening History Page
 
-`ListeningHistoryView` (`Views/SettingsView.swift`), reached via Menu → Listening History. Forced dark (`ColorScheme-Dark`), `Accent-Purple`, black background. Layout: a header row of two glass stat tiles (`HistoryStatView` — Listening Time, Episodes) above a grouped history `List`. `.searchable` filters by episode/podcast title (60 s minimum playback threshold). Empty/empty-search states use `ContentUnavailableView`.
+`ListeningHistoryView` (`Views/SettingsView.swift`), reached via Menu → Listening History. Forced dark (`ColorScheme-Dark`), `Accent-Purple`, black background. Layout: a header row of two glass stat tiles (`HistoryStatView` — Listening Time, Episodes) above a grouped history `List`. `.searchable` filters by episode/podcast title (60 s minimum playback threshold). Resolved episode rows use canonical `SwipeActions-EpisodeRow` behavior and show `ProgressBar-Download` beneath the row while an action-triggered download is active. Empty/empty-search states use `ContentUnavailableView`.
 
 **Label: `View-ListeningHistory`**
 

@@ -17,6 +17,12 @@ import UIKit
 // PlaybackClock (playbackClock.time), NOT appState.currentPlayerTime — reading
 // the AppState proxy in body would not re-render on ticks (AppState no longer
 // publishes them). Event handlers (skip buttons) may read the AppState proxy.
+// RESTORED-SCRUBBER FIX (2026-07-12): sliderValue is drag-local @State and
+// therefore starts at zero even when AppState restores PlaybackClock before this
+// permanently-mounted view appears. onAppear and current-episode changes call
+// synchronizeSliderWithPlaybackClock(), while the existing clock observer keeps
+// subsequent ticks aligned. Synchronization is visual only: it MUST NOT call
+// appState.seek, start playback, or overwrite an active user drag.
 // Top bar (NavRules): quiet list.bullet circle (left) pushes Subscriptions —
 // the only nav exit; next to it a Sleep Schedule indicator pill (bed.double
 // + minutes until the next "still listening?" prompt, icon-only when not
@@ -152,10 +158,14 @@ struct PlayerView: View {
         }
         .preferredColorScheme(.dark)
         .onChange(of: playbackClock.time) { _, time in
-            if !isSeeking { sliderValue = time }
+            if !isSeeking { sliderValue = clampedSliderTime(time) }
+        }
+        .onChange(of: episode?.id) { _, _ in
+            synchronizeSliderWithPlaybackClock()
         }
         .onAppear {
             isPlayerVisible = true
+            synchronizeSliderWithPlaybackClock()
             appState.updateIdleTimer(playerVisible: true)
             // Coach marks: introduce the player's panels, then (later session)
             // the speed controls. Only when there's actually an episode loaded.
@@ -829,6 +839,20 @@ struct PlayerView: View {
     }
 
     // MARK: - Scrubber
+
+    /// Copies the canonical restored/ticking clock into the Slider's drag-local
+    /// state without producing a seek side effect. SwiftUI's onChange does not
+    /// fire for a value already present when this view appears, so this explicit
+    /// initial synchronization is required for a paused restored episode.
+    private func synchronizeSliderWithPlaybackClock() {
+        guard !isSeeking else { return }
+        sliderValue = clampedSliderTime(playbackClock.time)
+    }
+
+    private func clampedSliderTime(_ time: TimeInterval) -> TimeInterval {
+        let upperBound = max(1, episode?.durationSeconds ?? 0)
+        return min(max(0, time), upperBound)
+    }
 
     private var scrubberView: some View {
         let total = max(1, episode?.durationSeconds ?? 0)

@@ -8,7 +8,12 @@ import SwiftUI
 // or a conditional cardBackground). SettingsView passes usesHostBackground: true so
 // the card drops its own surface and inherits the section row background, matching
 // its sibling sections on iOS 26. This file also hosts SettingsRowLabel — the
-// shared purple-icon row label used across the settings flow.
+// shared purple-icon row label used across the settings flow. It also owns
+// EpisodeTrimControlRow, the stable replacement for SwiftUI's Form Stepper on
+// both trim pages. That row keeps taps in local @State and coalesces persistence
+// after 350 ms, preventing active-playback publications and synchronous settings
+// writes from rebuilding the control once per tap. Its solid capsule intentionally
+// avoids the iOS 26 scrolling/glass compositing flicker seen in native Stepper.
 struct PlaybackControlsCard: View {
     let preference: PlaybackPreference
     let onSpeedChange: (Double) -> Void
@@ -212,5 +217,137 @@ struct SettingsRowLabel: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.purple)
         }
+    }
+}
+
+/// AI CONTEXT — Shared start/end episode-trim row for SettingsView and
+/// SubscriptionSettingsView. `persistedSeconds` is authoritative when no edit is
+/// pending. Button taps update `draftSeconds` immediately, then one debounced
+/// `onCommit` crosses into AppState/persistence. A disappearing row flushes the
+/// pending value so Form virtualization or navigation cannot discard the last tap.
+struct EpisodeTrimControlRow: View {
+    let title: String
+    let systemImage: String
+    let persistedSeconds: TimeInterval
+    let onCommit: (TimeInterval) -> Void
+
+    private let bounds: ClosedRange<TimeInterval> = 0...300
+    private let step: TimeInterval = 5
+
+    @State private var draftSeconds: TimeInterval
+    @State private var commitTask: Task<Void, Never>?
+
+    init(
+        title: String,
+        systemImage: String,
+        persistedSeconds: TimeInterval,
+        onCommit: @escaping (TimeInterval) -> Void
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.persistedSeconds = persistedSeconds
+        self.onCommit = onCommit
+        _draftSeconds = State(initialValue: Self.normalized(persistedSeconds))
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                SettingsRowLabel(title: title, systemImage: systemImage)
+
+                // Keep the longer minute/second text below the title instead of
+                // squeezing it between the title and 44 pt tap targets on narrow
+                // phones. Both settings pages therefore retain the same layout.
+                Text(EpisodeTrimDurationText.string(for: draftSeconds))
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.leading, 28)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 4)
+
+            HStack(spacing: 0) {
+                adjustmentButton(
+                    systemImage: "minus",
+                    accessibilityLabel: "Decrease \(title.lowercased()) by 5 seconds",
+                    disabled: draftSeconds <= bounds.lowerBound
+                ) {
+                    adjust(by: -step)
+                }
+
+                Divider()
+                    .frame(height: 28)
+
+                adjustmentButton(
+                    systemImage: "plus",
+                    accessibilityLabel: "Increase \(title.lowercased()) by 5 seconds",
+                    disabled: draftSeconds >= bounds.upperBound
+                ) {
+                    adjust(by: step)
+                }
+            }
+            // A fixed-color capsule is deliberate. Native Stepper's material was
+            // repeatedly recomposited while this Form scrolled over the mini player.
+            .background(Color.white.opacity(0.08), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.06), lineWidth: 1))
+        }
+        .transaction { transaction in
+            // PlaybackClock and store publications must not animate this control.
+            transaction.animation = nil
+        }
+        .onChange(of: persistedSeconds) { _, newValue in
+            guard commitTask == nil else { return }
+            draftSeconds = Self.normalized(newValue)
+        }
+        .onDisappear {
+            guard commitTask != nil else { return }
+            commitTask?.cancel()
+            commitTask = nil
+            onCommit(draftSeconds)
+        }
+    }
+
+    private func adjustmentButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(disabled ? Color.secondary.opacity(0.45) : Color.primary)
+        .disabled(disabled)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func adjust(by delta: TimeInterval) {
+        let nextValue = min(bounds.upperBound, max(bounds.lowerBound, draftSeconds + delta))
+        guard nextValue != draftSeconds else { return }
+        draftSeconds = nextValue
+        scheduleCommit(nextValue)
+    }
+
+    private func scheduleCommit(_ seconds: TimeInterval) {
+        commitTask?.cancel()
+        commitTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            commitTask = nil
+            onCommit(seconds)
+        }
+    }
+
+    private static func normalized(_ seconds: TimeInterval) -> TimeInterval {
+        guard seconds.isFinite else { return 0 }
+        return min(300, max(0, seconds))
     }
 }

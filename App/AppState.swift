@@ -126,6 +126,18 @@ import UIKit
 //    the threshold; playback.tickSummary emits a compact rolling summary. These
 //    logs are the intended tuning surface for the learned refresh system and
 //    main-thread playback pressure.
+//  - Autohop Relay protocol v2 (2026-07-12): AppState owns registration,
+//    membership reconciliation, retry pressure, and wake dispatch. The broad
+//    SubscriptionStore publisher is filtered through a canonical feed-URL set,
+//    so episode merges never generate membership traffic. Registration/recovery
+//    sends one idempotent full set; real subscribe/unsubscribe changes send
+//    add/remove deltas against the persisted server-acknowledged set. Debounce
+//    Tasks release their stored reference BEFORE URLSession begins, preventing a
+//    later mutation from canceling an in-flight request. Feed sync and sync-nudge
+//    use persisted exponential circuit breakers. A v2 `feed-updated` push maps
+//    opaque IDs to local subscriptions and refreshes only those feeds; a legacy
+//    ID-less push is capped to eight due feeds and respects failure backoff.
+//    Unknown IDs trigger mapping reconciliation, never a full-library sweep.
 //  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
@@ -217,7 +229,8 @@ final class PlaybackClock: ObservableObject {
 /// progress step of every active download (1–3 publishes/sec with concurrent
 /// transfers) invalidated EVERY AppState observer. Only the surfaces that render
 /// per-episode progress observe this object (episode rows in PodcastsView /
-/// PodcastDetailView / EpisodeDetailView, FirstSubscribeCard; DownloadsView reads
+/// PodcastDetailView / EpisodeDetailView, ListeningHistoryView,
+/// FirstSubscribeCard; DownloadsView reads
 /// DownloadActivityStore instead). AppState.downloadProgress remains the
 /// canonical accessor — it proxies here, so all existing read/write sites behave
 /// unchanged. Injected into the environment at the app root (AutohopApp).
@@ -260,8 +273,15 @@ final class AppState: ObservableObject {
     let autohopProStore = AutohopProStore()
     private let relayClient = RelayClient.shared
     private var relayAPNsToken: String?
+    private var relayRegistrationInFlight = false
     private var relayFeedSyncDebounceTask: Task<Void, Never>?
     private var relayFeedSyncInFlight = false
+    private var relayFeedSyncNeedsReconcile = false
+    private var relayForceFullFeedSync = false
+    private var relayObservedFeedURLs = Set<String>()
+    private static let relayAcknowledgedFeedsKey = "com.autohop.relay.acknowledgedFeeds.v2"
+    private static let relayFeedFailureCountKey = "com.autohop.relay.feedSyncFailureCount.v2"
+    private static let relayFeedNextAttemptKey = "com.autohop.relay.feedSyncNextAttempt.v2"
     /// CKContainer.fetchUserRecordID(), cached — the anonymous per-USER (not
     /// per-device) id the relay's Glossary calls `sync_group_id`, used to fan
     /// sync-nudge between a user's own devices (§6.4). Resolved lazily and
@@ -270,6 +290,11 @@ final class AppState: ObservableObject {
     private var relaySyncGroupID: String?
     private var relaySyncNudgeDebounceTask: Task<Void, Never>?
     private var relaySyncNudgeInFlight = false
+    private var relaySyncNudgeDirty = false
+    private static let relayNudgeFailureCountKey = "com.autohop.relay.nudgeFailureCount.v2"
+    private static let relayNudgeNextAttemptKey = "com.autohop.relay.nudgeNextAttempt.v2"
+    private static let relayNudgeLastSuccessKey = "com.autohop.relay.nudgeLastSuccess.v2"
+    private static let relayNudgeMinimumInterval: TimeInterval = 5 * 60
 
     // Player state
     @Published var currentPlayerEpisode: Episode? {
@@ -706,6 +731,10 @@ final class AppState: ObservableObject {
             subscriptionStore: subscriptionStore,
             database: subscriptionStore.database
         )
+        // Seed the observed membership before subscribing to the store's broad
+        // change publisher. Episode merges will still invalidate UI state, but
+        // only an actual feed-membership difference will reach the relay.
+        self.relayObservedFeedURLs = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
@@ -759,7 +788,7 @@ final class AppState: ObservableObject {
                     self.objectWillChange.send()
                     let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
                     NotificationService.shared.updateBadge(count: badgeCount)
-                    self.scheduleRelayFeedSync()
+                    self.scheduleRelayFeedSyncIfMembershipChanged()
                 }
             }
             .store(in: &cancellables)
@@ -778,6 +807,7 @@ final class AppState: ObservableObject {
                         await self.registerWithRelayIfPossible()
                     } else if self.relayClient.isRegistered {
                         _ = try? await self.relayClient.unregister()
+                        self.clearRelayFeedProtocolState()
                     }
                 }
             }
@@ -2373,6 +2403,44 @@ final class AppState: ObservableObject {
         }
     }
 
+    // AI CONTEXT — Episode-trim mutations enter through this single boundary.
+    // Optional arguments let either shared UI row merge with the latest stored
+    // preference instead of overwriting its sibling with a captured/stale
+    // Subscription value. EpisodeTrimControlRow already debounces taps, so this
+    // method performs exactly one store publication and one live-engine update.
+    func updateEpisodeTrim(
+        for subscriptionID: UUID,
+        startSkipSeconds: TimeInterval? = nil,
+        endSkipSeconds: TimeInterval? = nil
+    ) {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        var preference = subscription.playbackPreference
+        if let startSkipSeconds {
+            preference.startSkipSeconds = normalizedEpisodeTrim(startSkipSeconds)
+        }
+        if let endSkipSeconds {
+            preference.endSkipSeconds = normalizedEpisodeTrim(endSkipSeconds)
+        }
+        guard preference != subscription.playbackPreference else { return }
+
+        subscriptionStore.updatePlaybackPreference(
+            subscriptionID: subscriptionID,
+            preference: preference
+        )
+        logger.info("settings.episodeTrim", "Podcast episode trim changed", metadata: [
+            "podcast": subscription.title,
+            "startSeconds": "\(Int(preference.startSkipSeconds))",
+            "endSeconds": "\(Int(preference.endSkipSeconds))"
+        ])
+
+        if currentPlayerEpisode?.subscriptionID == subscriptionID {
+            playbackEngine.updateEpisodeTrim(
+                startSkipSeconds: preference.startSkipSeconds,
+                endSkipSeconds: preference.endSkipSeconds
+            )
+        }
+    }
+
     // MARK: - Default Playback Preference (global, for new + non-subscribed feeds)
 
     // These edit AppSettings.defaultPlaybackPreference only. They never touch an
@@ -2412,12 +2480,26 @@ final class AppState: ObservableObject {
         mutateDefaultPlaybackPreference { $0.trimSilence = amount }
     }
 
-    func updateDefaultStartSkip(_ seconds: TimeInterval) {
-        mutateDefaultPlaybackPreference { $0.startSkipSeconds = seconds }
+    // AI CONTEXT — Combined default-trim mutation used by both shared rows. A
+    // single assignment to @Published AppSettings means one atomic save, not a
+    // write for every intermediate button tap.
+    func updateDefaultEpisodeTrim(
+        startSkipSeconds: TimeInterval? = nil,
+        endSkipSeconds: TimeInterval? = nil
+    ) {
+        mutateDefaultPlaybackPreference { preference in
+            if let startSkipSeconds {
+                preference.startSkipSeconds = normalizedEpisodeTrim(startSkipSeconds)
+            }
+            if let endSkipSeconds {
+                preference.endSkipSeconds = normalizedEpisodeTrim(endSkipSeconds)
+            }
+        }
     }
 
-    func updateDefaultEndSkip(_ seconds: TimeInterval) {
-        mutateDefaultPlaybackPreference { $0.endSkipSeconds = seconds }
+    private func normalizedEpisodeTrim(_ seconds: TimeInterval) -> TimeInterval {
+        guard seconds.isFinite else { return 0 }
+        return min(300, max(0, seconds))
     }
 
     // MARK: - Shared Listening (global temporary override)
@@ -2480,6 +2562,10 @@ final class AppState: ObservableObject {
         let preference = effectivePreference(for: subscription)
         playbackEngine.updatePlaybackSpeed(preference.speed)
         playbackEngine.updateTrimSilence(preference.trimSilence)
+        playbackEngine.updateEpisodeTrim(
+            startSkipSeconds: preference.startSkipSeconds,
+            endSkipSeconds: preference.endSkipSeconds
+        )
         NowPlayingService.shared.updateTime(
             currentTime: currentPlayerTime,
             isPlaying: isPlaying,
@@ -3303,7 +3389,9 @@ final class AppState: ObservableObject {
         includeBackoffFeeds: Bool,
         onlyDueFeeds: Bool,
         joinActiveCycle: Bool = false,
-        backgroundTaskIdentifier: String? = nil
+        backgroundTaskIdentifier: String? = nil,
+        targetSubscriptionIDs: Set<UUID>? = nil,
+        refreshAfterJoiningActiveCycle: Bool = false
     ) async -> Bool {
         if let active = activeRefreshCycle {
             guard joinActiveCycle else {
@@ -3335,7 +3423,27 @@ final class AppState: ObservableObject {
                 "joinedTrigger": activeRefreshCycleDiagnostics?.trigger.rawValue ?? "unknown",
                 "joinedExecutionContext": activeRefreshCycleDiagnostics?.executionContext.rawValue ?? "unknown"
             ])
-            return await active.value
+            let joinedResult = await active.value
+            guard refreshAfterJoiningActiveCycle else { return joinedResult }
+            // The joined cycle may have been a capped/due-only poll that did not
+            // include the feed named by the relay. Let its owning caller clear
+            // activeRefreshCycle, then run one targeted follow-up cycle.
+            while activeRefreshCycle != nil { await Task.yield() }
+            return await refreshSubscriptions(
+                reason: reason,
+                trigger: trigger,
+                executionContext: executionContext,
+                maxSubscriptions: maxSubscriptions,
+                capBypassStates: capBypassStates,
+                protectedStates: protectedStates,
+                minimumProtectedSelections: minimumProtectedSelections,
+                includeBackoffFeeds: includeBackoffFeeds,
+                onlyDueFeeds: onlyDueFeeds,
+                joinActiveCycle: false,
+                backgroundTaskIdentifier: backgroundTaskIdentifier,
+                targetSubscriptionIDs: targetSubscriptionIDs,
+                refreshAfterJoiningActiveCycle: false
+            )
         }
 
         let diagnostics = RefreshCycleDiagnostics(
@@ -3355,7 +3463,8 @@ final class AppState: ObservableObject {
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
                 includeBackoffFeeds: includeBackoffFeeds,
-                onlyDueFeeds: onlyDueFeeds
+                onlyDueFeeds: onlyDueFeeds,
+                targetSubscriptionIDs: targetSubscriptionIDs
             )
         }
         activeRefreshCycle = cycle
@@ -3374,7 +3483,8 @@ final class AppState: ObservableObject {
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
         includeBackoffFeeds: Bool,
-        onlyDueFeeds: Bool
+        onlyDueFeeds: Bool,
+        targetSubscriptionIDs: Set<UUID>?
     ) async -> Bool {
         suppressUpNextRefresh = true
         defer { suppressUpNextRefresh = false }
@@ -3385,13 +3495,17 @@ final class AppState: ObservableObject {
             context: resourceContext(refreshContext),
             force: true
         )
-        logger.info("feed.refreshAll", "Refreshing all podcast feeds", metadata: [
-            "count": "\(subscriptionStore.subscriptions.count)",
+        let requestedSubscriptions = targetSubscriptionIDs.map { targetIDs in
+            subscriptionStore.subscriptions.filter { targetIDs.contains($0.id) }
+        } ?? subscriptionStore.subscriptions
+        logger.info("feed.refreshAll", "Refreshing podcast feeds", metadata: [
+            "count": "\(requestedSubscriptions.count)",
             "reason": diagnostics.reason,
-            "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all"
+            "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all",
+            "targeted": "\(targetSubscriptionIDs != nil)"
         ].merging(refreshContext) { _, new in new })
-        let skippedSubscriptions = subscriptionStore.subscriptions.filter(\.excludeFromAutoFeedRefresh)
-        let activeSubscriptions = subscriptionStore.subscriptions.filter { !$0.excludeFromAutoFeedRefresh }
+        let skippedSubscriptions = requestedSubscriptions.filter(\.excludeFromAutoFeedRefresh)
+        let activeSubscriptions = requestedSubscriptions.filter { !$0.excludeFromAutoFeedRefresh }
         let now = Date()
         let backoffSubscriptions = activeSubscriptions.filter { subscription in
             guard let until = feedFailureBackoffUntil[subscription.id] else { return false }
@@ -4424,8 +4538,11 @@ final class AppState: ObservableObject {
     private func registerWithRelayIfPossible() async {
         guard autohopProStore.isPro,
               let token = relayAPNsToken,
-              let jws = autohopProStore.latestTransactionJWS
+              let jws = autohopProStore.latestTransactionJWS,
+              !relayRegistrationInFlight
         else { return }
+        relayRegistrationInFlight = true
+        defer { relayRegistrationInFlight = false }
         let syncGroupID = await resolveRelaySyncGroupID()
         do {
             let (_, requestID) = try await relayClient.register(jws: jws, apnsToken: token, syncGroupId: syncGroupID)
@@ -4433,6 +4550,10 @@ final class AppState: ObservableObject {
                 "requestID": requestID,
                 "hasSyncGroupID": "\(syncGroupID != nil)"
             ])
+            // Registration may create a device or rotate credentials on the
+            // existing row. One idempotent full set confirms/rebuilds the local
+            // acknowledged baseline; ordinary library changes use deltas.
+            relayForceFullFeedSync = true
             await syncRelayFeedsIfRegistered()
         } catch {
             logger.warning("relay.registerFailed", "Autohop Relay registration failed", metadata: [
@@ -4442,50 +4563,145 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Debounced entry point for §4.3 feed-list sync — call this, not
-    /// syncRelayFeedsIfRegistered() directly, from anything that fires on
-    /// subscriptionStore.objectWillChange. A single feed refresh sweep fires
-    /// that publisher once per subscription/episode merged (seen hammering the
-    /// relay 60+ times/sec during a live refresh, 2026-07-10 diagnostic review —
-    /// AH-01-style storm). 2 s of quiet coalesces a whole sweep into one POST.
-    private func scheduleRelayFeedSync() {
+    /// AI CONTEXT — SubscriptionStore's publisher represents every episode and
+    /// metadata save, not just subscribe/unsubscribe. Compare the canonical feed
+    /// set synchronously after each save and schedule network work only when that
+    /// set actually changes.
+    private func scheduleRelayFeedSyncIfMembershipChanged() {
+        let current = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
+        guard current != relayObservedFeedURLs else { return }
+        relayObservedFeedURLs = current
+        relayFeedSyncNeedsReconcile = true
+        scheduleRelayFeedSync()
+    }
+
+    /// Debounces membership mutations. Crucially, this Task owns only the sleep:
+    /// it clears its stored reference before starting URLSession work. A later
+    /// store change can cancel a pending debounce but cannot cancel an in-flight
+    /// request (the cause of the diagnostic log's repeated NSURLErrorCancelled).
+    private func scheduleRelayFeedSync(after delay: TimeInterval = 2) {
         relayFeedSyncDebounceTask?.cancel()
         relayFeedSyncDebounceTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(max(0, delay)))
             guard !Task.isCancelled else { return }
-            await self?.syncRelayFeedsIfRegistered()
+            guard let self else { return }
+            self.relayFeedSyncDebounceTask = nil
+            await self.syncRelayFeedsIfRegistered()
         }
     }
 
-    /// Sends the full subscribed-feed set (§4.3 — idempotent). No-op for non-Pro,
-    /// not-yet-registered, or already-in-flight (debounce coalesces the CALLS;
-    /// this guards against a slow request still running when the next one lands).
-    /// Callers: scheduleRelayFeedSync() (debounced) and registerWithRelayIfPossible()
-    /// (one deliberate call right after a fresh registration — fine undebounced).
+    /// Reconciles desired membership against the last server-acknowledged set.
+    /// Fresh registration/recovery sends `set`; normal membership edits send only
+    /// `add`/`remove`. Failures open a persisted exponential circuit breaker so
+    /// relaunches and store churn cannot immediately recreate a request storm.
     private func syncRelayFeedsIfRegistered() async {
-        guard autohopProStore.isPro, relayClient.isRegistered, !relayFeedSyncInFlight else { return }
+        guard autohopProStore.isPro, relayClient.isRegistered else { return }
+        if relayFeedSyncInFlight {
+            relayFeedSyncNeedsReconcile = true
+            return
+        }
+        let defaults = UserDefaults.standard
+        let now = Date().timeIntervalSince1970
+        let nextAttempt = defaults.double(forKey: Self.relayFeedNextAttemptKey)
+        if nextAttempt > now {
+            relayFeedSyncNeedsReconcile = true
+            scheduleRelayFeedSync(after: nextAttempt - now)
+            return
+        }
+
         relayFeedSyncInFlight = true
-        defer { relayFeedSyncInFlight = false }
-        let urls = subscriptionStore.subscriptions
-            .filter { $0.browseDate == nil }
-            .map(\.feedURL)
+        relayFeedSyncNeedsReconcile = false
+        defer {
+            relayFeedSyncInFlight = false
+            if relayFeedSyncNeedsReconcile { scheduleRelayFeedSync() }
+        }
+
+        let desired = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
+        let hasBaseline = defaults.object(forKey: Self.relayAcknowledgedFeedsKey) != nil
+        let acknowledged = Set(defaults.stringArray(forKey: Self.relayAcknowledgedFeedsKey) ?? [])
+        let additions = desired.subtracting(acknowledged)
+        let removals = acknowledged.subtracting(desired)
+        // The Worker deliberately caps a single delta at 100 entries. A large
+        // OPML import/removal remains one bounded, idempotent full-set request
+        // instead of failing repeatedly against that pressure limit.
+        let forceFull = relayForceFullFeedSync || !hasBaseline
+            || additions.count > 100 || removals.count > 100
+        if !forceFull, additions.isEmpty, removals.isEmpty { return }
+
         do {
-            let (count, requestID) = try await relayClient.setFeeds(urls)
-            // Success was previously invisible — only relay.feedSyncFailed existed,
-            // so a log review could count failures but never tell "mostly working"
-            // from "never worked." requestID lets a review grep the Worker's own
-            // Cloudflare Workers Logs for the same request (§12 OBSERVABILITY).
+            let result: (response: RelayFeedsResponse, requestID: String)
+            if forceFull {
+                result = try await relayClient.setFeeds(Self.urls(from: desired))
+            } else {
+                result = try await relayClient.updateFeeds(
+                    add: Self.urls(from: additions),
+                    remove: Self.urls(from: removals)
+                )
+            }
+
+            let serverURLs: Set<String>
+            if let descriptors = result.response.feeds {
+                RelayFeedMappingStore.replace(with: descriptors)
+                serverURLs = Set(descriptors.map(\.url))
+            } else {
+                // Backward-compatible rollout path for a v1 Worker response.
+                // Membership can still advance, but targeted pushes remain
+                // unavailable until a v2 response supplies opaque mappings.
+                serverURLs = desired
+            }
+            defaults.set(Array(serverURLs).sorted(), forKey: Self.relayAcknowledgedFeedsKey)
+            defaults.set(0, forKey: Self.relayFeedFailureCountKey)
+            defaults.removeObject(forKey: Self.relayFeedNextAttemptKey)
+            relayForceFullFeedSync = result.response.count != desired.count
             logger.info("relay.feedSyncSucceeded", "Autohop Relay feed sync succeeded", metadata: [
-                "sentCount": "\(urls.count)",
-                "acknowledgedCount": "\(count)",
-                "requestID": requestID
+                "mode": forceFull ? "set" : "delta",
+                "desiredCount": "\(desired.count)",
+                "addedCount": "\(additions.count)",
+                "removedCount": "\(removals.count)",
+                "acknowledgedCount": "\(result.response.count)",
+                "changedCount": "\(result.response.changed ?? -1)",
+                "requestID": result.requestID
             ])
+            let latestDesired = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
+            if latestDesired != desired || relayForceFullFeedSync {
+                relayFeedSyncNeedsReconcile = true
+            }
         } catch {
+            let failureCount = defaults.integer(forKey: Self.relayFeedFailureCountKey) + 1
+            defaults.set(failureCount, forKey: Self.relayFeedFailureCountKey)
+            let policyDelay = RelayRetryPolicy.delay(failureCount: failureCount)
+            let delay = max(policyDelay, (error as? RelayError)?.retryAfter ?? 0)
+            defaults.set(now + delay, forKey: Self.relayFeedNextAttemptKey)
+            relayFeedSyncNeedsReconcile = true
             logger.warning("relay.feedSyncFailed", "Autohop Relay feed sync failed", metadata: [
                 "error": "\(error)",
-                "requestID": (error as? RelayError)?.requestID ?? "none"
+                "requestID": (error as? RelayError)?.requestID ?? "none",
+                "failureCount": "\(failureCount)",
+                "retryAfterSeconds": "\(Int(delay))"
             ])
         }
+    }
+
+    private static func relayFeedURLs(in subscriptions: [Subscription]) -> Set<String> {
+        Set(subscriptions.lazy
+            .filter { $0.browseDate == nil }
+            .compactMap { RelayFeedURLCanonicalizer.string(for: $0.feedURL) })
+    }
+
+    private static func urls(from strings: Set<String>) -> [URL] {
+        strings.sorted().compactMap(URL.init(string:))
+    }
+
+    private func clearRelayFeedProtocolState() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.relayAcknowledgedFeedsKey)
+        defaults.removeObject(forKey: Self.relayFeedFailureCountKey)
+        defaults.removeObject(forKey: Self.relayFeedNextAttemptKey)
+        RelayFeedMappingStore.clear()
+        relayForceFullFeedSync = false
+        relayFeedSyncNeedsReconcile = false
+        relayFeedSyncDebounceTask?.cancel()
+        relayFeedSyncDebounceTask = nil
     }
 
     /// Resolves the anonymous per-user CloudKit record ID used as the relay's
@@ -4512,20 +4728,26 @@ final class AppState: ObservableObject {
         return recordID.recordName
     }
 
-    /// Debounced entry point for §6.4's sync-nudge SEND side — call this, not
-    /// sendRelaySyncNudge() directly, from CloudSyncEngine.onLocalChangesPushed.
-    /// That fires on every successful CK push, which during active use can be
-    /// bursty (documented in this file's own CloudSyncEngine header: "8 CK
-    /// pushes in ~2 min of playback") — undebounced, this would repeat the
-    /// exact feed-sync storm bug fixed 2026-07-10. 5 s of quiet (longer than
-    /// feed-sync's 2 s: a sync-nudge is lower-urgency than a new episode) before
-    /// actually notifying the relay.
+    /// Coalesces CloudKit writes behind both a short quiet period and a persisted
+    /// five-minute minimum interval. The dirty bit preserves a trailing nudge;
+    /// unlike the former implementation, canceling a future sleep can never
+    /// cancel the URLSession request that is already running.
     private func scheduleRelaySyncNudge() {
+        relaySyncNudgeDirty = true
         relaySyncNudgeDebounceTask?.cancel()
+        let defaults = UserDefaults.standard
+        let now = Date().timeIntervalSince1970
+        let earliest = max(
+            now + 5,
+            defaults.double(forKey: Self.relayNudgeNextAttemptKey),
+            defaults.double(forKey: Self.relayNudgeLastSuccessKey) + Self.relayNudgeMinimumInterval
+        )
         relaySyncNudgeDebounceTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(max(0, earliest - Date().timeIntervalSince1970)))
             guard !Task.isCancelled else { return }
-            await self?.sendRelaySyncNudge()
+            guard let self else { return }
+            self.relaySyncNudgeDebounceTask = nil
+            await self.sendRelaySyncNudge()
         }
     }
 
@@ -4536,18 +4758,37 @@ final class AppState: ObservableObject {
     /// single target device is actually woken — this guard only protects the
     /// relay's REQUEST volume from this device, not push volume to the TV.
     private func sendRelaySyncNudge() async {
-        guard autohopProStore.isPro, relayClient.isRegistered, !relaySyncNudgeInFlight else { return }
+        guard autohopProStore.isPro, relayClient.isRegistered, relaySyncNudgeDirty else { return }
+        if relaySyncNudgeInFlight { return }
         relaySyncNudgeInFlight = true
-        defer { relaySyncNudgeInFlight = false }
+        relaySyncNudgeDirty = false
+        defer {
+            relaySyncNudgeInFlight = false
+            if relaySyncNudgeDirty { scheduleRelaySyncNudge() }
+        }
+        let defaults = UserDefaults.standard
         do {
             let requestID = try await relayClient.syncNudge()
+            defaults.set(Date().timeIntervalSince1970, forKey: Self.relayNudgeLastSuccessKey)
+            defaults.set(0, forKey: Self.relayNudgeFailureCountKey)
+            defaults.removeObject(forKey: Self.relayNudgeNextAttemptKey)
             logger.info("relay.syncNudgeSent", "Autohop Relay sync-nudge sent", metadata: [
                 "requestID": requestID
             ])
         } catch {
+            let failureCount = defaults.integer(forKey: Self.relayNudgeFailureCountKey) + 1
+            defaults.set(failureCount, forKey: Self.relayNudgeFailureCountKey)
+            let delay = max(
+                RelayRetryPolicy.delay(failureCount: failureCount, base: 60, maximum: 30 * 60),
+                (error as? RelayError)?.retryAfter ?? 0
+            )
+            defaults.set(Date().timeIntervalSince1970 + delay, forKey: Self.relayNudgeNextAttemptKey)
+            relaySyncNudgeDirty = true
             logger.warning("relay.syncNudgeFailed", "Autohop Relay sync-nudge failed", metadata: [
                 "error": "\(error)",
-                "requestID": (error as? RelayError)?.requestID ?? "none"
+                "requestID": (error as? RelayError)?.requestID ?? "none",
+                "failureCount": "\(failureCount)",
+                "retryAfterSeconds": "\(Int(delay))"
             ])
         }
     }
@@ -4597,27 +4838,60 @@ final class AppState: ObservableObject {
     /// the same no-stall contract as the BGTask handlers. Returns whether real
     /// work was kicked off (maps to .newData vs .noData for iOS's wake-budget).
     @discardableResult
-    func handleRelayPush(type: String) async -> Bool {
+    func handleRelayPush(type: String, feedIDs: [String] = []) async -> Bool {
         switch type {
         case "feed-updated":
-            // Tagged .relayPush (not .manualButton, what refreshAllSubscriptions()
-            // uses) so a log review can finally tell whether the relay caused this
-            // refresh or the on-device poller would have found it anyway — the
-            // question this whole feature exists to answer (diagnostic-log
-            // improvement pass, 2026-07-10). The wake payload is generic (§14
-            // DECISIONS — no specific feed_url), so — like a manual pull-to-refresh —
-            // every subscription is checked; the relay's own conditional-GET keeps
-            // the 112 unchanged feeds cheap (304s) server-side.
-            await refreshSubscriptions(
-                reason: "relay",
+            guard !feedIDs.isEmpty else {
+                // Protocol-v1/legacy fallback: never repeat the old unbounded,
+                // backoff-bypassing full-library sweep. Check only the same small
+                // due-feed budget used by BGAppRefresh and honor feed backoff.
+                return await refreshSubscriptions(
+                    reason: "relay.legacy",
+                    trigger: .relayPush,
+                    executionContext: .relayPush,
+                    maxSubscriptions: backgroundRefreshFeedLimit,
+                    includeBackoffFeeds: false,
+                    onlyDueFeeds: true,
+                    joinActiveCycle: true
+                )
+            }
+
+            let mapping = RelayFeedMappingStore.urlStrings(for: feedIDs)
+            if !mapping.unknown.isEmpty {
+                // Unknown IDs mean the local protocol cache missed a server
+                // membership revision (upgrade/re-registration race). Repair the
+                // mapping with a full set, but do not turn this push into a sweep.
+                relayForceFullFeedSync = true
+                relayFeedSyncNeedsReconcile = true
+                scheduleRelayFeedSync(after: 0)
+                logger.warning("relay.pushUnknownFeedIDs", "Relay push contained unknown feed identities", metadata: [
+                    "unknownCount": "\(mapping.unknown.count)",
+                    "receivedCount": "\(feedIDs.count)"
+                ])
+            }
+            let targetIDs: Set<UUID> = Set(subscriptionStore.subscriptions.compactMap { subscription -> UUID? in
+                guard let canonical = RelayFeedURLCanonicalizer.string(for: subscription.feedURL),
+                      mapping.known.contains(canonical)
+                else { return nil }
+                return subscription.id
+            })
+            guard !targetIDs.isEmpty else {
+                // The membership may have been removed locally before a queued
+                // push arrived. Mapping repair above is sufficient; no feed fetch
+                // is useful in this wake.
+                return !mapping.unknown.isEmpty
+            }
+            return await refreshSubscriptions(
+                reason: "relay.targeted",
                 trigger: .relayPush,
                 executionContext: .relayPush,
-                maxSubscriptions: nil,
+                maxSubscriptions: targetIDs.count,
                 includeBackoffFeeds: true,
                 onlyDueFeeds: false,
-                joinActiveCycle: true
+                joinActiveCycle: true,
+                targetSubscriptionIDs: targetIDs,
+                refreshAfterJoiningActiveCycle: true
             )
-            return true
         case "sync-nudge":
             // Immediate CloudKit pull — same primitives TV's launch/foreground
             // prime uses (TV/App/AutohopTVApp.swift primeLibraryFromCloudSoon),

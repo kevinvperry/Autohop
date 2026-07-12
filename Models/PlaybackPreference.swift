@@ -21,6 +21,9 @@ import Foundation
 // fallback, and `.default` all now agree on .off (ASSESSMENT.md B3, resolved
 // 2026-06-18). The legacy `vocalBoostEnabled` boolean key still maps true→.strong
 // / false→.off for old persisted data.
+// `EpisodeTrimDurationText` is the single display formatter for start/end trim
+// values on both settings pages. Keep that wording UI-only: persisted and engine
+// values remain TimeInterval seconds so playback and sync formats do not change.
 public enum TrimSilenceAmount: String, CaseIterable, Codable, Sendable {
     case off
     case low
@@ -144,5 +147,30 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         try container.encode(endSkipSeconds, forKey: .endSkipSeconds)
         try container.encode(vocalBoostLevel, forKey: .vocalBoostLevel)
         try container.encode(trimSilence, forKey: .trimSilence)
+    }
+}
+
+/// AI CONTEXT — Human-readable episode-trim text shared by global and
+/// per-subscription settings. This deliberately avoids DateComponentsFormatter:
+/// trim values are short elapsed durations, and the product wording requires
+/// compact forms such as "1 min 30 secs" rather than locale-dependent timestamps.
+public enum EpisodeTrimDurationText {
+    public static func string(for seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.isFinite ? seconds.rounded() : 0))
+        guard totalSeconds > 0 else { return "Off" }
+
+        let minutes = totalSeconds / 60
+        let remainingSeconds = totalSeconds % 60
+        let minuteUnit = minutes == 1 ? "min" : "mins"
+        let secondUnit = remainingSeconds == 1 ? "sec" : "secs"
+
+        switch (minutes, remainingSeconds) {
+        case (0, let seconds):
+            return "\(seconds) \(secondUnit)"
+        case (let minutes, 0):
+            return "\(minutes) \(minuteUnit)"
+        default:
+            return "\(minutes) \(minuteUnit) \(remainingSeconds) \(secondUnit)"
+        }
     }
 }

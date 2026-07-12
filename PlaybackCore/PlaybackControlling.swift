@@ -8,8 +8,11 @@ import Foundation
 // conformers: iOS PlaybackEngine (Playback/, app target only — AVAudioEngine
 // trim-silence/vocal-boost path, unchanged) and StreamingPlaybackEngine
 // (PlaybackCore/, AVPlayer-only, serves tvOS and later the watch). The ONLY
-// addition over the historical protocol is `capabilities` — surfaces read it
-// instead of hardcoding platform checks (see PlaybackCapabilities.swift).
+// additions over the historical protocol are `capabilities` and
+// `updateEpisodeTrim`: surfaces read capability flags instead of hardcoding
+// platforms, while a settings edit can update the active session's end boundary
+// without restarting audio. Start trim is retained for session consistency but
+// never seeks an episode that is already underway.
 // Do not add iOS-only requirements here; platform-specific behavior belongs on
 // the concrete engines behind capability flags.
 public protocol PlaybackControlling {
@@ -39,6 +42,7 @@ public protocol PlaybackControlling {
     func updatePlaybackSpeed(_ speed: Double)
     func updateVocalBoost(_ level: VocalBoostLevel)
     func updateTrimSilence(_ amount: TrimSilenceAmount)
+    func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval)
     /// Applies chapters that were fetched after playback already started (e.g. an
     /// external `podcast:chapters` JSON feed) to the live session, so chapter
     /// display and chapter-skip filtering work without the fetch having blocked

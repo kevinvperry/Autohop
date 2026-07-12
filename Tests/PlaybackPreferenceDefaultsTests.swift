@@ -3,7 +3,8 @@
 // vocalBoostLevel default, and `init(from:)`'s missing-key fallback must all
 // agree on `.off` — previously the init and decoder silently fell back to
 // `.strong`. The legacy `vocalBoostEnabled` boolean key must still map
-// true→.strong / false→.off.
+// true→.strong / false→.off. Also protects the shared episode-trim display
+// wording used by both settings pages (including singular/plural boundaries).
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -38,5 +39,15 @@ final class PlaybackPreferenceDefaultsTests: XCTestCase {
         let data = try JSONEncoder().encode(pref)
         let decoded = try JSONDecoder().decode(PlaybackPreference.self, from: data)
         XCTAssertEqual(decoded.vocalBoostLevel, .standard)
+    }
+
+    func testEpisodeTrimDurationTextUsesMinutesAndSeconds() {
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 0), "Off")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 5), "5 secs")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 60), "1 min")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 61), "1 min 1 sec")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 90), "1 min 30 secs")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 120), "2 mins")
+        XCTAssertEqual(EpisodeTrimDurationText.string(for: 300), "5 mins")
     }
 }

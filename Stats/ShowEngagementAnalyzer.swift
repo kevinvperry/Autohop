@@ -15,7 +15,9 @@ import Foundation
 //     healthy high-volume use is the completion COUNT, not the auto-archive rate
 //     (both a happy news listener and a lapsed one sit near a 100% auto rate).
 // Thresholds are the constants below; medianStopSeconds feeds the "you usually
-// stop around the N-minute mark" insight line.
+// stop around the N-minute mark" insight line. `excludingEpisodeIDs` is supplied
+// by StatsView for episodes currently classified as Download-Filter Skipped; the
+// pure analyzer applies that exclusion before classification/aggregation.
 
 // MARK: - EpisodeOutcome
 
@@ -171,11 +173,16 @@ public enum ShowEngagementAnalyzer {
 
     /// Per-show engagement for entries whose last activity is on/after `since`,
     /// sorted by struggle score descending.
-    public static func engagements(entries: [ListeningHistoryEntry], since: Date) -> [ShowEngagement] {
+    public static func engagements(
+        entries: [ListeningHistoryEntry],
+        since: Date,
+        excludingEpisodeIDs: Set<UUID> = []
+    ) -> [ShowEngagement] {
         var byShow: [UUID: ShowEngagement] = [:]
         var stops: [UUID: [TimeInterval]] = [:]
 
-        for entry in entries where entry.lastListenedAt >= since {
+        for entry in entries where entry.lastListenedAt >= since
+            && !excludingEpisodeIDs.contains(entry.episodeID) {
             guard let outcome = classify(entry) else { continue }
             var engagement = byShow[entry.subscriptionID]
                 ?? ShowEngagement(subscriptionID: entry.subscriptionID, title: entry.podcastTitle)
@@ -212,10 +219,15 @@ public enum ShowEngagementAnalyzer {
     public static func strugglingShows(
         entries: [ListeningHistoryEntry],
         since: Date,
-        excluding muted: Set<UUID> = []
+        excluding muted: Set<UUID> = [],
+        excludingEpisodeIDs: Set<UUID> = []
     ) -> [ShowEngagement] {
         Array(
-            engagements(entries: entries, since: since)
+            engagements(
+                entries: entries,
+                since: since,
+                excludingEpisodeIDs: excludingEpisodeIDs
+            )
                 .filter {
                     guard !muted.contains($0.subscriptionID) else { return false }
                     // Neglect path: a ghost subscription qualifies on its own.

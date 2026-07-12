@@ -461,6 +461,7 @@ private final class PlaybackSpy: PlaybackControlling {
     func updatePlaybackSpeed(_ speed: Double) { lastSpeed = speed }
     func updateVocalBoost(_ level: VocalBoostLevel) {}
     func updateTrimSilence(_ amount: TrimSilenceAmount) {}
+    func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval) {}
     func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {}
     func stop() {
         currentEpisode = nil

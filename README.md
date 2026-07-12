@@ -49,7 +49,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
 - Vocal Boost (Off / Light / Standard / Strong, per-podcast) — Pocket Casts-derived dynamics chain (high-pass filter → dynamics processor → peak limiter) targeting clearer spoken audio
-- Per-podcast playback speed (1.0–2.5x), start skip, and end skip
+- Per-podcast playback speed (1.0–2.5x), start skip, and end skip, with mirrored trim controls in both Podcast Settings and Default Playback that show compact minute/second values and debounce persistence so live playback stays responsive
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
 - Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
@@ -62,8 +62,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
-- Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned
-- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history (including your resume position), and stats in step across your devices over your private CloudKit database; downloads, global app settings, and per-podcast Download Filters stay per-device
+- Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned; it uses the same trim-control UI as per-podcast settings
+- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history (including your resume position), per-podcast Download Filters, and stats in step across your devices over your private CloudKit database; downloads and global app settings stay per-device
 - OPML import and export for subscription portability
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options

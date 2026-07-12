@@ -7,7 +7,8 @@ as a fast orientation file before reading the canonical docs. Do not treat it as
 the source of truth when it conflicts with code: FEATURES.md owns product
 behaviour, PAGES.md owns navigation/page names, DESIGN.md owns UI patterns,
 SYNC_DESIGN.md owns iCloud sync, and DEEP_SCAN_2026-06-28.md owns the latest
-assessment findings.
+assessment findings. Keep this brief refreshed when recent UI or sync behaviour
+changes so future AI agents do not inherit stale summary assumptions.
 -->
 
 ## Identity
@@ -46,8 +47,12 @@ current episode. Internal Swift names still include `QueueSheetView` and
 - Discovery: Apple Podcasts charts, country picker, Top Episodes, Top Podcasts,
   search, direct RSS add, and Recently Viewed browse subscriptions.
 - Listening: download-first playback, Trim Silence, Vocal Boost, per-podcast speed,
-  start/end skip, chapter filtering, audio/video playback, share cards, sleep timer,
-  sleep schedule, Now Playing, and lock-screen/Control Centre commands.
+  start/end skip, shared debounced trim-control rows in both Podcast Settings and
+  Default Playback, chapter filtering, audio/video playback, share cards, sleep
+  timer, sleep schedule, Now Playing, and lock-screen/Control Centre commands.
+- Player resume polish: the scrubber now synchronises to the restored playback
+  clock on first render, so partially played episodes open with the correct thumb
+  position as well as the correct elapsed/remaining labels.
 - Organisation: Priority Stack, Up Next, Play Next, Play Last, archive/unarchive,
   per-podcast settings, per-podcast Download Filters, auto-archive, listening history,
   and stats.
@@ -74,7 +79,6 @@ Not synced in v1:
 - Global `AppSettings` such as Release Radar sensitivity, download Wi-Fi/cellular
   toggles, skip durations, sleep schedule, recaps, launch screen, onboarding flags,
   and global Default Playback.
-- Per-podcast Download Filters.
 - Release Radar learned schedule/refresh stats.
 - Downloaded files, download state, catalog metadata, and media cache.
 

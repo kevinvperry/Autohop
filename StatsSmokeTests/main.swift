@@ -158,6 +158,7 @@ func runSmokeTest() throws {
 func historyEntry(
     show: UUID,
     title: String,
+    episodeID: UUID = UUID(),
     daysAgo: Int = 1,
     listened: TimeInterval,
     position: TimeInterval,
@@ -169,7 +170,7 @@ func historyEntry(
     ListeningHistoryEntry(
         id: UUID().uuidString,
         subscriptionID: show,
-        episodeID: UUID(),
+        episodeID: episodeID,
         episodeTitle: "Episode",
         podcastTitle: title,
         artworkURL: nil,
@@ -292,6 +293,32 @@ func runEngagementSmokeTest() {
 
     let muted = ShowEngagementAnalyzer.strugglingShows(entries: entries, since: since, excluding: [abandoner])
     require(!muted.map(\.subscriptionID).contains(abandoner), "Expected muted show excluded")
+
+    // Download Feed Filters represent a deliberate choice not to receive an
+    // episode. Excluded episode IDs must contribute neither a genuine drift
+    // signal nor ghost-subscription neglect.
+    let filterSkippedShow = UUID()
+    let skippedEpisodeIDs = Set((0..<4).map { _ in UUID() })
+    let filterSkippedEntries = skippedEpisodeIDs.map { episodeID in
+        historyEntry(
+            show: filterSkippedShow,
+            title: "Filtered Show",
+            episodeID: episodeID,
+            listened: 0,
+            position: 0,
+            status: .archived,
+            kind: .autoArchived,
+            percent: 0
+        )
+    }
+    require(
+        ShowEngagementAnalyzer.strugglingShows(
+            entries: filterSkippedEntries,
+            since: since,
+            excludingEpisodeIDs: skippedEpisodeIDs
+        ).isEmpty,
+        "Expected Download-Filter Skipped episodes to have no effect on drifting shows"
+    )
 
     // Below minResolvedEpisodes a show is never flagged, however bad the ratio.
     let tiny = UUID()

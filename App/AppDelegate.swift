@@ -5,7 +5,7 @@ import MetricKit
 
 // AI CONTEXT — App/AppDelegate.swift
 // UIKit delegate bridged into the SwiftUI app via @UIApplicationDelegateAdaptor
-// (see AutohopApp.swift). Handles the five things SwiftUI cannot:
+// (see AutohopApp.swift). Handles the nine things SwiftUI cannot:
 //  1. BGTaskScheduler registration for "com.autohop.feedrefresh" (BGAppRefreshTask,
 //     short ~30 s wake) AND "com.autohop.feedprocessing" (BGProcessingTask, a longer
 //     charging+Wi-Fi catch-up) — both registered before didFinishLaunching returns,
@@ -70,10 +70,12 @@ import MetricKit
 //     ready the moment AutohopProStore confirms entitlement — AppState.relay-
 //     TokenReceived(_:) forwards it and drives POST /v1/register when both the
 //     token AND an active entitlement are present. didReceiveRemoteNotification
-//     dispatches by the relay's own `type` payload key: "feed-updated" runs the
-//     existing background refresh path; "sync-nudge" triggers an immediate
-//     CloudKit pull. Must complete fast and call the completion handler — no UI,
-//     matches the BGTask handlers' no-stall rule.
+//     dispatches by the relay's own `type` payload key. Protocol-v2
+//     "feed-updated" payloads carry opaque `feed_ids` (never RSS URLs), which
+//     AppState resolves to a bounded targeted refresh; legacy ID-less payloads
+//     use AppState's eight-feed due-only fallback. "sync-nudge" triggers an
+//     immediate CloudKit pull. The received log records only the type and ID
+//     count. Must complete fast and call the completion handler — no UI.
 //     BONUS FIX (found 2026-07-09, not a separate code change): this same
 //     registerForRemoteNotifications() call also fixes CKSyncEngine's own native
 //     CloudKit push delivery, which had silently never worked — CKSyncEngine
@@ -156,11 +158,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             completionHandler(.noData)
             return
         }
-        AppLogger.shared.info("relay.pushReceived", "Silent push received", metadata: ["type": type], alwaysPersist: true)
+        let feedIDs = userInfo["feed_ids"] as? [String] ?? []
+        AppLogger.shared.info("relay.pushReceived", "Silent push received", metadata: [
+            "type": type,
+            "feedIDCount": "\(feedIDs.count)"
+        ], alwaysPersist: true)
         Task { @MainActor [weak self] in
             let state = AppState.sharedOrBootstrap()
             self?.appState = state
-            let didRun = await state.handleRelayPush(type: type)
+            let didRun = await state.handleRelayPush(type: type, feedIDs: feedIDs)
             completionHandler(didRun ? .newData : .noData)
         }
     }

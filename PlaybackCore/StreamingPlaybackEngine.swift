@@ -234,6 +234,12 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public func updateVocalBoost(_ level: VocalBoostLevel) {}
     public func updateTrimSilence(_ amount: TrimSilenceAmount) {}
 
+    /// AI CONTEXT — tvOS/streaming live trim update. Only end trim can affect an
+    /// already-started AVPlayer session; start trim remains a next-play setting.
+    public func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval) {
+        self.endSkipSeconds = max(0, endSkipSeconds)
+    }
+
     public func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {
         guard currentEpisode?.id == episodeID else { return }
         self.chapters = chapters

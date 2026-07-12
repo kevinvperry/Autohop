@@ -8,6 +8,9 @@ import SwiftUI
 // pull-to-refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by
 // design): leading Play / Play Next, trailing Archive / Play Last. Pin badges
 // mark Play Next (blue) / Play Last (orange) overrides.
+// Small Video/Explicit indicators live inside the trailing metadata stack above
+// the duration; they are never a top-trailing overlay here, so they cannot cover
+// the blue/orange pin when an episode has both media flags and a queue override.
 // EXPANDED ROW: tapping an episode title toggles expandedEpisodeID, unclamping
 // the title and revealing the full plain-text description, plus two small purple
 // circular glass buttons at the bottom-right (matching PodcastDetailView.refreshButton):
@@ -125,6 +128,12 @@ struct QueueSheetView: View {
                                     Spacer()
 
                                     VStack(alignment: .trailing, spacing: 4) {
+                                        if episode.mediaKind == .video || episode.isExplicit == true {
+                                            HStack(spacing: 4) {
+                                                if episode.mediaKind == .video { VideoPillSmall() }
+                                                if episode.isExplicit == true { ExplicitPillSmall() }
+                                            }
+                                        }
                                         if pinnedNext || pinnedLast {
                                             Image(systemName: "pin.fill")
                                                 .font(.system(size: 10, weight: .bold))
@@ -193,14 +202,6 @@ struct QueueSheetView: View {
                                         }
                                         .padding(.top, 8)
                                         .transition(.opacity.combined(with: .move(edge: .top)))
-                                    }
-                                }
-                            }
-                            .overlay(alignment: .topTrailing) {
-                                if episode.mediaKind == .video || episode.isExplicit == true {
-                                    HStack(spacing: 3) {
-                                        if episode.mediaKind == .video { VideoPillSmall() }
-                                        if episode.isExplicit == true { ExplicitPillSmall() }
                                     }
                                 }
                             }
