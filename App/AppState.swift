@@ -108,6 +108,10 @@ import UIKit
 //    receive a bounded fairness boost on later cycles so long wakes are drained
 //    over multiple runs instead of hammering every overdue feed at once. Manual
 //    refresh still ignores due dates and refreshes every eligible feed.
+//    Planning uses immutable snapshots and runs at utility priority off MainActor:
+//    profile fallback calculation, prediction, scoring, deferred boosts, and sort
+//    must never stall playback/UI. MainActor only filters mutable eligibility,
+//    applies the budget, reconciles backlog state, and starts network refreshes.
 //  - Refresh diagnostics: every all-feed cycle carries a stable refreshCycleID,
 //    trigger (manualButton / foregroundTimer / BGAppRefreshTask / BGProcessingTask),
 //    and executionContext (manual / foregroundVisible / backgroundRefreshTask /
@@ -207,6 +211,91 @@ private struct ReleaseRadarProfileCacheEntry {
     var filterSettings: DownloadFilterSettings
     var generatedAt: Date
     var profile: FeedScheduleProfile
+}
+
+// AI CONTEXT — Immutable Release Radar cycle-planning DTOs. They are file-scoped
+// so they do not inherit AppState's MainActor isolation. AppState snapshots all
+// mutable inputs, then ReleaseRadarCyclePlanner performs profile calculation,
+// prediction, priority scoring, deferred boosting, and sorting off-main. Only the
+// returned values are reconciled into observable state on MainActor.
+private struct RefreshCycleCandidate: Sendable {
+    var subscription: Subscription
+    var profile: FeedScheduleProfile
+    var prediction: FeedRefreshPrediction
+    var priority: FeedRefreshPriority
+    var deferredCount: Int = 0
+    var deferredSince: Date?
+    var deferredScoreBoost: Double = 0
+}
+
+private struct RefreshPlanningDeferredSnapshot: Sendable {
+    var firstDeferredAt: Date
+    var deferralCount: Int
+}
+
+private enum ReleaseRadarCyclePlanner {
+    static func candidates(
+        subscriptions: [Subscription],
+        cachedProfiles: [UUID: FeedScheduleProfile],
+        deferred: [UUID: RefreshPlanningDeferredSnapshot],
+        minimumRecheckInterval: TimeInterval,
+        now: Date
+    ) -> [RefreshCycleCandidate] {
+        subscriptions.compactMap { subscription in
+            let filter = subscription.downloadFilterSettings
+            let profile = cachedProfiles[subscription.id]
+                ?? subscription.refreshStats.scheduleProfile(downloadFilterSettings: filter)
+            let episodeDates = subscription.episodes
+                .filter { filter.evaluation(for: $0).isIncluded }
+                .compactMap(\.publishedAt)
+            let learnedDates = subscription.refreshStats
+                .releaseObservations(includedBy: filter)
+                .compactMap(\.publishedAt)
+            let fallbackDates = filter.hasActiveFilters
+                ? learnedDates
+                : subscription.refreshStats.recentPublishDates
+            let eligibleEpisodes = subscription.episodes.filter { filter.evaluation(for: $0).isIncluded }
+            let latestPublishedAt = eligibleEpisodes.compactMap(\.publishedAt).max()
+            let prediction = FeedRefreshScheduling.prediction(
+                profile: profile,
+                latestPublishedAt: latestPublishedAt,
+                publishDates: Array(Set(episodeDates).union(fallbackDates)),
+                stats: subscription.refreshStats,
+                minRecheckInterval: minimumRecheckInterval,
+                now: now
+            )
+            guard prediction.nextDueAt <= now else { return nil }
+            var priority = FeedRefreshPrioritizer.priority(
+                prediction: prediction,
+                profile: profile,
+                priorityRank: subscription.priorityRank,
+                lastFetchedAt: subscription.refreshStats.lastFetchedAt,
+                now: now
+            )
+            var candidate = RefreshCycleCandidate(subscription: subscription, profile: profile, prediction: prediction, priority: priority)
+            if let deferred = deferred[subscription.id] {
+                let ageHours = max(0, now.timeIntervalSince(deferred.firstDeferredAt) / 3600)
+                let boost = min(40, Double(deferred.deferralCount) * 12 + ageHours * 2)
+                let rounded = (boost * 10).rounded() / 10
+                if rounded > 0 {
+                    candidate.deferredCount = deferred.deferralCount
+                    candidate.deferredSince = deferred.firstDeferredAt
+                    candidate.deferredScoreBoost = rounded
+                    priority.score = ((priority.score + rounded) * 10).rounded() / 10
+                    priority.factors.append("deferred \(deferred.deferralCount)x")
+                    priority.reason = priority.factors.joined(separator: ", ")
+                    candidate.priority = priority
+                }
+            }
+            return candidate
+        }.sorted { lhs, rhs in
+            if lhs.priority.score != rhs.priority.score { return lhs.priority.score > rhs.priority.score }
+            if lhs.deferredSince != rhs.deferredSince { return (lhs.deferredSince ?? .distantFuture) < (rhs.deferredSince ?? .distantFuture) }
+            if lhs.prediction.nextDueAt != rhs.prediction.nextDueAt { return lhs.prediction.nextDueAt < rhs.prediction.nextDueAt }
+            if lhs.subscription.priorityRank != rhs.subscription.priorityRank { return lhs.subscription.priorityRank < rhs.subscription.priorityRank }
+            return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
+        }
+    }
 }
 
 /// Dedicated 2 Hz playback-time publisher (PERF-1 targeted fix). The scrubber tick
@@ -583,9 +672,6 @@ final class AppState: ObservableObject {
     ]
     private let foregroundRefreshFeedLimit = 12
     private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
-    private let refreshDeferralScoreBoostPerCycle = 12.0
-    private let refreshDeferralAgeBoostPerHour = 2.0
-    private let refreshDeferralMaxScoreBoost = 40.0
     private let playbackTickSlowThresholdMs = 120.0
     private let playbackTickSummarySampleInterval = 120
 
@@ -1051,6 +1137,16 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        // "Audio hijack" fix (2026-07-12): a removed output device (AirPods)
+        // returning fires this after the engine has re-claimed the audio
+        // session (PlaybackEngine.scheduleNowPlayingReassertAfterRouteRestore)
+        // — re-push the FULL Now Playing card so an AirPods stem-press lands
+        // on Autohop instead of falling through to Apple Music.
+        playbackEngine.onRouteRestored = { [weak state] in
+            Task { @MainActor in
+                state?.reassertNowPlayingCard(reason: "routeRestored")
+            }
+        }
         playbackEngine.onPlaybackResumed = { [weak state] in
             Task { @MainActor in
                 guard let state else { return }
@@ -1174,6 +1270,7 @@ final class AppState: ObservableObject {
                 // push any coalesced history/stats sync rows (the scene usually
                 // resigned long before a sleep-timer fire, so this is the only
                 // checkpoint that catches the tail of the session).
+                state.persistCurrentPlaybackPosition()
                 state.listeningStatsStore.save()
                 state.flushDeferredSyncPushes(reason: "sleepTimer.pause")
                 if let ep = state.currentPlayerEpisode,
@@ -1239,6 +1336,7 @@ final class AppState: ObservableObject {
                 let rewindTarget = atEpisodeBoundary ? 0 : state.sleepSchedulePromptAnchorTime
                 state.seek(to: rewindTarget)
                 state.savePlaybackPosition()
+                state.listeningHistoryStore.save()
                 state.listeningStatsStore.save()
                 state.flushDeferredSyncPushes(reason: "sleepSchedule.asleep")
                 if let ep = state.currentPlayerEpisode,
@@ -1354,6 +1452,34 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Playback controls
+
+    /// AI CONTEXT — "Audio hijack" fix (2026-07-12): re-pushes the FULL Now
+    /// Playing card (not just the elapsed-time patch) for the loaded episode,
+    /// re-claiming the system's now-playing slot. Called when a removed output
+    /// device returns (PlaybackEngine.onRouteRestored — the AirPods-stem-press-
+    /// resumed-Apple-Music report) and on scene foreground (AutohopApp), both
+    /// moments where the slot claim can have gone stale while the episode is
+    /// still loaded. Safe to call redundantly: it only rewrites metadata that
+    /// is already true and never touches the audio session or playback state.
+    func reassertNowPlayingCard(reason: String) {
+        guard let episode = currentPlayerEpisode,
+              let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
+        else { return }
+        NowPlayingService.shared.update(
+            episode: episode,
+            podcastTitle: subscription.title,
+            currentTime: currentPlayerTime,
+            duration: episode.durationSeconds,
+            speed: effectiveSpeed(for: subscription),
+            isPlaying: isPlaying,
+            artworkURL: episode.artworkURL ?? subscription.artworkURL
+        )
+        logger.info("nowPlaying.reasserted", "Now Playing card re-pushed", metadata: [
+            "reason": reason,
+            "episode": episode.title,
+            "isPlaying": "\(isPlaying)"
+        ])
+    }
 
     func togglePlayPause() async {
         resourceMonitor.logSnapshot(reason: "player.toggle", context: resourceContext())
@@ -3518,7 +3644,7 @@ final class AppState: ObservableObject {
                 return until <= now
             }
         let dueCandidates = onlyDueFeeds
-            ? refreshCandidatesForCycle(eligibleSubscriptions, now: now)
+            ? await refreshCandidatesForCycle(eligibleSubscriptions, now: now)
             : []
         let budgetSelection = FeedRefreshBudgeting.select(
             candidates: dueCandidates,
@@ -3839,16 +3965,6 @@ final class AppState: ObservableObject {
         )
     }
 
-    private struct RefreshCycleCandidate {
-        var subscription: Subscription
-        var profile: FeedScheduleProfile
-        var prediction: FeedRefreshPrediction
-        var priority: FeedRefreshPriority
-        var deferredCount: Int = 0
-        var deferredSince: Date?
-        var deferredScoreBoost: Double = 0
-    }
-
     private struct DeferredRefreshBacklogEntry {
         var subscriptionID: UUID
         var title: String
@@ -3866,43 +3982,30 @@ final class AppState: ObservableObject {
     private func refreshCandidatesForCycle(
         _ subscriptions: [Subscription],
         now: Date
-    ) -> [RefreshCycleCandidate] {
-        subscriptions
-            .compactMap { subscription -> RefreshCycleCandidate? in
-                let profile = releaseRadarProfile(for: subscription)
-                let prediction = refreshPrediction(for: subscription, profile: profile, now: now)
-                guard prediction.nextDueAt <= now else { return nil }
-                let priority = FeedRefreshPrioritizer.priority(
-                    prediction: prediction,
-                    profile: profile,
-                    priorityRank: subscription.priorityRank,
-                    lastFetchedAt: subscription.refreshStats.lastFetchedAt,
-                    now: now
-                )
-                var candidate = RefreshCycleCandidate(
-                    subscription: subscription,
-                    profile: profile,
-                    prediction: prediction,
-                    priority: priority
-                )
-                applyDeferredRefreshBoost(to: &candidate, now: now)
-                return candidate
+    ) async -> [RefreshCycleCandidate] {
+        let cachedProfiles = subscriptions.reduce(into: [UUID: FeedScheduleProfile]()) { result, subscription in
+            let observations = subscription.refreshStats.releaseObservations
+            if let entry = releaseRadarProfileCache[subscription.id],
+               entry.observationCount == observations.count,
+               entry.newestObservationKey == observations.last?.episodeKey,
+               entry.filterSettings == subscription.downloadFilterSettings,
+               now.timeIntervalSince(entry.generatedAt) < Self.releaseRadarProfileCacheTTL {
+                result[subscription.id] = entry.profile
             }
-            .sorted { lhs, rhs in
-                if lhs.priority.score != rhs.priority.score {
-                    return lhs.priority.score > rhs.priority.score
-                }
-                if lhs.deferredSince != rhs.deferredSince {
-                    return (lhs.deferredSince ?? .distantFuture) < (rhs.deferredSince ?? .distantFuture)
-                }
-                if lhs.prediction.nextDueAt != rhs.prediction.nextDueAt {
-                    return lhs.prediction.nextDueAt < rhs.prediction.nextDueAt
-                }
-                if lhs.subscription.priorityRank != rhs.subscription.priorityRank {
-                    return lhs.subscription.priorityRank < rhs.subscription.priorityRank
-                }
-                return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
-            }
+        }
+        let deferred = deferredRefreshBacklog.mapValues {
+            RefreshPlanningDeferredSnapshot(firstDeferredAt: $0.firstDeferredAt, deferralCount: $0.deferralCount)
+        }
+        let interval = Double(settingsStore.appSettings.podcastPollMinutes) * 60
+        return await Task.detached(priority: .utility) {
+            ReleaseRadarCyclePlanner.candidates(
+                subscriptions: subscriptions,
+                cachedProfiles: cachedProfiles,
+                deferred: deferred,
+                minimumRecheckInterval: interval,
+                now: now
+            )
+        }.value
     }
 
     private func logRefreshCycleDecisionSummary(
@@ -4034,24 +4137,44 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleBackgroundRefreshForNextDueFeed() {
+        let now = Date()
         let activeSubscriptions = subscriptionStore.subscriptions.filter { !$0.excludeFromAutoFeedRefresh }
         let nextDue = activeSubscriptions
             .map { subscription in
-                (subscription: subscription, dueAt: nextRefreshDue(for: subscription))
+                let feedDueAt = nextRefreshDue(for: subscription)
+                let backoffUntil = feedFailureBackoffUntil[subscription.id]
+                let effectiveDueAt = BackgroundTaskCoordinator.effectiveFeedDueDate(
+                    feedDueDate: feedDueAt,
+                    backoffUntil: backoffUntil,
+                    now: now
+                )
+                return (
+                    subscription: subscription,
+                    feedDueAt: feedDueAt,
+                    backoffUntil: backoffUntil,
+                    effectiveDueAt: effectiveDueAt
+                )
             }
             .min { lhs, rhs in
-                if lhs.dueAt != rhs.dueAt { return lhs.dueAt < rhs.dueAt }
+                if lhs.effectiveDueAt != rhs.effectiveDueAt { return lhs.effectiveDueAt < rhs.effectiveDueAt }
                 return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
             }
         if let nextDue {
-            let secondsUntilDue = max(0, Int(nextDue.dueAt.timeIntervalSinceNow.rounded()))
+            let secondsUntilDue = max(0, Int(nextDue.effectiveDueAt.timeIntervalSince(now).rounded()))
+            let activeBackoffCount = activeSubscriptions.reduce(into: 0) { count, subscription in
+                if let until = feedFailureBackoffUntil[subscription.id], until > now { count += 1 }
+            }
             logger.info("background.nextDue", "Selected next feed due date for background refresh scheduling", metadata: refreshFeedMetadata(
                 for: nextDue.subscription,
                 includeURL: false,
                 extra: [
-                    "nextDueAt": refreshLogDate(nextDue.dueAt),
+                    "feedDueAt": refreshLogDate(nextDue.feedDueAt),
+                    "backoffUntil": refreshLogDate(nextDue.backoffUntil),
+                    "nextDueAt": refreshLogDate(nextDue.effectiveDueAt),
+                    "delayedByBackoff": "\(nextDue.effectiveDueAt > nextDue.feedDueAt)",
                     "secondsUntilDue": "\(secondsUntilDue)",
                     "activeSubscriptions": "\(activeSubscriptions.count)",
+                    "activeBackoffSubscriptions": "\(activeBackoffCount)",
                     "skippedInactive": "\(subscriptionStore.subscriptions.count - activeSubscriptions.count)"
                 ]
             ))
@@ -4061,26 +4184,8 @@ final class AppState: ObservableObject {
                 "skippedInactive": "\(subscriptionStore.subscriptions.count)"
             ])
         }
-        let soonestDue = nextDue?.dueAt
+        let soonestDue = nextDue?.effectiveDueAt
         BackgroundTaskCoordinator.scheduleAppRefresh(earliestBeginDate: soonestDue)
-    }
-
-    private func applyDeferredRefreshBoost(to candidate: inout RefreshCycleCandidate, now: Date) {
-        guard let entry = deferredRefreshBacklog[candidate.subscription.id] else { return }
-        let ageHours = max(0, now.timeIntervalSince(entry.firstDeferredAt) / 3600)
-        let boost = min(
-            refreshDeferralMaxScoreBoost,
-            Double(entry.deferralCount) * refreshDeferralScoreBoostPerCycle
-                + ageHours * refreshDeferralAgeBoostPerHour
-        )
-        let roundedBoost = (boost * 10).rounded() / 10
-        guard roundedBoost > 0 else { return }
-        candidate.deferredCount = entry.deferralCount
-        candidate.deferredSince = entry.firstDeferredAt
-        candidate.deferredScoreBoost = roundedBoost
-        candidate.priority.score = ((candidate.priority.score + roundedBoost) * 10).rounded() / 10
-        candidate.priority.factors.append("deferred \(entry.deferralCount)x")
-        candidate.priority.reason = candidate.priority.factors.joined(separator: ", ")
     }
 
     private func reconcileDeferredRefreshBacklog(
@@ -5563,8 +5668,11 @@ final class AppState: ObservableObject {
 // Application Support/Autohop/listening-history.json (max 500 entries, oldest
 // dropped). Entries are keyed by subscription-scoped episode GUID/URL
 // (historyKey) so the same episode re-fetched from a feed merges into one entry
-// without colliding across feeds. recordProgress() is called from AppState
-// playback ticks; mark() sets played/archived status with a CompletionKind used
+// without colliding across feeds. recordProgress() is called from AppState's 0.5 s
+// playback ticks, but deliberately accumulates those samples in memory and applies
+// one entry mutation/sort/sync marker per 10-second batch. save() and mark() flush
+// the buffer first, preserving pause/background/completion durability. mark() sets
+// played/archived status with a CompletionKind used
 // later by ShowEngagementAnalyzer ("drifting" stats).
 // UI filters out entries with < 60 s listened — that rule lives in the views,
 // not here. Value types live in Models/ListeningHistory.swift.
@@ -5574,6 +5682,22 @@ final class ListeningHistoryStore: ObservableObject {
 
     private var lastSavedAt: Date?
     private let maxEntries = 500
+    private let progressFlushInterval: TimeInterval = 10
+    private var lastProgressFlushAt: Date?
+
+    /// Latest metadata plus accumulated wall-clock listening for one episode.
+    /// Playback normally has only one pending key; the dictionary makes an episode
+    /// switch safe even if its final lifecycle checkpoint arrives asynchronously.
+    private struct PendingProgress {
+        var episode: Episode
+        var podcastTitle: String
+        var artworkURL: URL?
+        var listenedSeconds: TimeInterval
+        var positionSeconds: TimeInterval
+        var durationSeconds: TimeInterval?
+        var lastListenedAt: Date
+    }
+    private var pendingProgress: [String: PendingProgress] = [:]
     /// Record store for cross-device history sync; set by AppState. nil = no sync.
     var syncDatabase: AutohopDatabase?
 
@@ -5606,41 +5730,86 @@ final class ListeningHistoryStore: ObservableObject {
         let key = historyKey(for: episode)
         let now = Date()
 
-        if let index = entries.firstIndex(where: { $0.id == key }) {
-            entries[index].episodeID = episode.id
-            entries[index].episodeTitle = episode.title
-            entries[index].podcastTitle = podcastTitle
-            entries[index].artworkURL = artworkURL
-            entries[index].publishedAt = episode.publishedAt
-            entries[index].durationSeconds = durationSeconds ?? episode.durationSeconds
-            entries[index].listenedSeconds += listenedSeconds
-            entries[index].lastPositionSeconds = positionSeconds
-            entries[index].lastListenedAt = now
-            // Status is intentionally left unchanged here: recordProgress only
-            // accrues listening time; played/archived transitions go through mark().
+        if var pending = pendingProgress[key] {
+            pending.episode = episode
+            pending.podcastTitle = podcastTitle
+            pending.artworkURL = artworkURL
+            pending.listenedSeconds += listenedSeconds
+            pending.positionSeconds = positionSeconds
+            pending.durationSeconds = durationSeconds ?? episode.durationSeconds
+            pending.lastListenedAt = now
+            pendingProgress[key] = pending
         } else {
-            entries.append(ListeningHistoryEntry(
-                id: key,
-                subscriptionID: episode.subscriptionID,
-                episodeID: episode.id,
-                episodeTitle: episode.title,
+            pendingProgress[key] = PendingProgress(
+                episode: episode,
                 podcastTitle: podcastTitle,
                 artworkURL: artworkURL,
-                publishedAt: episode.publishedAt,
-                durationSeconds: durationSeconds ?? episode.durationSeconds,
                 listenedSeconds: listenedSeconds,
-                lastPositionSeconds: positionSeconds,
-                lastListenedAt: now,
-                status: .listened
-            ))
+                positionSeconds: positionSeconds,
+                durationSeconds: durationSeconds ?? episode.durationSeconds,
+                lastListenedAt: now
+            )
+        }
+
+        guard lastProgressFlushAt.map({ now.timeIntervalSince($0) >= progressFlushInterval }) ?? true else {
+            return
+        }
+        flushPendingProgress(reason: "playbackBatch")
+    }
+
+    /// Applies all buffered tick samples as a single published array mutation.
+    /// This is the expensive boundary: lookup/update, one final sort, one sync-row
+    /// marker per affected episode, and at most one throttled JSON save.
+    private func flushPendingProgress(reason: String) {
+        guard !pendingProgress.isEmpty else { return }
+        let pending = pendingProgress
+        pendingProgress.removeAll(keepingCapacity: true)
+        lastProgressFlushAt = Date()
+
+        for (key, progress) in pending {
+            let episode = progress.episode
+            if let index = entries.firstIndex(where: { $0.id == key }) {
+                entries[index].episodeID = episode.id
+                entries[index].episodeTitle = episode.title
+                entries[index].podcastTitle = progress.podcastTitle
+                entries[index].artworkURL = progress.artworkURL
+                entries[index].publishedAt = episode.publishedAt
+                entries[index].durationSeconds = progress.durationSeconds
+                entries[index].listenedSeconds += progress.listenedSeconds
+                entries[index].lastPositionSeconds = progress.positionSeconds
+                entries[index].lastListenedAt = progress.lastListenedAt
+                // Status remains unchanged: only mark() owns completion state.
+            } else {
+                entries.append(ListeningHistoryEntry(
+                    id: key,
+                    subscriptionID: episode.subscriptionID,
+                    episodeID: episode.id,
+                    episodeTitle: episode.title,
+                    podcastTitle: progress.podcastTitle,
+                    artworkURL: progress.artworkURL,
+                    publishedAt: episode.publishedAt,
+                    durationSeconds: progress.durationSeconds,
+                    listenedSeconds: progress.listenedSeconds,
+                    lastPositionSeconds: progress.positionSeconds,
+                    lastListenedAt: progress.lastListenedAt,
+                    status: .listened
+                ))
+            }
         }
 
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
-        recordPending(id: key)
-        saveThrottled()
+        for key in pending.keys { recordPending(id: key) }
+        AppLogger.shared.info("history.progressFlush", "Applied coalesced listening-history progress", metadata: [
+            "reason": reason,
+            "episodeCount": "\(pending.count)",
+            "listenedSeconds": String(format: "%.1f", pending.values.reduce(0) { $0 + $1.listenedSeconds })
+        ])
+        if reason == "playbackBatch" {
+            saveThrottled()
+        }
     }
 
     func mark(
@@ -5652,6 +5821,8 @@ final class ListeningHistoryStore: ObservableObject {
         positionSeconds: TimeInterval? = nil
     ) {
         let key = historyKey(for: episode)
+        // Completion must include every tick accumulated since the last batch.
+        flushPendingProgress(reason: "mark")
         let now = Date()
         let epDuration = episode.durationSeconds
         let pct: Double? = {
@@ -5720,6 +5891,8 @@ final class ListeningHistoryStore: ObservableObject {
     /// (the entry with the newer `lastListenedAt` wins the whole record).
     @MainActor
     func applyRemote(_ remote: ListeningHistoryEntry) {
+        // Resolve local buffered ticks before record-level LWW compares timestamps.
+        flushPendingProgress(reason: "remoteMerge")
         if let index = entries.firstIndex(where: { $0.id == remote.id }) {
             guard remote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
             entries[index] = remote
@@ -5735,6 +5908,10 @@ final class ListeningHistoryStore: ObservableObject {
     }
 
     func save() {
+        // Lifecycle checkpoints call save(), so make buffered progress durable and
+        // sync-visible before encoding. flushPendingProgress may call saveThrottled;
+        // lastProgressFlushAt prevents recursion because the buffer is already empty.
+        flushPendingProgress(reason: "save")
         guard let url = Self.fileURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

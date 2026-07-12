@@ -143,6 +143,15 @@ queue's lifetime (lazy `appendHandle()`), reused across writes. It is closed via
 the next write reopens the fresh log. All handle access is on the serial `queue`,
 so no lock is needed. Compile-checked in AutohopCore. Original finding below.
 
+**Further hardening (2026-07-12):** the steady-state write path no longer calls
+`attributesOfItem` for every line; the logger initializes segment size from
+`seekToEnd()` once and increments it after successful writes. Timestamp formatting,
+metadata sorting, regex redaction, encoding, and debug console output now run on the
+serial logging queue instead of the playback/UI caller. `lastUpdated` notifications
+for the live viewer are trailing-edge coalesced to 1 Hz rather than dispatching one
+main-thread publish per line. Rotation, two-segment export, redaction, and clear
+semantics are unchanged.
+
 `Logging/AppLogger.swift` L113–129. Acceptable because logging is gated, but a
 verbose `sync.*`/`download.*` burst pays open+seek+close per entry.
 **Fix (optional):** hold one append handle for the serial queue's lifetime.

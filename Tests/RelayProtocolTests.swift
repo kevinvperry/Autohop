@@ -6,6 +6,7 @@ import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
 #else
+import UIKit
 @testable import Autohop
 #endif
 
@@ -52,4 +53,43 @@ final class RelayProtocolTests: XCTestCase {
         XCTAssertEqual(RelayRetryPolicy.delay(failureCount: 3), 120)
         XCTAssertEqual(RelayRetryPolicy.delay(failureCount: 20), 15 * 60)
     }
+
+    #if !AUTOHOP_SPM
+    /// App-target coverage for the UIKit completion arbiter. The deadline and
+    /// network path can arrive in either order; UIKit must be called once only.
+    @MainActor
+    func testRelayPushCompletionGateWorkWinsExactlyOnce() {
+        var results: [UIBackgroundFetchResult] = []
+        let gate = RelayPushCompletionGate(type: "feed-updated", feedIDCount: 1) {
+            results.append($0)
+        }
+
+        gate.finish(result: .newData, source: .workFinished)
+        gate.finish(result: .noData, source: .deadline)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first, .newData)
+    }
+
+    @MainActor
+    func testRelayPushCompletionGateDeadlineWinsExactlyOnce() {
+        var results: [UIBackgroundFetchResult] = []
+        let gate = RelayPushCompletionGate(type: "feed-updated", feedIDCount: 2) {
+            results.append($0)
+        }
+
+        gate.finish(result: .noData, source: .deadline)
+        gate.finish(result: .newData, source: .workFinished)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first, .noData)
+    }
+
+    func testBackgroundTaskCompletionGateCanBeClaimedOnlyOnce() {
+        let gate = BackgroundTaskCompletionGate()
+        XCTAssertTrue(gate.claim())
+        XCTAssertFalse(gate.claim())
+        XCTAssertFalse(gate.claim())
+    }
+    #endif
 }

@@ -16,6 +16,9 @@ import MetricKit
 //     The refresh handler calls refreshSubscriptionsForBackground(taskIdentifier:);
 //     the processing handler calls refreshSubscriptionsForProcessing(taskIdentifier:)
 //     for a fuller, uncapped due-feed sweep that drains the backlog (e.g. overnight).
+//     BGProcessing replacement requests are submitted only after the outcome is
+//     known: useful/empty successes resume an 18/24-hour cadence, while expiration
+//     uses persisted exponential backoff. Never reschedule one at handler entry.
 //     On expiration, cancelRefreshCycleIfBackgroundOnly cancels the active refresh
 //     cycle ONLY when no live foreground/audio context owns it (otherwise it detaches
 //     and lets that context finish) — a real cancel checkpoints selected-but-unfinished
@@ -74,8 +77,11 @@ import MetricKit
 //     "feed-updated" payloads carry opaque `feed_ids` (never RSS URLs), which
 //     AppState resolves to a bounded targeted refresh; legacy ID-less payloads
 //     use AppState's eight-feed due-only fallback. "sync-nudge" triggers an
-//     immediate CloudKit pull. The received log records only the type and ID
-//     count. Must complete fast and call the completion handler — no UI.
+//     immediate CloudKit pull. RelayPushCompletionGate races that work against a
+//     20-second deadline and calls iOS's fetch completion exactly once. A late
+//     refresh may finish through its existing shared-cycle owner, but cannot hold
+//     the silent-push contract open or cancel foreground/manual refresh work.
+//     The received log records only the type and ID count — no feed URLs.
 //     BONUS FIX (found 2026-07-09, not a separate code change): this same
 //     registerForRemoteNotifications() call also fixes CKSyncEngine's own native
 //     CloudKit push delivery, which had silently never worked — CKSyncEngine
@@ -92,6 +98,11 @@ import MetricKit
 //     to the guard above and completes with .noData, which is correct — CKSyncEngine
 //     has already claimed it before this method's userInfo check even matters.
 final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
+
+    /// Silent pushes normally receive only a short background execution window.
+    /// Keep a safety margin below the system's practical ~30-second ceiling so
+    /// completion is delivered before iOS terminates or penalises the process.
+    static let relayPushCompletionDeadline: Duration = .seconds(20)
 
     weak var appState: AppState?
 
@@ -163,11 +174,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             "type": type,
             "feedIDCount": "\(feedIDs.count)"
         ], alwaysPersist: true)
+        let gate = RelayPushCompletionGate(
+            type: type,
+            feedIDCount: feedIDs.count,
+            completionHandler: completionHandler
+        )
+
+        // AI CONTEXT — These are intentionally independent tasks rather than a
+        // structured task group. A task-group scope waits for cancelled children;
+        // handleRelayPush can be awaiting AppState's shared unstructured refresh
+        // cycle, so a group "timeout" could still block until that cycle finished.
+        // The one-shot MainActor gate lets the deadline return immediately while
+        // preserving any cycle also owned by foreground/audio/BGTask work.
         Task { @MainActor [weak self] in
             let state = AppState.sharedOrBootstrap()
             self?.appState = state
             let didRun = await state.handleRelayPush(type: type, feedIDs: feedIDs)
-            completionHandler(didRun ? .newData : .noData)
+            gate.finish(
+                result: didRun ? .newData : .noData,
+                source: .workFinished
+            )
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.relayPushCompletionDeadline)
+            guard !Task.isCancelled else { return }
+            gate.finish(result: .noData, source: .deadline)
         }
     }
 
@@ -350,6 +381,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
         let startedAt = Date()
+        let completionGate = BackgroundTaskCompletionGate()
         // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
         // this launch handler runs on the main queue and the MainActor.assumeIsolated
         // reads below are valid. DO NOT change the registration back to `using: nil`:
@@ -377,6 +409,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             let state = AppState.sharedOrBootstrap()
             state.logResourceSnapshot(reason: "background.appRefresh.workStart", extra: startMetadata, force: true)
             let didRun = await state.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
+            guard completionGate.claim() else { return }
             // Unawaited on purpose: draining awaits full media transfers, which
             // must not hold setTaskCompleted (a stalled BG task teaches iOS to
             // stop granting wakes). Intents are persisted, so anything this Task
@@ -402,6 +435,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         }
 
         task.expirationHandler = {
+            guard completionGate.claim() else { return }
             let elapsedMs = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.warning("background.expired", "Background app refresh expired before finishing", metadata: [
                 "identifier": task.identifier,
@@ -429,6 +463,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
     private static func handleFeedProcessing(_ task: BGProcessingTask) {
         let startedAt = Date()
+        let completionGate = BackgroundTaskCompletionGate()
         // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
         // this launch handler runs on the main queue and the MainActor.assumeIsolated
         // reads below are valid. DO NOT change the registration back to `using: nil`:
@@ -449,12 +484,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         MainActor.assumeIsolated {
             ResourceMonitor.shared.logSnapshot(reason: "background.processing.start", context: startMetadata, force: true)
         }
-        BackgroundTaskCoordinator.scheduleProcessing()
+        // AI CONTEXT — Do not schedule the replacement BGProcessing request here.
+        // The coordinator needs the completed/empty/expired outcome to select the
+        // next persisted cadence; scheduling at launch caused repeated ~30-minute
+        // wakes because requests had no meaningful earliestBeginDate.
 
         let work = Task {
             let state = AppState.sharedOrBootstrap()
             state.logResourceSnapshot(reason: "background.processing.workStart", extra: startMetadata, force: true)
             let didRun = await state.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
+            guard completionGate.claim() else { return }
             // Unawaited for the same reason as the refresh handler: never hold
             // setTaskCompleted on media transfers. BGProcessing runs are long
             // (charging + Wi-Fi), so this usually drains everything.
@@ -473,10 +512,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "elapsedMs": elapsedMs,
                 "taskKind": "BGProcessingTask"
             ], force: true)
+            BackgroundTaskCoordinator.scheduleProcessingIfNeeded(after: .completed(didRun: didRun))
             task.setTaskCompleted(success: true)
         }
 
         task.expirationHandler = {
+            guard completionGate.claim() else { return }
             let elapsedMs = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.warning("background.processingExpired", "Background processing expired before finishing", metadata: [
                 "identifier": task.identifier,
@@ -498,6 +539,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 state.cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
             }
             work.cancel()
+            BackgroundTaskCoordinator.scheduleProcessingIfNeeded(after: .expired)
             task.setTaskCompleted(success: false)
         }
     }
@@ -689,6 +731,103 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         case .active: return "active"
         case .inactive: return "inactive"
         case .background: return "background"
+        @unknown default: return "unknown"
+        }
+    }
+}
+
+/// AI CONTEXT — Thread-safe one-shot arbiter shared by BGAppRefreshTask and
+/// BGProcessingTask completion/expiration paths. Apple may deliver expiration
+/// while awaited work is returning. The winner alone may log the terminal event,
+/// schedule an outcome-dependent replacement, or call setTaskCompleted; the loser
+/// returns silently. NSLock is intentional because expiration-handler queue affinity
+/// is not an API guarantee even though launch handlers are registered on main.
+final class BackgroundTaskCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !claimed else { return false }
+        claimed = true
+        return true
+    }
+}
+
+/// AI CONTEXT — One-shot arbiter for the two independent relay-push completion
+/// paths: actual work completion and the hard deadline. MainActor isolation makes
+/// the boolean check + completion-handler call atomic without a lock. The losing
+/// path only writes a diagnostic and can never invoke UIKit's handler twice.
+@MainActor
+final class RelayPushCompletionGate {
+    enum Source: String {
+        case workFinished
+        case deadline
+    }
+
+    private let type: String
+    private let feedIDCount: Int
+    private let startedAt = CFAbsoluteTimeGetCurrent()
+    private let completionHandler: (UIBackgroundFetchResult) -> Void
+    private var winningSource: Source?
+
+    init(
+        type: String,
+        feedIDCount: Int,
+        completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        self.type = type
+        self.feedIDCount = feedIDCount
+        self.completionHandler = completionHandler
+    }
+
+    func finish(result: UIBackgroundFetchResult, source: Source) {
+        let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1_000)
+        guard winningSource == nil else {
+            // A normal work-first completion leaves the sleeping deadline task
+            // behind briefly; that expected loser is silent. Only work finishing
+            // after a deadline is operationally useful and worth persisting.
+            if winningSource == .deadline, source == .workFinished {
+                AppLogger.shared.info(
+                    "relay.pushLateResult",
+                    "Relay push work finished after iOS completion was already delivered",
+                    metadata: [
+                        "type": type,
+                        "feedIDCount": "\(feedIDCount)",
+                        "elapsedMs": "\(elapsedMs)",
+                        "winningSource": Source.deadline.rawValue,
+                        "lateSource": source.rawValue
+                    ],
+                    alwaysPersist: true
+                )
+            }
+            return
+        }
+
+        winningSource = source
+        AppLogger.shared.info(
+            source == .deadline ? "relay.pushDeadline" : "relay.pushComplete",
+            source == .deadline
+                ? "Relay push completion deadline reached; returning control to iOS"
+                : "Relay push work completed within its iOS execution budget",
+            metadata: [
+                "type": type,
+                "feedIDCount": "\(feedIDCount)",
+                "elapsedMs": "\(elapsedMs)",
+                "result": Self.resultLabel(result),
+                "source": source.rawValue
+            ],
+            alwaysPersist: true
+        )
+        completionHandler(result)
+    }
+
+    private static func resultLabel(_ result: UIBackgroundFetchResult) -> String {
+        switch result {
+        case .newData: return "newData"
+        case .noData: return "noData"
+        case .failed: return "failed"
         @unknown default: return "unknown"
         }
     }

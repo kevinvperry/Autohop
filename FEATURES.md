@@ -413,6 +413,12 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional. For rolling one-item feeds, such as hourly news bulletins, a newly discovered latest episode cancels a stale in-progress download for the previous latest episode immediately instead of waiting for app-start orphan cleanup.
 
+**Relay silent-push budget:** Feed-specific relay wakes race their targeted feed
+work against a 20-second completion deadline. The app reports to iOS exactly once,
+returns `.noData` if the deadline wins, and never waits for an episode media
+download. A late shared refresh may finish for another live owner, but cannot keep
+the silent-push completion handler open or cancel foreground/manual work.
+
 **Download states:** `notDownloaded` → `queued` → `downloading` → `downloaded` / `failed`
 
 **Downloads page rows:** three card sections — Downloading (progress bar + pause/resume + archive; controls are fixed-size so long progress text truncates rather than compressing buttons), Downloaded on Device, Recently Archived (re-download). Audio/Video and Explicit pills sit inline next to the podcast title. Progress publishes are coalesced to ≥1% steps so multiple concurrent downloads don't re-render whole pages every second.
@@ -603,6 +609,11 @@ When all three filter groups are off, no filtering occurs and Autohop downloads 
 
 ## 11. Listening History
 
+Listening progress is accumulated from the playback clock and persisted in efficient
+10-second batches. Pause, backgrounding, sleep stops, and episode completion immediately
+flush the final batch, retaining accurate resume positions and iCloud history without
+performing disk and sync bookkeeping every half-second.
+
 **Access:** Hamburger menu (☰) on the Priority page → Listening History. Also accessible from Settings → Subscriptions → Listening History.
 
 **What it tracks:** Every episode the user has listened to, recorded in `ListeningHistoryStore` → `listening-history.json`.
@@ -772,6 +783,8 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 
 **When checks run:** Autohop checks due feeds (1) on a ~30-second timer while the app is open, (2) **while you're listening with the app in the background** — audio playback keeps the app alive, so due feeds are refreshed and new episodes downloaded on the same cadence as in the foreground, (3) opportunistically via iOS Background App Refresh (`BGAppRefreshTask`), whose timing iOS controls and never guarantees, and (4) as a longer catch-up via a `BGProcessingTask` that iOS runs while the device is **charging and on Wi-Fi** (typically overnight) — a full sweep of every due feed plus downloads, so you wake up current even after a long stretch without opening the app. Newly found episodes download via a background `URLSession` that continues even if the app is later suspended. If the user has turned **Background App Refresh** off for Autohop, iOS grants *no* off-app checks at all; **Settings → Release Radar** then shows a warning with an **Open iOS Settings** link explaining this (and that force-quitting the app also stops background checks). (Background-task reliability research and the design rationale live in `BACKGROUND_REFRESH_RESEARCH.md`.) **Settings → Release Radar → Feed Refresh Schedule** (`FeedRefreshScheduleView`) shows a per-active-subscription table of when Release Radar will and won't check each feed — learned profile + confidence, current state, the recurring watch pattern, and the next concrete window — grouped by behaviour (Inactive subs excluded). Each row has a **Rebuild Prediction** button that fetches the feed's last 100 episodes' publish dates **and times** into the learner (without adding episodes to your library) to form a stronger schedule prediction; episodes skipped by Download Filters are excluded from that learner. For a weekly show this is typically enough history to size its release window from the observed publish-time spread. The page also has a toolbar **export** button that writes a shareable plain-text diagnostic of every active subscription — each show's classification, daily/weekly gate outcomes, learning signal, learned window, observed spread, weekday counts, **per-weekday watch tiers** (probability → Full/Light/Skip), and recent eligible observations — so the whole picture can be exported and analysed for trends.
 
+**BGProcessing cadence:** Catch-ups are outcome-paced rather than immediately re-requested. Useful runs wait at least 18 hours, empty runs 24 hours, and expired runs retry with persisted exponential backoff; small positive jitter avoids metronomic wake patterns. An already-pending request is preserved.
+
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
 | Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
@@ -828,7 +841,7 @@ If the expected episode has not appeared by the end of its learned window, the f
 | Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. Auto-downloads run separately after each successful feed merge. |
 | Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle, with 6 protected slots reserved for Release Radar windows (`preWindow`, `activeWindow`, `missedRelease`) before ordinary due feeds. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
 
-**Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds.
+**Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds. Background scheduling uses the later of a feed's normal Radar due date and its active backoff expiry, so one broken, long-overdue feed cannot repeatedly request near-immediate wakes; unrelated healthy feeds can still schedule earlier.
 
 **Individual manual refresh:** An Inactive podcast can still be refreshed from its own Podcast Detail page. If that individual refresh finds a new latest episode, Autohop schedules the normal auto-download and may send a new-episode notification when both notification toggles are enabled.
 

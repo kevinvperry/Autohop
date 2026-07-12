@@ -12,6 +12,19 @@ show never publishes. Decided with Kevin 2026-06-26; implemented in `AutohopCore
 (`FeedScheduleProfiler` in `Models/Subscription.swift`), tested headlessly via
 `Tests/ReleaseRadarSchedulingTests.swift`.
 
+## Runtime planning isolation
+
+Due-feed cycle planning is deliberately split at the actor boundary. `AppState`
+captures value-type snapshots of eligible subscriptions, valid cached profiles,
+the poll interval, current time, and deferred-backlog metadata. A utility-priority
+detached task then performs any cache-miss profile calculation, filter-aware date
+collection, prediction, priority scoring, fairness boost, and deterministic sorting.
+Only the immutable candidate result returns to `MainActor`, where AppState applies
+the foreground/background budget, updates the deferred backlog, logs the decision,
+and launches network requests. This preserves identical scheduling decisions while
+preventing a large library's profiler and sorting work from delaying player controls,
+scrolling, or the 0.5-second playback clock.
+
 ## Core principle: split identity from scheduling
 Classification and window-sizing were fused — the old profiler refused to call a feed
 "daily/weekly" unless its publish *time* was already tight, which dropped ~37 of 71

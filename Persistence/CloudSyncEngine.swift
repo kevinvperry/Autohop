@@ -821,8 +821,15 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             }
 
             // Queue snapshot? (fixed recordName == queue:current — one per account).
+            // AI CONTEXT — Build from the CURRENT singleton row, not only its
+            // pending projection. CKSyncEngine may ask for a queued record after a
+            // prior callback has cleared the pending flag (or may re-request during
+            // retry/reconciliation). The queued change is authority to build; the
+            // pending flag is only authority to enqueue. Requiring pending here
+            // caused repeated queue:current sync.recordNotFound warnings and could
+            // strand the authoritative Up Next snapshot.
             if CloudKitSync.isQueueSnapshotRecordName(name),
-               let snapshot = try database.pendingQueueSnapshot() {
+               let snapshot = try database.queueSnapshot() {
                 let target = cachedOrNewRecord(
                     systemFields: try? database.queueSnapshotSystemFields(),
                     recordType: CloudKitSync.queueSnapshotRecordType, recordID: recordID

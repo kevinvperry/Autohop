@@ -164,6 +164,11 @@ scheduled anywhere (RelayClient.heartbeat() exists but nothing calls it on foreg
 - On entitlement gained/lost, call `POST /v1/register` / `POST /v1/unregister`.
 - IMPL: `AutohopProStore.isPro` (published) is that gate; `AppState` observes `$isPro` and
   calls `registerWithRelayIfPossible()` / `relayClient.unregister()` accordingly.
+- **Signature-result invariant (fixed 2026-07-12):** the Worker verifier returns a
+  discriminated `{ok:true}` / `{ok:false,reason}` object. Registration explicitly
+  tests `verification.ok`; it must never negate the result object itself because a
+  JavaScript object is truthy even when it represents failure. The former boolean-era
+  call pattern was found during the final cross-repository audit and corrected.
 
 ### 4.2 Registration payload
 On first entitlement or token change, app sends the **signed StoreKit 2 transaction JWS** as proof.
@@ -193,7 +198,13 @@ the last acknowledged membership response and refresh only those subscriptions. 
 puts RSS URLs in APNs. A legacy v1 push without IDs runs a bounded, due-only eight-feed fallback
 that honors feed backoff; it never performs the former unbounded full-library sweep. On
 `type=sync-nudge`: trigger an immediate CloudKit fetch.
-MUST complete quickly and call the background completion handler. No UI.
+`AppDelegate` enforces a **20-second one-shot completion deadline** with
+`RelayPushCompletionGate`. Actual work completion and the deadline race on the
+main actor; whichever arrives first calls the background completion handler
+exactly once. The deadline returns `.noData` and deliberately does not cancel
+AppState's shared refresh cycle, because foreground, audio, or a BGTask may also
+own it. A refresh that finishes after the deadline emits `relay.pushLateResult`.
+Media downloads are separate durable intents and never hold this path open. No UI.
 - IMPL: `AppState.handleRelayPush(type:feedIDs:)`, dispatched from `AppDelegate.didReceiveRemoteNotification`.
   sync-nudge reuses `CloudSyncEngine.fetchAllSubscriptionsNow`/`fetchAllHistoryNow` — the same
   primitives TV's own launch/foreground prime uses (`AutohopTVApp.primeLibraryFromCloudSoon`) —

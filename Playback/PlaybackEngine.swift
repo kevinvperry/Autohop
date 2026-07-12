@@ -36,6 +36,10 @@ import Foundation
 //     peak limiter (the Pocket Casts-derived vocal boost chain; stages are
 //     bypassed per VocalBoostLevel). Changing a setting mid-play rebuilds the
 //     path while preserving position.
+// BUFFER BACKPRESSURE DIAGNOSTICS: an ordinary 4096-frame/48 kHz buffer spans
+// ~85 ms, so waits are warned only above 250 ms (~3 buffers). The 2-second
+// semaphore timeout remains the actual stuck-engine recovery boundary. Do not
+// lower the warning below one buffer duration or overnight logs become noise.
 //
 // ALSO OWNS: AVAudioSession configuration (spoken-audio mode when boost on),
 // interruption and route-change handling (AirPod removal must not auto-resume:
@@ -168,6 +172,13 @@ final class PlaybackEngine: PlaybackControlling {
     var onTimeUpdate: ((TimeInterval) -> Void)?
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
+    /// Fired after a removed output device returns (e.g. AirPods reinserted).
+    /// AppState refreshes the Now Playing card so this app re-claims the
+    /// system's now-playing slot BEFORE the user presses the AirPods stem —
+    /// the 2026-07-12 "audio hijack" fix (a stem-press after reinsertion was
+    /// sometimes falling through to Apple Music). See
+    /// scheduleNowPlayingReassertAfterRouteRestore for the full mechanism.
+    var onRouteRestored: (() -> Void)?
     var onManualSkipForward: ((TimeInterval) -> Void)?
     var onAutoSkip: ((TimeInterval) -> Void)?
     var onTrimSilenceSaved: ((TimeInterval) -> Void)?
@@ -909,7 +920,11 @@ final class PlaybackEngine: PlaybackControlling {
                         semResult = sem.wait(timeout: .now() + 2.0)
                     }
                     let semWaitMs = Int((CFAbsoluteTimeGetCurrent() - semWaitStart) * 1000)
-                    if semWaitMs > 80, !pausedDuringWait, !self.hasPendingRouteLossPause {
+                    // AI CONTEXT — A 4096-frame buffer at 48 kHz lasts ~85 ms, so
+                    // the former 80 ms warning threshold classified normal one-buffer
+                    // backpressure as a stall. Warn only after 250 ms (~3 buffers);
+                    // the existing 2 s timeout remains the recovery boundary.
+                    if semWaitMs > 250, !pausedDuringWait, !self.hasPendingRouteLossPause {
                         self.logger.warning("engine.bufferStall", "Audio buffer loop stalled waiting for slot", metadata: [
                             "stallMs": "\(semWaitMs)",
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
@@ -1440,6 +1455,7 @@ final class PlaybackEngine: PlaybackControlling {
         switch reason {
         case .oldDeviceUnavailable:
             if let output, routeOutputCanReplaceRemovedDevice(output) {
+                let wasRoutePaused = pausedByRouteChange
                 let scheduledDeferredRestart = cancelPendingRouteLossPause(
                     reason: reasonLabel,
                     output: newPort,
@@ -1449,18 +1465,25 @@ final class PlaybackEngine: PlaybackControlling {
                 if !scheduledDeferredRestart {
                     scheduleEngineRestartAfterRouteSettles(reason: reasonLabel, output: newPort)
                 }
+                scheduleNowPlayingReassertAfterRouteRestore(
+                    reason: reasonLabel, output: newPort, reactivateSession: wasRoutePaused
+                )
             } else {
                 scheduleRouteLossPause(reason: reasonLabel, output: newPort)
             }
         case .newDeviceAvailable, .routeConfigurationChange, .categoryChange, .override, .unknown:
             var scheduledDeferredRestart = false
             if let output, routeOutputCanReplaceRemovedDevice(output) {
+                let wasRoutePaused = pausedByRouteChange
                 scheduledDeferredRestart = cancelPendingRouteLossPause(
                     reason: reasonLabel,
                     output: newPort,
                     scheduleDeferredRestart: true
                 )
                 pausedByRouteChange = false
+                scheduleNowPlayingReassertAfterRouteRestore(
+                    reason: reasonLabel, output: newPort, reactivateSession: wasRoutePaused
+                )
             }
             if !scheduledDeferredRestart,
                outputChanged || reason == .newDeviceAvailable || hasPendingRouteLossPause {
@@ -1468,6 +1491,61 @@ final class PlaybackEngine: PlaybackControlling {
             }
         default:
             break
+        }
+    }
+
+    private var routeReassertGeneration = 0
+
+    /// AI CONTEXT — "Audio hijack" fix (2026-07-12, Kevin's report: removing
+    /// AirPods to talk, reinserting, then pressing the stem sometimes resumed
+    /// APPLE MUSIC instead of Autohop). Mechanism: an AirPods stem-press is
+    /// routed by iOS to whichever app holds the now-playing slot; a
+    /// route-loss pause can leave this app's audio session deactivated by the
+    /// system, and by reinsertion time the slot claim is stale enough that
+    /// the command falls through to the system default (Apple Music). Fix:
+    /// when a removed output RETURNS, wait for the route to settle (same
+    /// stabilization delay the engine restart uses, generation-guarded
+    /// against route flapping), then (a) reactivate our audio session —
+    /// but ONLY when our pause was route-loss-caused AND no other app is
+    /// audibly playing; grabbing the session while Apple Music is deliberately
+    /// playing would interrupt it, the exact hostility this fix removes —
+    /// and (b) fire onRouteRestored so AppState re-pushes the full Now
+    /// Playing card. The other half of this incident is background
+    /// TERMINATION while paused (MetricKit showed memory-pressure exits; a
+    /// dead process can never receive the stem-press) — addressed separately
+    /// by the relay memory-footprint work; this handles every still-alive case.
+    private func scheduleNowPlayingReassertAfterRouteRestore(
+        reason: String, output: String, reactivateSession: Bool
+    ) {
+        guard currentEpisode != nil else { return }
+        routeReassertGeneration += 1
+        let generation = routeReassertGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + routeRestartStabilizationDelay) { [weak self] in
+            guard let self, self.routeReassertGeneration == generation else { return }
+            guard self.currentEpisode != nil else { return }
+
+            let session = AVAudioSession.sharedInstance()
+            var sessionReactivated = false
+            if reactivateSession, !self.isPlaying, !session.isOtherAudioPlaying {
+                do {
+                    try session.setActive(true)
+                    sessionReactivated = true
+                } catch {
+                    self.logger.info("audio.routeReassertActivateFailed", "Could not reactivate audio session after route restore", metadata: [
+                        "reason": reason,
+                        "error": String(describing: error)
+                    ])
+                }
+            }
+            self.logger.info("audio.routeRestoredReassert", "Re-claiming Now Playing after output device returned", metadata: [
+                "reason": reason,
+                "newOutput": output,
+                "sessionReactivated": "\(sessionReactivated)",
+                "otherAudioPlaying": "\(session.isOtherAudioPlaying)",
+                "isPlaying": "\(self.isPlaying)",
+                "episode": self.currentEpisode?.title ?? "none"
+            ])
+            self.onRouteRestored?()
         }
     }
 

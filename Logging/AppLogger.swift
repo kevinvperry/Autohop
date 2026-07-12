@@ -23,6 +23,12 @@ import Foundation
 // fresh log; all handle access stays on `queue`, so no lock is required. If
 // opening succeeds but seek-to-end fails, appendHandle() closes the handle and
 // returns nil rather than risking a write at the wrong offset.
+// PERFORMANCE (2026-07-12): callers now enqueue raw fields immediately; timestamp
+// formatting, metadata sorting, regex redaction, console mirroring, and encoding all
+// run on the logger queue. Rotation uses an incrementally maintained byte count
+// initialized when the handle opens, avoiding attributesOfItem on every line. The
+// DiagnosticLogView's lastUpdated publication is trailing-edge coalesced to 1 Hz,
+// preventing log bursts from dispatching hundreds of main-thread invalidations.
 // PUBLIC logging surface since tvOS Phase 1: the TV target imports AutohopCore
 // as a library and must reach the shared diagnostic log. Internals stay internal.
 public final class AppLogger: ObservableObject {
@@ -48,6 +54,11 @@ public final class AppLogger: ObservableObject {
     /// doesn't pay open+seek+close per entry (P4). Touched only on `queue`; closed
     /// and reopened lazily across rotation/clear. nil = not currently open.
     private var fileHandle: FileHandle?
+    /// Exact current-segment size while the append handle is open. Queue-confined.
+    private var currentFileSizeBytes: Int?
+    /// A burst schedules only one trailing DiagnosticLogView refresh. Queue-confined.
+    private var updatePublishScheduled = false
+    private let updatePublishInterval: TimeInterval = 1
     private let fileManager: FileManager
     private let maxFileSizeBytes = 5_000_000
     private let dateFormatter: ISO8601DateFormatter = {
@@ -140,6 +151,7 @@ public final class AppLogger: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             self.closeHandle()
+            self.currentFileSizeBytes = nil
             try? self.fileManager.removeItem(at: self.logFileURL)
             // Also drop the rotated segment, otherwise it would resurface in the next
             // export (which now stitches .previous.log + current) despite the clear.
@@ -147,45 +159,51 @@ public final class AppLogger: ObservableObject {
             let resetLine = "\(self.dateFormatter.string(from: Date())) [INFO] log.cleared: Diagnostic log history cleared\n"
             try? self.fileManager.createDirectory(at: self.logFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? resetLine.data(using: .utf8)?.write(to: self.logFileURL, options: [.atomic])
-            DispatchQueue.main.async {
-                self.lastUpdated = Date()
-            }
+            self.scheduleLastUpdatedPublication()
         }
     }
 
     private func write(level: String, event: String, message: String, metadata: [String: String], force: Bool = false) {
         guard isEnabled || force else { return }
-        let timestamp = dateFormatter.string(from: Date())
-        let metadataText = metadata.isEmpty
-            ? ""
-            : " " + metadata
-                .sorted { $0.key < $1.key }
-                .map { key, value in
-                    let oneLineValue = value.replacingOccurrences(of: "\n", with: " ")
-                    return "\(key)=\(Self.redactSensitiveText(oneLineValue))"
-                }
-                .joined(separator: " ")
-        let cleanMessage = Self.redactSensitiveText(message.replacingOccurrences(of: "\n", with: " "))
-        let line = "\(timestamp) [\(level)] \(event): \(cleanMessage)\(metadataText)\n"
-
-        #if DEBUG
-        // Console mirror (2026-07-11, TV diagnostics): debug builds echo every
-        // persisted line to stdout so a device run launched from Xcode streams
-        // the diagnostic log live in the console — the fastest way to watch
-        // tv.mainThreadHang / tv.perf events while reproducing UI stutter.
-        // Release builds are file-only, exactly as before.
-        print(line, terminator: "")
-        #endif
-
         queue.async { [weak self] in
             guard let self else { return }
-            self.rotateIfNeeded(incomingBytes: line.utf8.count)
-            if let data = line.data(using: .utf8), let handle = self.appendHandle() {
-                try? handle.write(contentsOf: data)
+            let timestamp = self.dateFormatter.string(from: Date())
+            let metadataText = metadata.isEmpty
+                ? ""
+                : " " + metadata.sorted { $0.key < $1.key }.map { key, value in
+                    let oneLineValue = value.replacingOccurrences(of: "\n", with: " ")
+                    return "\(key)=\(Self.redactSensitiveText(oneLineValue))"
+                }.joined(separator: " ")
+            let cleanMessage = Self.redactSensitiveText(message.replacingOccurrences(of: "\n", with: " "))
+            let line = "\(timestamp) [\(level)] \(event): \(cleanMessage)\(metadataText)\n"
+
+            #if DEBUG
+            print(line, terminator: "")
+            #endif
+
+            guard let data = line.data(using: .utf8) else { return }
+            self.rotateIfNeeded(incomingBytes: data.count)
+            if let handle = self.appendHandle() {
+                do {
+                    try handle.write(contentsOf: data)
+                    self.currentFileSizeBytes = (self.currentFileSizeBytes ?? 0) + data.count
+                } catch {
+                    // Drop this diagnostic rather than recursively logging a logger failure.
+                }
             }
-            DispatchQueue.main.async {
-                self.lastUpdated = Date()
-            }
+            self.scheduleLastUpdatedPublication()
+        }
+    }
+
+    /// Coalesces a burst into one trailing main-thread notification so the live log
+    /// viewer eventually sees the final line without waking SwiftUI for every line.
+    private func scheduleLastUpdatedPublication() {
+        guard !updatePublishScheduled else { return }
+        updatePublishScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + updatePublishInterval) { [weak self] in
+            guard let self else { return }
+            self.lastUpdated = Date()
+            self.queue.async { self.updatePublishScheduled = false }
         }
     }
 
@@ -199,7 +217,8 @@ public final class AppLogger: ObservableObject {
         }
         guard let handle = try? FileHandle(forWritingTo: logFileURL) else { return nil }
         do {
-            try handle.seekToEnd()
+            let offset = try handle.seekToEnd()
+            currentFileSizeBytes = Int(offset)
         } catch {
             try? handle.close()
             return nil
@@ -213,10 +232,14 @@ public final class AppLogger: ObservableObject {
     private func closeHandle() {
         try? fileHandle?.close()
         fileHandle = nil
+        currentFileSizeBytes = nil
     }
 
     private func rotateIfNeeded(incomingBytes: Int) {
-        let size = ((try? fileManager.attributesOfItem(atPath: logFileURL.path)[.size]) as? NSNumber)?.intValue ?? 0
+        // appendHandle() initializes the byte count from seekToEnd once per segment.
+        // No filesystem metadata lookup occurs on the steady-state per-line path.
+        if currentFileSizeBytes == nil { _ = appendHandle() }
+        let size = currentFileSizeBytes ?? 0
         guard size + incomingBytes > maxFileSizeBytes else { return }
 
         // Release the handle before moving the file so the next append reopens the
@@ -225,6 +248,7 @@ public final class AppLogger: ObservableObject {
         let archivedURL = archivedLogFileURL
         try? fileManager.removeItem(at: archivedURL)
         try? fileManager.moveItem(at: logFileURL, to: archivedURL)
+        currentFileSizeBytes = 0
     }
 
     static func redactSensitiveText(_ text: String) -> String {

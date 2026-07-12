@@ -2,7 +2,9 @@
 // listening-stats accumulation runs every 0.5s playback tick, and each tick used to
 // issue a GRDB write transaction (recordStatsDay). These are now coalesced — the row
 // holds the FULL day bucket, so a throttled flush re-writes the complete value with no
-// data loss — and flushed on lifecycle save() checkpoints.
+// data loss — and flushed on lifecycle save() checkpoints. The same test also
+// protects the 2026-07-12 UI optimization: continuous playback may mutate the
+// authoritative bucket every tick, but must not publish a revision every tick.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -31,6 +33,9 @@ final class StatsWriteCoalescingTests: XCTestCase {
         for _ in 0..<120 {
             store.addListeningTime(0.5, speed: 1.0, subscriptionID: sub, showTitle: "Show")
         }
+
+        XCTAssertLessThanOrEqual(store.revision, 2,
+                                 "Playback ticks must coalesce Stats UI invalidations")
 
         // Without coalescing this would be 120 write transactions. The throttle is wall-clock
         // (10s) and these run in milliseconds, so only the first tick writes through.

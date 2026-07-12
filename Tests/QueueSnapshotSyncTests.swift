@@ -6,6 +6,9 @@
 // entries are skipped, and locally-known played/archived episodes are
 // filtered as stale protection. This record is what makes "3 queued episodes
 // of one show on the phone" mirror exactly on TV/watch.
+// The database tests also protect CKSyncEngine's queued-record contract: after a
+// snapshot is marked clean, the current singleton must remain readable so a late
+// or repeated CKSyncEngine save request can still build `queue:current`.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -57,6 +60,21 @@ final class QueueSnapshotSyncTests: XCTestCase {
         // Genuinely different entries → dirty again.
         store.updateLocalQueueSnapshot(entries: [makeEntry(key: "c")])
         XCTAssertNotNil(try db.pendingQueueSnapshot())
+    }
+
+    func testCleanSnapshotRemainsAvailableForQueuedRecordRebuild() throws {
+        let store = SubscriptionStore.inMemory()
+        let db = try XCTUnwrap(store.database)
+        store.updateLocalQueueSnapshot(entries: [makeEntry(key: "current")])
+
+        try db.markQueueSnapshotSynced()
+
+        XCTAssertNil(try db.pendingQueueSnapshot(), "Clean means do not enqueue another change")
+        XCTAssertEqual(
+            try db.queueSnapshot()?.entries.first?.episodeKey,
+            "current",
+            "A late CKSyncEngine record request must still build from current state"
+        )
     }
 
     func testSaveSyncedSnapshotIsLWWByUpdatedAt() throws {

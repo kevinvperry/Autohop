@@ -56,6 +56,11 @@ private struct AutohopRootBootstrapView: View {
                             isBackground: phase == .background
                         )
                         if phase == .active {
+                            // "Audio hijack" fix (2026-07-12): a loaded episode's
+                            // Now Playing slot claim can go stale while the app
+                            // was backgrounded — re-push the card so AirPods/
+                            // lock-screen transport lands here, not Apple Music.
+                            appState.reassertNowPlayingCard(reason: "scene.active")
                             Task { await appState.runAutoArchiveIfNeeded(reason: "app.foreground") }
                             // Retry auto-downloads whose BG-wake intent never
                             // started (persisted in AutoDownloadIntentStore).

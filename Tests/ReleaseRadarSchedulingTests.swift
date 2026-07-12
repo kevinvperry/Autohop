@@ -8,6 +8,13 @@
 // windows before ordinary random/deferred backlog work. Also protects the
 // Download Filters contract: episodes skipped by per-subscription filters must
 // not train Release Radar's learned profile. And the Release Radar v2 Stage-1
+// Also protects the BGProcessing cadence policy: app-launch, useful, empty, and
+// expired outcomes must produce bounded delays and expiry retries must back off.
+// This pure policy test deliberately supplies jitter rather than invoking iOS's
+// BGTaskScheduler, which is unavailable as a deterministic unit-test surface.
+// It also verifies that active feed-failure backoff replaces an overdue feed date
+// for BGAppRefresh scheduling, while expired backoff is ignored.
+// And the Release Radar v2 Stage-1
 // classifier: cadence + active-day pattern decides the kind (publish TIME never
 // gates) — variable-time weekday feeds classify as dailyWeekdays/Weekdays, 7-day
 // feeds as Daily, 2–4 days as multiSlot, irregular days stay Random, and weekends
@@ -903,3 +910,46 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         return calendar.date(from: components)!
     }
 }
+
+#if !AUTOHOP_SPM
+final class BackgroundProcessingScheduleTests: XCTestCase {
+    private let hour: TimeInterval = 60 * 60
+
+    func testNormalOutcomesUseLongCadence() {
+        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .initial, consecutiveFailures: 0, jitterUnit: 0), 12 * hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: true), consecutiveFailures: 0, jitterUnit: 0), 18 * hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: false), consecutiveFailures: 0, jitterUnit: 0), 24 * hour)
+    }
+
+    func testExpirationRetriesBackOffAndCapAtOneDay() {
+        let expectedHours: [TimeInterval] = [2, 4, 8, 16, 24, 24]
+        for (offset, expected) in expectedHours.enumerated() {
+            XCTAssertEqual(
+                BackgroundTaskCoordinator.processingDelay(after: .expired, consecutiveFailures: offset + 1, jitterUnit: 0),
+                expected * hour
+            )
+        }
+    }
+
+    func testJitterIsClampedAndOnlyDelaysTheRequest() {
+        let base = BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: true), consecutiveFailures: 0, jitterUnit: -1)
+        let maximum = BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: true), consecutiveFailures: 0, jitterUnit: 2)
+        XCTAssertEqual(base, 18 * hour)
+        XCTAssertEqual(maximum, 19 * hour)
+    }
+
+    func testActiveFeedBackoffDelaysEffectiveBackgroundDueDate() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let overdue = now.addingTimeInterval(-10 * 24 * hour)
+        let backoff = now.addingTimeInterval(2 * hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.effectiveFeedDueDate(feedDueDate: overdue, backoffUntil: backoff, now: now), backoff)
+    }
+
+    func testExpiredBackoffDoesNotDelayFeed() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let due = now.addingTimeInterval(hour)
+        let expired = now.addingTimeInterval(-hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.effectiveFeedDueDate(feedDueDate: due, backoffUntil: expired, now: now), due)
+    }
+}
+#endif

@@ -190,6 +190,16 @@ shows correct settings immediately. Guarded by
   author's newer pending queue), notify-only `onRemoteQueueSnapshotChanged`.
   Storage: single-row `queue_snapshot` table (migration v8). Tested:
   `Tests/QueueSnapshotSyncTests.swift`.
+
+  **Late queued-record rebuild fix (2026-07-12):** CKSyncEngine record construction
+  reads the current queue singleton (`queueSnapshot()`), not the pending-only view.
+  `pendingQueueSnapshot()` remains correct for deciding whether to enqueue a save,
+  but callback ordering/retry reconciliation can ask for an already-queued
+  `queue:current` after its pending flag has been cleared. The current row remains
+  authoritative and must still produce a CKRecord; otherwise the request emits
+  `sync.recordNotFound` and can strand Up Next propagation. Regression coverage
+  verifies that marking a snapshot clean removes it from pending while preserving
+  the current singleton for reconstruction.
   **Fast adoption (2026-07-04, Kevin's follow-up):** waiting for the snapshot
   to surface in the full CKSyncEngine change stream meant the TV queue cycled
   through stale episodes for ~10 min after launch. `CloudSyncEngine.fetchQueueSnapshotNow`
@@ -340,6 +350,18 @@ CKSyncEngine pushes in ~2 minutes of playback, each saving only 1–2 records �
 listening-stats day rows and listening-history rows were queued eagerly on
 every debounced store change as playback dirtied them. `CloudSyncEngine`'s
 queue pass is now type-aware:
+
+**Local write coalescing (hardened 2026-07-12):** the 0.5-second playback clock no
+longer performs a complete listening-history update on every tick. History samples
+accumulate in memory and are applied in 10-second batches, reducing array searches,
+full sorts, JSON-save checks, published-array invalidations, and SQLite pending-row
+writes from roughly two per second to roughly one per ten seconds. Stats still updates
+its authoritative in-memory day bucket on every tick for numerical accuracy, but its
+SwiftUI `revision` publishes at most once per 10 seconds. Existing stats sync-row writes
+remain on their 10-second throttle. Pause, scene background/inactive, sleep timer,
+sleep schedule, episode completion, and remote-history merge are explicit flush points,
+so the final position and accumulated time become durable before the slow-lane CloudKit
+push is requested.
 
 - **Fast lane** — `EpisodeState` + `SubscriptionState` (discrete user actions):
   queued immediately on the existing 1 s store-change debounce, unchanged.
@@ -546,3 +568,10 @@ Related diagnostic keys outside CloudKit:
   `engine.routeRestartDeferred` / `engine.routeRestartScheduled` trace
   AirPods/Speaker route stabilization, including previous/new output metadata
   for iOS `unknown` and `categoryChange` route notifications.
+  `audio.routeRestoredReassert` / `audio.routeReassertActivateFailed` /
+  `nowPlaying.reasserted` trace the 2026-07-12 "audio hijack" fix: when a
+  removed output returns (AirPods reinserted), the engine re-claims the audio
+  session (only if our pause was route-loss-caused AND no other app is
+  audibly playing) and AppState re-pushes the full Now Playing card, so an
+  AirPods stem-press resumes Autohop instead of falling through to Apple
+  Music. `nowPlaying.reasserted` also fires on scene foreground.

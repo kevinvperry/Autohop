@@ -151,7 +151,7 @@ Modern-standards checklist:
 | 2 | Reschedule next request at **start** of handler | ✅ | `BackgroundTaskCoordinator.scheduleAppRefresh()` first line of `handleFeedRefresh` (`AppDelegate.swift:96`) |
 | 3 | Modern async work + cooperative cancellation | ✅ | `let work = Task { await … }` + `expirationHandler { work.cancel(); setTaskCompleted(false) }` (`AppDelegate.swift:98-118`); `performRefreshCycle` checks `Task.isCancelled` and checkpoints the backlog |
 | 4 | `setTaskCompleted(success: true)` even for "nothing due" | ✅ | `AppDelegate.swift:104-106` + the documented rationale |
-| 5 | `earliestBeginDate` = soonest due feed, 15-min floor | ✅ (two-step) | The handler first submits a **generic 15-min** request (`scheduleAppRefresh()` no-arg, `AppDelegate.swift:96`) as a safety net, then the cycle **replaces** it with the due-feed date (`scheduleBackgroundRefreshForNextDueFeed()` → `scheduleAppRefresh(earliestBeginDate:)`, `AppState.swift:3194`). Net pending request = the due date once the cycle finishes; the 15-min one only persists if the cycle is killed first. |
+| 5 | `earliestBeginDate` = soonest effective due feed, 15-min floor | ✅ (two-step; backoff hardened 2026-07-12) | The handler first submits a **generic 15-min** request as a safety net, then the cycle replaces it with the earliest effective feed date. Per feed, effective due is `max(predictedDue, activeFailureBackoffUntil)`, so a broken feed with an overdue prediction cannot repeatedly anchor scheduling to the floor. Healthy feeds remain independent and can still win an earlier date. |
 | 6 | Stay near the ~100 KB data budget | ⚠️ partial | Conditional GET (`FeedService.refreshIfModified`, ETag/Last-Modified) makes an **unchanged** feed ≈ 0 bytes (`304`). A **changed** feed still returns a full body (capped at `episodeLimit` 50 items, **not by size**), so the ~100 KB guideline is **helped but not code-enforced**. |
 | 7 | Background `URLSession` for downloads (survives suspend, relaunches app) | ✅ | `DownloadManager` background session + `handleEventsForBackgroundURLSession` (`AppDelegate.swift:61`) |
 | 8 | **Refresh during background audio (the reliable window)** | ✅ **RESOLVED 2026-06-24** | `startForegroundPolling()` now guards on `isSceneActive || isPlaying`, so it refreshes due feeds and queues downloads while the user listens with the app backgrounded; it only stands down when the process is truly idle/suspended. |
@@ -181,12 +181,21 @@ warning) is now done too, so a user who has Background App Refresh off is told w
    prominent home-screen surface remains optional.
 
 **Tier 2 — worth considering, mild tradeoffs**
-3. ✅ **DONE (2026-06-24) — `BGProcessingTask` overnight catch-up.** `com.autohop.feedprocessing`
+3. ✅ **DONE (2026-06-24; cadence hardened 2026-07-12) — `BGProcessingTask` overnight catch-up.** `com.autohop.feedprocessing`
    (gated on `requiresExternalPower` + `requiresNetworkConnectivity`) runs
    `refreshSubscriptionsForProcessing()` — an **uncapped** due-feed sweep that drains the
-   deferred backlog and retries backed-off feeds. `processing` background mode re-added to
+   deferred backlog and retries backed-off feeds. The next request is submitted only after
+   the current outcome is known, with a persisted `earliestBeginDate`: 18 hours after useful
+   work, 24 hours after an empty run, and exponential 2/4/8/16/24-hour retry backoff after
+   expiration. Initial launch scheduling waits 12 hours; positive jitter avoids metronomic
+   wakes, and an already-pending request is never replaced. This replaces the former
+   no-date, resubmit-at-handler-entry behavior. `processing` background mode re-added to
    Info.plist; App Review notes (APPSTORE_ROADMAP Appendix 2) updated to declare/justify it.
-4. Add a `hasCompleted` guard around the two `setTaskCompleted` calls (#11).
+4. ✅ **DONE (2026-07-12) — one-shot completion/expiration guard.** Both
+   BGAppRefreshTask and BGProcessingTask use a thread-safe
+   `BackgroundTaskCompletionGate`. Whichever path claims the gate first is the only
+   path allowed to log terminal state, schedule an outcome-dependent replacement,
+   or call `setTaskCompleted`; a late work result or expiration returns silently.
 
 **Tier 3 — nuclear option**
 5. **Server-driven silent push** is the only *truly* reliable trigger, but it requires
