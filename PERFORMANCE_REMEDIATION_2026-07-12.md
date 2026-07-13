@@ -1,5 +1,12 @@
 # Overnight Performance Remediation — Final Resolution Ledger
 
+## AI CONTEXT — Monday diagnostic follow-up (implemented 2026-07-13)
+
+- Download stalls are confirmed against live URLSession task state, connectivity-wait state, and byte counters before cancellation. Suspended/waiting tasks hold their stall clock; out-of-process byte advances reset it. Confirmed stalls preserve resume data and use 30/60/120-second retries capped at three automatic attempts.
+- Inactive background-audio feed polling is limited to one cycle per ten minutes and four feeds per cycle, without the visible-foreground active-window cap bypass.
+- Decoded artwork memory is capped at 32 MB and purged with speculative prefetches on backgrounding, memory warning, or a ≥350 MB footprint. Paused AVAudioEngine graphs/files/buffers now receive the same background teardown as paused AVPlayer resources.
+- BGAppRefreshTask has a 20-second cooperative deadline. It cancels and checkpoints unfinished feed candidates, completes the useful partial run successfully, and leaves the system expiration handler as a fallback.
+
 > AI CONTEXT — This is the authoritative completion ledger for findings derived
 > from `autohop-diagnostic-redacted (22).log`, Claude Fable's independent review,
 > and the subsequent cross-repository audit completed 2026-07-12. Future AI models

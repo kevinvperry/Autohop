@@ -26,6 +26,8 @@ classification, main-thread hang context, playback tick timing, and stats-sync
 flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
+Version 1.3 is iPhone-only: tvOS, Autohop Pro, and Cloudflare Relay are retained
+as development implementations but excluded from the production feature set.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
 entitlement scope: Now Playing, downloaded-only Up Next, Subscriptions, explicit
 download-before-play confirmation for subscription episodes, Play Now, Play Next,
@@ -36,6 +38,10 @@ notifications, or other non-driving workflows.
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
+
+> **Version 1.3 production scope:** iPhone only. Autohop Pro is hidden and its
+> StoreKit lifecycle is inactive; Relay registration, uploads, heartbeats, nudges,
+> and push handling are inactive. Apple TV is a separate unsubmitted target.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
@@ -395,13 +401,13 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Availability:** The Chapters panel in the player is only shown when the current episode has embedded chapter data.
 
-**Display:** List of chapters with title and position. The currently playing chapter is highlighted and cannot be disabled.
+**Display:** List of chapters with title and position. The currently playing chapter is highlighted. Disabling it from the Player immediately advances playback to the next enabled chapter; Podcast Settings disables that row to prevent accidental interruption.
 
-**Skipping chapters:** Tap a chapter row to toggle its skipped state (not a swipe action). Skipped chapters are automatically bypassed during playback — the player jumps to the next enabled chapter when it reaches a disabled one.
+**Skipping chapters:** Tap a chapter control to toggle its skipped state. AppState persists the new filter and pushes it into the active playback engine atomically, so an episode already playing uses the new filter immediately. Skipped chapters are automatically bypassed; a disabled final chapter uses the loaded media duration when RSS duration is unavailable.
 
 **Chapter filter (per-podcast, per-position):** Disabled chapters are stored by position index in `ChapterFilter` on the `Subscription` model. Skips are **position-based and apply to all future episodes** of that podcast. This means disabling chapter 1 permanently skips the first chapter of every future episode — the primary use case being recurring show intros, sponsor reads, or outros that always appear in the same chapter slot.
 
-**Editing chapter filter:** Available in the individual podcast's settings page (gear icon from episode list), under "Chapter Filter". Only shown when the latest episode has chapters.
+**Editing chapter filter:** Available in the individual podcast's settings page (gear icon from episode list), under "Chapter Filter". While an episode from that podcast is loaded, the section uses that episode's chapter positions; otherwise it uses the newest episode with chapters.
 
 ---
 
@@ -413,7 +419,9 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional. For rolling one-item feeds, such as hourly news bulletins, a newly discovered latest episode cancels a stale in-progress download for the previous latest episode immediately instead of waiting for app-start orphan cleanup.
 
-**Relay silent-push budget:** Feed-specific relay wakes race their targeted feed
+**Development-only after Version 1.3:** The following Relay behavior is retained
+for controlled future testing and is not enabled in the 1.3 production build.
+Feed-specific relay wakes race their targeted feed
 work against a 20-second completion deadline. The app reports to iOS exactly once,
 returns `.noData` if the deadline wins, and never waits for an episode media
 download. A late shared refresh may finish for another live owner, but cannot keep
@@ -561,11 +569,11 @@ Three independent rules. All stored in `AutoArchiveSettings` on the `Subscriptio
 
 ### 10.5 Chapter Filter section
 
-Only shown when the podcast's latest episode has chapter data.
+Shown using the loaded episode when that podcast is currently playing; otherwise the newest episode supplies the position list.
 
 | Behaviour | Detail |
 |---|---|
-| Toggle chapter | Tap a chapter row to enable/disable it. Currently playing chapter cannot be disabled. |
+| Toggle chapter | Tap a chapter row to enable/disable it. Podcast Settings protects the current row; Player toggles are live and immediately advance if the current position is disabled. |
 | Scope | Position-based. A disabled position is skipped in all future episodes of this podcast. |
 | Primary use case | Permanently skip recurring chapters at a fixed position — show intros, sponsor reads, or outros that appear in the same chapter slot every episode. |
 
@@ -781,6 +789,8 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 Release Radar is Autohop's automatic feed-refresh system. Its job is to detect and download new podcast episodes faster than ordinary podcast apps while avoiding wasteful checks during periods when a feed is predictably quiet.
 
+> **AI CONTEXT — runtime budget update (2026-07-13):** background-audio checking is no longer the same cadence as visible foreground checking. While the scene is inactive, it is bounded to one cycle of at most four due feeds every ten minutes. This statement supersedes the older same-cadence wording below.
+
 **When checks run:** Autohop checks due feeds (1) on a ~30-second timer while the app is open, (2) **while you're listening with the app in the background** — audio playback keeps the app alive, so due feeds are refreshed and new episodes downloaded on the same cadence as in the foreground, (3) opportunistically via iOS Background App Refresh (`BGAppRefreshTask`), whose timing iOS controls and never guarantees, and (4) as a longer catch-up via a `BGProcessingTask` that iOS runs while the device is **charging and on Wi-Fi** (typically overnight) — a full sweep of every due feed plus downloads, so you wake up current even after a long stretch without opening the app. Newly found episodes download via a background `URLSession` that continues even if the app is later suspended. If the user has turned **Background App Refresh** off for Autohop, iOS grants *no* off-app checks at all; **Settings → Release Radar** then shows a warning with an **Open iOS Settings** link explaining this (and that force-quitting the app also stops background checks). (Background-task reliability research and the design rationale live in `BACKGROUND_REFRESH_RESEARCH.md`.) **Settings → Release Radar → Feed Refresh Schedule** (`FeedRefreshScheduleView`) shows a per-active-subscription table of when Release Radar will and won't check each feed — learned profile + confidence, current state, the recurring watch pattern, and the next concrete window — grouped by behaviour (Inactive subs excluded). Each row has a **Rebuild Prediction** button that fetches the feed's last 100 episodes' publish dates **and times** into the learner (without adding episodes to your library) to form a stronger schedule prediction; episodes skipped by Download Filters are excluded from that learner. For a weekly show this is typically enough history to size its release window from the observed publish-time spread. The page also has a toolbar **export** button that writes a shareable plain-text diagnostic of every active subscription — each show's classification, daily/weekly gate outcomes, learning signal, learned window, observed spread, weekday counts, **per-weekday watch tiers** (probability → Full/Light/Skip), and recent eligible observations — so the whole picture can be exported and analysed for trends.
 
 **BGProcessing cadence:** Catch-ups are outcome-paced rather than immediately re-requested. Useful runs wait at least 18 hours, empty runs 24 hours, and expired runs retry with persisted exponential backoff; small positive jitter avoids metronomic wake patterns. An already-pending request is preserved.
@@ -839,7 +849,7 @@ If the expected episode has not appeared by the end of its learned window, the f
 |---|---|
 | Manual refresh | Ignores due dates and refreshes every eligible non-excluded feed, subject to temporary failure backoff unless explicitly overridden by the caller. It does not wait for any scheduled auto-download to complete. |
 | Timed foreground refresh | Refreshes only feeds whose learned schedule says they are due, capped at 12 per cycle. Active/pre-release windows bypass that foreground cap. Auto-downloads run separately after each successful feed merge. |
-| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle, with 6 protected slots reserved for Release Radar windows (`preWindow`, `activeWindow`, `missedRelease`) before ordinary due feeds. If another refresh cycle is already in flight, the background task waits for it instead of completing early; if iOS expires the background task, the active cycle is cancelled and unfinished selected feeds are checkpointed. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
+| Background refresh | Uses the same due/prediction/priority/backlog pipeline, capped at 8 feeds per BGAppRefreshTask cycle, with 6 protected slots reserved for Release Radar windows (`preWindow`, `activeWindow`, `missedRelease`) before ordinary due feeds. A 20-second cooperative deadline cancels and checkpoints unfinished candidates, completing the useful partial run before iOS's typical expiration window. Scheduled media downloads are left to the download queue rather than holding the BGAppRefreshTask open. |
 
 **Exclusions and failure backoff:** Per-podcast "Exclude from Auto Feed Refresh" removes that subscription from automatic feed refresh. Feeds with recent failures are temporarily skipped unless the refresh path explicitly includes backoff feeds. Background scheduling uses the later of a feed's normal Radar due date and its active backoff expiry, so one broken, long-overdue feed cannot repeatedly request near-immediate wakes; unrelated healthy feeds can still schedule earlier.
 
@@ -925,7 +935,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| iCloud Sync | Toggle | **Off** | When on, syncs listening state across devices signed into the same iCloud account: episode played/archived state, per-podcast settings (playback, auto-archive, chapter filter, Download Filters, priority, notifications), subscribe/unsubscribe, listening history, and (since July 2026) the Up Next queue itself — its exact episodes and order, authored by the iPhone, mirrored on Apple TV and future devices. |
+| iCloud Sync | Toggle | **Off** | When on, syncs listening state through the user's private iCloud database. Version 1.3 ships only on iPhone; the retained Apple TV implementation can consume the same records during development but is not part of the 1.3 App Store offering. Synced data includes episode played/archived state, per-podcast settings, subscriptions, listening history, and the Up Next queue. |
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Per-podcast Download Filters sync as of July 2026 (they were backup/local-only in v1). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
 
@@ -988,7 +998,7 @@ This is especially important on Podcast Detail pages where a feed can expose a d
 
 | Layer | Behaviour |
 |---|---|
-| Memory cache | `NSCache<NSString, UIImage>` stores decoded display variants, capped at 80 MB. Keys include the source URL hash and requested pixel size, so a 44 pt row image and 320 pt detail image can coexist without fighting. |
+| Memory cache | `NSCache<NSString, UIImage>` stores decoded display variants, capped at 32 MB. Decoded variants and speculative prefetches are purged on backgrounding, memory warning, or a measured process footprint of at least 350 MB (with a five-minute anti-churn cooldown). |
 | Disk cache | Stores original validated source bytes once per artwork URL under `Caches/Autohop/Artwork`. Display variants are not written separately. |
 | Metadata | `_metadata.json` tracks original URL, byte size, created date, and last access date for every source file. Missing or changed files self-heal on later access/prune. |
 | Pruning | Disk cache is capped at 250 MB and 90 days since last access. Pruning removes expired/missing entries first, then trims least-recently-used files until under budget. |

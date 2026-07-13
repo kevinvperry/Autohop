@@ -365,24 +365,31 @@ final class PlaybackEngine: PlaybackControlling {
         ])
     }
 
-    /// Drops a paused AVPlayer and its item before the app is suspended. Paused
-    /// video players can hold sizeable decoder/display buffers; AppState keeps
-    /// the user-visible episode and position, then starts a fresh player on the
-    /// next resume.
+    /// Drops paused AVPlayer OR AVAudioEngine resources before suspension. The
+    /// engine path retains an AVAudioFile, graph, units, and scheduled buffers;
+    /// long background pauses previously kept those mappings resident. AppState
+    /// retains the episode/position and reconstructs the backend on next resume.
     @discardableResult
     func releasePausedPlayerResourcesForBackground(reason: String) -> TimeInterval? {
         guard !isPlaying else { return nil }
-        guard !engineUsesEngine, let player else { return nil }
-
         let seconds = currentPlaybackTime()
         let episode = currentEpisode
         cancelPendingRouteLossPause(reason: "backgroundRelease", output: currentOutputPortName())
         routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
-        player.pause()
-        removePlayerObservers()
-        player.replaceCurrentItem(with: nil)
-        self.player = nil
+        let releasedBackend: String
+        if engineUsesEngine {
+            releasedBackend = "AVAudioEngine"
+            stopEnginePlayback()
+        } else if let player {
+            releasedBackend = "AVPlayer"
+            player.pause()
+            removePlayerObservers()
+            player.replaceCurrentItem(with: nil)
+            self.player = nil
+        } else {
+            return nil
+        }
         pausedAtSeconds = seconds
         durationSeconds = 0
         didFinishCurrentEpisode = false
@@ -392,7 +399,7 @@ final class PlaybackEngine: PlaybackControlling {
 
         logger.info("playback.backgroundRelease", "Paused AVPlayer resources released for background", metadata: [
             "reason": reason,
-            "backend": "AVPlayer",
+            "backend": releasedBackend,
             "episode": episode?.title ?? "none",
             "mediaKind": episode?.mediaKind.rawValue ?? "unknown",
             "seconds": String(format: "%.1f", seconds)
@@ -586,6 +593,18 @@ final class PlaybackEngine: PlaybackControlling {
             "episode": episode.title,
             "count": "\(chapters.count)"
         ])
+    }
+
+    /// AI CONTEXT — live chapter-filter bridge. Re-evaluate immediately so the
+    /// persisted UI state and audible playback cannot diverge until a later tick.
+    func updateChapterFilter(_ filter: ChapterFilter, for episodeID: UUID) {
+        guard currentEpisode?.id == episodeID else { return }
+        currentFilter = currentEpisode?.chapters.isEmpty == false ? filter : nil
+        logger.info("playback.chapterFilterUpdated", "Live chapter filter applied", metadata: [
+            "episode": currentEpisode?.title ?? "none",
+            "skippedPositions": filter.skippedPositions.sorted().map(String.init).joined(separator: ",")
+        ])
+        skipDisabledChapterIfNeeded(at: currentPlaybackTime())
     }
 
     // MARK: - Volume
@@ -1802,7 +1821,9 @@ final class PlaybackEngine: PlaybackControlling {
                 "next": next.title
             ])
             seek(to: next.startSeconds)
-        } else if let duration = episode.durationSeconds {
+        } else {
+            let duration = episode.durationSeconds ?? (durationSeconds > 0 ? durationSeconds : nil)
+            guard let duration else { return }
             logger.info("playback.skipChapter", "Skipping disabled final chapter", metadata: [
                 "episode": episode.title,
                 "chapter": chapter.title

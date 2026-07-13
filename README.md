@@ -8,6 +8,9 @@ the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
 of truth, and DEEP_SCAN_2026-06-28.md as the newest assessment report. The
 visible playback-order sheet is "Up Next"; the Swift implementation still uses
 legacy `Queue*` type/property names in several places.
+Version 1.3 is an iPhone-only production release. The separate tvOS target,
+Autohop Pro subscription, and Cloudflare Relay service remain development
+features and are not offered, advertised, or contacted by the 1.3 build.
 -->
 
 **The podcast player for people who are serious about listening.**
@@ -40,6 +43,12 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Current Feature Set
 
+> **Version 1.3 release boundary:** This release contains the iPhone app only.
+> Apple TV, Autohop Pro, and Relay-assisted delivery remain under development.
+> Their source is retained for testing, but explicit compilation conditions are
+> required to enable Pro or Relay and the tvOS target must be uploaded separately.
+> See [`RELEASE_1_3.md`](RELEASE_1_3.md) for the archive and App Store checklist.
+
 - First-run onboarding: a Welcome carousel, chart-derived one-tap Starter Packs, guiding empty states, a "You're all set" first-subscribe moment that auto-downloads and cues your first episode, contextual coach marks, and a getting-started checklist — designed to teach the Priority Stack model without forcing playback or asking for permissions up front
 - "Open at launch" setting — choose whether the app opens to the Player, your Subscriptions, or Discover each time
 - Priority Stack: drag-ranked subscriptions feed the queue automatically in order
@@ -53,7 +62,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
 - Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
-- Background feed refresh (BGAppRefreshTask, due-date priority scheduling, protected Release Radar slots) and per-podcast exclude-from-refresh
+- Deadline-aware background feed refresh, bounded background-audio polling, due-date priority scheduling, protected Release Radar slots, and per-podcast exclude-from-refresh
 - Per-podcast Download Filters for automatic RSS downloads by episode duration, title, and description
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive / Skipped

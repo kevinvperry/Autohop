@@ -751,7 +751,9 @@ struct PlayerView: View {
     private var chapterStripView: some View {
         let active = appState.activeChapters
         let current = appState.currentChapter
-        let activeIdx = active.firstIndex(where: { $0.position == current?.position }) ?? 0
+        let activeIdx = active.firstIndex(where: { $0.position == current?.position })
+        let previousTarget = appState.previousChapterNavigationTarget
+        let nextTarget = appState.nextChapterNavigationTarget
 
         return HStack(spacing: 8) {
             Button { appState.navigateToPreviousChapter() } label: {
@@ -763,7 +765,7 @@ struct PlayerView: View {
             .background(Color(white: 0.12))
             .clipShape(Circle())
             .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
-            .disabled(activeIdx <= 0)
+            .disabled(previousTarget == nil)
 
             Button {
                 withAnimation(.easeInOut(duration: 0.22)) { selectedPanel = 2 }
@@ -774,7 +776,7 @@ struct PlayerView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
-                    Text("Chapter \(activeIdx + 1) of \(active.count)")
+                    Text(activeIdx.map { "Chapter \($0 + 1) of \(active.count)" } ?? "Moving past skipped chapter")
                         .font(.system(size: 10))
                         .foregroundStyle(Color(white: 0.33))
                 }
@@ -791,7 +793,7 @@ struct PlayerView: View {
             .background(Color(white: 0.12))
             .clipShape(Circle())
             .overlay(Circle().stroke(Color(white: 0.18), lineWidth: 0.5))
-            .disabled(activeIdx >= active.count - 1)
+            .disabled(nextTarget == nil)
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
@@ -1296,15 +1298,12 @@ struct PlayerView: View {
                 if let sub {
                     HStack(spacing: 14) {
                         Button("All") {
-                            for ch in chapters where sub.chapterFilter.skippedPositions.contains(ch.position) {
-                                appState.subscriptionStore.toggleChapter(subscriptionID: sub.id, position: ch.position)
-                            }
+                            appState.applyChapterFilter(ChapterFilter(), subscriptionID: sub.id)
                         }
                         Button("None") {
                             let currentPos = appState.currentChapter?.position
-                            for ch in chapters where ch.position != currentPos && !sub.chapterFilter.skippedPositions.contains(ch.position) {
-                                appState.subscriptionStore.toggleChapter(subscriptionID: sub.id, position: ch.position)
-                            }
+                            let skipped = Set(chapters.lazy.filter { $0.position != currentPos }.map(\.position))
+                            appState.applyChapterFilter(ChapterFilter(skippedPositions: skipped), subscriptionID: sub.id)
                         }
                     }
                     .font(.system(size: 12, weight: .bold))
@@ -1342,7 +1341,7 @@ struct PlayerView: View {
             HStack(spacing: 11) {
                 Button {
                     guard let sub = subscription else { return }
-                    appState.subscriptionStore.toggleChapter(subscriptionID: sub.id, position: chapter.position)
+                    appState.toggleChapter(subscriptionID: sub.id, position: chapter.position)
                 } label: {
                     ZStack {
                         Circle()

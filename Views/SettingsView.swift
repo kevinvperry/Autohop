@@ -2,8 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
-// settings Form, sections in order: Autohop Pro (status row → AutohopProSettings-
-// View, the only screen that calls AutohopProStore.purchase() — see
+// settings Form. Autohop Pro is omitted from the Version 1.3 production build;
+// when the explicit development feature is enabled its status row opens
+// AutohopProSettingsView, the only screen that calls AutohopProStore.purchase() — see
 // Docs/RELAY_TIER1_IMPLEMENTATION.md §4 and that file's own header for the
 // purchase/restore/manage-subscription flow), Startup (Open-at-launch menu picker →
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
@@ -73,7 +74,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            autohopProSection
+            if ReleaseFeatures.autohopPro {
+                autohopProSection
+            }
             startupSection
             pollingSection
             autoArchiveSection

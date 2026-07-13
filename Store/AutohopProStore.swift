@@ -17,6 +17,29 @@ import StoreKit
 // real x5c chain verification ships server-side, local-only purchases will be
 // REJECTED by the relay; Sandbox testing (a real, free Sandbox Apple ID
 // tester in App Store Connect) will be required for register() to succeed.
+//
+// AI CONTEXT — Version 1.3 release boundary: Pro and Relay remain compiled for
+// continued development but default OFF unless their explicit Swift compilation
+// conditions are supplied. Never infer availability from DEBUG: TestFlight uses
+// Release builds and must be able to exercise either configuration deliberately.
+enum ReleaseFeatures {
+#if AUTOHOP_PRO_ENABLED
+    static let autohopPro = true
+#else
+    static let autohopPro = false
+#endif
+
+#if AUTOHOP_RELAY_ENABLED
+    static let relayService = autohopPro
+#else
+    static let relayService = false
+#endif
+
+    /// Documentation invariant for App Store automation. AutohopTV is a separate
+    /// target and must not be uploaded as part of the iPhone-only 1.3 submission.
+    static let submitTVApp = false
+}
+
 @MainActor
 final class AutohopProStore: ObservableObject {
     static let productID = "autohop_pro_monthly"
@@ -28,9 +51,12 @@ final class AutohopProStore: ObservableObject {
     @Published private(set) var purchaseInFlight = false
     @Published var lastError: String?
 
+    let isEnabled: Bool
     private var updatesTask: Task<Void, Never>?
 
-    init() {
+    init(enabled: Bool = ReleaseFeatures.autohopPro) {
+        isEnabled = enabled
+        guard enabled else { return }
         updatesTask = Task { [weak self] in
             for await update in Transaction.updates {
                 await self?.handle(update)
@@ -47,6 +73,7 @@ final class AutohopProStore: ObservableObject {
     }
 
     func loadProduct() async {
+        guard isEnabled else { return }
         do {
             let products = try await Product.products(for: [Self.productID])
             product = products.first
@@ -60,6 +87,7 @@ final class AutohopProStore: ObservableObject {
     /// (e.g. Ask to Buy) — neither is an error.
     @discardableResult
     func purchase() async -> Bool {
+        guard isEnabled else { return false }
         guard let product else {
             lastError = "Autohop Pro isn't available right now."
             return false
@@ -85,6 +113,7 @@ final class AutohopProStore: ObservableObject {
     }
 
     func restorePurchases() async {
+        guard isEnabled else { return }
         try? await AppStore.sync()
         await refreshEntitlement()
     }
@@ -93,6 +122,7 @@ final class AutohopProStore: ObservableObject {
     /// `Transaction.currentEntitlements` — the source of truth StoreKit keeps
     /// current locally (no network call needed on the happy path).
     func refreshEntitlement() async {
+        guard isEnabled else { return }
         var activeJWS: String?
         var activeExpiration: Date?
         for await result in Transaction.currentEntitlements {

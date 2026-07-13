@@ -116,4 +116,27 @@ public enum PlaybackSessionPolicy {
         else { return nil }
         return activeChapters[index + 1].startSeconds
     }
+
+    /// Time-based navigation remains valid when `current` was just disabled and
+    /// therefore no longer exists in `activeChapters`. Previous preserves the
+    /// historical behaviour of moving to the chapter before the current slot.
+    public static func previousChapterStart(
+        at currentTime: TimeInterval,
+        currentChapter: Chapter?,
+        in activeChapters: [Chapter]
+    ) -> TimeInterval? {
+        let boundary = currentChapter?.startSeconds ?? currentTime
+        return activeChapters
+            .filter { $0.startSeconds < boundary }
+            .max(by: { $0.startSeconds < $1.startSeconds })?
+            .startSeconds
+    }
+
+    /// First enabled chapter strictly after the actual playback position.
+    public static func nextChapterStart(at currentTime: TimeInterval, in activeChapters: [Chapter]) -> TimeInterval? {
+        activeChapters
+            .filter { $0.startSeconds > currentTime }
+            .min(by: { $0.startSeconds < $1.startSeconds })?
+            .startSeconds
+    }
 }

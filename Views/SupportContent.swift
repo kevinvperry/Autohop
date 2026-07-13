@@ -301,7 +301,7 @@ enum SupportGuide {
             .paragraph("Tap any chapter row to jump to that position in the episode immediately."),
             .heading("Disabling chapters"),
             .paragraph("**Tap** any chapter row to toggle it between enabled and disabled. Disabled chapters are shown with a strikethrough and skipped automatically during playback — Autohop jumps past them without any input. This is useful for sponsor reads, recurring segments, or intros you've already heard many times."),
-            .paragraph("Tap a disabled chapter row again to re-enable it. The currently playing chapter cannot be disabled."),
+            .paragraph("Tap a disabled chapter row again to re-enable it. If you disable the chapter currently playing from the Player, Autohop immediately moves to the next enabled chapter; the podcast settings page protects the current row from accidental taps."),
             .callout(.tip, "**Tip:** Chapter skips are stored per-podcast, not per-episode. Disabling a chapter at position 1 skips the first chapter on every future episode of that podcast — perfect for permanently skipping a show's recurring intro or sponsor read that always appears in the same slot."),
         ]
     )

@@ -67,9 +67,10 @@ import MetricKit
 //     that symbolicates against that build's dSYM; hangs log `metrics.hang` with
 //     duration + stack. MetricKit delivers these on a later launch via
 //     pastDiagnosticPayloads, so a background crash is pinpointed after the fact.
-//  9. Autohop Relay wake-push (Autohop Pro only — RELAY_TIER1_IMPLEMENTATION.md §4.4):
-//     registerForRemoteNotifications() is called unconditionally at launch (cheap;
-//     a no-op token capture if the user never subscribes) so the raw APNs token is
+//  9. Autohop Relay wake-push (development-disabled for the Version 1.3 App Store
+//     build; see ReleaseFeatures). registerForRemoteNotifications() remains
+//     unconditional because CKSyncEngine also requires APNs. When Relay is enabled,
+//     the raw APNs token is
 //     ready the moment AutohopProStore confirms entitlement — AppState.relay-
 //     TokenReceived(_:) forwards it and drives POST /v1/register when both the
 //     token AND an active entitlement are present. didReceiveRemoteNotification
@@ -143,6 +144,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
+        guard ReleaseFeatures.relayService else { return }
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
         Task { @MainActor [weak self] in
             let state = AppState.sharedOrBootstrap()
@@ -155,7 +157,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        AppLogger.shared.warning("relay.apnsRegisterFailed", "Failed to register for remote notifications", metadata: [
+        AppLogger.shared.warning("push.apnsRegisterFailed", "Failed to register for remote notifications", metadata: [
             "error": error.localizedDescription
         ])
     }
@@ -165,6 +167,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        guard ReleaseFeatures.relayService else {
+            completionHandler(.noData)
+            return
+        }
         guard let type = userInfo["type"] as? String else {
             completionHandler(.noData)
             return
@@ -239,10 +245,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         ], force: true)
         // §4.5 heartbeat send-side (RELAY_TIER1_IMPLEMENTATION.md) — foreground is
         // the documented trigger; AppState debounces to ≤1/day itself.
-        Task { @MainActor [weak self] in
-            let state = AppState.sharedOrBootstrap()
-            self?.appState = state
-            await state.sendRelayHeartbeatIfDue()
+        if ReleaseFeatures.relayService {
+            Task { @MainActor [weak self] in
+                let state = AppState.sharedOrBootstrap()
+                self?.appState = state
+                await state.sendRelayHeartbeatIfDue()
+            }
         }
     }
 
@@ -382,6 +390,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
         let startedAt = Date()
         let completionGate = BackgroundTaskCompletionGate()
+        let cooperativeDeadline: TimeInterval = 20
         // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
         // this launch handler runs on the main queue and the MainActor.assumeIsolated
         // reads below are valid. DO NOT change the registration back to `using: nil`:
@@ -405,11 +414,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         }
         BackgroundTaskCoordinator.scheduleAppRefresh()
 
-        let work = Task {
+        var deadlineWork: Task<Void, Never>?
+        let work = Task { @MainActor in
             let state = AppState.sharedOrBootstrap()
             state.logResourceSnapshot(reason: "background.appRefresh.workStart", extra: startMetadata, force: true)
             let didRun = await state.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
             guard completionGate.claim() else { return }
+            deadlineWork?.cancel()
             // Unawaited on purpose: draining awaits full media transfers, which
             // must not hold setTaskCompleted (a stalled BG task teaches iOS to
             // stop granting wakes). Intents are persisted, so anything this Task
@@ -434,8 +445,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             task.setTaskCompleted(success: true)
         }
 
+        // AI CONTEXT — iOS commonly expires BGAppRefresh near 25–30 seconds. Stop
+        // cooperatively at 20 seconds, checkpoint unfinished candidates, and return
+        // success before the system expiration handler. The persisted due/backlog
+        // state makes this partial useful run resumable on the next opportunity.
+        deadlineWork = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(cooperativeDeadline))
+            } catch {
+                return
+            }
+            guard completionGate.claim() else { return }
+            let state = AppState.sharedOrBootstrap()
+            state.cancelRefreshCycleIfBackgroundOnly(reason: "background.cooperativeDeadline")
+            work.cancel()
+            let elapsedMs = elapsedMilliseconds(since: startedAt)
+            AppLogger.shared.info("background.deadlineComplete", "Background app refresh stopped at cooperative deadline", metadata: [
+                "identifier": task.identifier,
+                "elapsedMs": elapsedMs,
+                "deadlineSeconds": "\(Int(cooperativeDeadline))",
+                "taskKind": "BGAppRefreshTask"
+            ])
+            state.logResourceSnapshot(reason: "background.appRefresh.deadline", extra: [
+                "identifier": task.identifier,
+                "elapsedMs": elapsedMs,
+                "taskKind": "BGAppRefreshTask"
+            ], force: true)
+            task.setTaskCompleted(success: true)
+        }
+
         task.expirationHandler = {
             guard completionGate.claim() else { return }
+            deadlineWork?.cancel()
             let elapsedMs = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.warning("background.expired", "Background app refresh expired before finishing", metadata: [
                 "identifier": task.identifier,

@@ -178,7 +178,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         speed = preference.speed
         endSkipSeconds = max(0, preference.endSkipSeconds)
         chapterFilter = filter
-        chapters = []
+        chapters = episode.chapters
         didFinishCurrent = false
 
         installObservers(on: newPlayer, item: item, episode: episode)
@@ -246,6 +246,13 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         self.chapterFilter = filter
     }
 
+    public func updateChapterFilter(_ filter: ChapterFilter, for episodeID: UUID) {
+        guard currentEpisode?.id == episodeID else { return }
+        chapterFilter = filter
+        guard let item = player?.currentItem, let episode = currentEpisode else { return }
+        skipDisabledChapterIfNeeded(at: currentTimeSeconds, episode: episode, item: item)
+    }
+
     /// Chapters for the current session (transport-bar markers on TV, Phase 3).
     public var currentChapters: [Chapter] { chapters }
 
@@ -287,6 +294,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             let seconds = time.seconds
             guard seconds.isFinite else { return }
             self.onTimeUpdate?(seconds)
+            self.skipDisabledChapterIfNeeded(at: seconds, episode: episode, item: item)
 
             // End-skip: treat the final N seconds as finished (outro skip),
             // crediting the skipped span like the iOS engine does.
@@ -323,6 +331,23 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         if autoSkipped > 0 { onAutoSkip?(autoSkipped) }
         player?.pause()
         onEpisodeFinished?(episode)
+    }
+
+    /// Mirrors the iOS engine's position filter for tvOS/streaming playback.
+    private func skipDisabledChapterIfNeeded(at seconds: TimeInterval, episode: Episode, item: AVPlayerItem) {
+        let ordered = chapters.sorted { $0.startSeconds < $1.startSeconds }
+        guard let current = ordered.last(where: { $0.startSeconds <= seconds }),
+              !chapterFilter.allows(position: current.position) else { return }
+        if let next = ordered.first(where: {
+            $0.startSeconds > seconds && chapterFilter.allows(position: $0.position)
+        }) {
+            seek(to: next.startSeconds)
+            return
+        }
+        let duration = item.duration.seconds
+        if duration.isFinite, duration > 0 {
+            finishCurrentEpisode(episode, autoSkipped: max(0, duration - seconds))
+        }
     }
 
     private func setBuffering(_ value: Bool) {

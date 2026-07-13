@@ -8,9 +8,8 @@ import Foundation
 // conformers: iOS PlaybackEngine (Playback/, app target only — AVAudioEngine
 // trim-silence/vocal-boost path, unchanged) and StreamingPlaybackEngine
 // (PlaybackCore/, AVPlayer-only, serves tvOS and later the watch). The ONLY
-// additions over the historical protocol are `capabilities` and
-// `updateEpisodeTrim`: surfaces read capability flags instead of hardcoding
-// platforms, while a settings edit can update the active session's end boundary
+// additions over the historical protocol are `capabilities`, live trim, and
+// live chapter-filter updates: settings edits update the active session immediately
 // without restarting audio. Start trim is retained for session consistency but
 // never seeks an episode that is already underway.
 // Do not add iOS-only requirements here; platform-specific behavior belongs on
@@ -48,6 +47,8 @@ public protocol PlaybackControlling {
     /// display and chapter-skip filtering work without the fetch having blocked
     /// the first audio frame. No-op if `episodeID` is no longer the one playing.
     func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID)
+    /// Replaces the active episode's filter without restarting playback.
+    func updateChapterFilter(_ filter: ChapterFilter, for episodeID: UUID)
     func stop()
     /// Set the output volume on the active playback path. 0 = silent, 1 = full.
     func setVolume(_ volume: Float)

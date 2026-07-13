@@ -218,6 +218,9 @@ final class ResourceMonitor {
     /// observed. Held until the level actually changes so the rate spans a real 1%
     /// drop rather than 60 s of unchanged reading.
     private var batteryAnchor: (level: Float, at: Date)?
+    private var lastHighMemoryTrimAt: Date?
+    private let highMemoryTrimThresholdMB = 350
+    private let highMemoryTrimCooldown: TimeInterval = 5 * 60
 
     private init() {
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -253,6 +256,7 @@ final class ResourceMonitor {
                     reason: "memoryWarning",
                     context: monitor.contextProvider?() ?? [:]
                 )
+                Task { await ArtworkImageCache.shared.trimMemory(reason: "memoryWarning") }
             }
         }
     }
@@ -282,10 +286,12 @@ final class ResourceMonitor {
         }
 
         lastSnapshotTime = Date()
-        var metadata = snapshot().metadata
+        let resourceSnapshot = snapshot()
+        var metadata = resourceSnapshot.metadata
         metadata["reason"] = reason
         context.forEach { metadata[$0.key] = $0.value }
         logger.info("resources.snapshot", "Resource snapshot", metadata: metadata)
+        requestHighMemoryTrimIfNeeded(snapshot: resourceSnapshot, reason: reason)
     }
 
     func logWarningSnapshot(event: String, message: String, reason: String, context: [String: String] = [:]) {
@@ -294,6 +300,22 @@ final class ResourceMonitor {
         metadata["reason"] = reason
         context.forEach { metadata[$0.key] = $0.value }
         logger.warning(event, message, metadata: metadata)
+        requestHighMemoryTrimIfNeeded(snapshot: snapshot(), reason: reason)
+    }
+
+    /// Proactive decoded-image eviction keeps a transient artwork/list load from
+    /// becoming a sustained 600–700 MB process. Cooldown prevents trim/log churn.
+    private func requestHighMemoryTrimIfNeeded(snapshot: ResourceSnapshot, reason: String) {
+        guard snapshot.footprintMB >= highMemoryTrimThresholdMB else { return }
+        let now = Date()
+        guard lastHighMemoryTrimAt.map({ now.timeIntervalSince($0) >= highMemoryTrimCooldown }) ?? true else { return }
+        lastHighMemoryTrimAt = now
+        logger.warning("resources.highMemoryTrim", "High process footprint triggered cache eviction", metadata: [
+            "footprintMB": "\(snapshot.footprintMB)",
+            "residentMemoryMB": "\(snapshot.residentMemoryMB)",
+            "reason": reason
+        ])
+        Task { await ArtworkImageCache.shared.trimMemory(reason: "highFootprint") }
     }
 
     // MARK: - Device Snapshot

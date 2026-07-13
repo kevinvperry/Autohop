@@ -463,6 +463,7 @@ private final class PlaybackSpy: PlaybackControlling {
     func updateTrimSilence(_ amount: TrimSilenceAmount) {}
     func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval) {}
     func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {}
+    func updateChapterFilter(_ filter: ChapterFilter, for episodeID: UUID) {}
     func stop() {
         currentEpisode = nil
         isPlaying = false

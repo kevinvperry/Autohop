@@ -1155,6 +1155,15 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
+    /// Replaces the complete position filter with one persistence/UI publication.
+    /// AppState owns propagation into an active playback engine.
+    public func updateChapterFilter(subscriptionID: UUID, filter: ChapterFilter) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].chapterFilter != filter else { return }
+        subscriptions[index].chapterFilter = filter
+        save()
+    }
+
     // MARK: - Cross-device sync (remote → local)
 
     /// Applies a remote episode-state record into the local store with

@@ -133,4 +133,31 @@ final class PlaybackSessionPolicyTests: XCTestCase {
         XCTAssertNil(PlaybackSessionPolicy.previousChapterStart(from: orphan, in: makeChapters()))
         XCTAssertNil(PlaybackSessionPolicy.nextChapterStart(from: orphan, in: makeChapters()))
     }
+
+    func testTimeBasedNavigationWorksWhenCurrentChapterWasFilteredOut() {
+        let active = [makeChapters()[0], makeChapters()[2]]
+        let filteredCurrent = makeChapters()[1]
+
+        XCTAssertEqual(
+            PlaybackSessionPolicy.previousChapterStart(
+                at: 150,
+                currentChapter: filteredCurrent,
+                in: active
+            ),
+            0
+        )
+        XCTAssertEqual(PlaybackSessionPolicy.nextChapterStart(at: 150, in: active), 900)
+    }
+
+    func testTimeBasedNavigationReturnsNilAtRealEdges() {
+        let chapters = makeChapters()
+        XCTAssertNil(
+            PlaybackSessionPolicy.previousChapterStart(
+                at: 10,
+                currentChapter: chapters[0],
+                in: chapters
+            )
+        )
+        XCTAssertNil(PlaybackSessionPolicy.nextChapterStart(at: 950, in: chapters))
+    }
 }

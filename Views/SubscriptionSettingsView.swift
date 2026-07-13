@@ -19,8 +19,9 @@ import SwiftUI
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
 // Default Playback panel), Download Feed Filters (per-feed auto-download
 // eligibility), Automation (per-podcast notifications, exclude from auto feed
-// refresh), Auto Archive (three rules), Chapter Filter (only when latest episode
-// has chapters; position-based), Feed (read-only URL), Danger (unsubscribe with
+// refresh), Auto Archive (three rules), Chapter Filter (uses the actively playing
+// episode when it belongs to this podcast, otherwise newest; position-based and
+// live-applied through AppState), Feed (read-only URL), Danger (unsubscribe with
 // confirmation). This file also hosts DownloadFiltersView, a pushed
 // per-subscription page for auto-download eligibility rules
 // (duration/title/description, include/exclude, All/Any, live read-only
@@ -163,7 +164,7 @@ struct SubscriptionSettingsView: View {
                     downloadFeedFiltersSection(sub)
                     playbackSection(sub)
                     automationSection(sub)
-                    if let episode = sub.newestEpisode, !episode.chapters.isEmpty {
+                    if let episode = chapterSettingsEpisode(for: sub) {
                         chapterSection(sub, episode: episode)
                     }
                     feedSection(sub)
@@ -441,10 +442,7 @@ struct SubscriptionSettingsView: View {
 
                 Button {
                     guard !isPlaying else { return }
-                    appState.subscriptionStore.toggleChapter(
-                        subscriptionID: sub.id,
-                        position: chapter.position
-                    )
+                    appState.toggleChapter(subscriptionID: sub.id, position: chapter.position)
                 } label: {
                     HStack {
                         Image(systemName: allowed ? "checkmark.circle.fill" : "circle")
@@ -473,6 +471,19 @@ struct SubscriptionSettingsView: View {
             Text("Skips are position-based and apply to all future episodes of this podcast.")
         }
         .listRowBackground(sectionRowBackground)
+    }
+
+    /// Keep labels/playing protection tied to the episode producing audio. The
+    /// previous newest-only list could show unrelated positions for an older
+    /// playing episode from the same subscription.
+    private func chapterSettingsEpisode(for subscription: Subscription) -> Episode? {
+        if let playing = appState.currentPlayerEpisode,
+           playing.subscriptionID == subscription.id,
+           !playing.chapters.isEmpty {
+            return playing
+        }
+        guard let newest = subscription.newestEpisode, !newest.chapters.isEmpty else { return nil }
+        return newest
     }
 
     @ViewBuilder

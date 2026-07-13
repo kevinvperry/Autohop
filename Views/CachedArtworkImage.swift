@@ -7,7 +7,7 @@ import ImageIO
 // shared actor behind UI thumbnails, episode share cards, notification artwork,
 // and Now Playing artwork. Prefer this over AsyncImage for podcast/episode art.
 // The cache stores original source bytes once on disk, keeps downsampled display
-// variants in an 80 MB NSCache, validates remote responses (2xx image/*, <=5 MB),
+// variants in a 32 MB NSCache, validates remote responses (2xx image/*, <=5 MB),
 // negative-caches failures for 5 minutes, and prunes disk metadata/files at
 // 250 MB or 90 days LRU. Disk cache files are marked available-after-first-unlock
 // so CarPlay can render cached artwork while locked; CarPlay callers still use a
@@ -168,8 +168,28 @@ actor ArtworkImageCache {
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 15
         session = URLSession(configuration: config)
-        memoryCache.totalCostLimit = 80 * 1024 * 1024
+        memoryCache.totalCostLimit = 32 * 1024 * 1024
         diskMetadata = Self.loadDiskMetadata(in: cacheDirectory, fileName: metadataFileName)
+    }
+
+    /// AI CONTEXT — emergency/scene-background memory release. Disk originals stay
+    /// intact, so visible images can be cheaply reconstructed; only decoded bitmaps
+    /// and speculative prefetch work are discarded. Visible loads are not cancelled.
+    func trimMemory(reason: String) {
+        let speculative = inFlight.filter { $0.value.priority != .visible }
+        for (key, request) in speculative {
+            request.task.cancel()
+            inFlight.removeValue(forKey: key)
+            prefetchKeys.remove(key)
+        }
+        memoryCache.removeAllObjects()
+        failedUntil = failedUntil.filter { $0.value > Date() }
+        AppLogger.shared.info("artwork.memoryTrim", "Released decoded artwork cache and speculative loads", metadata: [
+            "reason": reason,
+            "cancelledLoads": "\(speculative.count)",
+            "visibleLoadsRemaining": "\(inFlight.count)",
+            "sourceLoadsRemaining": "\(sourceDataInFlight.count)"
+        ])
     }
 
     func image(

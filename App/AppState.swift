@@ -359,7 +359,7 @@ final class AppState: ObservableObject {
     /// entitlement state only; AppState owns WHEN to call the relay (register on
     /// entitlement gain, unregister on loss, feed-sync on subscription changes,
     /// dispatch wake-pushes) — wired in init() and relayTokenReceived(_:) below.
-    let autohopProStore = AutohopProStore()
+    let autohopProStore = AutohopProStore(enabled: ReleaseFeatures.autohopPro)
     private let relayClient = RelayClient.shared
     private var relayAPNsToken: String?
     private var relayRegistrationInFlight = false
@@ -671,6 +671,12 @@ final class AppState: ObservableObject {
         .missedRelease
     ]
     private let foregroundRefreshFeedLimit = 12
+    /// AI CONTEXT — background audio is a refresh opportunity, not permission for
+    /// continuous foreground-rate polling. This cap and global gate bound network,
+    /// parse, and radio cost during long screen-off listening sessions.
+    private let backgroundAudioRefreshFeedLimit = 4
+    private let backgroundAudioRefreshMinimumInterval: TimeInterval = 10 * 60
+    private var lastBackgroundAudioRefreshAt: Date?
     private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
     private let playbackTickSlowThresholdMs = 120.0
     private let playbackTickSummarySampleInterval = 120
@@ -820,7 +826,9 @@ final class AppState: ObservableObject {
         // Seed the observed membership before subscribing to the store's broad
         // change publisher. Episode merges will still invalidate UI state, but
         // only an actual feed-membership difference will reach the relay.
-        self.relayObservedFeedURLs = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
+        self.relayObservedFeedURLs = ReleaseFeatures.relayService
+            ? Self.relayFeedURLs(in: subscriptionStore.subscriptions)
+            : []
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
@@ -835,6 +843,7 @@ final class AppState: ObservableObject {
         // Relay sync-nudge send-side (§6.4) — see AppState's "Autohop Relay" MARK
         // section for scheduleRelaySyncNudge()'s debounce/gating.
         cloudSyncEngine.onLocalChangesPushed = { [weak self] in
+            guard ReleaseFeatures.relayService else { return }
             await MainActor.run { self?.scheduleRelaySyncNudge() }
         }
         // Active-player-wins: tell the store which episode is loaded in the
@@ -874,7 +883,9 @@ final class AppState: ObservableObject {
                     self.objectWillChange.send()
                     let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
                     NotificationService.shared.updateBadge(count: badgeCount)
-                    self.scheduleRelayFeedSyncIfMembershipChanged()
+                    if ReleaseFeatures.relayService {
+                        self.scheduleRelayFeedSyncIfMembershipChanged()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -884,20 +895,22 @@ final class AppState: ObservableObject {
         // instant entitlement lapses so a lapsed subscriber's feeds/token stop
         // being crawled/pushed. relayTokenReceived(_:) drives the other half of
         // this (token arriving after entitlement is already active).
-        autohopProStore.$isPro
-            .removeDuplicates()
-            .sink { [weak self] isPro in
-                Task { @MainActor in
-                    guard let self else { return }
-                    if isPro {
-                        await self.registerWithRelayIfPossible()
-                    } else if self.relayClient.isRegistered {
-                        _ = try? await self.relayClient.unregister()
-                        self.clearRelayFeedProtocolState()
+        if ReleaseFeatures.relayService {
+            autohopProStore.$isPro
+                .removeDuplicates()
+                .sink { [weak self] isPro in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if isPro {
+                            await self.registerWithRelayIfPossible()
+                        } else if self.relayClient.isRegistered {
+                            _ = try? await self.relayClient.unregister()
+                            self.clearRelayFeedProtocolState()
+                        }
                     }
                 }
-            }
-            .store(in: &cancellables)
+                .store(in: &cancellables)
+        }
 
         sleepTimerService.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -1250,12 +1263,41 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Watchdog retry: when the downloader cancels a stalled task, wait 30 s then retry.
-        // Resume data was saved by the watchdog so the retry picks up where it left off.
+        // Watchdog retry: bounded exponential delay prevents a broken CDN or resume
+        // blob from occupying a slot in an endless ten-minute cancel/recreate loop.
         downloadManager.onWatchdogCancelled = { [weak state] episodeID in
             Task { @MainActor in
                 guard let state else { return }
-                try? await Task.sleep(for: .seconds(30))
+                let attempt = (state.downloadWatchdogRetryCounts[episodeID] ?? 0) + 1
+                state.downloadWatchdogRetryCounts[episodeID] = attempt
+                guard attempt <= 3 else {
+                    state.downloadManager.clearResumeData(episodeID: episodeID)
+                    if let activity = state.downloadActivityStore.activeActivities.first(where: { $0.episodeID == episodeID }),
+                       let episode = state.subscriptionStore.episode(subscriptionID: activity.subscriptionID, episodeID: episodeID),
+                       let subscription = state.subscriptionStore.subscription(id: activity.subscriptionID) {
+                        state.subscriptionStore.markEpisodeDownloadFailed(
+                            subscriptionID: activity.subscriptionID,
+                            episodeID: episodeID
+                        )
+                        state.downloadActivityStore.fail(
+                            episode: episode,
+                            podcastTitle: subscription.title,
+                            error: "Download stalled repeatedly. Tap to retry."
+                        )
+                    }
+                    state.logger.warning("download.watchdogRetryExhausted", "Automatic retries stopped after repeated confirmed stalls", metadata: [
+                        "episodeID": episodeID.uuidString,
+                        "attempts": "\(attempt - 1)"
+                    ])
+                    return
+                }
+                let delay = TimeInterval(30 * (1 << (attempt - 1)))
+                state.logger.info("download.watchdogRetryScheduled", "Scheduled bounded watchdog retry", metadata: [
+                    "episodeID": episodeID.uuidString,
+                    "attempt": "\(attempt)",
+                    "delaySeconds": "\(Int(delay))"
+                ])
+                try? await Task.sleep(for: .seconds(delay))
                 await state.retryWatchdogCancelledDownload(episodeID: episodeID)
             }
         }
@@ -1640,25 +1682,54 @@ final class AppState: ObservableObject {
         }
     }
 
-    // Chapter prev/next target decisions live in PlaybackSessionPolicy
-    // (Phase 0 item 4); these wrappers gather the active chapter list and seek.
-    func navigateToPreviousChapter() {
+    /// Single mutation gateway for every chapter UI. Persist first, then push the
+    /// resulting filter into the active engine. Disabling the current chapter is
+    /// allowed and causes an immediate deterministic skip.
+    func toggleChapter(subscriptionID: UUID, position: Int) {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        var filter = subscription.chapterFilter
+        if filter.skippedPositions.contains(position) {
+            filter.skippedPositions.remove(position)
+        } else {
+            filter.skippedPositions.insert(position)
+        }
+        applyChapterFilter(filter, subscriptionID: subscriptionID)
+    }
+
+    func applyChapterFilter(_ filter: ChapterFilter, subscriptionID: UUID) {
+        subscriptionStore.updateChapterFilter(subscriptionID: subscriptionID, filter: filter)
+        guard let episode = currentPlayerEpisode, episode.subscriptionID == subscriptionID else { return }
+        playbackEngine.updateChapterFilter(filter, for: episode.id)
+    }
+
+    var previousChapterNavigationTarget: TimeInterval? {
         guard let episode = currentPlayerEpisode,
-              let sub = subscriptionStore.subscription(id: episode.subscriptionID),
-              let current = currentChapter
-        else { return }
-        let active = chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
-        guard let target = PlaybackSessionPolicy.previousChapterStart(from: current, in: active) else { return }
+              let sub = subscriptionStore.subscription(id: episode.subscriptionID) else { return nil }
+        return PlaybackSessionPolicy.previousChapterStart(
+            at: currentPlayerTime,
+            currentChapter: currentChapter,
+            in: chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
+        )
+    }
+
+    var nextChapterNavigationTarget: TimeInterval? {
+        guard let episode = currentPlayerEpisode,
+              let sub = subscriptionStore.subscription(id: episode.subscriptionID) else { return nil }
+        return PlaybackSessionPolicy.nextChapterStart(
+            at: currentPlayerTime,
+            in: chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
+        )
+    }
+
+    // Time-based target decisions stay functional when the current chapter has
+    // just been removed from the active list by a live settings edit.
+    func navigateToPreviousChapter() {
+        guard let target = previousChapterNavigationTarget else { return }
         seek(to: target)
     }
 
     func navigateToNextChapter() {
-        guard let episode = currentPlayerEpisode,
-              let sub = subscriptionStore.subscription(id: episode.subscriptionID),
-              let current = currentChapter
-        else { return }
-        let active = chapterService.activeChapters(for: episode, filter: sub.chapterFilter)
-        guard let target = PlaybackSessionPolicy.nextChapterStart(from: current, in: active) else { return }
+        guard let target = nextChapterNavigationTarget else { return }
         seek(to: target)
     }
 
@@ -2162,6 +2233,7 @@ final class AppState: ObservableObject {
                 episodeID: episode.id,
                 localFileURL: localFileURL
             )
+            downloadWatchdogRetryCounts.removeValue(forKey: episode.id)
             downloadFailureBackoff.removeValue(forKey: episode.guid)
             if let fileDuration {
                 subscriptionStore.updateEpisodeDuration(
@@ -2828,8 +2900,7 @@ final class AppState: ObservableObject {
                 fetchExternalChaptersInBackground(
                     url: chaptersURL,
                     episodeID: playableEpisode.id,
-                    subscriptionID: subscription.id,
-                    filter: subscription.chapterFilter
+                    subscriptionID: subscription.id
                 )
             }
 
@@ -3252,6 +3323,9 @@ final class AppState: ObservableObject {
     /// launch grants one more attempt (the server may have recovered) and a successful
     /// download clears the entry.
     private var downloadFailureBackoff: [String: (failures: Int, retryAfter: Date)] = [:]
+    /// Process-local ceiling for watchdog-triggered retries. Genuine user retries
+    /// and future launches remain possible, but one bad transfer cannot loop forever.
+    private var downloadWatchdogRetryCounts: [UUID: Int] = [:]
 
     /// Records a genuine download failure and schedules an exponential cooldown before the
     /// episode is eligible for another AUTO attempt: 2, 8, 32, then 120 min (capped).
@@ -3400,12 +3474,21 @@ final class AppState: ObservableObject {
     /// Timed foreground tick: only feeds whose adaptive schedule says they're due.
     @discardableResult
     func refreshDueSubscriptions() async -> Bool {
-        await refreshSubscriptions(
+        let foreground = isAppForeground
+        if !foreground {
+            let now = Date()
+            if let lastBackgroundAudioRefreshAt,
+               now.timeIntervalSince(lastBackgroundAudioRefreshAt) < backgroundAudioRefreshMinimumInterval {
+                return false
+            }
+            lastBackgroundAudioRefreshAt = now
+        }
+        return await refreshSubscriptions(
             reason: "timed-due",
             trigger: .foregroundTimer,
-            executionContext: isAppForeground ? .foregroundVisible : .backgroundAudioAlive,
-            maxSubscriptions: foregroundRefreshFeedLimit,
-            capBypassStates: foregroundRefreshCapBypassStates,
+            executionContext: foreground ? .foregroundVisible : .backgroundAudioAlive,
+            maxSubscriptions: foreground ? foregroundRefreshFeedLimit : backgroundAudioRefreshFeedLimit,
+            capBypassStates: foreground ? foregroundRefreshCapBypassStates : [],
             includeBackoffFeeds: false,
             onlyDueFeeds: true
         )
@@ -4636,12 +4719,14 @@ final class AppState: ObservableObject {
     /// so this is frequently a no-op token refresh; registerWithRelayIfPossible
     /// only actually calls the relay when isPro is also true.
     func relayTokenReceived(_ token: String) {
+        guard ReleaseFeatures.relayService else { return }
         relayAPNsToken = token
         Task { await registerWithRelayIfPossible() }
     }
 
     private func registerWithRelayIfPossible() async {
-        guard autohopProStore.isPro,
+        guard ReleaseFeatures.relayService,
+              autohopProStore.isPro,
               let token = relayAPNsToken,
               let jws = autohopProStore.latestTransactionJWS,
               !relayRegistrationInFlight
@@ -4673,6 +4758,7 @@ final class AppState: ObservableObject {
     /// set synchronously after each save and schedule network work only when that
     /// set actually changes.
     private func scheduleRelayFeedSyncIfMembershipChanged() {
+        guard ReleaseFeatures.relayService else { return }
         let current = Self.relayFeedURLs(in: subscriptionStore.subscriptions)
         guard current != relayObservedFeedURLs else { return }
         relayObservedFeedURLs = current
@@ -4685,6 +4771,7 @@ final class AppState: ObservableObject {
     /// store change can cancel a pending debounce but cannot cancel an in-flight
     /// request (the cause of the diagnostic log's repeated NSURLErrorCancelled).
     private func scheduleRelayFeedSync(after delay: TimeInterval = 2) {
+        guard ReleaseFeatures.relayService else { return }
         relayFeedSyncDebounceTask?.cancel()
         relayFeedSyncDebounceTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(0, delay)))
@@ -4700,7 +4787,9 @@ final class AppState: ObservableObject {
     /// `add`/`remove`. Failures open a persisted exponential circuit breaker so
     /// relaunches and store churn cannot immediately recreate a request storm.
     private func syncRelayFeedsIfRegistered() async {
-        guard autohopProStore.isPro, relayClient.isRegistered else { return }
+        guard ReleaseFeatures.relayService,
+              autohopProStore.isPro,
+              relayClient.isRegistered else { return }
         if relayFeedSyncInFlight {
             relayFeedSyncNeedsReconcile = true
             return
@@ -4838,6 +4927,7 @@ final class AppState: ObservableObject {
     /// unlike the former implementation, canceling a future sleep can never
     /// cancel the URLSession request that is already running.
     private func scheduleRelaySyncNudge() {
+        guard ReleaseFeatures.relayService else { return }
         relaySyncNudgeDirty = true
         relaySyncNudgeDebounceTask?.cancel()
         let defaults = UserDefaults.standard
@@ -4863,7 +4953,10 @@ final class AppState: ObservableObject {
     /// single target device is actually woken — this guard only protects the
     /// relay's REQUEST volume from this device, not push volume to the TV.
     private func sendRelaySyncNudge() async {
-        guard autohopProStore.isPro, relayClient.isRegistered, relaySyncNudgeDirty else { return }
+        guard ReleaseFeatures.relayService,
+              autohopProStore.isPro,
+              relayClient.isRegistered,
+              relaySyncNudgeDirty else { return }
         if relaySyncNudgeInFlight { return }
         relaySyncNudgeInFlight = true
         relaySyncNudgeDirty = false
@@ -4907,7 +5000,9 @@ final class AppState: ObservableObject {
     private static let heartbeatInterval: TimeInterval = 24 * 3600
 
     func sendRelayHeartbeatIfDue() async {
-        guard autohopProStore.isPro, relayClient.isRegistered else { return }
+        guard ReleaseFeatures.relayService,
+              autohopProStore.isPro,
+              relayClient.isRegistered else { return }
         let lastSent = UserDefaults.standard.double(forKey: Self.lastHeartbeatKey)
         let elapsed = Date().timeIntervalSince1970 - lastSent
         guard elapsed >= Self.heartbeatInterval else { return }
@@ -4944,6 +5039,7 @@ final class AppState: ObservableObject {
     /// work was kicked off (maps to .newData vs .noData for iOS's wake-budget).
     @discardableResult
     func handleRelayPush(type: String, feedIDs: [String] = []) async -> Bool {
+        guard ReleaseFeatures.relayService else { return false }
         switch type {
         case "feed-updated":
             guard !feedIDs.isEmpty else {
@@ -5261,7 +5357,7 @@ final class AppState: ObservableObject {
 
     /// Fetches external chapters off the playback-start path and applies them live
     /// when (and only if) the same episode is still the one playing. (P7)
-    private func fetchExternalChaptersInBackground(url: URL, episodeID: UUID, subscriptionID: UUID, filter: ChapterFilter) {
+    private func fetchExternalChaptersInBackground(url: URL, episodeID: UUID, subscriptionID: UUID) {
         Task { [weak self] in
             guard let self,
                   let fetched = await self.fetchExternalChapters(url: url, episodeID: episodeID),
@@ -5274,7 +5370,10 @@ final class AppState: ObservableObject {
                 chapters: fetched
             )
             self.currentPlayerEpisode?.chapters = fetched
-            self.playbackEngine.updateChapters(fetched, filter: filter, for: episodeID)
+            // Read the filter AFTER the network await. Capturing it at request
+            // launch let a late response overwrite settings changed meanwhile.
+            let latestFilter = self.subscriptionStore.subscription(id: subscriptionID)?.chapterFilter ?? ChapterFilter()
+            self.playbackEngine.updateChapters(fetched, filter: latestFilter, for: episodeID)
         }
     }
 
@@ -5361,6 +5460,7 @@ final class AppState: ObservableObject {
         )
 
         guard isBackground else { return }
+        Task { await ArtworkImageCache.shared.trimMemory(reason: "scene.background") }
         scheduleBackgroundPlaybackDiagnostics(reason: "scene.background")
         let released = releasePausedPlaybackResourcesForBackground(reason: "scene.background")
         metadata["releasedPausedPlayerResources"] = "\(released)"
@@ -5385,14 +5485,14 @@ final class AppState: ObservableObject {
             return false
         }
         guard let releasedPosition = engine.releasePausedPlayerResourcesForBackground(reason: reason) else {
-            logger.info("player.backgroundReleaseSkipped", "No paused AVPlayer resources to release", metadata: metadata)
+            logger.info("player.backgroundReleaseSkipped", "No paused playback resources to release", metadata: metadata)
             return false
         }
 
         currentPlayerTime = releasedPosition
         persistCurrentPlaybackPosition()
         metadata["releasedPositionSecs"] = String(format: "%.1f", releasedPosition)
-        logger.info("player.backgroundRelease", "Released paused AVPlayer resources for background", metadata: metadata)
+        logger.info("player.backgroundRelease", "Released paused playback resources for background", metadata: metadata)
         resourceMonitor.logSnapshot(reason: "player.backgroundRelease", context: metadata, force: true)
         return true
     }
@@ -5469,11 +5569,13 @@ final class AppState: ObservableObject {
     /// The loop Task is never cancelled, so it keeps ticking whenever the process is
     /// alive — in the foreground AND while background audio playback keeps the app
     /// running. It therefore guards on `isSceneActive || isPlaying`: active
-    /// listening is a fully-reliable, unthrottled refresh window for a podcast app
+    /// listening is a reliable refresh window for a podcast app
     /// (unlike best-effort BGAppRefreshTask), so new episodes are caught and queued
     /// for download while the user listens with the screen off. When the process is
     /// truly idle (no audio) iOS suspends it and this loop pauses until the next
-    /// foreground/audio wake; BGAppRefreshTask covers that not-listening case (see
+    /// foreground/audio wake; background-audio refreshes are globally limited to one
+    /// four-feed cycle per ten minutes so a long session cannot create a radio storm.
+    /// BGAppRefreshTask covers the not-listening case (see
     /// BACKGROUND_REFRESH_RESEARCH.md). The work label flips to `backgroundAudioAlive`
     /// when the scene is inactive but audio is playing.
     func startForegroundPolling() {
@@ -5509,6 +5611,11 @@ final class AppState: ObservableObject {
                 }.count
                 if dueCount > 0 {
                     let executionContext: FeedRefreshExecutionContext = self.isAppForeground ? .foregroundVisible : .backgroundAudioAlive
+                    if executionContext == .backgroundAudioAlive,
+                       let lastRefresh = self.lastBackgroundAudioRefreshAt,
+                       now.timeIntervalSince(lastRefresh) < self.backgroundAudioRefreshMinimumInterval {
+                        continue
+                    }
                     self.logger.info("feed.pollDue", "Due-feed poll found due subscriptions", metadata: [
                         "due": "\(dueCount)",
                         "appForeground": "\(self.isAppForeground)",

@@ -154,7 +154,7 @@ Modern-standards checklist:
 | 5 | `earliestBeginDate` = soonest effective due feed, 15-min floor | ✅ (two-step; backoff hardened 2026-07-12) | The handler first submits a **generic 15-min** request as a safety net, then the cycle replaces it with the earliest effective feed date. Per feed, effective due is `max(predictedDue, activeFailureBackoffUntil)`, so a broken feed with an overdue prediction cannot repeatedly anchor scheduling to the floor. Healthy feeds remain independent and can still win an earlier date. |
 | 6 | Stay near the ~100 KB data budget | ⚠️ partial | Conditional GET (`FeedService.refreshIfModified`, ETag/Last-Modified) makes an **unchanged** feed ≈ 0 bytes (`304`). A **changed** feed still returns a full body (capped at `episodeLimit` 50 items, **not by size**), so the ~100 KB guideline is **helped but not code-enforced**. |
 | 7 | Background `URLSession` for downloads (survives suspend, relaunches app) | ✅ | `DownloadManager` background session + `handleEventsForBackgroundURLSession` (`AppDelegate.swift:61`) |
-| 8 | **Refresh during background audio (the reliable window)** | ✅ **RESOLVED 2026-06-24** | `startForegroundPolling()` now guards on `isSceneActive || isPlaying`, so it refreshes due feeds and queues downloads while the user listens with the app backgrounded; it only stands down when the process is truly idle/suspended. |
+| 8 | **Refresh during background audio (the reliable window)** | ✅ **RESOLVED; BOUNDED 2026-07-13** | The poller refreshes while listening, but inactive/background-audio work is capped at one four-feed cycle per ten minutes. Visible foreground polling retains its faster adaptive cadence. |
 | 9 | `backgroundAudioAlive` context actually used | ✅ **RESOLVED 2026-06-24** | Now reachable: when the poller runs with `!isSceneActive` (background audio), `refreshDueSubscriptions` labels the cycle `.backgroundAudioAlive`. |
 | 10 | Detect `backgroundRefreshStatus` / Low Power Mode and inform the user | ✅ **RESOLVED 2026-06-24** | `UIApplication.backgroundRefreshStatus` is now read in `SettingsView` and surfaced as a warning row + "Open iOS Settings" link in the Release Radar section (re-checked on `scenePhase`). Low Power Mode is still only logged diagnostically (`ResourceMonitor.swift:222`), not surfaced — minor/optional. |
 | 11 | Guard against double `setTaskCompleted` | ⚠️ minor | `work` calls `setTaskCompleted(true)` and `expirationHandler` calls `setTaskCompleted(false)`; a late expiration after completion would double-call. iOS tolerates it, but a `hasCompleted` flag would be tidier. |
@@ -196,6 +196,8 @@ warning) is now done too, so a user who has Background App Refresh off is told w
    `BackgroundTaskCompletionGate`. Whichever path claims the gate first is the only
    path allowed to log terminal state, schedule an outcome-dependent replacement,
    or call `setTaskCompleted`; a late work result or expiration returns silently.
+   BGAppRefreshTask additionally has a 20-second cooperative deadline that cancels
+   and checkpoints unfinished candidates before the system expiration window.
 
 **Tier 3 — nuclear option**
 5. **Server-driven silent push** is the only *truly* reliable trigger, but it requires

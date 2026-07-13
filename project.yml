@@ -79,6 +79,10 @@ targets:
           - Package.resolved
           - project.yml
           - README.md
+          - Autohop.storekit                # local StoreKit testing only; never ship in 1.3
+          - "Autohop.xcodeproj/**"          # project metadata is not an app resource
+          - "Design/**"                     # source artwork; compiled app icon lives in Assets.xcassets
+          - "AppStoreScreenshots/**"        # marketing source images, never bundled
           - "**/*.md"
           - "**/*.swp"                        # Vim swap files — never bundle as resources
           - "**/.*.swp"                        # hidden Vim swap files (e.g. .PAGES.md.swp)
@@ -98,8 +102,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "1"          # iPhone only — explicit on the app target
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        # AI CONTEXT — Version 1.3 is intentionally iPhone-only. Pro/Relay have no
+        # enabling compilation conditions in either config; opt-in development
+        # builds must add AUTOHOP_PRO_ENABLED and AUTOHOP_RELAY_ENABLED explicitly.
+        MARKETING_VERSION: "1.3"
+        CURRENT_PROJECT_VERSION: "4"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG          # Kevin Perry — keeps signing through regen
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

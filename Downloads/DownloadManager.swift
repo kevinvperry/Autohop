@@ -11,11 +11,11 @@ import Foundation
 // removeMediaURLTask(_:for:) drops only the finishing task; download() blocks if
 // ANY suspected task for the URL/episode is still alive, else clears stale entries
 // and starts fresh.
-// HANDLES: resume-data save/restore on pause/cancel/failure; a stall watchdog
-// (no progress bytes for 10 min → cancel with resume data, notify AppState via
-// onWatchdogCancelled to schedule a retry) — the watchdog detects app suspension
-// from its own tick gap and grants a fresh window instead of false-cancelling
-// background transfers that ran out-of-process while suspended; progress throttling (≤1/s/task);
+// HANDLES: resume-data save/restore on pause/cancel/failure; a task-aware stall
+// watchdog (a RUNNING task with unchanged URLSession byte counters for 10 min →
+// cancel with resume data and notify AppState). Suspended tasks, connectivity waits,
+// process suspension gaps, and out-of-process byte advances reset/hold the clock so
+// iOS scheduling is never mistaken for a network stall; progress throttling (≤1/s/task);
 // background relaunch completion (onBackgroundDownloadCompleted, when the app
 // was killed and iOS relaunched it to deliver a finished download — there is
 // no live continuation in that case); file storage under the app's Downloads
@@ -77,6 +77,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private var progressLastDispatchedAt: [Int: Date] = [:]
     // Watchdog: track last time each episode received any progress bytes.
     private var progressLastReceivedAt: [UUID: Date] = [:]
+    private var progressLastObservedBytes: [UUID: Int64] = [:]
+    private var connectivityWaitingTaskIDs = Set<Int>()
     private var downloadWatchdogTimer: Timer?
     /// Wall-clock time of the last watchdog tick. The timer only fires while the app is
     /// running, so a gap far larger than `watchdogInterval` means the app was suspended
@@ -212,6 +214,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         mediaURLByEpisodeID[episode.id] = episode.audioURL
         lastLoggedProgressBucketByEpisodeID[episode.id] = 0
         progressLastReceivedAt[episode.id] = Date()
+        progressLastObservedBytes[episode.id] = task.countOfBytesReceived
         logger.info("download.taskResume", "Download task resumed", metadata: [
             "episode": episode.title,
             "episodeID": episode.id.uuidString,
@@ -231,6 +234,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
+        progressLastObservedBytes.removeValue(forKey: episodeID)
+        connectivityWaitingTaskIDs.remove(taskID)
     }
 
     /// Removes a single task ID from the media-URL → task-IDs map, dropping the
@@ -442,6 +447,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, let episodeID = self.episodeIDByTask[taskID] else { return }
             self.progressLastReceivedAt[episodeID] = Date()
+            self.progressLastObservedBytes[episodeID] = totalBytesWritten
+            self.connectivityWaitingTaskIDs.remove(taskID)
             let now = Date()
             let shouldDispatch = self.progressLastDispatchedAt[taskID]
                 .map { now.timeIntervalSince($0) >= self.progressThrottleInterval } ?? true
@@ -730,6 +737,8 @@ private extension DownloadManager {
         lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
+        progressLastObservedBytes.removeValue(forKey: episodeID)
+        connectivityWaitingTaskIDs.remove(taskID)
     }
 
     // MARK: - Watchdog
@@ -762,41 +771,91 @@ private extension DownloadManager {
             }
             return
         }
-        let stalled = progressLastReceivedAt.filter { now.timeIntervalSince($0.value) > downloadStallThreshold }
-        guard !stalled.isEmpty else { return }
-        for (episodeID, _) in stalled {
-            guard let taskID = taskIDByEpisodeID[episodeID] else { continue }
-            logger.warning("download.watchdog", "Cancelling stalled download — no progress received", metadata: [
-                "episodeID": episodeID.uuidString,
-                "taskID": "\(taskID)",
-                "stallMinutes": "\(Int(downloadStallThreshold / 60))"
-            ])
-            // Mark as watchdog-stalled so didCompleteWithError can fire onWatchdogCancelled.
-            // Do NOT pre-clear task tracking here — that would orphan the episodeID lookup in
-            // the delegate and silently drop the retry callback.
-            watchdogStalledEpisodeIDs.insert(episodeID)
-            session.getAllTasks { [weak self] tasks in
-                guard let task = tasks.first(where: { $0.taskIdentifier == taskID }) as? URLSessionDownloadTask else {
-                    // Task already gone — clean up directly and still fire the retry callback.
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        self.watchdogStalledEpisodeIDs.remove(episodeID)
-                        self.clearTaskTracking(taskID: taskID)
+        let candidates = progressLastReceivedAt.filter { now.timeIntervalSince($0.value) > downloadStallThreshold }
+        guard !candidates.isEmpty else { return }
+        session.getAllTasks { [weak self] tasks in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let tasksByID = Dictionary(uniqueKeysWithValues: tasks.map { ($0.taskIdentifier, $0) })
+                for (episodeID, lastProgressAt) in candidates {
+                    guard let taskID = self.taskIDByEpisodeID[episodeID],
+                          let task = tasksByID[taskID] as? URLSessionDownloadTask else {
+                        if let taskID = self.taskIDByEpisodeID[episodeID] {
+                            self.continuations[taskID]?.resume(throwing: DownloadError.paused)
+                            self.continuations.removeValue(forKey: taskID)
+                            self.clearTaskTracking(taskID: taskID)
+                        }
                         self.onWatchdogCancelled?(episodeID)
+                        continue
                     }
-                    return
-                }
-                // Use cancel(byProducingResumeData:) so the partial download isn't thrown away.
-                task.cancel(byProducingResumeData: { [weak self] resumeData in
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        if let resumeData {
+
+                    let observedBytes = max(task.countOfBytesReceived, task.countOfBytesSent)
+                    let previousBytes = self.progressLastObservedBytes[episodeID] ?? 0
+                    if observedBytes > previousBytes {
+                        self.progressLastObservedBytes[episodeID] = observedBytes
+                        self.progressLastReceivedAt[episodeID] = now
+                        self.logger.info("download.watchdogProgressRecovered", "URLSession byte counter advanced without a recent delegate callback", metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "taskID": "\(taskID)",
+                            "bytesReceived": "\(observedBytes)"
+                        ])
+                        continue
+                    }
+
+                    guard task.state == .running,
+                          !self.connectivityWaitingTaskIDs.contains(taskID) else {
+                        self.progressLastReceivedAt[episodeID] = now
+                        self.logger.info("download.watchdogDeferred", "Download stall clock held because URLSession is not actively transferring", metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "taskID": "\(taskID)",
+                            "taskState": Self.taskStateLabel(task.state),
+                            "waitingForConnectivity": "\(self.connectivityWaitingTaskIDs.contains(taskID))"
+                        ])
+                        continue
+                    }
+
+                    self.logger.warning("download.watchdog", "Cancelling confirmed running download with no byte progress", metadata: [
+                        "episodeID": episodeID.uuidString,
+                        "taskID": "\(taskID)",
+                        "stallSeconds": "\(Int(now.timeIntervalSince(lastProgressAt)))",
+                        "bytesReceived": "\(observedBytes)",
+                        "bytesExpected": "\(task.countOfBytesExpectedToReceive)",
+                        "taskState": Self.taskStateLabel(task.state)
+                    ])
+                    self.watchdogStalledEpisodeIDs.insert(episodeID)
+                    task.cancel(byProducingResumeData: { [weak self] resumeData in
+                        DispatchQueue.main.async {
+                            guard let self, let resumeData else { return }
                             self.resumeDataByEpisodeID[episodeID] = resumeData
                         }
-                        // didCompleteWithError will fire next and handle the rest.
-                    }
-                })
+                    })
+                }
             }
+        }
+    }
+
+    static func taskStateLabel(_ state: URLSessionTask.State) -> String {
+        switch state {
+        case .running: return "running"
+        case .suspended: return "suspended"
+        case .canceling: return "canceling"
+        case .completed: return "completed"
+        @unknown default: return "unknown"
+        }
+    }
+}
+
+extension DownloadManager {
+    public func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.connectivityWaitingTaskIDs.insert(task.taskIdentifier)
+            if let episodeID = self.episodeIDByTask[task.taskIdentifier] {
+                self.progressLastReceivedAt[episodeID] = Date()
+            }
+            self.logger.info("download.waitingForConnectivity", "Download is waiting for network connectivity", metadata: [
+                "taskID": "\(task.taskIdentifier)"
+            ])
         }
     }
 }

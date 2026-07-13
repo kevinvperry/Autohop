@@ -8,6 +8,8 @@ Next"; `QueueSheetView`, `downloadedQueue`, and `QueueAction-Animation` remain
 implementation/design-token names. When editing UI, preserve the app-wide dark
 mode, purple accent semantics, glass-ready iOS 26 fallbacks, fixed row geometry,
 and the labeled pattern names below so future prompts can target them.
+Version 1.3 presents only the iPhone design system. Retained Apple TV and
+Autohop Pro screens are development references and are not shipping surfaces.
 -->
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
@@ -2067,7 +2069,7 @@ The full chapters panel (third tab). A header row (chapter count + skip count, p
 - **Skipped row opacity** — `0.45`
 - **Divider** — `white.opacity(0.06)` at the bottom of each row
 
-Tapping a row toggles the chapter's skipped state (except the currently playing chapter, which cannot be skipped).
+The row body seeks to that chapter; its leading circular control toggles the skipped state. Disabling the currently playing chapter in the Player immediately advances to the next enabled chapter. The Podcast Settings list disables its current row to protect against accidental interruption. Previous/next availability is derived from real time-based navigation targets, never a fabricated fallback index.
 
 ---
 
