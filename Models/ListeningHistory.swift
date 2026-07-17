@@ -7,6 +7,9 @@ import Foundation
 // manuallyArchived, autoArchived, etc.). CompletionKind is the signal
 // ShowEngagementAnalyzer uses to distinguish deliberate abandonment from
 // auto-archive churn in the Stats "Shows You're Drifting From" section.
+// A completed/marked-played terminal event has precedence over a later automatic
+// storage cleanup. Auto Archive may change the episode library state, but must
+// not rewrite why the listening-history session ended.
 //
 // Moved out of App/AppState.swift (June 2026) so AutohopCore — and the
 // ShowEngagementAnalyzer smoke tests — can consume listening history entries.
@@ -131,5 +134,26 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         completionPercent = try c.decodeIfPresent(Double.self, forKey: .completionPercent)
         listenedDurationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .listenedDurationSeconds)
         episodeDurationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .episodeDurationSeconds)
+    }
+
+    /// Repairs the Version 1.4 development-build bug where the After Playing
+    /// Auto Archive pass replaced an immediately preceding natural-completion
+    /// event. The exact EOF position is deliberately required: a genuinely
+    /// abandoned episode that happened to be nearly finished remains archived.
+    /// The archive-time timestamp is retained because the earlier completion
+    /// timestamp cannot be recovered from the overwritten record.
+    @discardableResult
+    public mutating func repairAutoArchiveOverwriteIfClearlyCompleted() -> Bool {
+        guard completionKind == .autoArchived else { return false }
+        let duration = episodeDurationSeconds ?? durationSeconds
+        guard let duration, duration > 0,
+              lastPositionSeconds >= duration * 0.999
+        else { return false }
+
+        status = .played
+        completionKind = .finishedNaturally
+        completionPercent = 1
+        listenedDurationSeconds = duration
+        return true
     }
 }

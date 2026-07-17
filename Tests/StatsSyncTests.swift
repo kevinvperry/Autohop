@@ -7,6 +7,8 @@
 // for DayStats without changing the additive sync contract. The system-fields
 // invariant protects DayStats conflict repair: caching the server change tag for
 // this device's own partition must not mark the full local day bucket synced.
+// Version-aware acknowledgement coverage prevents an older day upload from
+// clearing a newer accumulated full-day value.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -58,11 +60,24 @@ final class StatsSyncTests: XCTestCase {
 
         try db.recordStatsDay(day("2026-06-14", seconds: 600))
         XCTAssertEqual(try db.pendingStatsDays().count, 1)
-        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: ["2026-06-14"])
+        XCTAssertFalse(try db.acknowledgeStatsDay(day("2026-06-14", seconds: 600)))
         XCTAssertTrue(try db.pendingStatsDays().isEmpty)
 
         try db.applyRemoteStatsPartition(deviceID: "other", day: day("2026-06-14", seconds: 300))
         XCTAssertEqual(try db.remoteStatsByDayKey()["2026-06-14"]?.count, 1)
+    }
+
+    func testOldAcknowledgementLeavesNewerStatsDayPending() throws {
+        let db = try AutohopDatabase()
+        let old = day("2026-06-14", seconds: 600)
+        let newer = day("2026-06-14", seconds: 900)
+        try db.recordStatsDay(old)
+        try db.recordStatsDay(newer)
+
+        XCTAssertTrue(try db.acknowledgeStatsDay(old))
+        XCTAssertEqual(try db.pendingStatsDays().first?.wallClockSeconds, 900)
+        XCTAssertFalse(try db.acknowledgeStatsDay(newer))
+        XCTAssertTrue(try db.pendingStatsDays().isEmpty)
     }
 
     func testStatsSystemFieldRefreshDoesNotClearPendingDay() throws {

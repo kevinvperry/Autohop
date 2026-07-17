@@ -24,8 +24,9 @@ import Foundation
 // wires every closure callback (time ticks, finish, skip/trim accounting).
 //
 // TWO PLAYBACK PATHS — the central design decision of this file:
-//  1. AVPlayer path ("standard"): all VIDEO episodes, and audio when both
-//     Vocal Boost and Trim Silence are off. Speed via AVPlayer.rate. It shares
+//  1. AVPlayer path ("standard"): all VIDEO episodes, and audio when Vocal
+//     Boost, Trim Silence, Mono Audio, and Volume Adjustment are off. Speed via
+//     AVPlayer.rate. It shares
 //     the delayed route-loss pause logic with the engine path, but does not need
 //     buffer-loop restarts.
 //  2. AVAudioEngine path ("engine"): audio when Vocal Boost or Trim Silence is
@@ -59,6 +60,10 @@ import Foundation
 // if a replacement route appears inside that window, the restart is rescheduled
 // after the replacement route settles.
 // Do not make headphone removal auto-resume while improving route recovery.
+// SEEK-TO-END INVARIANT: AppState classifies a seek within 0.25 s of duration as
+// completion and stops this engine before calling its completion pipeline. Never
+// start an AVAudioFile buffer loop at EOF: frame-position fallback would otherwise
+// reset to zero and make the UI clock/end state diverge from audible playback.
 // Chapters present at play() time drive skip filtering immediately; chapters
 // that arrive LATER (external podcast:chapters fetched after playback starts,
 // P7) are applied to the live session via
@@ -111,6 +116,9 @@ final class PlaybackEngine: PlaybackControlling {
     private var audioHighPass: AVAudioUnitEffect?
     private var audioDynamics: AVAudioUnitEffect?
     private var audioPeakLimiter: AVAudioUnitEffect?
+    /// Final per-subscription gain stage. AVAudioUnitEQ.globalGain is expressed
+    /// directly in dB and supports amplification without altering system volume.
+    private var audioVolumeAdjustment: AVAudioUnitEQ?
     private var audioFile: AVAudioFile?
     private var engineTimer: DispatchSourceTimer?
     private var engineIsPlaying = false
@@ -127,6 +135,10 @@ final class PlaybackEngine: PlaybackControlling {
     // and must not be treated as stalls.
     private var engineReadPaused = false
     private var engineReadFinished = false          // set on main thread after read loop exits
+    /// Invalidates callbacks from a stopped/route-replaced buffer loop. Semaphore
+    /// slots are always returned, but stale completions cannot advance playback
+    /// time, finish the episode, or launch a competing recovery.
+    private var engineBufferGeneration = 0
     private var engineBufferSemaphore = DispatchSemaphore(value: 0)
     private let maxEngineBufferSlots = 8
 
@@ -157,6 +169,7 @@ final class PlaybackEngine: PlaybackControlling {
     private var lastRouteRestartAt: CFAbsoluteTime = 0
     private var routeLossPauseGeneration = 0
     private var routeRestartGeneration = 0
+    private var routeRestartScheduled = false
     private var hasPendingRouteLossPause = false
     private var routeRestartDeferredByRouteLoss: (reason: String, output: String)?
     private let engineRenderStallThreshold: TimeInterval = 2.5
@@ -241,7 +254,10 @@ final class PlaybackEngine: PlaybackControlling {
         // trim silence is active — the dynamics chain requires engine-level processing.
         // Video always stays on AVPlayer (VideoPlayer view requires it).
         let useEngine = episode.mediaKind == .audio
-            && (preference.vocalBoostLevel != .off || preference.trimSilence != .off)
+            && (preference.vocalBoostLevel != .off
+                || preference.trimSilence != .off
+                || preference.audioChannelMode == .mono
+                || preference.volumeAdjustment != 0)
 
         if useEngine {
             // AVAudioFile gives us duration synchronously — no await needed, which means
@@ -260,7 +276,7 @@ final class PlaybackEngine: PlaybackControlling {
             let asset = AVURLAsset(url: localFileURL)
             let loadedDuration = try await asset.load(.duration).seconds
             let item = AVPlayerItem(asset: asset)
-            let mix = await vocalBoostMix(for: asset, level: preference.vocalBoostLevel)
+            let mix = await audioGainMix(for: asset, preference: preference)
             await MainActor.run {
                 item.audioMix = mix
             }
@@ -298,6 +314,7 @@ final class PlaybackEngine: PlaybackControlling {
                 "speed": PlaybackPreference.speedLabel(preference.speed),
                 "vocalBoost": preference.vocalBoostLevel.title,
                 "trimSilence": preference.trimSilence.title,
+                "audioChannelMode": preference.audioChannelMode.title,
                 "resumeAt": resumeAt.map { "\(Int($0))" } ?? "startSkip"
             ])
         }
@@ -315,7 +332,10 @@ final class PlaybackEngine: PlaybackControlling {
               let preference = currentPreference,
               episode.mediaKind == .audio else { return false }
 
-        let shouldUseEngine = preference.vocalBoostLevel != .off || preference.trimSilence != .off
+        let shouldUseEngine = preference.vocalBoostLevel != .off
+            || preference.trimSilence != .off
+            || preference.audioChannelMode == .mono
+            || preference.volumeAdjustment != 0
         guard shouldUseEngine != engineUsesEngine else { return false }
 
         let resumeTime = currentPlaybackTime()
@@ -409,6 +429,9 @@ final class PlaybackEngine: PlaybackControlling {
 
     func resume() {
         guard currentEpisode != nil else { return }
+        let resumeStartedAt = CFAbsoluteTimeGetCurrent()
+        var engineStartMs: Double = 0
+        var fallbackRestartMs: Double = 0
         cancelPendingRouteLossPause(reason: "resume", output: currentOutputPortName())
         routeRestartDeferredByRouteLoss = nil
         pausedByRouteChange = false
@@ -418,7 +441,9 @@ final class PlaybackEngine: PlaybackControlling {
             // player node, otherwise the node plays but nothing gets rendered.
             if let engine = audioEngine, !engine.isRunning {
                 do {
+                    let stageStartedAt = CFAbsoluteTimeGetCurrent()
                     try engine.start()
+                    engineStartMs = (CFAbsoluteTimeGetCurrent() - stageStartedAt) * 1000
                     logger.info("engine.restarted", "AVAudioEngine restarted after route change on resume", metadata: [
                         "episode": currentEpisode?.title ?? "none"
                     ])
@@ -430,12 +455,15 @@ final class PlaybackEngine: PlaybackControlling {
                         "error": error.localizedDescription
                     ])
                     let position = pausedAtSeconds
+                    let stageStartedAt = CFAbsoluteTimeGetCurrent()
                     stopEngineBufferLoop()
                     startEngineBufferLoop(from: position, shouldPlay: true)
+                    fallbackRestartMs = (CFAbsoluteTimeGetCurrent() - stageStartedAt) * 1000
                     // Reset watchdog so the restarted loop gets a clean window.
                     let now = CFAbsoluteTimeGetCurrent()
                     resumedAt = now
                     lastRenderedAt = now
+                    logResumeTiming(startedAt: resumeStartedAt, engineStartMs: engineStartMs, fallbackRestartMs: fallbackRestartMs, path: "fallback")
                     return
                 }
             }
@@ -452,6 +480,21 @@ final class PlaybackEngine: PlaybackControlling {
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
             "episode": currentEpisode?.title ?? "none",
             "speed": PlaybackPreference.speedLabel(currentPreference?.speed ?? 1.0)
+        ])
+        logResumeTiming(startedAt: resumeStartedAt, engineStartMs: engineStartMs, fallbackRestartMs: fallbackRestartMs, path: engineUsesEngine ? "engine" : "player")
+    }
+
+    /// Main-thread hang instrumentation for the synchronous resume path. Always
+    /// records slow resumes; fast resumes are sampled by the normal event volume.
+    private func logResumeTiming(startedAt: CFAbsoluteTime, engineStartMs: Double, fallbackRestartMs: Double, path: String) {
+        let totalMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        guard totalMs >= 100 else { return }
+        logger.info("playback.resumeTiming", "Measured synchronous playback resume stages", metadata: [
+            "path": path,
+            "totalMs": String(format: "%.1f", totalMs),
+            "engineStartMs": String(format: "%.1f", engineStartMs),
+            "fallbackRestartMs": String(format: "%.1f", fallbackRestartMs),
+            "episode": currentEpisode?.title ?? "none"
         ])
     }
 
@@ -532,7 +575,8 @@ final class PlaybackEngine: PlaybackControlling {
             // Video stays on AVPlayer: apply boost as an audioMix gain (no engine chain available).
             Task { [weak self, weak item] in
                 guard let self, let item else { return }
-                let mix = await self.vocalBoostMix(for: asset, level: level)
+                guard let preference = self.currentPreference else { return }
+                let mix = await self.audioGainMix(for: asset, preference: preference)
                 await MainActor.run { [weak self, weak item] in
                     guard let self, let item,
                           self.player?.currentItem === item,
@@ -567,6 +611,57 @@ final class PlaybackEngine: PlaybackControlling {
         logger.info("playback.trimSilence", "Trim Silence updated mid-playback", metadata: [
             "episode": currentEpisode?.title ?? "none",
             "amount": amount.title
+        ])
+    }
+
+    /// Applies a live Stereo/Mono preference. Audio episodes switch to the
+    /// AVAudioEngine path when Mono is enabled; when already on that path the
+    /// buffer loop restarts at the current position so no stale stereo buffers
+    /// remain scheduled. Video deliberately stays on AVPlayer.
+    func updateAudioChannelMode(_ mode: AudioChannelMode) {
+        guard currentPreference?.audioChannelMode != mode else { return }
+        currentPreference?.audioChannelMode = mode
+        if reconcileAudioPathForLiveChange() { return }
+        guard engineUsesEngine else { return }
+        let time = currentPlaybackTime()
+        let wasPlaying = isPlaying
+        audioPlayerNode?.stop()
+        stopEngineBufferLoop()
+        startEngineBufferLoop(from: time, shouldPlay: wasPlaying)
+        logger.info("playback.audioChannelMode", "Audio channel mode updated mid-playback", metadata: [
+            "episode": currentEpisode?.title ?? "none",
+            "mode": mode.title
+        ])
+    }
+
+    /// Applies the podcast's -3...+3 dB gain independently of system volume.
+    /// A non-zero adjustment forces audio onto AVAudioEngine so positive gain is
+    /// real amplification; live changes then update the final EQ stage in place.
+    func updateVolumeAdjustment(_ adjustment: Int) {
+        let clamped = PlaybackPreference.clampedVolumeAdjustment(adjustment)
+        guard currentPreference?.volumeAdjustment != clamped else { return }
+        currentPreference?.volumeAdjustment = clamped
+        if reconcileAudioPathForLiveChange() { return }
+        if engineUsesEngine {
+            configureVolumeAdjustment(clamped)
+        } else if let item = player?.currentItem,
+                  let asset = item.asset as? AVURLAsset,
+                  let preference = currentPreference {
+            Task { [weak self, weak item] in
+                guard let self, let item else { return }
+                let mix = await self.audioGainMix(for: asset, preference: preference)
+                await MainActor.run { [weak self, weak item] in
+                    guard let self, let item,
+                          self.player?.currentItem === item,
+                          self.currentPreference?.volumeAdjustment == clamped else { return }
+                    item.audioMix = mix
+                }
+            }
+        }
+        logger.info("playback.volumeAdjustment", "Subscription volume adjustment updated", metadata: [
+            "episode": currentEpisode?.title ?? "none",
+            "adjustmentDB": "\(clamped)",
+            "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer"
         ])
     }
 
@@ -729,12 +824,14 @@ final class PlaybackEngine: PlaybackControlling {
         let highPass = makeAudioUnit(type: kAudioUnitType_Effect, subType: kAudioUnitSubType_HighPassFilter)
         let dynamics = makeAudioUnit(type: kAudioUnitType_Effect, subType: kAudioUnitSubType_DynamicsProcessor)
         let limiter  = makeAudioUnit(type: kAudioUnitType_Effect, subType: kAudioUnitSubType_PeakLimiter)
+        let volumeAdjustment = AVAudioUnitEQ(numberOfBands: 0)
 
         engine.attach(node)
         engine.attach(timePitch)
         engine.attach(highPass)
         engine.attach(dynamics)
         engine.attach(limiter)
+        engine.attach(volumeAdjustment)
 
         let format = file.processingFormat
         // Graph: node → timePitch → highPass → dynamics → limiter → mainMixer
@@ -742,7 +839,8 @@ final class PlaybackEngine: PlaybackControlling {
         engine.connect(timePitch, to: highPass,  format: format)
         engine.connect(highPass,  to: dynamics,  format: format)
         engine.connect(dynamics,  to: limiter,   format: format)
-        engine.connect(limiter,   to: engine.mainMixerNode, format: format)
+        engine.connect(limiter,   to: volumeAdjustment, format: format)
+        engine.connect(volumeAdjustment, to: engine.mainMixerNode, format: format)
 
         audioEngine = engine
         audioPlayerNode = node
@@ -750,8 +848,10 @@ final class PlaybackEngine: PlaybackControlling {
         audioHighPass = highPass
         audioDynamics = dynamics
         audioPeakLimiter = limiter
+        audioVolumeAdjustment = volumeAdjustment
 
         configureVocalBoostChain(level: preference.vocalBoostLevel)
+        configureVolumeAdjustment(preference.volumeAdjustment)
         audioFile = file
         engineUsesEngine = true
         currentEpisode = episode
@@ -780,7 +880,8 @@ final class PlaybackEngine: PlaybackControlling {
             "episode": episode.title,
             "speed": PlaybackPreference.speedLabel(preference.speed),
             "vocalBoost": preference.vocalBoostLevel.title,
-            "trimSilence": preference.trimSilence.title
+            "trimSilence": preference.trimSilence.title,
+            "audioChannelMode": preference.audioChannelMode.title
         ])
     }
 
@@ -788,6 +889,8 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func startEngineBufferLoop(from startSeconds: TimeInterval, shouldPlay: Bool) {
         guard let file = audioFile, let node = audioPlayerNode else { return }
+        engineBufferGeneration += 1
+        let generation = engineBufferGeneration
 
         // Seed the file-seconds tracker immediately so the scrubber shows the correct
         // start/seek position before any buffers have rendered.
@@ -801,6 +904,9 @@ final class PlaybackEngine: PlaybackControlling {
         let sampleRate = file.processingFormat.sampleRate
         let totalFrames = file.length
         let trimAmount = currentPreference?.trimSilence ?? .off
+        // Capture with the other loop policy before crossing to the serial read
+        // queue. Live changes restart this generation with a new immutable value.
+        let channelMode = currentPreference?.audioChannelMode ?? .stereo
         let startFrame = AVAudioFramePosition(max(0, startSeconds) * sampleRate)
 
         pausedAtSeconds = startSeconds
@@ -813,6 +919,7 @@ final class PlaybackEngine: PlaybackControlling {
         // Resetting it here (synchronously) would race with the old loop still checking it.
         engineReadQueue.async { [weak self] in
             guard let self else { return }
+            guard self.engineBufferGeneration == generation else { return }
 
             // Reset cancellation flag now that any previous loop has exited.
             self.engineReadCancelled = false
@@ -828,7 +935,7 @@ final class PlaybackEngine: PlaybackControlling {
             var detector = SilenceDetector(amount: trimAmount)
             var needsFadeIn = true   // apply a 0→1 ramp to the very first scheduled buffer
 
-            while !self.engineReadCancelled {
+            while !self.engineReadCancelled, self.engineBufferGeneration == generation {
                 guard let buffer = AVAudioPCMBuffer(
                     pcmFormat: file.processingFormat,
                     frameCapacity: bufferFrameCount
@@ -868,6 +975,7 @@ final class PlaybackEngine: PlaybackControlling {
                     self.reportTrimSilenceSaved(frames: flushed.framesRemoved, sampleRate: sampleRate)
                     for buf in flushed.buffers {
                         if self.engineReadCancelled { break }
+                        if channelMode == .mono { Self.foldStereoBufferToMono(buf) }
                         sem.wait()
                         if self.engineReadCancelled { sem.signal(); break }
                         node.scheduleBuffer(buf, completionCallbackType: .dataRendered) { _ in
@@ -884,12 +992,18 @@ final class PlaybackEngine: PlaybackControlling {
                         ) {
                             sentinel.frameLength = 1
                             node.scheduleBuffer(sentinel, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                                DispatchQueue.main.async { self?.finishCurrentEpisode() }
+                                DispatchQueue.main.async {
+                                    guard let self, self.engineBufferGeneration == generation else { return }
+                                    self.finishCurrentEpisode()
+                                }
                             }
                         }
                     }
 
-                    DispatchQueue.main.async { [weak self] in self?.engineReadFinished = true }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.engineBufferGeneration == generation else { return }
+                        self.engineReadFinished = true
+                    }
                     return
                 }
 
@@ -916,6 +1030,10 @@ final class PlaybackEngine: PlaybackControlling {
 
                 for (i, buf) in outputBuffers.enumerated() {
                     if self.engineReadCancelled { break }
+
+                    if channelMode == .mono {
+                        Self.foldStereoBufferToMono(buf)
+                    }
 
                     // Fade-in the very first buffer after every play/seek to eliminate
                     // the click/pop that occurs when audio starts or resumes abruptly.
@@ -956,22 +1074,47 @@ final class PlaybackEngine: PlaybackControlling {
                         self.logger.warning("engine.bufferStall.timeout", "Buffer slot timeout — engine appears stuck, requesting restart", metadata: [
                             "positionSecs": String(format: "%.1f", chunkEndSeconds)
                         ])
-                        DispatchQueue.main.async { [weak self] in self?.recoverSilentEngine(reason: "bufferStall") }
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self,
+                                  self.engineBufferGeneration == generation,
+                                  !self.routeRestartScheduled,
+                                  !self.hasPendingRouteLossPause else { return }
+                            self.recoverSilentEngine(reason: "bufferStall")
+                        }
                         break
                     }
                     if self.engineReadCancelled { sem.signal(); break }
                     node.scheduleBuffer(buf, completionCallbackType: .dataRendered) { [weak self] _ in
                         sem.signal()
                         DispatchQueue.main.async {
-                            self?.lastRenderedAt = CFAbsoluteTimeGetCurrent()
-                            self?.engineCurrentFileSeconds = chunkEndSeconds
+                            guard let self, self.engineBufferGeneration == generation else { return }
+                            self.lastRenderedAt = CFAbsoluteTimeGetCurrent()
+                            self.engineCurrentFileSeconds = chunkEndSeconds
                         }
                     }
                 }
             }
 
-            DispatchQueue.main.async { [weak self] in self?.engineReadFinished = true }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.engineBufferGeneration == generation else { return }
+                self.engineReadFinished = true
+            }
         }
+    }
+
+    /// AI CONTEXT — In-place stereo fold-down used only on the serial engine
+    /// read queue. Averaging L+R prevents clipping and copies the centred signal
+    /// back to both channels, so headphones and stereo speakers both hear the
+    /// same content. Native mono files and unsupported/interleaved formats no-op.
+    private static func foldStereoBufferToMono(_ buffer: AVAudioPCMBuffer) {
+        guard buffer.format.channelCount >= 2,
+              let channels = buffer.floatChannelData,
+              buffer.frameLength > 0 else { return }
+        let count = vDSP_Length(buffer.frameLength)
+        vDSP_vadd(channels[0], 1, channels[1], 1, channels[0], 1, count)
+        var half: Float = 0.5
+        vDSP_vsmul(channels[0], 1, &half, channels[0], 1, count)
+        cblas_scopy(Int32(buffer.frameLength), channels[0], 1, channels[1], 1)
     }
 
     /// Convert net trimmed frames (as reported by SilenceDetector) to seconds and add
@@ -986,6 +1129,7 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     private func stopEngineBufferLoop() {
+        engineBufferGeneration += 1
         engineReadCancelled = true
         // Unblock any semaphore.wait() in the read loop.
         for _ in 0..<(maxEngineBufferSlots + 2) { engineBufferSemaphore.signal() }
@@ -1007,6 +1151,7 @@ final class PlaybackEngine: PlaybackControlling {
         audioHighPass = nil
         audioDynamics = nil
         audioPeakLimiter = nil
+        audioVolumeAdjustment = nil
         audioFile = nil
         engineIsPlaying = false
         engineReadPaused = false
@@ -1086,6 +1231,14 @@ final class PlaybackEngine: PlaybackControlling {
     /// Guards against rapid repeated calls (at most once every 3 s).
     private func recoverSilentEngine(reason: String = "silentEngine") {
         guard engineUsesEngine, engineIsPlaying else { return }
+        guard !routeRestartScheduled, !hasPendingRouteLossPause else {
+            logger.info("engine.silentRecoveryDeferred", "Silent-engine recovery deferred to pending route coordination", metadata: [
+                "reason": reason,
+                "routeRestartScheduled": "\(routeRestartScheduled)",
+                "routeLossPending": "\(hasPendingRouteLossPause)"
+            ])
+            return
+        }
         let now = CFAbsoluteTimeGetCurrent()
         let position = currentPlaybackTime()
         if finishReadFinishedEngineIfNearEnd(reason: reason, position: position, now: now) { return }
@@ -1182,6 +1335,11 @@ final class PlaybackEngine: PlaybackControlling {
         ])
     }
 
+    private func configureVolumeAdjustment(_ adjustment: Int) {
+        let clamped = PlaybackPreference.clampedVolumeAdjustment(adjustment)
+        audioVolumeAdjustment?.globalGain = Float(clamped)
+    }
+
     private func configureHighPass(_ unit: AVAudioUnitEffect, cutoff: Float) {
         setParam(unit, param: kHipassParam_CutoffFrequency, value: cutoff)
         setParam(unit, param: kHipassParam_Resonance,       value: 0)
@@ -1237,15 +1395,17 @@ final class PlaybackEngine: PlaybackControlling {
         return AVAudioUnitEffect(audioComponentDescription: desc)
     }
 
-    private func vocalBoostMix(for asset: AVURLAsset, level: VocalBoostLevel) async -> AVAudioMix? {
-        guard level.outputGain != 1.0 else { return nil }
+    private func audioGainMix(for asset: AVURLAsset, preference: PlaybackPreference) async -> AVAudioMix? {
+        let dbMultiplier = pow(10.0, Float(preference.volumeAdjustment) / 20.0)
+        let outputGain = preference.vocalBoostLevel.outputGain * dbMultiplier
+        guard abs(outputGain - 1.0) > 0.001 else { return nil }
 
         let audioTracks: [AVAssetTrack]
         do {
             audioTracks = try await asset.loadTracks(withMediaType: .audio)
         } catch {
             logger.warning("playback.vocalBoostMixFailed", "Could not load video audio tracks for Vocal Boost", metadata: [
-                "level": level.title,
+                "level": preference.vocalBoostLevel.title,
                 "error": String(describing: error)
             ])
             return nil
@@ -1255,7 +1415,7 @@ final class PlaybackEngine: PlaybackControlling {
         let mix = AVMutableAudioMix()
         mix.inputParameters = audioTracks.map { track in
             let params = AVMutableAudioMixInputParameters(track: track)
-            params.setVolume(level.outputGain, at: .zero)
+            params.setVolume(outputGain, at: .zero)
             return params
         }
         return mix
@@ -1662,6 +1822,7 @@ final class PlaybackEngine: PlaybackControlling {
 
         routeRestartGeneration += 1
         let generation = routeRestartGeneration
+        routeRestartScheduled = true
         logger.info("engine.routeRestartScheduled", "Scheduling engine restart after route settles", metadata: [
             "reason": reason,
             "newOutput": output,
@@ -1672,12 +1833,14 @@ final class PlaybackEngine: PlaybackControlling {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + routeRestartStabilizationDelay) { [weak self] in
             guard let self, self.routeRestartGeneration == generation else { return }
+            self.routeRestartScheduled = false
             self.restartEngineAfterRouteChangeIfNeeded(reason: reason, output: output)
         }
     }
 
     private func cancelPendingRouteRestart() {
         routeRestartGeneration += 1
+        routeRestartScheduled = false
     }
 
     private func routeOutputCanReplaceRemovedDevice(_ output: AVAudioSessionPortDescription) -> Bool {

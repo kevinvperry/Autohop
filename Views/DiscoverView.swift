@@ -12,7 +12,8 @@ import SwiftUI
 // .spotlightCountries so they never duplicate the user's selected country or
 // each other). A storefront
 // country picker (defaults to Locale.current.region, falls back to US,
-// persisted in @AppStorage), and a search-field-shaped shortcut that presents
+// persisted in @AppStorage and shared by every Discover chart child page), and
+// a search-field-shaped shortcut that presents
 // the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
 // results: every entry routes to PodcastDetailView, which renders both the
@@ -29,6 +30,9 @@ import SwiftUI
 // podcastHero — NOT the fixed-country spotlight heroes) likewise has a "See All"
 // → TopPodcastsView (Top-50 child page). heroCarousel takes an optional
 // seeAllRoute; only the podcastHero passes one, so spotlights stay link-free.
+// CATEGORY TOP 50: each purple category chip and each icon-bearing rail heading
+// pushes TopPodcastsView configured with that ChartGenre. The horizontal Top-15
+// rails remain as quick previews; chips/headings are navigation controls.
 // PERF: the feed is a LazyVStack and each genre rail a LazyHStack, so the ~10
 // image-heavy rails + hero carousels build only as they scroll into view
 // (was a plain VStack/HStack, which laid everything out eagerly and stuttered).
@@ -60,6 +64,7 @@ struct DiscoverView: View {
         case episodes(UUID)
         case topEpisodes
         case topPodcasts
+        case category(ChartGenre)
     }
 
     /// Ordered Discover feed item: a genre rail or one of the two country
@@ -146,7 +151,7 @@ struct DiscoverView: View {
                 Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                countryMenu
+                ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
             }
         }
         .navigationDestination(item: $pendingRoute) { route in
@@ -159,6 +164,8 @@ struct DiscoverView: View {
                 TopEpisodesView(viewModel: viewModel, country: country)
             case .topPodcasts:
                 TopPodcastsView(viewModel: viewModel, country: country)
+            case .category(let genre):
+                TopPodcastsView(viewModel: viewModel, country: country, genre: genre)
             }
         }
         .miniPlayerBar()
@@ -178,12 +185,11 @@ struct DiscoverView: View {
     // MARK: - Page body
 
     private var chartsContent: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
+        ScrollView {
                 // LazyVStack so the ~10 image-heavy genre rails + hero carousels
                 // build only as they scroll into view (was a plain VStack, which
                 // laid them all out eagerly and stuttered the vertical scroll).
-                LazyVStack(alignment: .leading, spacing: 48) {
+                LazyVStack(alignment: .leading, spacing: 60) {
                     VStack(alignment: .leading, spacing: 16) {
                         searchShortcut
                             .padding(.horizontal, 20)
@@ -199,7 +205,7 @@ struct DiscoverView: View {
                         }
 
                         if !viewModel.rails.isEmpty {
-                            categoryChips(proxy: proxy)
+                            categoryChips
                         }
                     }
 
@@ -224,46 +230,9 @@ struct DiscoverView: View {
                     Spacer(minLength: 24)
                 }
                 .padding(.top, 8)
-            }
-            .refreshable {
-                await viewModel.reload(country: country.code)
-            }
         }
-    }
-
-    // MARK: - Country picker
-
-    private var countryMenu: some View {
-        Menu {
-            ForEach(ChartCountry.featured) { c in
-                countryButton(c)
-            }
-            Divider()
-            ForEach(ChartCountry.all) { c in
-                countryButton(c)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text("\(country.flag) \(country.name)")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-            }
-            .foregroundStyle(.primary)
-        }
-        .accessibilityLabel("Charts country: \(country.name)")
-    }
-
-    private func countryButton(_ c: ChartCountry) -> some View {
-        Button {
-            storedCountryCode = c.code
-        } label: {
-            if c.code == country.code {
-                Label("\(c.flag) \(c.name)", systemImage: "checkmark")
-            } else {
-                Text("\(c.flag) \(c.name)")
-            }
+        .refreshable {
+            await viewModel.reload(country: country.code)
         }
     }
 
@@ -534,14 +503,12 @@ struct DiscoverView: View {
         1309: "tv",                      // TV & Film
     ]
 
-    private func categoryChips(proxy: ScrollViewProxy) -> some View {
+    private var categoryChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(viewModel.rails) { rail in
                     Button {
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            proxy.scrollTo("rail-\(rail.id)", anchor: .top)
-                        }
+                        pendingRoute = .category(rail.genre)
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
@@ -631,9 +598,26 @@ struct DiscoverView: View {
 
     private func genreRail(_ rail: DiscoverViewModel.GenreRail) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(rail.genre.name)
-                .font(.title3.weight(.bold))
-                .padding(.horizontal, 20)
+            Button {
+                pendingRoute = .category(rail.genre)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.purple)
+                    Text(rail.genre.name)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .accessibilityLabel("Open Top 50 \(rail.genre.name)")
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 14) {
@@ -730,6 +714,55 @@ struct DiscoverView: View {
                 pendingRoute = .episodes(activeSub.id)
             } else {
                 pendingRoute = .preview(result)
+            }
+        }
+    }
+}
+
+// AI CONTEXT — Shared storefront selector for the Discover navigation family.
+// Discover, Top Episodes, overall Top Podcasts, and category Top-50 pages bind
+// to the same discoverCountryCode AppStorage value. Selecting a storefront on
+// any page therefore reloads that visible chart and remains selected after
+// navigating back. `fallback` preserves the device-region default before the
+// first explicit selection.
+struct ChartCountryPicker: View {
+    @Binding var selectionCode: String
+    let fallback: ChartCountry
+
+    private var selectedCountry: ChartCountry {
+        selectionCode.isEmpty ? fallback : .named(selectionCode)
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(ChartCountry.featured) { country in
+                countryButton(country)
+            }
+            Divider()
+            ForEach(ChartCountry.all) { country in
+                countryButton(country)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("\(selectedCountry.flag) \(selectedCountry.name)")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .foregroundStyle(.primary)
+        }
+        .accessibilityLabel("Charts country: \(selectedCountry.name)")
+    }
+
+    private func countryButton(_ country: ChartCountry) -> some View {
+        Button {
+            selectionCode = country.code
+        } label: {
+            if country.code == selectedCountry.code {
+                Label("\(country.flag) \(country.name)", systemImage: "checkmark")
+            } else {
+                Text("\(country.flag) \(country.name)")
             }
         }
     }

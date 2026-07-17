@@ -6,6 +6,11 @@ import Foundation
 // file time), VocalBoostLevel (off/light/standard/strong — selects which stages
 // of the high-pass→dynamics→limiter chain are active), TrimSilenceAmount
 // (off/low/medium/high — selects SilenceDetector tuning).
+// Volume adjustment is a per-subscription integer gain from -3...+3 dB (0 default),
+// applied independently of system output volume and the sleep fade. AudioChannelMode
+// defaults to stereo; mono folds the first two decoded channels
+// into an equal-power centre signal copied to both outputs. Missing legacy keys
+// decode as stereo, preserving every existing subscription.
 // Any non-off boost or trim forces the AVAudioEngine playback path; video
 // episodes ignore both and always use AVPlayer.
 //
@@ -69,12 +74,26 @@ public enum VocalBoostLevel: String, CaseIterable, Codable, Sendable {
     }
 }
 
+public enum AudioChannelMode: String, CaseIterable, Codable, Sendable {
+    case stereo
+    case mono
+
+    public var title: String {
+        switch self {
+        case .stereo: return "Stereo"
+        case .mono: return "Mono"
+        }
+    }
+}
+
 public struct PlaybackPreference: Equatable, Codable, Sendable {
     public var speed: Double
     public var startSkipSeconds: TimeInterval
     public var endSkipSeconds: TimeInterval
     public var vocalBoostLevel: VocalBoostLevel
     public var trimSilence: TrimSilenceAmount
+    public var audioChannelMode: AudioChannelMode
+    public var volumeAdjustment: Int
 
     public var vocalBoostEnabled: Bool {
         vocalBoostLevel != .off
@@ -92,7 +111,9 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         startSkipSeconds: 0,
         endSkipSeconds: 0,
         vocalBoostLevel: .off,
-        trimSilence: .off
+        trimSilence: .off,
+        audioChannelMode: .stereo,
+        volumeAdjustment: 0
     )
 
     public static func speedLabel(_ speed: Double) -> String {
@@ -104,13 +125,17 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         startSkipSeconds: TimeInterval,
         endSkipSeconds: TimeInterval,
         vocalBoostLevel: VocalBoostLevel = .off,
-        trimSilence: TrimSilenceAmount = .off
+        trimSilence: TrimSilenceAmount = .off,
+        audioChannelMode: AudioChannelMode = .stereo,
+        volumeAdjustment: Int = 0
     ) {
         self.speed = speed
         self.startSkipSeconds = startSkipSeconds
         self.endSkipSeconds = endSkipSeconds
         self.vocalBoostLevel = vocalBoostLevel
         self.trimSilence = trimSilence
+        self.audioChannelMode = audioChannelMode
+        self.volumeAdjustment = Self.clampedVolumeAdjustment(volumeAdjustment)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -120,6 +145,8 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         case vocalBoostLevel
         case vocalBoostEnabled
         case trimSilence
+        case audioChannelMode
+        case volumeAdjustment
     }
 
     public init(from decoder: Decoder) throws {
@@ -138,6 +165,10 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
             vocalBoostLevel = Self.default.vocalBoostLevel
         }
         trimSilence = try container.decodeIfPresent(TrimSilenceAmount.self, forKey: .trimSilence) ?? .off
+        audioChannelMode = try container.decodeIfPresent(AudioChannelMode.self, forKey: .audioChannelMode) ?? .stereo
+        volumeAdjustment = Self.clampedVolumeAdjustment(
+            try container.decodeIfPresent(Int.self, forKey: .volumeAdjustment) ?? 0
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -147,6 +178,17 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         try container.encode(endSkipSeconds, forKey: .endSkipSeconds)
         try container.encode(vocalBoostLevel, forKey: .vocalBoostLevel)
         try container.encode(trimSilence, forKey: .trimSilence)
+        try container.encode(audioChannelMode, forKey: .audioChannelMode)
+        try container.encode(volumeAdjustment, forKey: .volumeAdjustment)
+    }
+
+    public static func clampedVolumeAdjustment(_ value: Int) -> Int {
+        min(3, max(-3, value))
+    }
+
+    public static func volumeAdjustmentLabel(_ value: Int) -> String {
+        let clamped = clampedVolumeAdjustment(value)
+        return clamped > 0 ? "+\(clamped) dB" : "\(clamped) dB"
     }
 }
 

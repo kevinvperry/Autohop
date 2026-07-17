@@ -8,8 +8,13 @@ aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
 Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
 Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
-(`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique
-across record types inside a zone. Refresh scheduling stats remain local, and
+(`episode:`, `subscription:`, `subscription-order:`, `history:`, `stats:`)
+because record IDs are unique across record types inside a zone. Priority Stack
+ordering is one atomic `SubscriptionOrder` generation; per-subscription
+`priorityRank` remains a local/legacy compatibility projection. A CloudKit save
+acknowledgement clears only the exact value/timestamp or order generation that
+was sent, so a newer local edit cannot be lost while an older request is in
+flight. Refresh scheduling stats remain local, and
 download/media state never syncs. DownloadFilterSettings JOINED the sync
 projection in July 2026 (Kevin's product decision) — it was local/backup-only in
 v1; see "Download Filters sync" notes throughout.
@@ -38,19 +43,22 @@ applied on top of CloudKit.
    regenerates, and RSS GUIDs can collide across feeds.
 4. **Downloads are per-device and never sync.**
 5. **Pick the conflict strategy per domain.** Most fields are field-level
-   last-write-wins; stats (a later step) are additive and partition per device.
+   last-write-wins; Priority Stack order is whole-list LWW; stats are additive
+   and partition per device.
 
 ## Sync coverage at a glance (what roams vs. what stays on-device)
 Verified against `Models/SyncState.swift`, `Persistence/CloudKitSyncMapping.swift`
-(record types: `EpisodeState`, `SubscriptionState`, `HistoryEntry`, `DayStats` — and
-**no settings record type**), and `Models/{Subscription,AppSettings}.swift`.
+(record types: `EpisodeState`, `SubscriptionState`, `SubscriptionOrder`,
+`HistoryEntry`, `DayStats`, and `QueueSnapshot` — and **no global settings record
+type**), and `Models/{Subscription,SubscriptionOrder,AppSettings}.swift`.
 
 | Domain | Roams via CloudKit? | Record / projection | Notes |
 |---|---|---|---|
 | **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`AppState.materializeRemoteSubscription`); unsubscribe leaves a `subscribed=false` tombstone. |
+| **Priority Stack order** | ✅ Yes | `SubscriptionOrder` singleton | One whole-list generation contains every real-subscription UUID, active first and Inactive last. It is authoritative over independently delivered legacy rank fields and prevents mixed reorder generations. |
 | **Per-episode user state** (playedState, wasCompleted, lastPlayedAt) | ✅ Yes | `EpisodeState` | Field-level LWW + active-player-wins + self-heal. |
 | **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Whole-entry record-level LWW by `lastListenedAt`. This is also how **playback position** roams. |
-| **Individual subscription settings** | ✅ Yes | `SubscriptionState` | Synced: priority rank (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title, **downloadFilterSettings (since July 2026)**. **NOT synced:** Release Radar `refreshStats` (see below). |
+| **Individual subscription settings** | ✅ Yes | `SubscriptionState` | Synced: legacy priority rank compatibility field (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title, **downloadFilterSettings (since July 2026)**. The atomic `SubscriptionOrder` is authoritative for whole-list ordering. **NOT synced:** Release Radar `refreshStats` (see below). |
 | **Stats page data** | ✅ Yes | `DayStats` | Additive per-device partition `(deviceID, dayKey)`; the Stats page sums across devices on read. Pre-tracking lifetime baseline stays per-device (deferred). |
 | **Overall system settings** (`AppSettings`: poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags, …) | ❌ **No** | — (no record type) | Local `UserDefaults` only; roams **only** via iCloud/device backup-restore, not live CloudKit sync. A fresh install starts from defaults until restored. |
 | **Per-podcast Download Filters** (`DownloadFilterSettings`) | ✅ Yes (July 2026) | `SubscriptionState` | JSON blob + stamp on the subscription record, struct-level LWW. Was backup/local-only in v1; records written before the field existed decode with a nil stamp and never reset local filters. |
@@ -58,9 +66,9 @@ Verified against `Models/SyncState.swift`, `Persistence/CloudKitSyncMapping.swif
 | **Downloaded media / download state / files** | ❌ No | — | Per-device by design — re-downloadable from the feed. |
 | **Catalog content** (episode/show title, description, artwork, categories) | ❌ No | — | Re-hydrates from the RSS feed; never synced. |
 
-> **Headline for a reviewer:** the four user-state domains the question asks about —
-> subscriptions, listening history, per-podcast settings (including Download
-> Filters since July 2026), and stats — are all covered. The intentional gaps to
+> **Headline for a reviewer:** subscriptions, atomic Priority Stack ordering,
+> listening history, per-podcast settings (including Download Filters since July
+> 2026), queue state, and stats are covered. The intentional gaps to
 > be aware of are **global app settings** and the per-device Release Radar
 > learning, which do **not** roam. See FUTURE_VERSIONS.md if any of these should
 > become a roaming setting.
@@ -73,6 +81,10 @@ merge per-field. Private database, custom zone `AutohopSync`.
 ## Local store: GRDB
 `subscriptions.json` migrated one-time into GRDB rows (`AutohopDatabase`), behind
 the unchanged `@MainActor SubscriptionStore` facade. Per-row incremental writes.
+Migration v9 adds a singleton `subscription_order` row holding the current
+generation, pending flag, and CloudKit system fields. Reorder writes are retried
+with bounded exponential backoff; Done and lifecycle transitions can await
+`flushPendingSaves()` before CloudKit scans for pending work.
 Release Radar refresh stats are persisted locally on the subscription row but are
 not part of the CloudKit sync projection; refresh-stat-only saves publish no
 `objectWillChange`, so routine polling evidence does not wake the UI or sync
@@ -88,7 +100,8 @@ than as an authoritative default. (`Synced` is a port of Pocket Casts'
 Projections (Models/SyncState.swift):
 - `EpisodeSyncState` (key `subscriptionID|guid:<guid>`): playedState,
   wasCompleted, lastPlayedAt.
-- `SubscriptionSyncState` (key `subscriptionID`): subscribed, title, priorityRank,
+- `SubscriptionSyncState` (key `subscriptionID`): subscribed, title,
+  legacy-compatible priorityRank,
   autoFeedRefreshReturnPriorityRank (the hidden Inactive return rank), notificationsEnabled,
   excludeFromAutoFeedRefresh, playbackPreference, autoArchiveSettings, chapterFilter,
   downloadFilterSettings (since July 2026), + constant `feedURL`. It deliberately
@@ -101,24 +114,32 @@ Projections (Models/SyncState.swift):
   populates filters on the server. Remote records without the field decode with a
   nil stamp ("no remote opinion") and can never reset local filters to defaults.
 
-**priorityRank materialization bug (found + fixed for TV 2026-07-04):** a
-freshly-syncing device receives subscription records from CloudKit in
-ARBITRARY delivery order, not the phone's true rank order.
-`SubscriptionStore.normalizePriorityOrder()` renumbers every subscription's
-`priorityRank` by its current array position — correct for local edits
-(drag-reorder, subscribe, unsubscribe) where the array itself is the
-authoritative full picture, but WRONG when only some subscriptions have
-received their true synced rank yet: the next one to materialize clobbers
-everyone's rank back to arrival order. Fixed in `materialize`,
-`applyRemoteSubscriptionState`, and `recoverSettingsFromLegacySubscriptionState`
-via a new `resortByCurrentPriorityRank()` (sorts by current rank, does NOT
-renumber — see its header for the full trace). Ranks may keep small numeric
-gaps until the next local edit recompacts them (cosmetic only — iPhone's
-Priority Stack rank badge reads the raw value, but every consumer only ever
-compares relative order). **iPhone's own `AppState.materializeRemoteSubscription`
-has the same underlying flaw** (via `addSubscription(insertAtBottom:)`,
-shared with local OPML import) and is flagged but not yet fixed — needs its
-own pass to separate the two callers' needs.
+**Atomic Priority Stack order repair (2026-07-18):** CloudKit can deliver
+individual `SubscriptionState` records in arbitrary order, and a drag changes
+several ranks as one logical action. Independently syncing those ranks allowed a
+receiver—or a delayed acknowledgement on the sender—to observe a mixture of two
+reorder generations. `SubscriptionOrderState` now represents the complete
+real-subscription UUID sequence in one singleton `SubscriptionOrder` record
+(`subscription-order:current`). Local `priorityRank` values are derived from that
+sequence. Newly materialised subscriptions reapply the stored whole-list order;
+legacy ranks are used only when no atomic order exists.
+
+The Subscriptions page begins an ID-based reorder session containing active real
+subscriptions only. Inactive and browse rows cannot corrupt filtered indices.
+Remote order received during a drag is deferred. One validated Done/navigation/
+background commit authors one local order generation and flushes it to SQLite.
+Whole-list LWW uses `updatedAt`; `generationID` ensures an older CloudKit save
+response cannot clear a newer pending reorder. Local generation timestamps advance
+monotonically beyond the stored order even after a wall-clock rollback/future
+remote clock, and equal timestamps use generation UUID as a deterministic tie
+break.
+
+**Acknowledgement invariant (2026-07-18):** `Synced.markClean(ifAcknowledgedBy:)`
+requires an exact value+timestamp match. Episode and subscription projections
+clear fields independently; history/stats/queue use their version identity; the
+order singleton uses `generationID`. If anything newer remains pending,
+`CloudSyncEngine` immediately requeues it. Never replace this with unconditional
+`markSynced` after an asynchronous request.
 
 **Related bug, same root cause class (found + fixed same day):** episode
 played/archived state (`EpisodeSyncState`) can also arrive and stash itself
@@ -313,17 +334,17 @@ shows correct settings immediately. Guarded by
     the scene leaving `.active`). Playback FINISH already went out on the fast
     lane. The receiving side still uses the normal change stream (fast when the
     app is foregrounded); only the SEND side's debounce is bypassed.
-- **Rank-corruption family closed out (same day):** (a) iPhone's
+- **Legacy rank-corruption safeguards (2026-07-04, retained as fallback):** (a) iPhone's
   `materializeRemoteSubscription` now passes `reindexRanks: false` to
   `addSubscription` (new parameter; local subscribe/OPML keep the default
   compaction, which is correct for them); (b) `load()` no longer compacts
   ranks at startup — a relaunch mid-initial-sync would have tied
   later-arriving absolute ranks against freshly compacted 1..n. Audit swept
   every remaining `reindexPriority`/`normalizePriorityOrder` call site: all
-  others are genuine local edits (remove/reorder/rank-edit/preview cleanup)
-  where compaction is correct, and no other synced record type uses
-  positional renumbering (history/stats/episode state are key- or
-  partition-addressed).
+  others are genuine local edits where compaction is correct. Since 2026-07-18,
+  the atomic `SubscriptionOrder` supersedes these per-record ranks whenever a
+  whole-list generation is available; the safeguards remain for migration and
+  older CloudKit data.
 
 Dirty-tracking is maintained centrally in `AutohopDatabase.persist` — domain
 models are untouched. Pristine never-touched episodes are skipped; unsubscribe
@@ -336,6 +357,8 @@ identity, but outbound record names are now type-namespaced:
 |---|---|---|
 | EpisodeState | `episode:<subscriptionID>|guid:<guid>` | unprefixed scoped key, or bare GUID when the record stores `subscriptionID` |
 | SubscriptionState | `subscription:<subscriptionID>` | unprefixed subscription UUID |
+| SubscriptionOrder | `subscription-order:current` | none; new singleton in July 2026 |
+| QueueSnapshot | `queue:current` | legacy queue singleton name |
 | HistoryEntry | `history:<historyID>` | unprefixed history ID |
 | DayStats | `stats:<deviceID>:<dayKey>` | unprefixed `deviceID:dayKey` |
 
@@ -353,17 +376,18 @@ queue pass is now type-aware:
 
 **Local write coalescing (hardened 2026-07-12):** the 0.5-second playback clock no
 longer performs a complete listening-history update on every tick. History samples
-accumulate in memory and are applied in 10-second batches, reducing array searches,
+accumulate in memory and are applied in 30-second batches, reducing array searches,
 full sorts, JSON-save checks, published-array invalidations, and SQLite pending-row
 writes from roughly two per second to roughly one per ten seconds. Stats still updates
 its authoritative in-memory day bucket on every tick for numerical accuracy, but its
-SwiftUI `revision` publishes at most once per 10 seconds. Existing stats sync-row writes
-remain on their 10-second throttle. Pause, scene background/inactive, sleep timer,
+SwiftUI `revision` publishes at most once per 10 seconds. Stats sync-row writes
+use a 30-second throttle. Pause, scene background/inactive, sleep timer,
 sleep schedule, episode completion, and remote-history merge are explicit flush points,
 so the final position and accumulated time become durable before the slow-lane CloudKit
 push is requested.
 
-- **Fast lane** — `EpisodeState` + `SubscriptionState` (discrete user actions):
+- **Fast lane** — `EpisodeState` + `SubscriptionState` + `SubscriptionOrder`
+  (discrete user actions):
   queued immediately on the existing 1 s store-change debounce, unchanged.
 - **Slow lane** — `HistoryEntry` + `DayStats` (continuously re-dirtied by
   playback): when a queue pass finds *only* slow-lane dirt, it schedules a
@@ -418,7 +442,11 @@ adopted clean. Settings sub-structs
    processes unsubscribe / signals `.needsMaterialization`;
    `AppState.materializeRemoteSubscription` fetches the feed via FeedService and
    creates the podcast, then applies settings. Migration v4 caches subscription
-   system fields. Unit-tested; real-device cross-device verification pending.
+   system fields. Migration v9 and the `SubscriptionOrder` singleton
+   (`subscription-order:current`) synchronize Priority Stack order atomically;
+   materialization reapplies the stored order rather than trusting record
+   arrival order. Unit-tested; real-device cross-device verification of the new
+   singleton remains pending.
 
 5. ✅ **Listening history + stats**
    - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
@@ -458,8 +486,9 @@ adopted clean. Settings sub-structs
    3 unit tests.
 
 **All six sync build steps complete.** Opt-in iCloud sync covers episode
-user-state, per-podcast settings + subscribe/unsubscribe, listening history, and
-additive per-device stats — with field-level LWW, active-player-wins, and
+user-state, per-podcast settings + subscribe/unsubscribe, atomic Priority Stack
+order, listening history, queue state, and additive per-device stats — with
+field-level/whole-record version-aware acknowledgements, active-player-wins, and
 self-heal.
 
 ## Namespace repair / collision containment
@@ -511,7 +540,7 @@ intentionally avoided because it has more cross-device risk than benefit.
 Sync coverage lives in `Tests/SyncStateTests.swift`,
 `CloudKitSyncMappingTests.swift`, `EpisodeDiffPersistTests.swift`,
 `RemoteEpisodeApplyTests.swift`, `SubscriptionSyncTests.swift`,
-`SyncGuardsTests.swift`, `HistorySyncTests.swift`, `StatsSyncTests.swift`,
+`SubscriptionReorderTests.swift`, `SyncGuardsTests.swift`, `HistorySyncTests.swift`, `StatsSyncTests.swift`,
 `CloudSyncEnginePermanentFailureTests.swift`, and
 `SyncPushCoalescingTests.swift` (slow-lane push-coalescing policy).
 The pure projection/mapping/database paths run under `swift test`; the
@@ -536,6 +565,12 @@ Diagnostic Log (Settings → About → tap version 5×, then share) for `sync.`:
   (restored pre-namespace save retired), `sync.zoneRecreate`, `sync.recordGone`.
 - **Pull / merge:** `sync.fetched` (applied/deletions counts), `sync.conflict` (serverRecordChanged → merge+retry; DayStats conflicts include stats device ID, local device ID, day key, partition match, cached system-field state, retry status, planned resolution, and per-session conflict count; this device's own DayStats partition caches the server system fields and retries the local full-day bucket), `sync.conflictStorm` (same record conflicts repeatedly inside a short window), `sync.materialize` (remote sub fetched locally), `sync.decodeFailed`, `sync.unknownRecordType`, `sync.legacySubscriptionRecovery*` (one-shot legacy settings recovery).
 - **Local store:** `sync.dbWriteFailed` (ERROR) — a write that used to be silently `try?`-swallowed (lost system fields / never-cleared dirty stamp → record re-pushes forever); `sync.state{Save,Decode}Failed`.
+- **Priority order/persistence:** `subscriptions.reorderBegan`,
+  `subscriptions.reorderCommitted`, `subscriptions.reorderRejected`,
+  `subscriptions.remoteOrderDeferred`,
+  `subscriptions.deferredRemoteOrderApplied`,
+  `subscriptions.persistFailed`, `subscriptions.persistRetryScheduled`, and
+  `subscriptions.persistRetryExhausted`.
 
 Verbosity is **balanced** — batch summaries, not one line per record. **ERROR**
 events (`sync.pushFailed`, `sync.pushQuarantined`, `sync.dbWriteFailed`,

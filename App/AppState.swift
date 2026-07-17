@@ -23,10 +23,16 @@ import UIKit
 // proxy; only progress-rendering surfaces observe the model, so ≥1% progress
 // steps no longer invalidate every AppState observer during active downloads.
 // RESPONSIBILITIES:
+//  - Play Instant: a per-podcast, automatic-download-only FIFO interruption
+//    pipeline. It warns over current playback, snapshots the interrupted episode
+//    at switch time, plays eligible arrivals outside normal Up Next order, then
+//    restores the snapshot after natural completion or Mark Played. Manual
+//    pause, archive, episode selection, or Next cancels restoration. Persisted
+//    automatic-download intent preserves provenance across URLSession relaunch.
 //  - Player state: currentPlayerEpisode / currentPlayerTime / isPlaying;
 //    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
 //    playNextEpisode), seek, chapter navigation, per-podcast audio settings
-//    (speed / vocal boost / trim silence) pushed live into PlaybackEngine.
+//    (speed / mono fold-down / vocal boost / trim silence) pushed live into PlaybackEngine.
 //    Playback DECISIONS (effective preference, resume-vs-start-skip, speed
 //    cycle/normalize, chapter prev/next targets) live in AutohopCore's
 //    PlaybackSessionPolicy (tvOS Phase 0 item 4) — AppState delegates the
@@ -142,7 +148,7 @@ import UIKit
 //    opaque IDs to local subscriptions and refreshes only those feeds; a legacy
 //    ID-less push is capped to eight due feeds and respects failure backoff.
 //    Unknown IDs trigger mapping reconciliation, never a full-library sweep.
-//  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 30 min
+//  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 25 min
 //    (autoArchiveInterval) unless forced; runAutoArchive applies the three
 //    per-podcast rules (after-played delay, inactive timeout, episode limit).
 //    DRIVEN BY the 30-second foreground poller (startForegroundPolling,
@@ -340,6 +346,7 @@ final class AppState: ObservableObject {
     let subscriptionStore: SubscriptionStore
     let listeningHistoryStore = ListeningHistoryStore()
     let listeningStatsStore = ListeningStatsStore()
+    let autoArchiveActivityStore = AutoArchiveActivityStore()
     /// Durable auto-download intents (AH-2026-06-28-01): recorded before the
     /// fire-and-forget download Task so a BG-wake suspension can't lose a
     /// discovered episode; drained at launch/foreground/BG-task end.
@@ -446,15 +453,33 @@ final class AppState: ObservableObject {
         let subscriptionID: UUID
         let podcastTitle: String
         let showCompletionMessage: Bool
+        let isAutomatic: Bool
     }
     private var pendingDownloadQueue: [PendingDownload] = []
     private var activeDownloadCount = 0
+
+    // MARK: Play Instant
+
+    private struct PlayInstantCandidate: Equatable {
+        let episodeID: UUID
+        let subscriptionID: UUID
+    }
+    private struct PlayInstantInterruptedSession {
+        let episodeID: UUID
+        let subscriptionID: UUID
+        var position: TimeInterval
+    }
+    private var playInstantQueue: [PlayInstantCandidate] = []
+    private var playInstantInterruptedSession: PlayInstantInterruptedSession?
+    private var activePlayInstantEpisodeID: UUID?
+    private var playInstantTransitionTask: Task<Void, Never>?
+    private var playInstantWarningPlayer: AVAudioPlayer?
 
     private(set) static var shared: AppState!
 
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
-    private let autoArchiveInterval: TimeInterval = 30 * 60
+    private let autoArchiveInterval: TimeInterval = 25 * 60
     private var lastAutoArchiveSkipLogAt: Date?
     private var backgroundPlaybackDiagnosticsGeneration = 0
 
@@ -674,10 +699,16 @@ final class AppState: ObservableObject {
     /// AI CONTEXT — background audio is a refresh opportunity, not permission for
     /// continuous foreground-rate polling. This cap and global gate bound network,
     /// parse, and radio cost during long screen-off listening sessions.
-    private let backgroundAudioRefreshFeedLimit = 4
-    private let backgroundAudioRefreshMinimumInterval: TimeInterval = 10 * 60
+    private let backgroundAudioRefreshFeedLimit = 7
+    private let backgroundAudioRefreshHardLimit = 10
+    private let backgroundAudioRefreshMinimumInterval: TimeInterval = 4 * 60
     private var lastBackgroundAudioRefreshAt: Date?
     private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
+    private let backgroundAudioCapBypassStates: Set<FeedRefreshWindowState> = [.preWindow, .activeWindow, .missedRelease]
+    /// Automatic base cadence. State-specific scheduling expands this to five
+    /// minutes in pre-window and 5–10 minutes after a missed release; random and
+    /// unreliable feeds retain their 15–60 minute adaptive surveillance.
+    private let automaticReleaseRadarBaseInterval: TimeInterval = 3 * 60
     private let playbackTickSlowThresholdMs = 120.0
     private let playbackTickSummarySampleInterval = 120
 
@@ -1015,6 +1046,7 @@ final class AppState: ObservableObject {
     }
 
     static func bootstrap() -> AppState {
+        let bootstrapStartedAt = CFAbsoluteTimeGetCurrent()
         // Re-entrancy / single-instance guard. bootstrap() runs on the @MainActor and is
         // synchronous, so two *concurrent* callers can't interleave — but a caller reached
         // from within bootstrap's own setup (or any future `await` added before the shared
@@ -1037,6 +1069,7 @@ final class AppState: ObservableObject {
             settingsStore: SettingsStore(),
             subscriptionStore: SubscriptionStore()
         )
+        let constructionFinishedAt = CFAbsoluteTimeGetCurrent()
         // Publish immediately, before the remaining setup, so any re-entrant
         // sharedOrBootstrap() during bootstrap resolves to THIS instance.
         AppState.shared = state
@@ -1210,6 +1243,11 @@ final class AppState: ObservableObject {
         downloadManager.onBackgroundDownloadCompleted = { [weak state] episodeID, subscriptionID, localFileURL in
             Task { @MainActor in
                 guard let state else { return }
+                // AI CONTEXT — A persisted intent is the authoritative proof that
+                // this background completion originated from automatic feed policy.
+                // Capture it before the downloaded state settles/removes the intent;
+                // manual background downloads must never trigger Play Instant.
+                let wasAutomatic = state.autoDownloadIntentStore.contains(episodeID: episodeID)
                 state.subscriptionStore.markEpisodeDownloaded(
                     subscriptionID: subscriptionID,
                     episodeID: episodeID,
@@ -1235,7 +1273,11 @@ final class AppState: ObservableObject {
                         localFileName: localFileURL.lastPathComponent
                     )
                     state.notifyNewEpisodeIfAllowed(ep, subscription: sub)
+                    if wasAutomatic {
+                        state.enqueuePlayInstantIfEligible(episodeID: episodeID, subscriptionID: subscriptionID)
+                    }
                 }
+                state.resolveAutoDownloadIntentIfSettled(episodeID: episodeID, subscriptionID: subscriptionID)
                 state.refreshDownloadedActivities()
             }
         }
@@ -1271,6 +1313,10 @@ final class AppState: ObservableObject {
                 let attempt = (state.downloadWatchdogRetryCounts[episodeID] ?? 0) + 1
                 state.downloadWatchdogRetryCounts[episodeID] = attempt
                 guard attempt <= 3 else {
+                    // Retire both any surviving URLSession task and orphaned
+                    // watchdog clocks before publishing the terminal failure.
+                    // cancelDownload is deliberately idempotent/no-task safe.
+                    state.downloadManager.cancelDownload(episodeID: episodeID)
                     state.downloadManager.clearResumeData(episodeID: episodeID)
                     if let activity = state.downloadActivityStore.activeActivities.first(where: { $0.episodeID == episodeID }),
                        let episode = state.subscriptionStore.episode(subscriptionID: activity.subscriptionID, episodeID: episodeID),
@@ -1405,6 +1451,11 @@ final class AppState: ObservableObject {
             onNextTrack: {
                 Task { @MainActor in
                     guard let ep = state.currentPlayerEpisode else { return }
+                    // AI CONTEXT — Remote/CarPlay Next is a deliberate switch,
+                    // not natural EOF, so it cancels Play Instant's return point.
+                    if state.activePlayInstantEpisodeID != nil || state.playInstantTransitionTask != nil {
+                        state.cancelPlayInstantSession(reason: "manualNextTrack")
+                    }
                     await state.handleEpisodeFinished(ep)
                 }
             },
@@ -1483,6 +1534,14 @@ final class AppState: ObservableObject {
             let badgeCount = state.settingsStore.appSettings.showQueueBadge ? state.downloadedQueue.count : 0
             NotificationService.shared.updateBadge(count: badgeCount)
         }
+        let bootstrapFinishedAt = CFAbsoluteTimeGetCurrent()
+        state.logger.info("app.bootstrapTiming", "Measured synchronous cold-bootstrap stages", metadata: [
+            "totalMs": String(format: "%.1f", (bootstrapFinishedAt - bootstrapStartedAt) * 1000),
+            "constructionMs": String(format: "%.1f", (constructionFinishedAt - bootstrapStartedAt) * 1000),
+            "wiringAndRestoreMs": String(format: "%.1f", (bootstrapFinishedAt - constructionFinishedAt) * 1000),
+            "subscriptionCount": "\(state.subscriptionStore.subscriptions.count)",
+            "historyCount": "\(state.listeningHistoryStore.entries.count)"
+        ])
         return state
     }
 
@@ -1537,6 +1596,9 @@ final class AppState: ObservableObject {
             logger.info("sleepSchedule.stillListening", "User confirmed still listening via play/pause")
         }
         if isPlaying {
+            if activePlayInstantEpisodeID != nil || playInstantTransitionTask != nil {
+                cancelPlayInstantSession(reason: "pausedDuringPlayInstant")
+            }
             playbackEngine.pause()
             isPlaying = false
             listeningStatsStore.save()
@@ -1647,9 +1709,15 @@ final class AppState: ObservableObject {
     /// row was permanently 0s. `seek(to:)` keeps its own side effects (sleep-schedule
     /// "still listening", logging, position persistence).
     func skipForward(seconds: TimeInterval) {
-        if seconds > 0 {
+        let duration = currentPlayerEpisode?.durationSeconds
+        let actualSkipped = PlaybackSeekBoundaryPolicy.actualForwardSkip(
+            from: currentPlayerTime,
+            seconds: seconds,
+            duration: duration
+        )
+        if actualSkipped > 0 {
             listeningStatsStore.addManualSkipForward(
-                seconds,
+                actualSkipped,
                 subscriptionID: currentPlayerEpisode?.subscriptionID
             )
         }
@@ -1670,6 +1738,23 @@ final class AppState: ObservableObject {
             "target": "\(Int(target))",
             "requested": "\(Int(seconds))"
         ])
+        if PlaybackSeekBoundaryPolicy.reachesCompletion(requestedTime: seconds, duration: duration),
+           let episode = currentPlayerEpisode {
+            // Stop synchronously before scheduling completion so neither backend
+            // can emit a competing EOF callback or restart an engine loop at zero.
+            playbackEngine.stop()
+            currentPlayerTime = duration ?? target
+            isPlaying = false
+            logger.info("player.seekCompleted", "Seek reached episode end; completing instead of restarting at EOF", metadata: [
+                "episode": episode.title,
+                "requested": String(format: "%.2f", seconds),
+                "duration": duration.map { String(format: "%.2f", $0) } ?? "unknown"
+            ])
+            Task { @MainActor [weak self] in
+                await self?.handleEpisodeFinished(episode)
+            }
+            return
+        }
         playbackEngine.seek(to: target)
         currentPlayerTime = target
         if let episode = currentPlayerEpisode,
@@ -2033,6 +2118,7 @@ final class AppState: ObservableObject {
     }
 
     func markEpisodePlayed(_ episode: Episode) async {
+        let completesPlayInstant = activePlayInstantEpisodeID == episode.id
         logger.info("episode.markPlayed", "Marking episode as played", metadata: [
             "episode": episode.title
         ])
@@ -2065,6 +2151,9 @@ final class AppState: ObservableObject {
         subscriptionStore.markEpisodePlayed(subscriptionID: episode.subscriptionID, episodeID: episode.id)
         downloadProgress.removeValue(forKey: episode.id)
         downloadMessage = "Marked \(episode.title) as played."
+        if completesPlayInstant {
+            await finishPlayInstantAndAdvance(reason: "markedPlayed")
+        }
     }
 
     func archiveEpisode(_ episode: Episode, completionKind: CompletionKind = .manuallyArchived) async {
@@ -2072,6 +2161,9 @@ final class AppState: ObservableObject {
             "episode": episode.title
         ])
         if currentPlayerEpisode?.id == episode.id {
+            if activePlayInstantEpisodeID == episode.id || playInstantInterruptedSession != nil {
+                cancelPlayInstantSession(reason: "archiveCurrentEpisode")
+            }
             playbackEngine.stop()
             currentPlayerEpisode = nil
             currentPlayerTime = 0
@@ -2135,7 +2227,8 @@ final class AppState: ObservableObject {
         _ episode: Episode,
         subscriptionID: UUID,
         podcastTitle: String,
-        showCompletionMessage: Bool
+        showCompletionMessage: Bool,
+        isAutomatic: Bool = false
     ) async {
         resourceMonitor.logSnapshot(reason: "download.before", context: resourceContext([
             "episode": episode.title,
@@ -2177,7 +2270,8 @@ final class AppState: ObservableObject {
                 episode: episode,
                 subscriptionID: subscriptionID,
                 podcastTitle: podcastTitle,
-                showCompletionMessage: showCompletionMessage
+                showCompletionMessage: showCompletionMessage,
+                isAutomatic: isAutomatic
             ))
             return
         }
@@ -2265,6 +2359,9 @@ final class AppState: ObservableObject {
             )
             if let sub = subscriptionStore.subscription(id: subscriptionID) {
                 notifyNewEpisodeIfAllowed(episode, subscription: sub)
+            }
+            if isAutomatic {
+                enqueuePlayInstantIfEligible(episodeID: episode.id, subscriptionID: subscriptionID)
             }
             refreshDownloadedActivities()
             resourceMonitor.logSnapshot(reason: "download.afterSuccess", context: resourceContext([
@@ -2412,9 +2509,195 @@ final class AppState: ObservableObject {
                 next.episode,
                 subscriptionID: next.subscriptionID,
                 podcastTitle: next.podcastTitle,
-                showCompletionMessage: next.showCompletionMessage
+                showCompletionMessage: next.showCompletionMessage,
+                isAutomatic: next.isAutomatic
             )
         }
+    }
+
+    // MARK: - Play Instant
+
+    /// Accepts only the successful automatic-download boundary. Eligibility is
+    /// re-read from the current subscription so disabling the toggle while a
+    /// transfer is running prevents an interruption. A paused/idle player does
+    /// not qualify and the arrival remains in normal Up Next order.
+    private func enqueuePlayInstantIfEligible(episodeID: UUID, subscriptionID: UUID) {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID),
+              subscription.autoArchiveSettings.playInstantEnabled,
+              let episode = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID),
+              subscription.downloadFilterSettings.evaluation(for: episode).isIncluded,
+              episode.downloadState == .downloaded,
+              currentPlayerEpisode?.id != episodeID,
+              isPlaying || playbackEngine.isPlaying
+        else { return }
+
+        let candidate = PlayInstantCandidate(episodeID: episodeID, subscriptionID: subscriptionID)
+        guard activePlayInstantEpisodeID != episodeID,
+              !playInstantQueue.contains(candidate) else { return }
+        playInstantQueue.append(candidate)
+        logger.info("playInstant.queued", "Queued automatically downloaded episode for instant playback", metadata: [
+            "episode": episode.title,
+            "podcast": subscription.title,
+            "queueDepth": "\(playInstantQueue.count)"
+        ])
+        beginPlayInstantTransitionIfNeeded()
+    }
+
+    private func beginPlayInstantTransitionIfNeeded() {
+        guard activePlayInstantEpisodeID == nil,
+              playInstantTransitionTask == nil,
+              !playInstantQueue.isEmpty,
+              let interruptedEpisode = currentPlayerEpisode,
+              isPlaying || playbackEngine.isPlaying else { return }
+
+        if playInstantInterruptedSession == nil {
+            playInstantInterruptedSession = PlayInstantInterruptedSession(
+                episodeID: interruptedEpisode.id,
+                subscriptionID: interruptedEpisode.subscriptionID,
+                position: currentPlayerTime
+            )
+        }
+        let expectedCurrentID = interruptedEpisode.id
+        playPlayInstantWarningTone()
+        logger.info("playInstant.warning", "Warning before switching to Play Instant episode", metadata: [
+            "interruptedEpisode": interruptedEpisode.title,
+            "delaySeconds": "2"
+        ])
+
+        playInstantTransitionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+            self.playInstantTransitionTask = nil
+            guard self.currentPlayerEpisode?.id == expectedCurrentID,
+                  self.isPlaying || self.playbackEngine.isPlaying else {
+                self.cancelPlayInstantSession(reason: "playbackChangedDuringWarning")
+                return
+            }
+            self.playInstantInterruptedSession?.position = self.currentPlayerTime
+            self.savePlaybackPosition()
+            await self.startNextPlayInstantCandidate()
+        }
+    }
+
+    private func startNextPlayInstantCandidate() async {
+        while !playInstantQueue.isEmpty {
+            let candidate = playInstantQueue.removeFirst()
+            guard let subscription = subscriptionStore.subscription(id: candidate.subscriptionID),
+                  subscription.autoArchiveSettings.playInstantEnabled,
+                  let episode = subscriptionStore.episode(
+                    subscriptionID: candidate.subscriptionID,
+                    episodeID: candidate.episodeID
+                  ),
+                  episode.downloadState == .downloaded,
+                  localAudioFileExists(for: episode)
+            else { continue }
+
+            activePlayInstantEpisodeID = episode.id
+            logger.info("playInstant.started", "Starting Play Instant episode", metadata: [
+                "episode": episode.title,
+                "podcast": subscription.title,
+                "remainingInstantQueue": "\(playInstantQueue.count)"
+            ])
+            if await startPlayback(episode: episode, resumeFrom: 0) { return }
+            activePlayInstantEpisodeID = nil
+        }
+        await restoreInterruptedPlayInstantSession(reason: "noPlayableInstantCandidate")
+    }
+
+    private func finishPlayInstantAndAdvance(reason: String) async {
+        activePlayInstantEpisodeID = nil
+        if !playInstantQueue.isEmpty {
+            playPlayInstantWarningTone()
+            try? await Task.sleep(for: .seconds(2))
+            await startNextPlayInstantCandidate()
+            return
+        }
+        await restoreInterruptedPlayInstantSession(reason: reason)
+    }
+
+    private func restoreInterruptedPlayInstantSession(reason: String) async {
+        guard let interrupted = playInstantInterruptedSession else {
+            cancelPlayInstantSession(reason: "missingInterruptedSession")
+            return
+        }
+        playInstantInterruptedSession = nil
+        activePlayInstantEpisodeID = nil
+        guard let episode = subscriptionStore.episode(
+            subscriptionID: interrupted.subscriptionID,
+            episodeID: interrupted.episodeID
+        ), episode.downloadState == .downloaded, localAudioFileExists(for: episode) else {
+            logger.warning("playInstant.restoreUnavailable", "Interrupted episode was no longer available to resume", metadata: [
+                "episodeID": interrupted.episodeID.uuidString,
+                "reason": reason
+            ])
+            await playNextEpisode()
+            return
+        }
+        logger.info("playInstant.restoring", "Returning to episode interrupted by Play Instant", metadata: [
+            "episode": episode.title,
+            "positionSeconds": String(format: "%.1f", interrupted.position),
+            "reason": reason
+        ])
+        _ = await startPlayback(episode: episode, resumeFrom: interrupted.position)
+    }
+
+    private func cancelPlayInstantSession(reason: String) {
+        let hadSession = playInstantInterruptedSession != nil || activePlayInstantEpisodeID != nil || !playInstantQueue.isEmpty
+        playInstantTransitionTask?.cancel()
+        playInstantTransitionTask = nil
+        playInstantWarningPlayer?.stop()
+        playInstantWarningPlayer = nil
+        playInstantQueue.removeAll()
+        playInstantInterruptedSession = nil
+        activePlayInstantEpisodeID = nil
+        if hadSession {
+            logger.info("playInstant.cancelled", "Cancelled Play Instant return session after deliberate user action", metadata: [
+                "reason": reason
+            ])
+        }
+    }
+
+    /// Generates a quiet two-note PCM cue in memory; no bundled sound asset and
+    /// no network/file dependency. AVAudioPlayer shares Autohop's active audio
+    /// session, allowing the warning to sound gently over the interrupted show.
+    private func playPlayInstantWarningTone() {
+        guard let data = Self.makePlayInstantWarningWAV() else { return }
+        playInstantWarningPlayer = try? AVAudioPlayer(data: data)
+        playInstantWarningPlayer?.volume = 0.22
+        playInstantWarningPlayer?.prepareToPlay()
+        playInstantWarningPlayer?.play()
+    }
+
+    private static func makePlayInstantWarningWAV() -> Data? {
+        let sampleRate = 22_050
+        let duration = 0.55
+        let sampleCount = Int(Double(sampleRate) * duration)
+        var pcm = Data(capacity: sampleCount * 2)
+        for index in 0..<sampleCount {
+            let time = Double(index) / Double(sampleRate)
+            let frequency = time < 0.25 ? 523.25 : (time < 0.30 ? 0 : 659.25)
+            let localTime = time < 0.30 ? time : time - 0.30
+            let noteDuration = time < 0.30 ? 0.25 : 0.25
+            let envelope = frequency == 0 ? 0 : min(1, localTime / 0.025) * min(1, (noteDuration - localTime) / 0.05)
+            let value = Int16((sin(2 * .pi * frequency * time) * max(0, envelope) * 8_000).rounded())
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { pcm.append(contentsOf: $0) }
+        }
+        var wav = Data()
+        func appendASCII(_ value: String) { wav.append(value.data(using: .ascii)!) }
+        func appendUInt16(_ value: UInt16) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { wav.append(contentsOf: $0) }
+        }
+        func appendUInt32(_ value: UInt32) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { wav.append(contentsOf: $0) }
+        }
+        appendASCII("RIFF"); appendUInt32(UInt32(36 + pcm.count)); appendASCII("WAVE")
+        appendASCII("fmt "); appendUInt32(16); appendUInt16(1); appendUInt16(1)
+        appendUInt32(UInt32(sampleRate)); appendUInt32(UInt32(sampleRate * 2)); appendUInt16(2); appendUInt16(16)
+        appendASCII("data"); appendUInt32(UInt32(pcm.count)); wav.append(pcm)
+        return wav
     }
 
     // MARK: - Playback
@@ -2452,6 +2735,9 @@ final class AppState: ObservableObject {
 
     /// Play a specific episode immediately, regardless of queue order.
     func playEpisode(_ episode: Episode) async {
+        if activePlayInstantEpisodeID != nil || playInstantTransitionTask != nil || playInstantInterruptedSession != nil {
+            cancelPlayInstantSession(reason: "selectedDifferentEpisode")
+        }
         savePlaybackPosition()
         queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
         queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
@@ -2508,6 +2794,9 @@ final class AppState: ObservableObject {
     }
 
     func skipToEpisode(_ episode: Episode) async {
+        if activePlayInstantEpisodeID != nil || playInstantTransitionTask != nil || playInstantInterruptedSession != nil {
+            cancelPlayInstantSession(reason: "skippedToDifferentEpisode")
+        }
         savePlaybackPosition()
         logger.info("queue.skipToEpisode", "Skipping to episode", metadata: [
             "episode": episode.title
@@ -2578,6 +2867,44 @@ final class AppState: ObservableObject {
 
         if currentPlayerEpisode?.subscriptionID == subscriptionID {
             playbackEngine.updateVocalBoost(level)
+        }
+    }
+
+    // AI CONTEXT — Per-subscription Volume Adjustment is stored inside the same
+    // PlaybackPreference sync unit as speed/boost/mono. It is a gain stage in dB,
+    // not a write to device volume; sleep fading remains independently controlled
+    // through PlaybackControlling.setVolume().
+    func updateVolumeAdjustment(for subscriptionID: UUID, adjustment: Int) {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        let clamped = PlaybackPreference.clampedVolumeAdjustment(adjustment)
+        var preference = subscription.playbackPreference
+        guard preference.volumeAdjustment != clamped else { return }
+        preference.volumeAdjustment = clamped
+        subscriptionStore.updatePlaybackPreference(subscriptionID: subscriptionID, preference: preference)
+        logger.info("player.volumeAdjustment", "Subscription volume adjustment changed", metadata: [
+            "podcast": subscription.title,
+            "adjustmentDB": "\(clamped)"
+        ])
+        if currentPlayerEpisode?.subscriptionID == subscriptionID {
+            playbackEngine.updateVolumeAdjustment(clamped)
+        }
+    }
+
+    // AI CONTEXT — Mono Audio is persisted inside PlaybackPreference so it uses
+    // the existing per-podcast sync boundary. A live change rebuilds/restarts the
+    // audio engine at the current file position; video remains on AVPlayer.
+    func updateAudioChannelMode(for subscriptionID: UUID, mode: AudioChannelMode) {
+        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        var preference = subscription.playbackPreference
+        guard preference.audioChannelMode != mode else { return }
+        preference.audioChannelMode = mode
+        subscriptionStore.updatePlaybackPreference(subscriptionID: subscriptionID, preference: preference)
+        logger.info("player.audioChannelMode", "Audio channel mode changed", metadata: [
+            "podcast": subscription.title,
+            "mode": mode.title
+        ])
+        if currentPlayerEpisode?.subscriptionID == subscriptionID {
+            playbackEngine.updateAudioChannelMode(mode)
         }
     }
 
@@ -2673,6 +3000,13 @@ final class AppState: ObservableObject {
         mutateDefaultPlaybackPreference { $0.vocalBoostLevel = level }
     }
 
+    func updateDefaultAudioChannelMode(_ mode: AudioChannelMode) {
+        logger.info("settings.defaultAudioChannelMode", "Default audio channel mode changed", metadata: [
+            "mode": mode.title
+        ])
+        mutateDefaultPlaybackPreference { $0.audioChannelMode = mode }
+    }
+
     func updateDefaultTrimSilence(_ amount: TrimSilenceAmount) {
         logger.info("settings.defaultTrimSilence", "Default Trim Silence changed", metadata: ["amount": amount.title])
         mutateDefaultPlaybackPreference { $0.trimSilence = amount }
@@ -2760,6 +3094,7 @@ final class AppState: ObservableObject {
         let preference = effectivePreference(for: subscription)
         playbackEngine.updatePlaybackSpeed(preference.speed)
         playbackEngine.updateTrimSilence(preference.trimSilence)
+        playbackEngine.updateAudioChannelMode(preference.audioChannelMode)
         playbackEngine.updateEpisodeTrim(
             startSkipSeconds: preference.startSkipSeconds,
             endSkipSeconds: preference.endSkipSeconds
@@ -2959,6 +3294,17 @@ final class AppState: ObservableObject {
             "episode": episode.title
         ])
 
+        // A Play Instant return point is invalid once that interrupted episode
+        // has itself completed (including a forward skip that crosses EOF).
+        // Keeping it would resurrect the final skipped seconds after the Instant
+        // episode ends.
+        if playInstantInterruptedSession?.episodeID == episode.id {
+            cancelPlayInstantSession(reason: "interruptedEpisodeCompleted")
+            logger.info("playInstant.returnDiscarded", "Discarded return point because the interrupted episode completed", metadata: [
+                "episode": episode.title
+            ])
+        }
+
         // Check sleep timer before advancing. `episodeFinished()` decrements the counter;
         // returns true on the last episode — in which case we stop rather than advance.
         let sleepTimerFired = sleepTimerService.episodeFinished()
@@ -2992,6 +3338,16 @@ final class AppState: ObservableObject {
 
         isPlaying = false
         currentPlayerTime = 0
+
+        if activePlayInstantEpisodeID == episode.id {
+            if sleepTimerFired {
+                cancelPlayInstantSession(reason: "sleepTimerFired")
+                NowPlayingService.shared.clear()
+                return
+            }
+            await finishPlayInstantAndAdvance(reason: "finishedNaturally")
+            return
+        }
 
         if sleepTimerFired {
             logger.info("sleepTimer.episodeEnd", "Sleep timer stopped playback after episode finished", metadata: [
@@ -3096,17 +3452,22 @@ final class AppState: ObservableObject {
                 "latestChanged": "\(latestChanged)",
                 "releaseSignal": "\(newEligibleEpisode != nil || latestChangedEligible)"
             ]))
-            subscriptionStore.updateEpisodes(
-                subscriptionID: subscription.id,
-                episodes: result.episodes
-            )
-            if let artworkURL = result.artworkURL {
-                subscriptionStore.updateArtworkURL(subscriptionID: subscription.id, artworkURL: artworkURL)
+            // Keep Foundation/SQLite bridge temporaries scoped to one feed. The
+            // value result remains available for downstream scheduling, while
+            // transient merge objects can drain before the next feed begins.
+            autoreleasepool {
+                subscriptionStore.updateEpisodes(
+                    subscriptionID: subscription.id,
+                    episodes: result.episodes
+                )
+                if let artworkURL = result.artworkURL {
+                    subscriptionStore.updateArtworkURL(subscriptionID: subscription.id, artworkURL: artworkURL)
+                }
+                subscriptionStore.updateAuthor(subscriptionID: subscription.id, author: result.author)
+                subscriptionStore.updateDescription(subscriptionID: subscription.id, description: result.description)
+                subscriptionStore.updateCategories(subscriptionID: subscription.id, categories: result.categories)
+                subscriptionStore.updateIsExplicit(subscriptionID: subscription.id, isExplicit: result.isExplicit)
             }
-            subscriptionStore.updateAuthor(subscriptionID: subscription.id, author: result.author)
-            subscriptionStore.updateDescription(subscriptionID: subscription.id, description: result.description)
-            subscriptionStore.updateCategories(subscriptionID: subscription.id, categories: result.categories)
-            subscriptionStore.updateIsExplicit(subscriptionID: subscription.id, isExplicit: result.isExplicit)
             // Browse-only previews (opened from the Discover page) are NOT real
             // subscriptions and must never auto-download or enter the queue. The
             // Podcast Detail page calls refreshSubscription on a returning browse
@@ -3427,7 +3788,8 @@ final class AppState: ObservableObject {
             targetEpisode,
             subscriptionID: subscriptionID,
             podcastTitle: podcastTitle,
-            showCompletionMessage: false
+            showCompletionMessage: false,
+            isAutomatic: true
         )
         if refreshUpNextAfterMerge {
             scheduleUpNextRefresh(reason: "feed.download.\(podcastTitle)")
@@ -3475,6 +3837,7 @@ final class AppState: ObservableObject {
     @discardableResult
     func refreshDueSubscriptions() async -> Bool {
         let foreground = isAppForeground
+        let backgroundBudget = foreground ? nil : backgroundAudioRefreshBudget()
         if !foreground {
             let now = Date()
             if let lastBackgroundAudioRefreshAt,
@@ -3487,11 +3850,44 @@ final class AppState: ObservableObject {
             reason: "timed-due",
             trigger: .foregroundTimer,
             executionContext: foreground ? .foregroundVisible : .backgroundAudioAlive,
-            maxSubscriptions: foreground ? foregroundRefreshFeedLimit : backgroundAudioRefreshFeedLimit,
-            capBypassStates: foreground ? foregroundRefreshCapBypassStates : [],
+            maxSubscriptions: foreground ? foregroundRefreshFeedLimit : backgroundBudget?.routineLimit,
+            maxTotalSelections: foreground ? nil : backgroundBudget?.hardLimit,
+            capBypassStates: foreground ? foregroundRefreshCapBypassStates : backgroundAudioCapBypassStates,
             includeBackoffFeeds: false,
             onlyDueFeeds: true
         )
+    }
+
+    /// AI CONTEXT — Background audio is a valuable refresh opportunity, but its
+    /// network/parser budget adapts to device pressure. The normal 7/10 routine/
+    /// urgent limits are reduced—not disabled—on cellular/constrained paths, Low
+    /// Power Mode, elevated thermal state, or while a >=100 MB transfer is active.
+    private func backgroundAudioRefreshBudget() -> (routineLimit: Int, hardLimit: Int) {
+        var routineLimit = backgroundAudioRefreshFeedLimit
+        var hardLimit = backgroundAudioRefreshHardLimit
+
+        func reduce(routine: Int, hard: Int) {
+            routineLimit = min(routineLimit, routine)
+            hardLimit = min(hardLimit, hard)
+        }
+
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { reduce(routine: 4, hard: 6) }
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious: reduce(routine: 3, hard: 5)
+        case .critical: reduce(routine: 2, hard: 3)
+        case .nominal, .fair: break
+        @unknown default: reduce(routine: 4, hard: 6)
+        }
+        if let path = latestNetworkPath,
+           path.usesInterfaceType(.cellular) || path.isConstrained || path.isExpensive {
+            reduce(routine: 4, hard: 6)
+        }
+        let largeDownloadActive = downloadActivityStore.activeActivities.contains { activity in
+            activity.status == .downloading
+                && max(activity.expectedBytes ?? 0, activity.writtenBytes) >= 100 * 1_024 * 1_024
+        }
+        if largeDownloadActive { reduce(routine: 4, hard: 6) }
+        return (routineLimit, max(routineLimit, hardLimit))
     }
 
     @discardableResult
@@ -3592,6 +3988,7 @@ final class AppState: ObservableObject {
         trigger: FeedRefreshTrigger,
         executionContext: FeedRefreshExecutionContext,
         maxSubscriptions: Int?,
+        maxTotalSelections: Int? = nil,
         capBypassStates: Set<FeedRefreshWindowState> = [],
         protectedStates: Set<FeedRefreshWindowState> = [],
         minimumProtectedSelections: Int = 0,
@@ -3643,6 +4040,7 @@ final class AppState: ObservableObject {
                 trigger: trigger,
                 executionContext: executionContext,
                 maxSubscriptions: maxSubscriptions,
+                maxTotalSelections: maxTotalSelections,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
@@ -3668,6 +4066,7 @@ final class AppState: ObservableObject {
             await self.performRefreshCycle(
                 diagnostics: diagnostics,
                 maxSubscriptions: maxSubscriptions,
+                maxTotalSelections: maxTotalSelections,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
@@ -3688,6 +4087,7 @@ final class AppState: ObservableObject {
     private func performRefreshCycle(
         diagnostics: RefreshCycleDiagnostics,
         maxSubscriptions: Int?,
+        maxTotalSelections: Int?,
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
@@ -3733,6 +4133,7 @@ final class AppState: ObservableObject {
             candidates: dueCandidates,
             policy: FeedRefreshBudgetPolicy(
                 maxSelections: maxSubscriptions,
+                maxTotalSelections: maxTotalSelections,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections
@@ -3761,6 +4162,7 @@ final class AppState: ObservableObject {
                 skippedBackoffCount: backoffSubscriptions.count,
                 skippedInactiveCount: skippedSubscriptions.count,
                 maxSubscriptions: maxSubscriptions,
+                maxTotalSelections: maxTotalSelections,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
@@ -3792,6 +4194,12 @@ final class AppState: ObservableObject {
         }
         var completedSubscriptionIDs = Set<UUID>()
         var wasCancelled = false
+        // AI CONTEXT — Refreshes remain sequential for deterministic store merges,
+        // but cycles are divided into 16-feed memory batches. Every boundary logs
+        // physical footprint (the intervention metric), yields the main actor, and
+        // gives manual all-library refreshes a short drain window for parser pools.
+        let refreshMemoryBatchSize = 16
+        let isLargeManualRefresh = diagnostics.executionContext == .manual && subscriptions.count > refreshMemoryBatchSize
         for (index, subscription) in subscriptions.enumerated() {
             if Task.isCancelled {
                 wasCancelled = true
@@ -3821,6 +4229,23 @@ final class AppState: ObservableObject {
                 "total": "\(subscriptions.count)",
                 "reason": diagnostics.reason
             ].merging(refreshContext) { _, new in new }))
+            let completedCount = index + 1
+            if completedCount % refreshMemoryBatchSize == 0, completedCount < subscriptions.count {
+                resourceMonitor.logSnapshot(
+                    reason: "feed.refreshAll.batchCheckpoint",
+                    context: resourceContext(refreshContext.merging([
+                        "completedFeeds": "\(completedCount)",
+                        "totalFeeds": "\(subscriptions.count)",
+                        "batchSize": "\(refreshMemoryBatchSize)",
+                        "manualDrainPause": "\(isLargeManualRefresh)"
+                    ]) { _, new in new }),
+                    force: true
+                )
+                await Task.yield()
+                if isLargeManualRefresh {
+                    try? await Task.sleep(for: .milliseconds(25))
+                }
+            }
         }
         if wasCancelled {
             let unfinishedCandidates = selectedCandidates.filter { candidate in
@@ -4043,7 +4468,7 @@ final class AppState: ObservableObject {
             latestPublishedAt: newestReleaseRadarEligibleEpisode(in: subscription)?.publishedAt,
             publishDates: Array(publishDates),
             stats: subscription.refreshStats,
-            minRecheckInterval: Double(settingsStore.appSettings.podcastPollMinutes) * 60,
+            minRecheckInterval: automaticReleaseRadarBaseInterval,
             now: now
         )
     }
@@ -4079,7 +4504,7 @@ final class AppState: ObservableObject {
         let deferred = deferredRefreshBacklog.mapValues {
             RefreshPlanningDeferredSnapshot(firstDeferredAt: $0.firstDeferredAt, deferralCount: $0.deferralCount)
         }
-        let interval = Double(settingsStore.appSettings.podcastPollMinutes) * 60
+        let interval = automaticReleaseRadarBaseInterval
         return await Task.detached(priority: .utility) {
             ReleaseRadarCyclePlanner.candidates(
                 subscriptions: subscriptions,
@@ -4100,6 +4525,7 @@ final class AppState: ObservableObject {
         skippedBackoffCount: Int,
         skippedInactiveCount: Int,
         maxSubscriptions: Int?,
+        maxTotalSelections: Int?,
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
@@ -4113,6 +4539,7 @@ final class AppState: ObservableObject {
             "selected": "\(selectedCount)",
             "cappedOut": "\(max(0, candidates.count - selectedCount))",
             "maxSubscriptions": maxSubscriptions.map(String.init) ?? "all",
+            "maxTotalSelections": maxTotalSelections.map(String.init) ?? "unlimited",
             "capBypassStates": refreshStateList(capBypassStates),
             "protectedStates": refreshStateList(protectedStates),
             "protectedMinimum": "\(minimumProtectedSelections)",
@@ -4124,7 +4551,8 @@ final class AppState: ObservableObject {
             "topCandidates": refreshTopCandidateSummary(for: candidates),
             "selectedCandidates": refreshTopCandidateSummary(for: selectedCandidates),
             "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
-        ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
+        ].merging(deferredBacklogDiagnosticMetadata(now: Date())) { _, new in new }
+         .merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
     }
 
     private func refreshDecisionMetadata(for candidate: RefreshCycleCandidate) -> [String: String] {
@@ -4296,7 +4724,8 @@ final class AppState: ObservableObject {
                 "deferred": "\(deferredCandidates.count)",
                 "backlogCount": "\(deferredRefreshBacklog.count)",
                 "deferredCandidates": refreshTopCandidateSummary(for: deferredCandidates)
-            ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
+            ].merging(deferredBacklogDiagnosticMetadata(now: now)) { _, new in new }
+             .merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
         }
     }
 
@@ -4314,7 +4743,31 @@ final class AppState: ObservableObject {
             "unfinished": "\(candidates.count)",
             "backlogCount": "\(deferredRefreshBacklog.count)",
             "unfinishedCandidates": refreshTopCandidateSummary(for: candidates)
-        ].merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
+        ].merging(deferredBacklogDiagnosticMetadata(now: now)) { _, new in new }
+         .merging(diagnostics.metadata(currentSceneActive: isSceneActive)) { _, new in new })
+    }
+
+    /// AI CONTEXT — Backlog diagnostics expose starvation directly. Age is based
+    /// on the first time the currently-oldest feed was capped out, not its most
+    /// recent deferral, so repeated cycles cannot make a long wait look new.
+    private func deferredBacklogDiagnosticMetadata(now: Date) -> [String: String] {
+        guard let oldest = deferredRefreshBacklog.values.min(by: { $0.firstDeferredAt < $1.firstDeferredAt }) else {
+            return [
+                "oldestDeferredAgeSeconds": "0",
+                "oldestDeferredPodcast": "none",
+                "oldestDeferredSubscriptionID": "none",
+                "oldestDeferredCount": "0",
+                "oldestDeferredState": "none"
+            ]
+        }
+        return [
+            "oldestDeferredAgeSeconds": "\(max(0, Int(now.timeIntervalSince(oldest.firstDeferredAt).rounded())))",
+            "oldestDeferredSince": refreshLogDate(oldest.firstDeferredAt),
+            "oldestDeferredPodcast": oldest.title,
+            "oldestDeferredSubscriptionID": oldest.subscriptionID.uuidString,
+            "oldestDeferredCount": "\(oldest.deferralCount)",
+            "oldestDeferredState": oldest.state.rawValue
+        ]
     }
 
     private func recordDeferredRefreshCandidate(_ candidate: RefreshCycleCandidate, now: Date) {
@@ -4372,6 +4825,16 @@ final class AppState: ObservableObject {
                 "limit": "\(limit)"
             ])
             await archiveEpisode(episode, completionKind: .autoArchived)
+            autoArchiveActivityStore.record(AutoArchiveActivity(
+                episodeID: episode.id,
+                subscriptionID: subscription.id,
+                episodeTitle: episode.title,
+                podcastTitle: subscription.title,
+                archivedAt: Date(),
+                rule: .episodeLimit,
+                configuredThreshold: "Keep \(limit)",
+                measuredAgeSeconds: max(0, Date().timeIntervalSince(episode.publishedAt ?? episode.downloadedAt ?? Date()))
+            ))
         }
     }
 
@@ -4417,6 +4880,21 @@ final class AppState: ObservableObject {
         let now = Date()
         let playingID = currentPlayerEpisode?.id
 
+        // AI CONTEXT — Eligibility counters explain zero-result passes. They
+        // count rule-specific candidates and the principal reason work remained
+        // pending/protected, then emit one compact diagnostic at pass completion.
+        var playedEvaluated = 0
+        var playedWaiting = 0
+        var inactiveEvaluated = 0
+        var inactiveNeverDownloaded = 0
+        var inactiveWaiting = 0
+        var protectedCurrent = 0
+        var limitCandidates = 0
+        var limitBacklogProtected = 0
+        var archivedPlayed = 0
+        var archivedInactive = 0
+        var archivedLimit = 0
+
         // Collect all non-archived episodes grouped by subscription.
         let allSubscriptions = subscriptionStore.subscriptions
         var archivedIDs = Set<UUID>()   // track within this run to avoid double-archiving
@@ -4438,30 +4916,50 @@ final class AppState: ObservableObject {
             // ── Pass 1: After Played ──────────────────────────────────────────
             if let interval = settings.afterPlayed.interval {
                 for episode in allEpisodes {
-                    guard episode.playedState == .played,
-                          episode.id != playingID,
+                    guard episode.playedState == .played else { continue }
+                    playedEvaluated += 1
+                    guard episode.id != playingID,
                           !archivedIDs.contains(episode.id)
-                    else { continue }
+                    else {
+                        if episode.id == playingID { protectedCurrent += 1 }
+                        continue
+                    }
 
                     let playedAt = episode.lastPlayedAt ?? now  // if no timestamp, archive immediately
-                    if now.timeIntervalSince(playedAt) >= interval {
+                    let playedAge = now.timeIntervalSince(playedAt)
+                    if playedAge >= interval {
                         await archiveEpisode(episode, completionKind: .autoArchived)
+                        autoArchiveActivityStore.record(AutoArchiveActivity(
+                            episodeID: episode.id,
+                            subscriptionID: subscription.id,
+                            episodeTitle: episode.title,
+                            podcastTitle: subscription.title,
+                            archivedAt: Date(),
+                            rule: .afterPlaying,
+                            configuredThreshold: settings.afterPlayed.title,
+                            measuredAgeSeconds: playedAge
+                        ))
                         archivedIDs.insert(episode.id)
                         archivedCount += 1
+                        archivedPlayed += 1
                         logger.info("autoArchive.played", "Archived played episode", metadata: [
                             "podcast": subscription.title, "episode": episode.title
                         ])
-                    }
+                    } else { playedWaiting += 1 }
                 }
             }
 
             // ── Pass 2: After Inactive ────────────────────────────────────────
             if let interval = settings.afterInactive.interval {
                 for episode in allEpisodes {
-                    guard episode.playedState == .unplayed,
-                          episode.id != playingID,
+                    guard episode.playedState == .unplayed else { continue }
+                    inactiveEvaluated += 1
+                    guard episode.id != playingID,
                           !archivedIDs.contains(episode.id)
-                    else { continue }
+                    else {
+                        if episode.id == playingID { protectedCurrent += 1 }
+                        continue
+                    }
 
                     // Only downloaded episodes are eligible — an episode that has
                     // never been downloaded has never been "touched" and should not
@@ -4470,7 +4968,10 @@ final class AppState: ObservableObject {
                     // exemption above (bug fix 2026-07-05: an old backlog episode
                     // the user explicitly downloaded was being permanently
                     // protected from the inactive-timeout rule by publish date).
-                    guard let downloadedAt = episode.downloadedAt else { continue }
+                    guard let downloadedAt = episode.downloadedAt else {
+                        inactiveNeverDownloaded += 1
+                        continue
+                    }
 
                     // "Last activity" = the most recent of: download date, play date.
                     // The clock starts when the file lands on device, and resets any
@@ -4481,31 +4982,57 @@ final class AppState: ObservableObject {
 
                     if lastActivityAge >= interval {
                         await archiveEpisode(episode, completionKind: .autoArchived)
+                        autoArchiveActivityStore.record(AutoArchiveActivity(
+                            episodeID: episode.id,
+                            subscriptionID: subscription.id,
+                            episodeTitle: episode.title,
+                            podcastTitle: subscription.title,
+                            archivedAt: Date(),
+                            rule: .inactiveEpisodes,
+                            configuredThreshold: settings.afterInactive.title,
+                            measuredAgeSeconds: lastActivityAge
+                        ))
                         archivedIDs.insert(episode.id)
                         archivedCount += 1
+                        archivedInactive += 1
                         logger.info("autoArchive.inactive", "Archived inactive episode", metadata: [
                             "podcast": subscription.title, "episode": episode.title
                         ])
-                    }
+                    } else { inactiveWaiting += 1 }
                 }
             }
 
             // ── Pass 3: Episode Limit ─────────────────────────────────────────
             let limit = settings.episodeLimit.rawValue
             if limit > 0 {
+                limitBacklogProtected += subscription.episodes.filter {
+                    $0.playedState != .archived && isPreSubscriptionBacklog($0)
+                }.count
                 // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
                 let candidates = subscription.episodes
                     .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && ($0.downloadState == .queued || $0.downloadState == .downloaded) && !isPreSubscriptionBacklog($0) }
                     .sorted {
                         ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
                     }
+                limitCandidates += candidates.count
                 for (index, episode) in candidates.enumerated() {
                     guard index >= limit,
                           episode.id != playingID
                     else { continue }
                     await archiveEpisode(episode, completionKind: .autoArchived)
+                    autoArchiveActivityStore.record(AutoArchiveActivity(
+                        episodeID: episode.id,
+                        subscriptionID: subscription.id,
+                        episodeTitle: episode.title,
+                        podcastTitle: subscription.title,
+                        archivedAt: Date(),
+                        rule: .episodeLimit,
+                        configuredThreshold: "Keep \(limit)",
+                        measuredAgeSeconds: max(0, now.timeIntervalSince(episode.publishedAt ?? episode.downloadedAt ?? now))
+                    ))
                     archivedIDs.insert(episode.id)
                     archivedCount += 1
+                    archivedLimit += 1
                     logger.info("autoArchive.limit", "Archived episode over limit", metadata: [
                         "podcast": subscription.title, "episode": episode.title, "limit": "\(limit)"
                     ])
@@ -4514,6 +5041,21 @@ final class AppState: ObservableObject {
         }
 
         refreshUpNextEpisode(reason: "autoArchive.finished")
+        logger.info("autoArchive.eligibility", "Auto Archive eligibility summary", metadata: [
+            "reason": reason,
+            "subscriptions": "\(allSubscriptions.count)",
+            "playedEvaluated": "\(playedEvaluated)",
+            "playedWaiting": "\(playedWaiting)",
+            "inactiveEvaluated": "\(inactiveEvaluated)",
+            "inactiveNeverDownloaded": "\(inactiveNeverDownloaded)",
+            "inactiveWaiting": "\(inactiveWaiting)",
+            "protectedCurrent": "\(protectedCurrent)",
+            "limitCandidates": "\(limitCandidates)",
+            "limitBacklogProtected": "\(limitBacklogProtected)",
+            "archivedPlayed": "\(archivedPlayed)",
+            "archivedInactive": "\(archivedInactive)",
+            "archivedLimit": "\(archivedLimit)"
+        ])
         logger.info("autoArchive.finished", "Auto archive finished", metadata: [
             "reason": reason,
             "archivedCount": "\(archivedCount)"
@@ -5573,8 +6115,9 @@ final class AppState: ObservableObject {
     /// (unlike best-effort BGAppRefreshTask), so new episodes are caught and queued
     /// for download while the user listens with the screen off. When the process is
     /// truly idle (no audio) iOS suspends it and this loop pauses until the next
-    /// foreground/audio wake; background-audio refreshes are globally limited to one
-    /// four-feed cycle per ten minutes so a long session cannot create a radio storm.
+    /// foreground/audio wake; background-audio refreshes are limited to one cycle
+    /// every four minutes: seven routine feeds, with urgent release-window work
+    /// allowed to use up to ten total checks. Resource pressure lowers both limits.
     /// BGAppRefreshTask covers the not-listening case (see
     /// BACKGROUND_REFRESH_RESEARCH.md). The work label flips to `backgroundAudioAlive`
     /// when the scene is inactive but audio is playing.
@@ -5599,9 +6142,8 @@ final class AppState: ObservableObject {
                 // the onlyDueFeeds/no-selection guard) or the cycle is cancelled
                 // by the background time budget. So the inactive-timeout clock was
                 // serviced only by chance. This tick services it every poll while
-                // the app is alive; runAutoArchiveIfNeeded's built-in 30-min gate
-                // keeps the actual pass to "at most every 30 minutes" (the promise
-                // the Settings footer makes) regardless of how often we call it.
+                // the app is alive; runAutoArchiveIfNeeded's built-in 25-minute
+                // gate bounds the work regardless of how often this loop calls it.
                 await self.runAutoArchiveIfNeeded(reason: "poll.tick")
 
                 let now = Date()
@@ -5777,9 +6319,13 @@ final class AppState: ObservableObject {
 // (historyKey) so the same episode re-fetched from a feed merges into one entry
 // without colliding across feeds. recordProgress() is called from AppState's 0.5 s
 // playback ticks, but deliberately accumulates those samples in memory and applies
-// one entry mutation/sort/sync marker per 10-second batch. save() and mark() flush
+// one entry mutation/sort/sync marker per 30-second batch. Routine diagnostics
+// are summarized at most every five minutes; lifecycle flushes remain immediate.
+// save() and mark() flush
 // the buffer first, preserving pause/background/completion durability. mark() sets
-// played/archived status with a CompletionKind used
+// played/archived status with a CompletionKind used. A later `.autoArchived`
+// storage cleanup cannot replace an existing Played/finished/marked-played event;
+// history records how listening ended, not the episode's later library state.
 // later by ShowEngagementAnalyzer ("drifting" stats).
 // UI filters out entries with < 60 s listened — that rule lives in the views,
 // not here. Value types live in Models/ListeningHistory.swift.
@@ -5789,8 +6335,10 @@ final class ListeningHistoryStore: ObservableObject {
 
     private var lastSavedAt: Date?
     private let maxEntries = 500
-    private let progressFlushInterval: TimeInterval = 10
+    private let progressFlushInterval: TimeInterval = 30
     private var lastProgressFlushAt: Date?
+    private var lastProgressDiagnosticAt: Date?
+    private let progressDiagnosticInterval: TimeInterval = 5 * 60
 
     /// Latest metadata plus accumulated wall-clock listening for one episode.
     /// Playback normally has only one pending key; the dictionary makes an episode
@@ -5909,11 +6457,16 @@ final class ListeningHistoryStore: ObservableObject {
             entries.removeLast(entries.count - maxEntries)
         }
         for key in pending.keys { recordPending(id: key) }
-        AppLogger.shared.info("history.progressFlush", "Applied coalesced listening-history progress", metadata: [
-            "reason": reason,
-            "episodeCount": "\(pending.count)",
-            "listenedSeconds": String(format: "%.1f", pending.values.reduce(0) { $0 + $1.listenedSeconds })
-        ])
+        let now = Date()
+        let routineSummaryDue = lastProgressDiagnosticAt.map({ now.timeIntervalSince($0) >= progressDiagnosticInterval }) ?? true
+        if reason != "playbackBatch" || routineSummaryDue {
+            lastProgressDiagnosticAt = now
+            AppLogger.shared.info("history.progressFlush", "Applied coalesced listening-history progress", metadata: [
+                "reason": reason,
+                "episodeCount": "\(pending.count)",
+                "listenedSeconds": String(format: "%.1f", pending.values.reduce(0) { $0 + $1.listenedSeconds })
+            ])
+        }
         if reason == "playbackBatch" {
             saveThrottled()
         }
@@ -5938,6 +6491,21 @@ final class ListeningHistoryStore: ObservableObject {
         }()
 
         if let index = entries.firstIndex(where: { $0.id == key }) {
+            // AI CONTEXT — Auto Archive's After Played pass runs after playback
+            // completion and changes the library row to Archived. It is not a new
+            // listening outcome. Preserve both modern CompletionKind events and
+            // legacy Played entries so the UI continues to say Completed.
+            let existing = entries[index]
+            if completionKind == .autoArchived,
+               existing.status == .played
+                || existing.completionKind == .finishedNaturally
+                || existing.completionKind == .markedPlayed {
+                AppLogger.shared.info("history.autoArchivePreservedCompletion", "Preserved completed history event during automatic storage cleanup", metadata: [
+                    "episode": episode.title,
+                    "existingKind": existing.completionKind?.rawValue ?? "legacyPlayed"
+                ])
+                return
+            }
             entries[index].status = status
             entries[index].podcastTitle = podcastTitle
             entries[index].artworkURL = artworkURL
@@ -6000,17 +6568,19 @@ final class ListeningHistoryStore: ObservableObject {
     func applyRemote(_ remote: ListeningHistoryEntry) {
         // Resolve local buffered ticks before record-level LWW compares timestamps.
         flushPendingProgress(reason: "remoteMerge")
-        if let index = entries.firstIndex(where: { $0.id == remote.id }) {
-            guard remote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
-            entries[index] = remote
+        var normalizedRemote = remote
+        normalizedRemote.repairAutoArchiveOverwriteIfClearlyCompleted()
+        if let index = entries.firstIndex(where: { $0.id == normalizedRemote.id }) {
+            guard normalizedRemote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
+            entries[index] = normalizedRemote
         } else {
-            entries.append(remote)
+            entries.append(normalizedRemote)
         }
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
-        try? syncDatabase?.saveSyncedHistoryEntry(remote) // clean — don't re-push
+        try? syncDatabase?.saveSyncedHistoryEntry(normalizedRemote) // clean — don't re-push
         save()
     }
 
@@ -6045,7 +6615,20 @@ final class ListeningHistoryStore: ObservableObject {
               let data = try? Data(contentsOf: url),
               let loadedEntries = try? JSONDecoder().decode([ListeningHistoryEntry].self, from: data)
         else { return }
-        entries = loadedEntries.sorted { $0.lastListenedAt > $1.lastListenedAt }
+        var repairedCount = 0
+        entries = loadedEntries.map { entry in
+            var normalized = entry
+            if normalized.repairAutoArchiveOverwriteIfClearlyCompleted() {
+                repairedCount += 1
+            }
+            return normalized
+        }.sorted { $0.lastListenedAt > $1.lastListenedAt }
+        if repairedCount > 0 {
+            AppLogger.shared.info("history.autoArchiveRepair", "Repaired completed history events overwritten by automatic storage cleanup", metadata: [
+                "entryCount": "\(repairedCount)"
+            ])
+            save()
+        }
     }
 
     private func historyKey(for episode: Episode) -> String {

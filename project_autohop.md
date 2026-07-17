@@ -9,6 +9,9 @@ behaviour, PAGES.md owns navigation/page names, DESIGN.md owns UI patterns,
 SYNC_DESIGN.md owns iCloud sync, and DEEP_SCAN_2026-06-28.md owns the latest
 assessment findings. Keep this brief refreshed when recent UI or sync behaviour
 changes so future AI agents do not inherit stale summary assumptions.
+Priority Stack ordering is one UUID-addressed `SubscriptionOrder` generation,
+not a set of independently authoritative `priorityRank` fields. Reorder UI drafts
+active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
 -->
@@ -43,7 +46,10 @@ compilation conditions are provided. The iPhone target remains device family 1;
   media into the local downloads directory.
 - Sync: optional CloudKit via `Persistence/CloudSyncEngine.swift` and
   `Persistence/CloudKitSyncMapping.swift`. Record types are `EpisodeState`,
-  `SubscriptionState`, `HistoryEntry`, and `DayStats`.
+  `SubscriptionState`, `SubscriptionOrder`, `HistoryEntry`, `DayStats`, and the
+  existing queue singleton. `SubscriptionOrder` stores the real-subscription UUID
+  list atomically; delayed save acknowledgements clear only matching field/order
+  versions.
 - CarPlay: read-only/downloaded playback surface in `CarPlay/`, sharing the same
   playback, Up Next, archive, speed, and shared-listening state as the iPhone app.
 
@@ -52,20 +58,22 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - First-run onboarding: Welcome carousel, OPML import, Starter Packs, first-subscribe
   "You're all set" sheet, getting-started checklist, and coach marks.
 - Discovery: Apple Podcasts charts, country picker, Top Episodes, Top Podcasts,
+  dedicated Top-50 pages for every displayed category,
   search, direct RSS add, and Recently Viewed browse subscriptions.
-- Listening: download-first playback, Trim Silence, Vocal Boost, per-podcast speed,
+- Listening: download-first playback, Trim Silence, Vocal Boost, per-podcast speed
+  and −3…+3 dB volume adjustment,
   start/end skip, shared debounced trim-control rows in both Podcast Settings and
   Default Playback, chapter filtering, audio/video playback, share cards, sleep
   timer, sleep schedule, Now Playing, and lock-screen/Control Centre commands.
 - Player resume polish: the scrubber now synchronises to the restored playback
   clock on first render, so partially played episodes open with the correct thumb
   position as well as the correct elapsed/remaining labels.
-- Organisation: Priority Stack, Up Next, Play Next, Play Last, archive/unarchive,
-  per-podcast settings, per-podcast Download Filters, auto-archive, listening history,
-  and stats.
+- Organisation: Priority Stack with stable multi-move reorder sessions, Up Next,
+  Play Next, Play Last, archive/unarchive, per-podcast settings, per-podcast
+  Download Filters, auto-archive, listening history, and stats.
 - Background work: cooperative-deadline BGAppRefreshTask + BGProcessingTask feed refresh,
-  Release Radar protected background slots, foreground polling, four-feed/ten-minute
-  background-audio polling budgets, and background
+  Release Radar protected background slots, foreground polling, adaptive seven-feed
+  background-audio cycles every four minutes (urgent hard ceiling ten), and background
   URLSession media downloads.
 - Portability/privacy: OPML import/export, optional iCloud sync, on-device default
   stance, local logs, and a minimal privacy manifest.
@@ -77,14 +85,16 @@ Synced:
 - Subscriptions and unsubscribe tombstones.
 - Per-episode played/archive/completion state.
 - Listening history, including `lastPositionSeconds` resume point and `listenedSeconds`.
-- Most individual subscription settings: priority rank, inactive/return rank,
-  notifications, playback preference, auto-archive settings, chapter filter, title,
-  and feed URL.
+- Atomic whole-list Priority Stack order (`SubscriptionOrder`); legacy
+  per-subscription rank remains a compatibility projection.
+- Most individual subscription settings: inactive/return rank, notifications,
+  playback preference, auto-archive settings, chapter filter, Download Filters,
+  title, and feed URL.
 - Stats page data via additive per-device `DayStats`.
 
 Not synced in v1:
 
-- Global `AppSettings` such as Release Radar sensitivity, download Wi-Fi/cellular
+- Global `AppSettings` such as download Wi-Fi/cellular
   toggles, skip durations, sleep schedule, recaps, launch screen, onboarding flags,
   and global Default Playback.
 - Release Radar learned schedule/refresh stats.

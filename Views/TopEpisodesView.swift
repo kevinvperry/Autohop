@@ -3,7 +3,8 @@ import SwiftUI
 // AI CONTEXT — Views/TopEpisodesView.swift ("Top Episodes" page — child of
 // Discover, reached via the "See All" button on the Top Episodes hero header).
 // An expanded, editorial Top-50 list of Apple Podcasts chart episodes for the
-// currently selected Discover country. Data comes from the shared
+// currently selected Discover country. The shared toolbar country picker writes
+// Discover's AppStorage selection and reloads this visible chart. Data comes from the shared
 // DiscoverViewModel.top50Episodes (service.topEpisodes limit 50, release-date
 // enriched, cached per country); loaded lazily on appear via loadTop50. LAYOUT:
 // a large feature card every 7th entry (ranks 1, 8, 15, 22, 29, 36, 43 —
@@ -20,6 +21,7 @@ import SwiftUI
 struct TopEpisodesView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
+    @AppStorage("discoverCountryCode") private var storedCountryCode = ""
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -31,6 +33,10 @@ struct TopEpisodesView: View {
     private enum DetailRoute: Hashable {
         case preview(PodcastSearchResult)
         case episodes(UUID)
+    }
+
+    private var selectedCountry: ChartCountry {
+        storedCountryCode.isEmpty ? country : .named(storedCountryCode)
     }
 
     var body: some View {
@@ -46,7 +52,7 @@ struct TopEpisodesView: View {
                     Text(message)
                 } actions: {
                     Button("Retry") {
-                        Task { await viewModel.reloadTop50(country: country.code) }
+                        Task { await viewModel.reloadTop50(country: selectedCountry.code) }
                     }
                     .buttonStyle(.bordered)
                 }
@@ -61,6 +67,9 @@ struct TopEpisodesView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
+            }
         }
         .navigationDestination(item: $pendingRoute) { route in
             switch route {
@@ -72,11 +81,11 @@ struct TopEpisodesView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
-        .task(id: country.code) {
-            await viewModel.loadTop50(country: country.code)
+        .task(id: selectedCountry.code) {
+            await viewModel.loadTop50(country: selectedCountry.code)
         }
         .refreshable {
-            await viewModel.reloadTop50(country: country.code)
+            await viewModel.reloadTop50(country: selectedCountry.code)
         }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
@@ -90,7 +99,7 @@ struct TopEpisodesView: View {
     private var listContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                Text("Apple Podcasts · \(country.name)")
+                Text("Apple Podcasts · \(selectedCountry.name)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 20)
@@ -271,7 +280,7 @@ struct TopEpisodesView: View {
         resolvingEpisodeID = episode.id
         Task {
             defer { resolvingEpisodeID = nil }
-            guard let result = await viewModel.resolveEpisodePodcast(episode, country: country.code) else {
+            guard let result = await viewModel.resolveEpisodePodcast(episode, country: selectedCountry.code) else {
                 showUnavailableAlert = true
                 return
             }

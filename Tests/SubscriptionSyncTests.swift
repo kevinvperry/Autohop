@@ -82,7 +82,8 @@ final class SubscriptionSyncTests: XCTestCase {
             startSkipSeconds: 0,
             endSkipSeconds: 0,
             vocalBoostLevel: .strong,
-            trimSilence: .low
+            trimSilence: .low,
+            volumeAdjustment: 2
         )
         var local = SubscriptionSyncState(subscription: sub)
         local.markClean()
@@ -105,6 +106,7 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(merged.playbackPreference.speed, 1.8)
         XCTAssertEqual(merged.playbackPreference.trimSilence, .low)
         XCTAssertEqual(merged.playbackPreference.vocalBoostLevel, .strong)
+        XCTAssertEqual(merged.playbackPreference.volumeAdjustment, 2)
     }
 
     // MARK: - CKRecord mapping
@@ -304,7 +306,8 @@ final class SubscriptionSyncTests: XCTestCase {
             startSkipSeconds: 7,
             endSkipSeconds: 3,
             vocalBoostLevel: .strong,
-            trimSilence: .low
+            trimSilence: .low,
+            volumeAdjustment: -2
         )
         let legacy = SubscriptionSyncState(subscription: legacySub, dirtyAt: Date(timeIntervalSince1970: 1_700_000_000))
 
@@ -317,6 +320,7 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(result.endSkipSeconds, 3)
         XCTAssertEqual(result.trimSilence, .low)
         XCTAssertEqual(result.vocalBoostLevel, .strong)
+        XCTAssertEqual(result.volumeAdjustment, -2)
 
         let pending = try db.pendingSubscriptionSyncStates()
         let upload = try XCTUnwrap(pending.first { $0.subscriptionID == id })

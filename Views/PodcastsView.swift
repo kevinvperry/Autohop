@@ -4,8 +4,12 @@ import UniformTypeIdentifiers
 // AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
 // home page, see PAGES.md). Ranked list of real subscriptions (browse
 // subscriptions filtered out; Inactive subscriptions remain visible at the
-// bottom with the orange pill); drag-to-reorder in Reorder mode rewrites
-// priorityRank for the whole list. Each row shows artwork, the show title and
+// bottom with the orange pill). Reorder mode uses a stable local draft of ACTIVE
+// real-subscription IDs; browse previews never enter the drag index space and
+// Inactive rows are fixed at the bottom. Done commits one validated transaction,
+// flushes it to disk, and authors one atomic SubscriptionOrder generation.
+// Remote order updates are deferred by SubscriptionStore while this draft is
+// active. Each row shows artwork, the show title and
 // the show's (channel-level) description clamped to 2 lines — styled to match
 // PodcastDetailView's episode-row title/description (subheadline-semibold /
 // caption-secondary) — plus a metadata line "Updated: <relative age>"
@@ -30,6 +34,7 @@ import UniformTypeIdentifiers
 // (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
@@ -39,12 +44,36 @@ struct PodcastsView: View {
     @State private var showDiscover = false
     @State private var showOPMLImporter = false
     @State private var showStarterPacks = false
+    @State private var reorderDraftIDs: [UUID] = []
+    @State private var persistenceErrorMessage: String?
 
     /// Subscriptions visible in the Priority Sort list.
     /// Browse-only subscriptions (browseDate != nil) are invisible here —
     /// they only become visible once the user explicitly presses Subscribe.
     private var visibleSubscriptions: [Subscription] {
         appState.subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+    }
+
+    private var activeSubscriptions: [Subscription] {
+        visibleSubscriptions.filter { !$0.excludeFromAutoFeedRefresh }
+    }
+
+    private var inactiveSubscriptions: [Subscription] {
+        visibleSubscriptions.filter(\.excludeFromAutoFeedRefresh)
+    }
+
+    /// Stable reorder source: existing draft IDs first, then any active
+    /// subscription that arrived while the session was open.
+    private var reorderableSubscriptions: [Subscription] {
+        guard editMode == .active else { return activeSubscriptions }
+        let byID = Dictionary(activeSubscriptions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<UUID>()
+        var result = reorderDraftIDs.compactMap { id -> Subscription? in
+            guard seen.insert(id).inserted else { return nil }
+            return byID[id]
+        }
+        result.append(contentsOf: activeSubscriptions.filter { seen.insert($0.id).inserted })
+        return result
     }
 
     var body: some View {
@@ -62,7 +91,12 @@ struct PodcastsView: View {
                     HStack {
                         Button {
                             withAnimation {
-                                editMode = editMode == .active ? .inactive : .active
+                                if editMode == .active {
+                                    finishReorderSession(reason: "done")
+                                } else {
+                                    reorderDraftIDs = appState.subscriptionStore.beginPriorityReorderSession()
+                                    editMode = .active
+                                }
                             }
                         } label: {
                             let reorderLabel = Label(
@@ -92,7 +126,7 @@ struct PodcastsView: View {
                         .buttonStyle(.plain)
 
                         if editMode == .active {
-                            Text("drag to set priority")
+                            Text("drag active shows to set priority")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                                 .padding(.leading, 4)
@@ -165,6 +199,22 @@ struct PodcastsView: View {
         }
         .onAppear {
             if !visibleSubscriptions.isEmpty { appState.requestTip(.priorityStack) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active, editMode == .active else { return }
+            finishReorderSession(reason: "scene.\(phase)")
+        }
+        .onDisappear {
+            guard editMode == .active else { return }
+            finishReorderSession(reason: "view.disappeared")
+        }
+        .alert("Couldn’t Save Subscription Order", isPresented: Binding(
+            get: { persistenceErrorMessage != nil },
+            set: { if !$0 { persistenceErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { persistenceErrorMessage = nil }
+        } message: {
+            Text(persistenceErrorMessage ?? "Autohop will retry the save.")
         }
         .sheet(isPresented: $showMenu) { MenuSheetView() }
         .navigationDestination(isPresented: $showDiscover) { DiscoverView() }
@@ -260,17 +310,41 @@ struct PodcastsView: View {
         }
     }
 
+    private func finishReorderSession(reason: String) {
+        let finalIDs = reorderableSubscriptions.map(\.id)
+        let accepted = appState.subscriptionStore.commitPriorityReorderSession(
+            orderedActiveSubscriptionIDs: finalIDs,
+            reason: reason
+        )
+        reorderDraftIDs = []
+        editMode = .inactive
+        guard accepted else {
+            persistenceErrorMessage = "The podcast list changed while you were reordering. No uncertain order was saved; please try again."
+            return
+        }
+        Task { @MainActor in
+            let saved = await appState.subscriptionStore.flushPendingSaves()
+            if !saved {
+                persistenceErrorMessage = appState.subscriptionStore.lastPersistenceErrorDescription
+                    ?? "Autohop could not write the new order to local storage."
+            }
+        }
+    }
+
     /// The Priority Stack list inside an iOS-glass card, matching the bell button
     /// and toolbar capsule (same treatment as PodcastDetailView's episode list).
     @ViewBuilder
     private var priorityListCard: some View {
         let list = List {
-            ForEach(visibleSubscriptions) { subscription in
+            ForEach(Array(reorderableSubscriptions.enumerated()), id: \.element.id) { index, subscription in
                 let isPlaying = subscription.newestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)
                 } label: {
-                    subscriptionRow(subscription)
+                    subscriptionRow(
+                        subscription,
+                        displayedRank: editMode == .active ? index + 1 : subscription.priorityRank
+                    )
                 }
                 // Idle rows are clear so the card's glass shows through; the
                 // playing row keeps the faint purple tint.
@@ -279,9 +353,24 @@ struct PodcastsView: View {
             }
             .onMove { from, to in
                 guard editMode == .active else { return }
-                appState.subscriptionStore.reorder(from: from, to: to)
+                var draft = reorderableSubscriptions.map(\.id)
+                draft.move(fromOffsets: from, toOffset: to)
+                reorderDraftIDs = draft
                 // Onboarding: mark the "reorder your Priority Stack" step done.
                 UserDefaults.standard.set(true, forKey: GettingStartedChecklist.reorderedKey)
+            }
+
+            // Inactive subscriptions remain visible for access/settings but are
+            // not part of active playback priority and cannot be dragged.
+            ForEach(inactiveSubscriptions) { subscription in
+                let isPlaying = subscription.newestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
+                NavigationLink {
+                    PodcastDetailView(subscriptionID: subscription.id)
+                } label: {
+                    subscriptionRow(subscription, displayedRank: subscription.priorityRank)
+                }
+                .listRowBackground(isPlaying ? Color.purple.opacity(0.08) : Color.clear)
+                .moveDisabled(true)
             }
         }
         .listStyle(.plain)
@@ -298,7 +387,7 @@ struct PodcastsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    private func subscriptionRow(_ sub: Subscription) -> some View {
+    private func subscriptionRow(_ sub: Subscription, displayedRank: Int) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             // Top band: artwork + titles
             HStack(alignment: .top, spacing: 12) {
@@ -337,7 +426,7 @@ struct PodcastsView: View {
                     // Rank pill — centred under the artwork; min width 44pt so it
                     // stays aligned with the artwork above for single-digit numbers,
                     // but expands naturally for two- or three-digit numbers.
-                    rankPill(sub.priorityRank)
+                    rankPill(displayedRank)
                         .frame(minWidth: 44, alignment: .center)
 
                     // Metadata: "Updated: <relative date>" · Spacer · status pill

@@ -6,8 +6,8 @@ import Combine
 // CKSyncEngine wrapper for cross-device sync (SYNC_DESIGN.md).
 // OPT-IN: only runs while AppSettings.iCloudSyncEnabled is true (AppState drives
 // start/stop). Syncs episode user-state, subscription settings, listening
-// history, and additive per-device listening stats. Downloads and catalog content
-// never sync.
+// history, additive per-device listening stats, and one atomic SubscriptionOrder
+// record. Downloads and catalog content never sync.
 //
 // Pull: handleFetchedChanges wraps the apply loop in SubscriptionStore.begin/
 // endChangeNotificationCoalescing so a fetch burst (e.g. 18 records after cold
@@ -82,6 +82,10 @@ import Combine
 // server system fields/change tag but keeps the local full-day bucket dirty, so
 // the retry updates the current server record instead of fighting the same stale
 // change tag again.
+// STALE-ACK INVARIANT (2026-07-18): a successful response clears only the exact
+// value+modifiedAt/generation sent. If another local edit occurred in flight,
+// it stays dirty and is immediately requeued. Never call the database's legacy
+// unconditional markSynced path from a network acknowledgment.
 // PUBLIC since tvOS Phase 1: the TV app consumes AutohopCore as a library
 // import (unlike the iOS target, which compiles these sources directly), so
 // the engine's lifecycle surface (init/start/stop/toggle/flush + the three
@@ -382,6 +386,12 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 }
                 cursor = page.queryCursor
             } while cursor != nil
+            // Prime the authoritative whole-list order immediately after the
+            // membership records. Materialization can continue asynchronously;
+            // SubscriptionStore reuses this stored order as each feed arrives.
+            if let orderRecord = try? await database.record(for: CloudKitSync.subscriptionOrderRecordID) {
+                await applyRemote(record: orderRecord)
+            }
             logger.info("sync.subscriptionsPrimed", "Targeted subscription prime applied", metadata: [
                 "reason": reason, "count": "\(applied)"
             ])
@@ -535,6 +545,9 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         let history = read("history entries", database.pendingHistoryEntries)
         let stats = read("stats days", database.pendingStatsDays)
         let pendingQueue = (try? database.pendingQueueSnapshot()) ?? nil
+        let pendingSubscriptionOrder = pushesSubscriptionState
+            ? ((try? database.pendingSubscriptionOrder()) ?? nil)
+            : nil
         let deviceID = DeviceIdentity.current
 
         let episodeChanges = episodes.map {
@@ -556,8 +569,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         let queueChanges: [CKSyncEngine.PendingRecordZoneChange] = pendingQueue != nil
             ? [.saveRecord(CloudKitSync.queueSnapshotRecordID)].filter { !isQuarantined($0) }
             : []
+        let subscriptionOrderChanges: [CKSyncEngine.PendingRecordZoneChange] = pendingSubscriptionOrder != nil
+            ? [.saveRecord(CloudKitSync.subscriptionOrderRecordID)].filter { !isQuarantined($0) }
+            : []
 
-        let fastChanges = episodeChanges + subscriptionChanges + queueChanges
+        let fastChanges = episodeChanges + subscriptionChanges + subscriptionOrderChanges + queueChanges
         let slowChanges = historyChanges + statsChanges
 
         if Self.shouldDeferSlowLane(slowLane, fastCount: fastChanges.count, slowCount: slowChanges.count) {
@@ -589,13 +605,14 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         logger.info("sync.queued", "Queued local changes to push", metadata: [
             "episodes": "\(episodeChanges.count)",
             "subscriptions": "\(subscriptionChanges.count)",
+            "subscriptionOrder": "\(subscriptionOrderChanges.count)",
             "history": "\(historyChanges.count)",
             "stats": "\(statsChanges.count)",
             "queue": "\(queueChanges.count)",
             "statsDayKeys": statsDayKeys.joined(separator: ","),
             "statsSystemFieldsCached": "\(cachedStatsSystemFieldCount)",
             "statsRecordNames": statsDayKeys.map { CloudKitSync.statsRecordName(deviceID: deviceID, dayKey: $0) }.joined(separator: ","),
-            "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count + (pendingQueue != nil ? 1 : 0)) - changes.count)",
+            "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count + (pendingQueue != nil ? 1 : 0) + (pendingSubscriptionOrder != nil ? 1 : 0)) - changes.count)",
             "slowLane": slowLaneLabel,
             "device": deviceID
         ])
@@ -800,6 +817,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 return target.record
             }
 
+            // Atomic Priority Stack order? Build from the current singleton even
+            // if a prior callback already cleared its pending flag; CKSyncEngine's
+            // queued request is authority to build.
+            if CloudKitSync.isSubscriptionOrderRecordName(name),
+               let order = try database.subscriptionOrder() {
+                let target = cachedOrNewRecord(
+                    systemFields: try? database.subscriptionOrderSystemFields(),
+                    recordType: CloudKitSync.subscriptionOrderRecordType,
+                    recordID: recordID
+                )
+                CloudKitSync.populate(target.record, from: order)
+                return target.record
+            }
+
             // History entry? (current recordName == history:<composite history key>).
             if let entry = try database.historyEntry(id: historyID) {
                 let target = cachedOrNewRecord(
@@ -934,6 +965,26 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     "feedURL": state.feedURL.absoluteString
                 ])
                 await onSubscriptionNeedsMaterialization?(state)
+            }
+
+        case CloudKitSync.subscriptionOrderRecordType:
+            guard let remote = CloudKitSync.subscriptionOrder(from: record) else {
+                logDecodeFailure(record)
+                return
+            }
+            var adopted = false
+            runDB("saveSyncedSubscriptionOrder", metadata: [
+                "generationID": remote.generationID.uuidString
+            ]) {
+                adopted = try self.database?.saveSyncedSubscriptionOrder(remote) ?? false
+            }
+            runDB("storeSubscriptionOrderSystemFields") {
+                try self.database?.storeSubscriptionOrderSystemFields(Self.systemFields(of: record))
+            }
+            if adopted {
+                await MainActor.run {
+                    subscriptionStore.applyRemoteSubscriptionOrder(remote)
+                }
             }
 
         case CloudKitSync.historyRecordType:
@@ -1120,14 +1171,19 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     }
 
     private func handleSentChanges(_ event: CKSyncEngine.Event.SentRecordZoneChanges) async {
+        var newerLocalVersionRemains = false
         for saved in event.savedRecords {
-            markSaved(saved)
+            newerLocalVersionRemains = markSaved(saved) || newerLocalVersionRemains
         }
         if !event.savedRecords.isEmpty {
             logger.info("sync.pushed", "Pushed local records to iCloud", metadata: [
                 "saved": "\(event.savedRecords.count)"
             ])
             await onLocalChangesPushed?()
+        }
+        if newerLocalVersionRemains {
+            logger.info("sync.staleAcknowledgmentPreserved", "A newer local version remained dirty after an older push completed")
+            await queuePendingLocalChanges(slowLane: .flush(reason: "newerLocalAfterAcknowledgment"))
         }
 
         for failure in event.failedRecordSaves {
@@ -1246,9 +1302,9 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         }
     }
 
-    /// True when a pending change targets a `SubscriptionState` record (save
-    /// OR delete) — used by read-only subscription-state mode to drop them.
-    /// Matches by the type-namespaced record name (`subscription:<uuid>`).
+    /// True when a pending change can alter phone-owned subscription state:
+    /// either a per-show SubscriptionState or the atomic SubscriptionOrder.
+    /// tvOS/read-only clients must drop both.
     static func isSubscriptionStateChange(_ change: CKSyncEngine.PendingRecordZoneChange) -> Bool {
         let recordID: CKRecord.ID
         switch change {
@@ -1257,6 +1313,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         @unknown default: return false
         }
         return CloudKitSync.subscriptionID(fromRecordName: recordID.recordName) != nil
+            || CloudKitSync.isSubscriptionOrderRecordName(recordID.recordName)
     }
 
     private struct QuarantinedRecordKey: Hashable {
@@ -1271,47 +1328,68 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         }
     }
 
-    /// Caches system fields and clears the dirty stamp for a successfully saved record.
-    /// DB writes here were previously `try?`-swallowed; a failure leaves the record
-    /// permanently dirty (it re-pushes every sync), so they are logged as errors.
-    private func markSaved(_ record: CKRecord) {
+    /// Caches system fields and acknowledges ONLY the exact version represented
+    /// by the returned record. Returns true when a newer local version remains
+    /// dirty and must be requeued immediately.
+    private func markSaved(_ record: CKRecord) -> Bool {
         let name = record.recordID.recordName
+        var remainsPending = false
         switch record.recordType {
         case CloudKitSync.episodeRecordType:
+            remainsPending = true
             let syncKey = CloudKitSync.episodeSyncKey(from: record)
                 ?? CloudKitSync.episodeSyncKey(fromRecordName: name)
             runDB("markSaved.episode", metadata: ["syncKey": syncKey]) {
                 try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: syncKey)
-                try self.database?.markSynced(episodeSyncKeys: [syncKey], subscriptionIDs: [])
+                guard let acknowledged = CloudKitSync.episodeSyncState(from: record) else { return }
+                remainsPending = try self.database?.acknowledgeEpisodeSyncState(acknowledged) ?? false
             }
         case CloudKitSync.subscriptionRecordType:
             if let id = CloudKitSync.subscriptionID(fromRecordName: name) {
+                remainsPending = true
                 runDB("markSaved.subscription", metadata: ["id": id.uuidString]) {
                     try self.database?.storeSubscriptionSystemFields(Self.systemFields(of: record), id: id)
-                    try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [id])
+                    guard let acknowledged = CloudKitSync.subscriptionSyncState(from: record) else { return }
+                    remainsPending = try self.database?.acknowledgeSubscriptionSyncState(acknowledged) ?? false
                 }
             }
+        case CloudKitSync.subscriptionOrderRecordType:
+            remainsPending = true
+            runDB("markSaved.subscriptionOrder") {
+                try self.database?.storeSubscriptionOrderSystemFields(Self.systemFields(of: record))
+                guard let acknowledged = CloudKitSync.subscriptionOrder(from: record) else { return }
+                remainsPending = try self.database?.acknowledgeSubscriptionOrder(
+                    generationID: acknowledged.generationID
+                ) ?? false
+            }
         case CloudKitSync.historyRecordType:
+            remainsPending = true
             let id = CloudKitSync.historyID(fromRecordName: name)
             runDB("markSaved.history", metadata: ["id": id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: id)
-                try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [id])
+                guard let acknowledged = CloudKitSync.historyEntry(from: record) else { return }
+                remainsPending = try self.database?.acknowledgeHistoryEntry(acknowledged) ?? false
             }
         case CloudKitSync.statsRecordType:
             if let dayKey = CloudKitSync.statsDayKey(fromRecordName: name) {
+                remainsPending = true
                 runDB("markSaved.stats", metadata: ["dayKey": dayKey]) {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
-                    try self.database?.markSynced(episodeSyncKeys: [], subscriptionIDs: [], statsDayKeys: [dayKey])
+                    guard let (_, acknowledged) = CloudKitSync.statsPartition(from: record) else { return }
+                    remainsPending = try self.database?.acknowledgeStatsDay(acknowledged) ?? false
                 }
             }
         case CloudKitSync.queueSnapshotRecordType:
+            remainsPending = true
             runDB("markSaved.queueSnapshot") {
                 try self.database?.storeQueueSnapshotSystemFields(Self.systemFields(of: record))
-                try self.database?.markQueueSnapshotSynced()
+                guard let acknowledged = CloudKitSync.queueSnapshot(from: record) else { return }
+                remainsPending = try self.database?.acknowledgeQueueSnapshot(acknowledged) ?? false
             }
         default:
             break
         }
+        return remainsPending
     }
 
     private func handleAccountChange(_ event: CKSyncEngine.Event.AccountChange) async {

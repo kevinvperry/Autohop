@@ -8,6 +8,9 @@ Next"; `QueueSheetView`, `downloadedQueue`, and `QueueAction-Animation` remain
 implementation/design-token names. When editing UI, preserve the app-wide dark
 mode, purple accent semantics, glass-ready iOS 26 fallbacks, fixed row geometry,
 and the labeled pattern names below so future prompts can target them.
+Subscriptions Reorder is a local UUID-draft interaction: only active real
+subscriptions receive drag grips, Inactive rows remain fixed below them, and
+browse previews are absent from the visual/index space. Done commits once.
 Version 1.3 presents only the iPhone design system. Retained Apple TV and
 Autohop Pro screens are development references and are not shipping surfaces.
 -->
@@ -91,9 +94,9 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `UpNextRow-Player` | Up Next episode row — `ListRow-Standard` layout with custom drag gesture (not `.swipeActions`) |
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
-| `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost card (`Views/PlaybackControlsCard.swift`). iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background (callers pass `white.opacity(0.08)`). The `usesHostBackground` flag (default off) drops the card's own outer surface so it inherits the host Form section's row background instead — App Settings (§`Form-SettingsDark`) passes `true` so the Default Playback card matches its sibling sections; the per-podcast Playback section leaves it off. |
+| `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost / optional Volume Adjustment / Mono Audio card (`Views/PlaybackControlsCard.swift`). Per-podcast settings enable the −3…+3 dB adjustment between Vocal Boost and Mono; global Default Playback deliberately omits it. iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background. The `usesHostBackground` flag lets App Settings inherit its Form surface; Podcast Settings retains the self-contained glass card. |
 | `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
-| `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the Default Playback card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; multi-line rows (e.g. the Automation toggles) are rendered as a single `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
+| `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
@@ -1119,7 +1122,7 @@ Purple, animated progress bar shown whenever an episode is actively downloading.
 |---|---|
 | Subscriptions | Below the metadata row, indented 56 pt (past artwork) |
 | Individual Subscription | Below the episode row HStack, indented 56 pt (past artwork) |
-| Listening History | Below the history row HStack, indented 66 pt (past its larger 54 pt artwork + 12 pt gap) |
+| Listening History | Below the history row HStack, indented 56 pt (matching canonical 44 pt artwork + 12 pt gap) |
 | Downloads page | Inside the activity row, below the text stack |
 
 Progress values publish in ≥1% steps (coalesced in AppState.onProgressUpdate) so
@@ -1815,6 +1818,16 @@ VStack(alignment: .center, spacing: 3) {
 
 **Label: `Scrubber-Player`**
 
+**AI CONTEXT — seek completion/recovery (2026-07-17):** `sliderValue` is local
+drag state while `PlaybackClock.time` is the canonical rendered position. A normal
+Slider editing-end commits one seek. If iOS cancels the gesture without delivering
+editing-end, five seconds without thumb movement commits the same seek and clears
+`isSeeking`, preventing permanently frozen elapsed/remaining labels. A scrub or
+forward skip within 0.25 seconds of duration is an episode completion: it must use
+the played/history/position-clear/advance pipeline and must never start an engine
+buffer loop at EOF. If that episode was a Play Instant return target, completion
+cancels the return so its skipped ending cannot be resurrected later.
+
 Purple `Slider` above a two-label time row. The slider value tracks the canonical playback clock while not seeking; during seek the value is decoupled and committed on `onEditingChanged(false)`. On first appearance, the drag-local slider state is explicitly synchronised from the restored playback clock so a paused resumed episode does not render with the thumb stranded at the beginning.
 
 > **Glass:** the scrubber is a stock SwiftUI `Slider`, which on iOS 26 automatically renders with the system Liquid Glass thumb/track — there is no custom opacity/material surface to replace, so it carries only `.tint(.purple)`. No manual `.glassEffect` is applied (or needed).
@@ -2211,6 +2224,15 @@ Stepper (`−` · value · `+`) on the right. Steps through `PlaybackPreference.
 ### Vocal Boost Row
 Same pattern as Trim Silence. Label includes a subtitle `"Voices sound clearer"` in `size 13, Color(white: 0.50)`. Levels: Light / Standard / Strong.
 
+### Volume Adjustment Row (Podcast Settings only)
+
+Placed immediately after Vocal Boost and before Mono Audio. Header uses the shared
+purple `speaker.wave.1.fill` icon, 17 pt semibold title, 13 pt secondary subtitle
+(`Adjust this podcast only`), and a purple bold rounded current value (`−2 dB`,
+`0 dB`, `+2 dB`). Beneath it, a purple stepped Slider spans whole-number values
+from −3 to +3 with compact endpoint labels. The control changes subscription gain,
+not device volume; do not add it to global Default Playback.
+
 **Row icon style:** `size 18, weight .semibold`, `.purple` foreground, `26 pt` fixed width frame.
 
 ```swift
@@ -2501,7 +2523,7 @@ Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`)
 
 **Label: `Overlay-SleepSchedulePrompt`**
 
-Full-screen overlay shown over the player while `sleepScheduleService.isPrompting` (the screen-on / video case; on the lock screen the time-sensitive "Still Listening" notification handles it). `Color.black.opacity(0.72)` scrim, centred `VStack(spacing: 22)`: `moon.zzz.fill` (40pt, purple) · "Are you still listening?" (`size 22, .bold`, white) · subtitle (`size 14`, `Color(white: 0.6)`) · a deliberately **oversized** confirm button. The button fills the width and is `minHeight: 160` with a `size 26, .bold` "Still Listening" label, `Color.purple` fill, `cornerRadius 28`, explicit `contentShape` — a huge tap target so a half-asleep user can confirm without aiming. Tapping calls `sleepScheduleService.userResponded()`.
+Full-screen overlay shown over the player while `sleepScheduleService.isPrompting` (the screen-on / video case; on the lock screen the time-sensitive "Still Listening" notification handles it). `Color.black.opacity(0.72)` scrim, centred `VStack(spacing: 22)`: `moon.zzz.fill` (40pt, purple) · "Are you still listening?" (`size 22, .bold`, white) · subtitle (`size 14`, `Color(white: 0.6)`) · a deliberately **oversized** confirm button. The button fills the width and is `minHeight: 160` with a `size 26, .bold` "Still Listening" label, `Color.purple` fill, `cornerRadius 28`, explicit `contentShape` — a huge tap target so a half-asleep user can confirm without aiming. Tapping calls `sleepScheduleService.userResponded()`. The overlay is strictly bounded by the configured Active Hours: if the window ends during a prompt, the service dismisses the overlay, chime, and lock-screen notification while leaving podcast playback undisturbed.
 
 ## Support Page — Section Row
 
@@ -2529,7 +2551,7 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 
 - **Stat tiles** — `HistoryStatView`: uppercase `.caption2.bold` `.secondary` title over a `.title3.bold` primary value, in a `Glass-Card` (`.glassCard(cornerRadius: 12)`).
 - **History list** — a `.plain` `List` with `.scrollContentBackground(.hidden)` wrapped in a single `Glass-Card` (`.glassCard(cornerRadius: 16)`), like `PodcastDetailView`'s episode list. Rows are clear so the one glass surface shows behind them; the currently-playing row gets `Color.purple.opacity(0.08)`. Sections are date groups (Today / Yesterday / abbreviated date) with `.caption.bold` `.secondary` headers.
-- **Row** (`ListeningHistoryRow`) — 54 pt artwork (`cornerRadius 9`, purple-gradient `Artwork-Placeholder` fallback) · podcast title (caption bold secondary, uppercased) · episode title (`.body.semibold`) · metadata line (status label + listened duration + remaining, caption secondary).
+- **Row** (`ListeningHistoryRow`) — canonical `ListRow-EpisodeRow` sizing: 44 pt artwork (`cornerRadius 9`, purple-gradient `Artwork-Placeholder` fallback) · episode title (`.subheadline.semibold`, primary, two lines) · podcast title (`.caption`, secondary, one line) · metadata (`.caption`, tertiary) · shared trailing `EpisodeStatusPill`. Metadata is historical and timestamped from the terminal mutation: `Completed • <date/time>`, `Manually Archived • <date/time>`, `Auto Archived • <date/time>`, or honest legacy/unresolved fallbacks (`Archived`, `Last listened`). Played/Archived pills come from the stored history outcome rather than a later live library state; unresolved entries show Paused, or Playing only while currently audible. The download bar uses the canonical 56 pt leading indent.
 - **Swipe actions** (`SwipeActions-EpisodeRow`) — mirrors `PodcastDetailView`: leading **Play** (green) / **Play Next** (blue); trailing far-right **Download** (teal) for not-yet-downloaded episodes on active real subscriptions, otherwise **Archive** (purple, → **Unarchive** when the episode is archived/played), plus **Play Last** (orange). Each resolves the entry to its `Episode` via `subscriptionStore.episode(subscriptionID:episodeID:)`, downloads first if not on device, and is hidden when the entry's episode can't be resolved or is the currently-playing episode.
 
 ## Settings Pages — Form Style
@@ -2582,15 +2604,74 @@ struct SettingsRowLabel: View {
 
 The icon is forced `.purple` while the title inherits the row's primary colour. Section group headers stay as plain text labels (no icon). Action buttons (Run Auto Archive, Import/Export OPML) keep their own `Label` and read as purple-tinted actions; destructive buttons (Unsubscribe) stay red.
 
+## Auto Archive Activity
+
+**AI CONTEXT — decision-audit surface (2026-07-15):** `AutoArchiveActivityView`
+is reached from the Auto Archive section in System Settings. It is intentionally a
+read-only operational history, not a second episode-management list. The durable
+local store is bounded to 500 newest-first records and starts collecting only after
+the feature is installed.
+
+- Use the standard black page background, compact navigation title, circular glass
+  back button, and persistent mini player used by other System Settings subpages.
+- Render one standard rounded menu card per decision. Do not use episode artwork or
+  swipe controls: the information hierarchy is episode title, podcast name, exact
+  local archived date/time, then labelled Rule / Configured threshold / Measured age
+  rows.
+- Rule labels are user-facing and limited to **After Playing**, **Inactive Episodes**,
+  and **Episode Limit**. Threshold and measured-age values must reflect the values
+  captured at archive time rather than recalculating from current settings.
+- Use `ContentUnavailableView` when the store is empty and explain that future
+  automatic archives will appear; never imply that pre-feature history was lost.
+
 ---
+
+# CarPlay Now Playing Controls
+
+**AI CONTEXT — playback-speed glyph (2026-07-15):** CarPlay's speed control is
+an app-rendered `CPNowPlayingImageButton`, not the system playback-rate button.
+This preserves the configured effective speed while paused and avoids the system
+button's transient `0x` state. Render the short value (`1x`, `1.5x`, etc.) in a
+an automatically measured template-image canvas using 34 pt heavy compressed
+system text and the multiplication symbol (`1.5×`). Crop the output to its actual
+glyph bounds with only a one-point anti-aliasing margin. CarPlay scales the entire
+image into the standard button slot; a fixed transparent canvas makes the label
+visibly smaller than the neighbouring list, Shared Listening, and archive symbols.
 
 # Subscriptions Page
 
-`Views/PodcastsView.swift` — the app's home page. Ranked list of active subscriptions with drag-to-reorder.
+`Views/PodcastsView.swift` — the app's home page. Ranked list of real
+subscriptions. Active subscriptions can be drag-reordered; Inactive
+subscriptions remain visible and fixed below the active list.
 
 ## Subscriptions Page — Action Row
 
-The action row sits below the nav title. Left: Reorder toggle capsule (`glassCapsule(highlighted:)` — neutral when idle, purple-tinted when Reorder active). Right: Refresh All button when not in reorder mode.
+The action row sits below the nav title. Left: Reorder toggle capsule
+(`glassCapsule(highlighted:)` — neutral when idle, purple-tinted when Reorder
+active). Right: Refresh All button when not in reorder mode.
+
+**Reorder interaction contract (`List-ReorderPriorityStack`):**
+
+- Entering Reorder creates a stable local draft of active, real subscription
+  UUIDs. SwiftUI moves mutate that draft; they do not repeatedly persist the
+  shared store.
+- Active rows show drag grips. Inactive rows remain below them without grips.
+  Browse-only preview rows are never rendered and never enter the move-index
+  calculation.
+- Multiple drags may be performed in one session. **Done**, navigation away, or
+  the app leaving the active scene validates and commits the final UUID order as
+  one transaction.
+- Status pills and the mini-player remain hidden during Reorder so drag targets
+  stay visually stable.
+- If membership changed in a way that makes the draft invalid, the app rejects
+  the uncertain order and asks the user to retry. A failed local write is retried
+  with bounded backoff and surfaced if it cannot be made durable.
+- A remote iCloud ordering update received during the drag is deferred until the
+  session ends; a deliberate local move wins, while an unchanged session accepts
+  the deferred remote order.
+- Podcast Settings' numeric Priority editor uses the same active-real row count
+  as its maximum; it never exposes a rank position occupied by an Inactive or
+  hidden browse row.
 
 **Refresh All button:**
 - Frame: `30×30 pt` `Circle`
@@ -2606,9 +2687,13 @@ The action row sits below the nav title. Left: Reorder toggle capsule (`glassCap
 
 ## Discover Page — Layout
 
-A single `ScrollView` with a `VStack(alignment: .leading, spacing: 48)` separating sections. The increased 48 pt spacing (was 34 pt) gives each section visual breathing room.
+A single `ScrollView` with a lazy `VStack(alignment: .leading, spacing: 60)` separating sections. The 60pt spacing gives the image-heavy category rails and hero cards a clearer visual break.
 
-**Four hero carousel sections** interspersed with category rails:
+**Four hero carousel sections** interspersed with category rails. The purple
+category chips above the feed are navigation controls: each pushes a dedicated
+`Top 50 - <Category>` child page for the selected storefront. Each category row
+also has a linked heading composed of its purple SF Symbol, bold category name,
+and trailing chevron. The Top-15 rails remain on Discover as quick previews.
 
 | Position | Content | Data Source |
 |---|---|---|
@@ -2618,6 +2703,14 @@ A single `ScrollView` with a `VStack(alignment: .leading, spacing: 48)` separati
 | End of feed | **Spotlight B** — editorial spotlight | Apple Marketing Tools |
 
 Hero carousels use `TabView(.page)` with the default page dots hidden. Section spacing in `feedSections` is position-based (rail count thresholds), not genre-ID based.
+
+**Progressive loading contract:** `DiscoverViewModel.phase` enters `.loaded` as
+soon as a country load starts so the Search shortcut and page chrome never wait
+behind the slowest chart endpoint. A task group publishes Top Episodes, overall
+Top Podcasts, each category rail, and both country spotlights independently.
+Rails are re-sorted into `ChartGenre.rails` order after every arrival, preventing
+network completion order from rearranging the designed page. Only an all-section
+failure replaces the page with Charts Unavailable.
 
 ## Discover Page — Episode Hero Carousel
 
@@ -2659,6 +2752,29 @@ struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
 | Category chips | `.glassCapsule(highlighted: true)` (purple-tinted) |
 | Episode hero rank badge | `.glassCapsule(highlighted: true)` (purple-tinted) |
 | Rail tile rank badge | `.glassCapsule()` (neutral) |
+
+## Discover — Category Top 50 Pages
+
+`TopPodcastsView` serves both the overall Top Podcasts chart and category charts.
+Category pages are reached from both Discover chips and rail headings and use the
+title `Top 50 - <Category>`, followed by
+`Apple Podcasts · <Category> · <Country>`.
+They deliberately mirror the established Top Podcasts editorial rhythm: full-width
+feature cards at ranks 1/8/15/22/29/36/43, compact 84pt-artwork rows elsewhere,
+20pt horizontal insets, black background, brand back control, pull-to-refresh,
+and the docked mini-player. Selecting an entry resolves its RSS feed and follows
+the standard subscribed-or-preview Podcast Detail route.
+
+When the matching country/category Top-15 rail already exists, `TopPodcastsView`
+uses those same ranked models as its immediate list and shows a small
+“Loading the full Top 50…” footer. The canonical 50-entry result replaces that
+preview when ready; preview data is storefront-keyed so a country change cannot
+flash the previous country's chart.
+
+The same `ChartCountryPicker` toolbar menu appears on Discover, Top Episodes,
+Top Podcasts, and category Top-50 pages. It binds to the shared
+`discoverCountryCode` preference, so a selection reloads the visible child chart
+and remains selected after navigating back.
 
 ## Apple TV Patterns (tvOS Phase 2)
 

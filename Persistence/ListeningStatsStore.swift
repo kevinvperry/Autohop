@@ -9,16 +9,19 @@ import Foundation
 // (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause / sleep-timer or sleep-schedule
 // pause / background (AutohopApp + AppState). Day-bucket writes into the sync
-// database are separately coalesced on a 10 s throttle (recordDayPending /
+// database are separately coalesced on a 30 s throttle (recordDayPending /
 // flushPendingStatsDays below); SwiftUI revision publication from continuous
 // playback is separately coalesced to 10 seconds so a 0.5-second audio clock does
-// not invalidate every Stats consumer. Discrete events still publish immediately.
+// not invalidate every Stats consumer. A pending-revision bit prevents the first
+// tick's immediate persistence checkpoint from publishing that same tick twice.
+// Discrete events still publish immediately.
 // DOWNSTREAM, CloudSyncEngine holds stats/history-
 // only CloudKit pushes on a further ~60 s slow-lane debounce, flushed at the
 // same lifecycle checkpoints via AppState.flushDeferredSyncPushes — which must
 // run AFTER this store's save()/flush so the scan sees current rows.
-// Diagnostics: stats.pendingMarked logs the first pending sync mark for a day
-// bucket after each flush, and stats.flush logs coalesced writes into
+// Diagnostics are rate-limited summaries: routine playback batching is emitted
+// at most every five minutes, while lifecycle checkpoints, failures, and slow
+// writes remain immediately visible. This keeps diagnostic I/O out of playback.
 // stats_sync_state. These low-frequency breadcrumbs help correlate DayStats
 // CloudKit conflicts and playback tick pressure without logging every 0.5 s tick.
 // Legacy lifetime totals from playback-stats.json are imported once as
@@ -304,6 +307,10 @@ public final class ListeningStatsStore: ObservableObject {
     /// UI consumers do not need 2 Hz invalidations. Publish at most once per 10 s;
     /// explicit mutations and lifecycle save checkpoints force the final revision.
     private var lastPlaybackRevisionAt: Date?
+    /// True only when a playback tick changed data after the last published
+    /// playback revision. Prevents an immediate saveThrottled() checkpoint from
+    /// publishing the same first tick twice.
+    private var playbackRevisionPending = false
     private let playbackRevisionInterval: TimeInterval = 10
     private let calendar = Calendar.current
     private let fileURL: URL?
@@ -351,7 +358,10 @@ public final class ListeningStatsStore: ObservableObject {
     // second during playback (addListeningTime fires every 0.5 s).
     private var pendingStatsDayKeys = Set<String>()
     private var lastStatsDayWriteAt: Date?
-    private let statsDayWriteThrottle: TimeInterval = 10
+    private let statsDayWriteThrottle: TimeInterval = 30
+    private let routineDiagnosticInterval: TimeInterval = 5 * 60
+    private var lastPendingDiagnosticAt: Date?
+    private var lastFlushDiagnosticAt: Date?
 
     private func recordDayPending(_ day: DayStats) {
         guard syncDatabase != nil else { return }
@@ -359,7 +369,8 @@ public final class ListeningStatsStore: ObservableObject {
         let inserted = pendingStatsDayKeys.insert(day.dayKey).inserted
         let secondsSinceLastFlush = lastStatsDayWriteAt.map { now.timeIntervalSince($0) }
         let throttled = secondsSinceLastFlush.map { $0 < statsDayWriteThrottle } ?? false
-        if inserted || !throttled {
+        if lastPendingDiagnosticAt.map({ now.timeIntervalSince($0) >= routineDiagnosticInterval }) ?? true {
+            lastPendingDiagnosticAt = now
             AppLogger.shared.info("stats.pendingMarked", "Marked listening stats day pending for sync", metadata: [
                 "dayKey": day.dayKey,
                 "inserted": "\(inserted)",
@@ -409,16 +420,21 @@ public final class ListeningStatsStore: ObservableObject {
         pendingStatsDayKeys = failedKeys
         lastStatsDayWriteAt = Date()
         let durationMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-        AppLogger.shared.info("stats.flush", "Flushed coalesced listening stats days to sync database", metadata: [
-            "reason": reason,
-            "pendingBefore": "\(pendingBefore.count)",
-            "written": "\(writtenKeys.count)",
-            "failed": "\(failedKeys.count)",
-            "remaining": "\(pendingStatsDayKeys.count)",
-            "dayKeys": writtenKeys.sorted().joined(separator: ","),
-            "failedDayKeys": failedKeys.sorted().joined(separator: ","),
-            "durationMs": String(format: "%.1f", durationMs)
-        ])
+        let now = Date()
+        let routineSummaryDue = lastFlushDiagnosticAt.map({ now.timeIntervalSince($0) >= routineDiagnosticInterval }) ?? true
+        if reason != "throttle" || !failedKeys.isEmpty || durationMs >= 50 || routineSummaryDue {
+            lastFlushDiagnosticAt = now
+            AppLogger.shared.info("stats.flush", "Flushed coalesced listening stats days to sync database", metadata: [
+                "reason": reason,
+                "pendingBefore": "\(pendingBefore.count)",
+                "written": "\(writtenKeys.count)",
+                "failed": "\(failedKeys.count)",
+                "remaining": "\(pendingStatsDayKeys.count)",
+                "dayKeys": writtenKeys.sorted().joined(separator: ","),
+                "failedDayKeys": failedKeys.sorted().joined(separator: ","),
+                "durationMs": String(format: "%.1f", durationMs)
+            ])
+        }
     }
 
     /// A day counts toward streaks once it has at least this much listening.
@@ -471,6 +487,7 @@ public final class ListeningStatsStore: ObservableObject {
         data.days[day.dayKey] = day
         data.showTitles[showKey] = showTitle
         recordDayPending(day)
+        playbackRevisionPending = true
         bumpPlaybackRevisionIfNeeded(now: now)
         saveThrottled()
     }
@@ -861,9 +878,12 @@ public final class ListeningStatsStore: ObservableObject {
     /// Coalesces only the continuous playback path. Discrete events continue to
     /// use bumpRevision() immediately so taps/downloads/completions remain live.
     private func bumpPlaybackRevisionIfNeeded(now: Date, force: Bool = false) {
-        guard force || lastPlaybackRevisionAt.map({ now.timeIntervalSince($0) >= playbackRevisionInterval }) ?? true else {
+        guard playbackRevisionPending,
+              force || lastPlaybackRevisionAt.map({ now.timeIntervalSince($0) >= playbackRevisionInterval }) ?? true
+        else {
             return
         }
+        playbackRevisionPending = false
         lastPlaybackRevisionAt = now
         bumpRevision()
     }

@@ -5,8 +5,12 @@ import Foundation
 // per-podcast policies. All persisted by SubscriptionStore except transient
 // scheduling/priority predictions. Contains:
 //  - AutoArchiveSettings: three independent rules (AfterPlayed delay,
-//    AfterInactive timeout, EpisodeLimit keep-N). Defaults: afterPlaying /
-//    1 week / keep 1. Enforced by AppState.runAutoArchive every ≤30 min.
+//    AfterInactive timeout, EpisodeLimit keep-N). Per-podcast AfterInactive
+//    includes a 40-minute bulletin option; the global-new-subscription picker
+//    deliberately omits that specialist value. Defaults remain afterPlaying /
+//    1 week / keep 1. The same backward-compatible payload carries the opt-in
+//    per-podcast Play Instant automation flag. Archive rules are enforced by
+//    AppState.runAutoArchive every ≤30 min.
 //  - DownloadFilterSettings: local/backup-only per-subscription auto-download
 //    filters. Duration/title/description groups can be toggled independently;
 //    include/exclude rules combine via All/Any, exclude wins, simple text
@@ -128,6 +132,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     // Rule 2: archive inactive (unplayed, untouched) episodes after this interval
     public enum AfterInactive: String, CaseIterable, Codable, Sendable {
         case never
+        case minutes40
         case hours4
         case hours6
         case hours8
@@ -146,6 +151,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
         public var title: String {
             switch self {
             case .never:   return "Never"
+            case .minutes40: return "40 Minutes"
             case .hours4:  return "4 Hours"
             case .hours6:  return "6 Hours"
             case .hours8:  return "8 Hours"
@@ -166,6 +172,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
         public var interval: TimeInterval? {
             switch self {
             case .never:   return nil
+            case .minutes40: return 40 * 60
             case .hours4:  return 4 * 3600
             case .hours6:  return 6 * 3600
             case .hours8:  return 8 * 3600
@@ -210,21 +217,40 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     public var afterPlayed: AfterPlayed
     public var afterInactive: AfterInactive
     public var episodeLimit: EpisodeLimit
+    /// Per-podcast automation stored alongside the other subscription automation
+    /// settings so it automatically participates in existing persistence and
+    /// CloudKit field-level sync. It is not itself an archive rule.
+    public var playInstantEnabled: Bool
 
     public static let `default` = AutoArchiveSettings(
         afterPlayed: .afterPlaying,
         afterInactive: .days7,
-        episodeLimit: .one
+        episodeLimit: .one,
+        playInstantEnabled: false
     )
 
     public init(
         afterPlayed: AfterPlayed = .afterPlaying,
         afterInactive: AfterInactive = .days7,
-        episodeLimit: EpisodeLimit = .one
+        episodeLimit: EpisodeLimit = .one,
+        playInstantEnabled: Bool = false
     ) {
         self.afterPlayed = afterPlayed
         self.afterInactive = afterInactive
         self.episodeLimit = episodeLimit
+        self.playInstantEnabled = playInstantEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case afterPlayed, afterInactive, episodeLimit, playInstantEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        afterPlayed = try container.decodeIfPresent(AfterPlayed.self, forKey: .afterPlayed) ?? .afterPlaying
+        afterInactive = try container.decodeIfPresent(AfterInactive.self, forKey: .afterInactive) ?? .days7
+        episodeLimit = try container.decodeIfPresent(EpisodeLimit.self, forKey: .episodeLimit) ?? .one
+        playInstantEnabled = try container.decodeIfPresent(Bool.self, forKey: .playInstantEnabled) ?? false
     }
 }
 
@@ -2052,13 +2078,14 @@ public enum FeedRefreshScheduling {
         }
 
         if now < slot.windowStart {
+            let preWindowRecheck = max(baseRecheck, 5 * 60)
             return FeedRefreshPrediction(
-                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: baseRecheck, now: now),
+                nextDueAt: dueFromLastFetch(stats.lastFetchedAt, interval: preWindowRecheck, now: now),
                 state: .preWindow,
                 profileKind: profile.kind,
                 expectedWindowStart: slot.windowStart,
                 expectedWindowEnd: slot.windowEnd,
-                recheckInterval: baseRecheck,
+                recheckInterval: preWindowRecheck,
                 reason: "Pre-window is open; start checking shortly before the learned release time."
             )
         }
@@ -2380,7 +2407,7 @@ public enum FeedRefreshScheduling {
 
     private static func missedRecheckInterval(lateBy: TimeInterval, baseRecheck: TimeInterval) -> TimeInterval {
         if lateBy <= 2 * 60 * 60 {
-            return baseRecheck
+            return max(baseRecheck, 5 * 60)
         }
         if lateBy <= 12 * 60 * 60 {
             return min(max(baseRecheck * 2, 10 * 60), 30 * 60)
@@ -2409,6 +2436,10 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
     /// Nil, zero, or a negative value means "unlimited" for compatibility with
     /// the existing manual/foreground refresh paths.
     public var maxSelections: Int?
+    /// Optional absolute ceiling after cap-bypass candidates are included. This
+    /// lets background audio use a seven-feed routine budget while allowing urgent
+    /// release-window feeds through only up to a ten-feed safety ceiling.
+    public var maxTotalSelections: Int?
     /// States that should be selected even after the normal budget is full. These
     /// candidates do not consume budget slots.
     public var capBypassStates: Set<FeedRefreshWindowState>
@@ -2420,11 +2451,13 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
 
     public init(
         maxSelections: Int?,
+        maxTotalSelections: Int? = nil,
         capBypassStates: Set<FeedRefreshWindowState> = [],
         protectedStates: Set<FeedRefreshWindowState> = [],
         minimumProtectedSelections: Int = 0
     ) {
         self.maxSelections = maxSelections
+        self.maxTotalSelections = maxTotalSelections
         self.capBypassStates = capBypassStates
         self.protectedStates = protectedStates
         self.minimumProtectedSelections = minimumProtectedSelections
@@ -2472,7 +2505,10 @@ public enum FeedRefreshBudgeting {
         selected.reserveCapacity(min(candidates.count, maxSelections))
 
         for candidate in candidates {
-            if policy.capBypassStates.contains(state(candidate)) {
+            let totalLimitReached = policy.maxTotalSelections.map { selected.count >= $0 } ?? false
+            if totalLimitReached {
+                deferred.append(candidate)
+            } else if policy.capBypassStates.contains(state(candidate)) {
                 selected.append(candidate)
             } else if remainingBudget > 0 {
                 selected.append(candidate)
@@ -2507,7 +2543,10 @@ public enum FeedRefreshBudgeting {
 
         for (index, candidate) in indexedCandidates where !protectedIndexSet.contains(index) {
             let candidateState = state(candidate)
-            if policy.capBypassStates.contains(candidateState) {
+            let totalLimitReached = policy.maxTotalSelections.map { selectedIndices.count >= $0 } ?? false
+            if totalLimitReached {
+                continue
+            } else if policy.capBypassStates.contains(candidateState) {
                 selectedIndices.append(index)
             } else if remainingBudget > 0 {
                 selectedIndices.append(index)

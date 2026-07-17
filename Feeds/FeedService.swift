@@ -11,7 +11,9 @@ import Foundation
 //    Radar fast path; a 304 returns .notModified with zero parse cost.
 // Converts ParsedFeed → FeedRefreshResult with Episode values; AppState then
 // merges via SubscriptionStore. 25 s request timeout. Episode limit param
-// caps parse work (50 for normal refresh, nil for full history load).
+// caps parse work (50 for normal refresh, nil for full history load). Each
+// synchronous parse/conversion runs inside an autorelease pool so Foundation/XML
+// temporaries are reclaimed between feeds during large manual refresh cycles.
 protocol FeedServicing {
     func refresh(feedURL: URL, subscriptionID: UUID, episodeLimit: Int?) async throws -> FeedRefreshResult
     func refreshIfModified(
@@ -123,27 +125,29 @@ final class FeedService: FeedServicing {
     }
 
     private func parseResult(data: Data, subscriptionID: UUID, episodeLimit: Int?) throws -> FeedRefreshResult {
-        let parsedFeed = try parser.parse(data: data, maxEpisodes: episodeLimit)
+        try autoreleasepool {
+            let parsedFeed = try parser.parse(data: data, maxEpisodes: episodeLimit)
 
-        let playableEpisodes = parsedFeed.episodes.compactMap { parsedEpisode -> Episode? in
-            guard let audioURL = parsedEpisode.audioURL else { return nil }
-            return Self.episode(from: parsedEpisode, subscriptionID: subscriptionID, audioURL: audioURL, feedArtworkURL: parsedFeed.artworkURL)
+            let playableEpisodes = parsedFeed.episodes.compactMap { parsedEpisode -> Episode? in
+                guard let audioURL = parsedEpisode.audioURL else { return nil }
+                return Self.episode(from: parsedEpisode, subscriptionID: subscriptionID, audioURL: audioURL, feedArtworkURL: parsedFeed.artworkURL)
+            }
+
+            guard let latestEpisode = playableEpisodes.first else {
+                throw FeedServiceError.missingAudioEnclosure
+            }
+
+            return FeedRefreshResult(
+                subscriptionTitle: parsedFeed.title,
+                description: parsedFeed.description,
+                author: parsedFeed.author,
+                artworkURL: parsedFeed.artworkURL,
+                categories: parsedFeed.categories,
+                isExplicit: parsedFeed.isExplicit,
+                latestEpisode: latestEpisode,
+                episodes: playableEpisodes
+            )
         }
-
-        guard let latestEpisode = playableEpisodes.first else {
-            throw FeedServiceError.missingAudioEnclosure
-        }
-
-        return FeedRefreshResult(
-            subscriptionTitle: parsedFeed.title,
-            description: parsedFeed.description,
-            author: parsedFeed.author,
-            artworkURL: parsedFeed.artworkURL,
-            categories: parsedFeed.categories,
-            isExplicit: parsedFeed.isExplicit,
-            latestEpisode: latestEpisode,
-            episodes: playableEpisodes
-        )
     }
 
     private static func episode(

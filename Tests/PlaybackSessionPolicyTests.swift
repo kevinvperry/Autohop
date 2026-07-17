@@ -2,7 +2,8 @@
 // DECISIONS extracted from AppState in Phase 0 item 4 (tvOS proposal):
 // effective preference (browse-feed + Shared Listening overrides), resume-vs-
 // start-skip start resolution, speed cycling/normalization, and chapter
-// prev/next navigation. These are exact ports of historical AppState behavior
+// prev/next navigation, plus the shared seek-to-end completion boundary. These
+// are exact ports of historical AppState behavior
 // shared by every playback surface — treat a failure as a real on-device
 // behavior change, not test rot.
 import XCTest
@@ -13,6 +14,32 @@ import XCTest
 #endif
 
 final class PlaybackSessionPolicyTests: XCTestCase {
+
+    func testForwardSkipCrossingEndIsCompletionAndCreditsOnlyRemainingTime() {
+        XCTAssertTrue(
+            PlaybackSeekBoundaryPolicy.reachesCompletion(
+                requestedTime: 100,
+                duration: 99
+            )
+        )
+        XCTAssertEqual(
+            PlaybackSeekBoundaryPolicy.actualForwardSkip(
+                from: 70,
+                seconds: 30,
+                duration: 99
+            ),
+            29
+        )
+    }
+
+    func testOrdinarySeekDoesNotCompleteEpisode() {
+        XCTAssertFalse(
+            PlaybackSeekBoundaryPolicy.reachesCompletion(
+                requestedTime: 60,
+                duration: 99
+            )
+        )
+    }
 
     private func makePreference(speed: Double, trim: TrimSilenceAmount = .low) -> PlaybackPreference {
         PlaybackPreference(

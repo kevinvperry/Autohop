@@ -10,9 +10,16 @@ import Foundation
 // which is the bridge into the existing browse-subscription flow.
 // Responses are cached to Caches/discover-charts with a 12 h TTL (2 h for
 // episodes) so Discover opens instantly and survives offline.
-// DiscoverViewModel also exposes loadTop50/top50Episodes (top episodes, limit 50,
-// release-date enriched) for the "See All" Top Episodes child page
-// (Views/TopEpisodesView.swift) — loaded lazily so the main Discover page stays fast.
+// DiscoverViewModel also exposes lazy Top-50 child-page loaders for episodes,
+// overall podcasts, and each current Discover category. Category pages reuse
+// the legacy genre endpoint at limit 50 and the same 12-hour country/genre cache
+// rather than inflating the main Discover page's Top-15 rails.
+// PERFORMANCE INVARIANTS: (1) Discover enters its usable loaded phase before
+// network completion and publishes each hero/rail independently; one slow
+// endpoint must not block unrelated content. (2) A category child page may seed
+// itself from the current country’s already-loaded Top-15 rail while Top 50
+// arrives. (3) a fresh larger disk-cache entry is a valid ordered superset for
+// a smaller chart request, preventing duplicate Top-8/Top-15 downloads.
 // Consumed by DiscoverViewModel.
 // tvOS Phase 4 (2026-07-04): this file is now IN AutohopCore's Package.swift
 // sources (verified Foundation-only, no UIKit) but its types are still
@@ -138,6 +145,10 @@ actor PodcastChartsService {
     func topPodcasts(country: String, limit: Int) async throws -> [ChartPodcast] {
         let key = "\(country)-top-\(limit)"
         if let cached: [ChartPodcast] = cachedCharts(key: key) { return cached }
+        if limit < 50,
+           let cached: [ChartPodcast] = cachedCharts(key: "\(country)-top-50") {
+            return Array(cached.prefix(limit))
+        }
 
         let url = URL(string: "https://rss.marketingtools.apple.com/api/v2/\(country)/podcasts/top/\(limit)/podcasts.json")!
         let (data, httpResponse) = try await session.data(from: url)
@@ -161,6 +172,10 @@ actor PodcastChartsService {
     func topPodcasts(country: String, genre: ChartGenre, limit: Int) async throws -> [ChartPodcast] {
         let key = "\(country)-genre\(genre.id)-\(limit)"
         if let cached: [ChartPodcast] = cachedCharts(key: key) { return cached }
+        if limit < 50,
+           let cached: [ChartPodcast] = cachedCharts(key: "\(country)-genre\(genre.id)-50") {
+            return Array(cached.prefix(limit))
+        }
 
         let url = URL(string: "https://itunes.apple.com/\(country)/rss/toppodcasts/limit=\(limit)/genre=\(genre.id)/json")!
         let (data, httpResponse) = try await session.data(from: url)
@@ -480,6 +495,17 @@ final class DiscoverViewModel: ObservableObject {
         case failed(String)
     }
 
+    /// Independently completed pieces of the main Discover request. A task
+    /// group emits these as soon as each endpoint finishes, allowing SwiftUI to
+    /// render useful content without waiting for the slowest rail or spotlight.
+    private enum LoadResult: Sendable {
+        case hero([ChartPodcast])
+        case episodes([ChartEpisode])
+        case rail(ChartGenre, [ChartPodcast])
+        case spotlightA(ChartCountry, [ChartPodcast])
+        case spotlightB(ChartCountry, [ChartPodcast])
+    }
+
     @Published private(set) var phase: Phase = .loading
     @Published private(set) var heroPodcasts: [ChartPodcast] = []
     @Published private(set) var topEpisodes: [ChartEpisode] = []
@@ -508,6 +534,15 @@ final class DiscoverViewModel: ObservableObject {
     @Published private(set) var top50Podcasts: [ChartPodcast] = []
     private var loaded50PodcastsCountry: String?
 
+    // Top 50 podcasts for a category chip's dedicated chart page. Only one
+    // category child page can be visible on the navigation stack at a time, so
+    // one published slot is sufficient; PodcastChartsService retains the
+    // country+genre result on disk for fast back-and-forth navigation.
+    @Published private(set) var top50CategoryPhase: Phase = .loading
+    @Published private(set) var top50CategoryPodcasts: [ChartPodcast] = []
+    private var loaded50CategoryKey: String?
+    private var requested50CategoryKey: String?
+
     /// Resolves the two fixed spotlight storefronts relative to the user's
     /// selected country so neither duplicates it or each other.
     /// Card A: US, falling back to UK when the user is in the US.
@@ -523,45 +558,66 @@ final class DiscoverViewModel: ObservableObject {
     func load(country: String) async {
         guard loadedCountry != country else { return }
         loadedCountry = country
-        phase = .loading
         heroPodcasts = []
         topEpisodes = []
         rails = []
         spotlightA = nil
         spotlightB = nil
+        // Search and the surrounding page are usable immediately. Individual
+        // sections appear progressively as their independent results arrive.
+        phase = .loaded
 
         let (countryA, countryB) = Self.spotlightCountries(selected: country)
 
-        // Hero, episodes, spotlights and rails load concurrently; a failed one is omitted.
-        async let heroTask: [ChartPodcast]? = try? service.topPodcasts(country: country, limit: 8)
-        async let episodesTask: [ChartEpisode]? = try? service.topEpisodes(country: country, limit: 8)
-        async let spotlightATask: [ChartPodcast]? = try? service.topPodcasts(country: countryA.code, limit: 8)
-        async let spotlightBTask: [ChartPodcast]? = try? service.topPodcasts(country: countryB.code, limit: 8)
-        let railTasks = ChartGenre.rails.map { genre in
-            Task { [service] in
-                (genre, try? await service.topPodcasts(country: country, genre: genre, limit: 15))
+        await withTaskGroup(of: LoadResult.self) { group in
+            group.addTask { [service] in
+                .hero((try? await service.topPodcasts(country: country, limit: 8)) ?? [])
             }
-        }
+            group.addTask { [service] in
+                .episodes((try? await service.topEpisodes(country: country, limit: 8)) ?? [])
+            }
+            group.addTask { [service] in
+                .spotlightA(countryA, (try? await service.topPodcasts(country: countryA.code, limit: 8)) ?? [])
+            }
+            group.addTask { [service] in
+                .spotlightB(countryB, (try? await service.topPodcasts(country: countryB.code, limit: 8)) ?? [])
+            }
+            for genre in ChartGenre.rails {
+                group.addTask { [service] in
+                    .rail(genre, (try? await service.topPodcasts(country: country, genre: genre, limit: 15)) ?? [])
+                }
+            }
 
-        let hero = await heroTask ?? []
-        let episodes = await episodesTask ?? []
-        let spotA = await spotlightATask ?? []
-        let spotB = await spotlightBTask ?? []
-        var loadedRails: [GenreRail] = []
-        for task in railTasks {
-            let (genre, podcasts) = await task.value
-            if let podcasts, !podcasts.isEmpty {
-                loadedRails.append(GenreRail(genre: genre, podcasts: podcasts))
+            for await result in group {
+                guard loadedCountry == country else {
+                    group.cancelAll()
+                    return
+                }
+                switch result {
+                case .hero(let podcasts):
+                    heroPodcasts = podcasts
+                case .episodes(let episodes):
+                    topEpisodes = episodes
+                case .rail(let genre, let podcasts):
+                    guard !podcasts.isEmpty else { continue }
+                    rails.removeAll(where: { $0.genre.id == genre.id })
+                    rails.append(GenreRail(genre: genre, podcasts: podcasts))
+                    rails.sort {
+                        let lhs = ChartGenre.rails.firstIndex(of: $0.genre) ?? .max
+                        let rhs = ChartGenre.rails.firstIndex(of: $1.genre) ?? .max
+                        return lhs < rhs
+                    }
+                case .spotlightA(let spotlightCountry, let podcasts):
+                    spotlightA = podcasts.isEmpty ? nil : CountrySpotlight(country: spotlightCountry, podcasts: podcasts)
+                case .spotlightB(let spotlightCountry, let podcasts):
+                    spotlightB = podcasts.isEmpty ? nil : CountrySpotlight(country: spotlightCountry, podcasts: podcasts)
+                }
             }
         }
 
         guard loadedCountry == country else { return }  // user switched mid-flight
-        heroPodcasts = hero
-        topEpisodes = episodes
-        spotlightA = spotA.isEmpty ? nil : CountrySpotlight(country: countryA, podcasts: spotA)
-        spotlightB = spotB.isEmpty ? nil : CountrySpotlight(country: countryB, podcasts: spotB)
-        rails = loadedRails
-        phase = (hero.isEmpty && loadedRails.isEmpty)
+        phase = (heroPodcasts.isEmpty && topEpisodes.isEmpty && rails.isEmpty
+                 && spotlightA == nil && spotlightB == nil)
             ? .failed("Couldn't load charts. Check your connection and try again.")
             : .loaded
     }
@@ -569,6 +625,22 @@ final class DiscoverViewModel: ObservableObject {
     func reload(country: String) async {
         loadedCountry = nil
         await load(country: country)
+    }
+
+    /// Returns the current storefront's already-rendered Top-15 rail so a
+    /// category page can paint its first rows synchronously while its full
+    /// Top-50 request is in flight. Never crosses storefront boundaries.
+    func categoryPreview(genre: ChartGenre, country: String) -> [ChartPodcast] {
+        guard loadedCountry == country else { return [] }
+        return rails.first(where: { $0.genre.id == genre.id })?.podcasts ?? []
+    }
+
+    /// Exposes the full category result only when it belongs to the requested
+    /// country+genre. Prevents a one-frame flash of the previous category while
+    /// SwiftUI starts the new page task or changes storefronts.
+    func loadedCategoryTop50(genre: ChartGenre, country: String) -> [ChartPodcast] {
+        guard loaded50CategoryKey == "\(country)-\(genre.id)" else { return [] }
+        return top50CategoryPodcasts
     }
 
     /// Resolve a chart entry to a search result with a usable RSS feed URL.
@@ -621,5 +693,34 @@ final class DiscoverViewModel: ObservableObject {
     func reloadTop50Podcasts(country: String) async {
         loaded50PodcastsCountry = nil
         await loadTop50Podcasts(country: country)
+    }
+
+    /// Loads a category-specific Top 50 only after its Discover chip is opened.
+    /// This deliberately does not reuse the 15-entry rail array: requesting the
+    /// real 50-entry chart preserves Apple's rank order and keeps Discover light.
+    func loadTop50Category(country: String, genre: ChartGenre) async {
+        let key = "\(country)-\(genre.id)"
+        if loaded50CategoryKey == key, !top50CategoryPodcasts.isEmpty { return }
+        requested50CategoryKey = key
+        top50CategoryPhase = .loading
+        top50CategoryPodcasts = []
+        let podcasts = (try? await service.topPodcasts(country: country, genre: genre, limit: 50)) ?? []
+        guard requested50CategoryKey == key else { return }
+        guard !podcasts.isEmpty else {
+            top50CategoryPhase = .failed("Couldn't load \(genre.name) podcasts. Check your connection and try again.")
+            return
+        }
+        loaded50CategoryKey = key
+        top50CategoryPodcasts = podcasts
+        top50CategoryPhase = .loaded
+    }
+
+    /// Force-refreshes the selected category page. The service may still
+    /// satisfy this from its bounded chart cache, matching existing Discover
+    /// and Top Podcasts refresh semantics.
+    func reloadTop50Category(country: String, genre: ChartGenre) async {
+        loaded50CategoryKey = nil
+        requested50CategoryKey = nil
+        await loadTop50Category(country: country, genre: genre)
     }
 }

@@ -27,7 +27,11 @@ import GRDB
 // Also hosts the field-level sync-state projections: per-episode,
 // per-subscription, history, and stats rows with JSON payloads + indexed pending
 // flags + cached CKRecord `systemFields` blobs, maintained centrally from
-// `persist`. Migration v7 scopes episode sync rows by
+// `persist`. Migration v9 adds one atomic SubscriptionOrder row. `persist`
+// compares the ordered real-subscription IDs and authors a new generation only
+// when membership/order actually changes; remote materialization can explicitly
+// suppress authorship until the authoritative remote list is fully represented.
+// Migration v7 scopes episode sync rows by
 // `subscriptionID|guid:<guid>` so identical RSS GUIDs in different feeds cannot
 // collide.
 
@@ -213,6 +217,20 @@ final class AutohopDatabase: @unchecked Sendable {
             }
         }
 
+        // 2026-07-18: one atomic Priority Stack order per account. Independent
+        // SubscriptionState.priorityRank records can arrive in mixed generations;
+        // this singleton makes the complete order one LWW value.
+        migrator.registerMigration("v9_subscription_order") { db in
+            try db.create(table: "subscription_order") { t in
+                t.column("id", .text).primaryKey()
+                t.column("payload", .blob).notNull()
+                t.column("updatedAt", .double).notNull().defaults(to: 0)
+                t.column("generationID", .text).notNull()
+                t.column("hasPendingChanges", .boolean).notNull().defaults(to: false)
+                t.column("systemFields", .blob)
+            }
+        }
+
         return migrator
     }
 
@@ -277,6 +295,18 @@ final class AutohopDatabase: @unchecked Sendable {
         static let singletonID = "queue"
     }
 
+    private struct SubscriptionOrderRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "subscription_order"
+        var id: String
+        var payload: Data
+        var updatedAt: Double
+        var generationID: String
+        var hasPendingChanges: Bool
+        var systemFields: Data?
+
+        static let singletonID = "current"
+    }
+
     private struct StatsSyncRow: Codable, FetchableRecord, PersistableRecord {
         static let databaseTableName = "stats_sync_state"
         var dayKey: String
@@ -333,7 +363,11 @@ final class AutohopDatabase: @unchecked Sendable {
     /// transaction: removed subscriptions are deleted (cascading to episodes),
     /// and a subscription whose value differs is fully rewritten (row + episode
     /// rows). Unchanged subscriptions touch no disk.
-    func persist(current: [Subscription], previous: [UUID: Subscription]) throws {
+    func persist(
+        current: [Subscription],
+        previous: [UUID: Subscription],
+        authorSubscriptionOrder: Bool = true
+    ) throws {
         if _testFailNextPersist {
             _testFailNextPersist = false
             throw _TestPersistError.injectedFailure
@@ -352,6 +386,10 @@ final class AutohopDatabase: @unchecked Sendable {
                 if let prior, prior == subscription { continue }
                 try write(subscription, previous: prior, into: db)
             }
+
+            if authorSubscriptionOrder {
+                try recordLocalSubscriptionOrderIfNeeded(current: current, into: db)
+            }
         }
     }
 
@@ -363,6 +401,7 @@ final class AutohopDatabase: @unchecked Sendable {
             for subscription in subscriptions {
                 try write(subscription, previous: nil, into: db)
             }
+            try recordLocalSubscriptionOrderIfNeeded(current: subscriptions, into: db)
         }
     }
 
@@ -564,6 +603,38 @@ final class AutohopDatabase: @unchecked Sendable {
         try row.save(db)
     }
 
+    /// Authors a new atomic ordering generation only when the ordered set of REAL
+    /// subscription IDs changed. Browse previews never enter cross-device order.
+    private func recordLocalSubscriptionOrderIfNeeded(current: [Subscription], into db: Database) throws {
+        let orderedIDs = current
+            .filter { $0.browseDate == nil }
+            .map(\.id)
+        let existingRow = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID)
+        let existing = existingRow.flatMap { try? decoder.decode(SubscriptionOrderState.self, from: $0.payload) }
+        guard existing?.orderedSubscriptionIDs != orderedIDs else { return }
+
+        // Keep the LWW clock monotonic even if the device wall clock moves
+        // backwards or the previously adopted remote order came from a device
+        // whose clock was ahead.
+        let now = Date()
+        let updatedAt = existing.map {
+            max(now, $0.updatedAt.addingTimeInterval(0.001))
+        } ?? now
+        let state = SubscriptionOrderState(
+            orderedSubscriptionIDs: orderedIDs,
+            updatedAt: updatedAt
+        )
+        let row = SubscriptionOrderRow(
+            id: SubscriptionOrderRow.singletonID,
+            payload: try encoder.encode(state),
+            updatedAt: state.updatedAt.timeIntervalSince1970,
+            generationID: state.generationID.uuidString,
+            hasPendingChanges: true,
+            systemFields: existingRow?.systemFields
+        )
+        try row.save(db)
+    }
+
     // MARK: - Sync-state queries (consumed by the CloudKit step)
 
     /// Episode projections with unsynced local changes. A row that can't decode
@@ -613,6 +684,70 @@ final class AutohopDatabase: @unchecked Sendable {
                 try row.save(db)
             }
         }
+    }
+
+    // MARK: Version-aware sync acknowledgments
+
+    /// Applies a CloudKit acknowledgment to only the episode field versions that
+    /// were actually sent. Returns true when a newer local edit remains pending.
+    @discardableResult
+    func acknowledgeEpisodeSyncState(_ acknowledged: EpisodeSyncState) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard let row = try EpisodeSyncRow.fetchOne(db, key: acknowledged.syncKey),
+                  var current = try? decoder.decode(EpisodeSyncState.self, from: row.payload)
+            else { return }
+            current.markAcknowledged(by: acknowledged)
+            remainsPending = current.hasPendingChanges
+            try save(episodeState: current, into: db)
+        }
+        return remainsPending
+    }
+
+    /// Applies a CloudKit acknowledgment to only the subscription field versions
+    /// that were sent. This is the critical stale-ack guard for rapid reorders.
+    @discardableResult
+    func acknowledgeSubscriptionSyncState(_ acknowledged: SubscriptionSyncState) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard let row = try SubscriptionSyncRow.fetchOne(db, key: acknowledged.subscriptionID.uuidString),
+                  var current = try? decoder.decode(SubscriptionSyncState.self, from: row.payload)
+            else { return }
+            current.markAcknowledged(by: acknowledged)
+            remainsPending = current.hasPendingChanges
+            try save(subscriptionState: current, into: db)
+        }
+        return remainsPending
+    }
+
+    @discardableResult
+    func acknowledgeHistoryEntry(_ acknowledged: ListeningHistoryEntry) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard var row = try HistorySyncRow.fetchOne(db, key: acknowledged.id) else { return }
+            let current = try? decoder.decode(ListeningHistoryEntry.self, from: row.payload)
+            if current == acknowledged {
+                row.hasPendingChanges = false
+                try row.save(db)
+            }
+            remainsPending = row.hasPendingChanges
+        }
+        return remainsPending
+    }
+
+    @discardableResult
+    func acknowledgeStatsDay(_ acknowledged: DayStats) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard var row = try StatsSyncRow.fetchOne(db, key: acknowledged.dayKey) else { return }
+            let current = try? decoder.decode(DayStats.self, from: row.payload)
+            if current == acknowledged {
+                row.hasPendingChanges = false
+                try row.save(db)
+            }
+            remainsPending = row.hasPendingChanges
+        }
+        return remainsPending
     }
 
     /// Single episode projection by scoped sync key.
@@ -781,6 +916,88 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: Atomic subscription-order sync accessors (2026-07-18)
+
+    func subscriptionOrder() throws -> SubscriptionOrderState? {
+        try dbQueue.read { db in
+            guard let row = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID) else { return nil }
+            return try? decoder.decode(SubscriptionOrderState.self, from: row.payload)
+        }
+    }
+
+    func pendingSubscriptionOrder() throws -> SubscriptionOrderState? {
+        try dbQueue.read { db in
+            guard let row = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID),
+                  row.hasPendingChanges
+            else { return nil }
+            return try? decoder.decode(SubscriptionOrderState.self, from: row.payload)
+        }
+    }
+
+    /// Whole-list LWW. A newer local pending generation cannot be overwritten by
+    /// an older remote record.
+    @discardableResult
+    func saveSyncedSubscriptionOrder(_ order: SubscriptionOrderState) throws -> Bool {
+        let adopted: Bool = try dbQueue.write { db in
+            let existingRow = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID)
+            if let existingRow {
+                let incomingTime = order.updatedAt.timeIntervalSince1970
+                if existingRow.updatedAt > incomingTime {
+                    return false
+                }
+                // Deterministic equal-time tie break prevents two devices with
+                // the same coarse clock value from each retaining a different
+                // order forever.
+                if existingRow.updatedAt == incomingTime,
+                   existingRow.generationID >= order.generationID.uuidString {
+                    return false
+                }
+            }
+            let row = SubscriptionOrderRow(
+                id: SubscriptionOrderRow.singletonID,
+                payload: try encoder.encode(order),
+                updatedAt: order.updatedAt.timeIntervalSince1970,
+                generationID: order.generationID.uuidString,
+                hasPendingChanges: false,
+                systemFields: existingRow?.systemFields
+            )
+            try row.save(db)
+            return true
+        }
+        hardenStoreFiles()
+        return adopted
+    }
+
+    /// Clears only the exact generation returned by CloudKit. If the user
+    /// reordered again while the request was in flight, the newer row stays dirty.
+    @discardableResult
+    func acknowledgeSubscriptionOrder(generationID: UUID) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard var row = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID) else { return }
+            if row.generationID == generationID.uuidString {
+                row.hasPendingChanges = false
+                try row.save(db)
+            }
+            remainsPending = row.hasPendingChanges
+        }
+        return remainsPending
+    }
+
+    func subscriptionOrderSystemFields() throws -> Data? {
+        try dbQueue.read { db in
+            try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID)?.systemFields
+        }
+    }
+
+    func storeSubscriptionOrderSystemFields(_ data: Data?) throws {
+        try writeAndHarden { db in
+            guard var row = try SubscriptionOrderRow.fetchOne(db, key: SubscriptionOrderRow.singletonID) else { return }
+            row.systemFields = data
+            try row.save(db)
+        }
+    }
+
     // MARK: Queue-snapshot sync accessors (2026-07-04)
 
     /// Records THIS device's queue snapshot as pending push (preserving cached
@@ -851,6 +1068,23 @@ final class AutohopDatabase: @unchecked Sendable {
             row.hasPendingChanges = false
             try row.save(db)
         }
+    }
+
+    /// Generation-safe queue acknowledgment: a newer queue snapshot authored
+    /// while an older request was in flight remains dirty.
+    @discardableResult
+    func acknowledgeQueueSnapshot(_ acknowledged: QueueSnapshot) throws -> Bool {
+        var remainsPending = false
+        try writeAndHarden { db in
+            guard var row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) else { return }
+            let current = try? decoder.decode(QueueSnapshot.self, from: row.payload)
+            if current == acknowledged {
+                row.hasPendingChanges = false
+                try row.save(db)
+            }
+            remainsPending = row.hasPendingChanges
+        }
+        return remainsPending
     }
 
     func queueSnapshotSystemFields() throws -> Data? {

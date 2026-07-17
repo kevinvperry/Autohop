@@ -4,7 +4,8 @@
 // No CloudKit network. (The applyRemote merge itself lives in
 // ListeningHistoryStore in the app target and is exercised by the on-device
 // build.) The record-name parser assertions protect the Phase-2 legacy fallback
-// for old unprefixed HistoryEntry records.
+// for old unprefixed HistoryEntry records. Version-aware acknowledgement tests
+// ensure an older in-flight save cannot clear a newer resume/history update.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -64,7 +65,23 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertEqual(try db.pendingHistoryEntries().count, 1)
         XCTAssertEqual(try db.historyEntry(id: e.id)?.episodeTitle, "Episode")
 
-        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [], historyIDs: [e.id])
+        XCTAssertFalse(try db.acknowledgeHistoryEntry(e))
+        XCTAssertTrue(try db.pendingHistoryEntries().isEmpty)
+    }
+
+    func testOldAcknowledgementLeavesNewerHistoryEntryPending() throws {
+        let db = try AutohopDatabase()
+        let old = entry(listenedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        var newer = old
+        newer.lastListenedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        newer.lastPositionSeconds = 900
+
+        try db.recordHistoryEntry(old)
+        try db.recordHistoryEntry(newer)
+
+        XCTAssertTrue(try db.acknowledgeHistoryEntry(old))
+        XCTAssertEqual(try db.pendingHistoryEntries().first?.lastPositionSeconds, 900)
+        XCTAssertFalse(try db.acknowledgeHistoryEntry(newer))
         XCTAssertTrue(try db.pendingHistoryEntries().isEmpty)
     }
 

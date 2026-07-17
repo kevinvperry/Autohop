@@ -8,12 +8,33 @@ import Foundation
 // conformers: iOS PlaybackEngine (Playback/, app target only — AVAudioEngine
 // trim-silence/vocal-boost path, unchanged) and StreamingPlaybackEngine
 // (PlaybackCore/, AVPlayer-only, serves tvOS and later the watch). The ONLY
-// additions over the historical protocol are `capabilities`, live trim, and
-// live chapter-filter updates: settings edits update the active session immediately
+// additions over the historical protocol are `capabilities`, live trim, live
+// per-subscription volume gain, live audio-channel mode, and live chapter-filter
+// updates: settings edits update the active session immediately
 // without restarting audio. Start trim is retained for session consistency but
 // never seeks an episode that is already underway.
 // Do not add iOS-only requirements here; platform-specific behavior belongs on
 // the concrete engines behind capability flags.
+
+/// AI CONTEXT — Cross-platform seek-boundary policy. A forward skip or scrub
+/// that lands at the final quarter-second is completion, not an ordinary seek.
+/// This prevents local-file engines from trying to start a reader at EOF and
+/// ensures a 30-second skip with 29 seconds remaining marks the episode played.
+public enum PlaybackSeekBoundaryPolicy {
+    public static let completionTolerance: TimeInterval = 0.25
+
+    public static func reachesCompletion(requestedTime: TimeInterval, duration: TimeInterval?) -> Bool {
+        guard let duration, duration > 0 else { return false }
+        return requestedTime >= max(0, duration - completionTolerance)
+    }
+
+    public static func actualForwardSkip(from currentTime: TimeInterval, seconds: TimeInterval, duration: TimeInterval?) -> TimeInterval {
+        guard seconds > 0 else { return 0 }
+        guard let duration, duration > 0 else { return seconds }
+        return min(seconds, max(0, duration - currentTime))
+    }
+}
+
 public protocol PlaybackControlling {
     var onEpisodeFinished: ((Episode) -> Void)? { get set }
     var onTimeUpdate: ((TimeInterval) -> Void)? { get set }
@@ -41,6 +62,8 @@ public protocol PlaybackControlling {
     func updatePlaybackSpeed(_ speed: Double)
     func updateVocalBoost(_ level: VocalBoostLevel)
     func updateTrimSilence(_ amount: TrimSilenceAmount)
+    func updateAudioChannelMode(_ mode: AudioChannelMode)
+    func updateVolumeAdjustment(_ adjustment: Int)
     func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval)
     /// Applies chapters that were fetched after playback already started (e.g. an
     /// external `podcast:chapters` JSON feed) to the live session, so chapter

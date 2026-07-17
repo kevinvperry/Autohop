@@ -29,8 +29,9 @@ enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-// podcastPollMinutes is the Release Radar sensitivity (how often a feed
-// is re-checked while a drop is imminent, default 5 min). The *Migrated flags
+// podcastPollMinutes is retained only for backward-compatible decoding of
+// existing settings files. Version 1.4 Release Radar scheduling is automatic;
+// runtime code must not consult this legacy value. The *Migrated flags
 // are one-shot first-launch migration markers (e.g. moving existing users to
 // the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag
 // once shipped or the migration will re-run. Defaults here must stay in sync

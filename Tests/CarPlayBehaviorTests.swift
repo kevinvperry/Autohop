@@ -460,7 +460,9 @@ private final class PlaybackSpy: PlaybackControlling {
     func seek(to seconds: TimeInterval) { lastSeek = seconds }
     func updatePlaybackSpeed(_ speed: Double) { lastSpeed = speed }
     func updateVocalBoost(_ level: VocalBoostLevel) {}
+    func updateVolumeAdjustment(_ adjustment: Int) {}
     func updateTrimSilence(_ amount: TrimSilenceAmount) {}
+    func updateAudioChannelMode(_ mode: AudioChannelMode) {}
     func updateEpisodeTrim(startSkipSeconds: TimeInterval, endSkipSeconds: TimeInterval) {}
     func updateChapters(_ chapters: [Chapter], filter: ChapterFilter, for episodeID: UUID) {}
     func updateChapterFilter(_ filter: ChapterFilter, for episodeID: UUID) {}

@@ -8,6 +8,9 @@ the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
 of truth, and DEEP_SCAN_2026-06-28.md as the newest assessment report. The
 visible playback-order sheet is "Up Next"; the Swift implementation still uses
 legacy `Queue*` type/property names in several places.
+Priority Stack reordering uses a stable active-subscription UUID draft and one
+atomic cross-device order generation; Inactive and hidden browse rows never share
+its move-index space.
 Version 1.3 is an iPhone-only production release. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
 features and are not offered, advertised, or contacted by the 1.3 build.
@@ -29,7 +32,7 @@ Autohop is built for people who already know what they love — who subscribe to
 The Priority Stack is a ranked list of subscriptions the user orders once. Autohop works down that list, surfaces only downloaded episodes, and flows from one to the next without any user input. Finish an episode mid-commute and the next one starts automatically — no decisions required.
 
 **2. Audio that is actually comfortable to listen to.**
-Per-podcast Trim Silence (four levels), per-podcast Vocal Boost (four intensities), per-podcast playback speed, and per-podcast start/end skip let users dial in the right listening experience for every show independently. A dense interview podcast can be compressed and crisp; a narrative show can stay natural and relaxed.
+Per-podcast Trim Silence, Vocal Boost, playback speed, −3…+3 dB Volume Adjustment, Mono Audio, and start/end skip let users dial in the right listening experience for every show independently. Quietly mastered podcasts can be raised without changing device volume or affecting other subscriptions.
 
 **3. Surgical queue control when you want it.**
 The priority system handles everything automatically, but when a user wants to override it — Play Next or Play Last — two swipe gestures put them back in control instantly. The queue always shows exactly where things stand via color-coded status pills and pin badges.
@@ -51,28 +54,36 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 - First-run onboarding: a Welcome carousel, chart-derived one-tap Starter Packs, guiding empty states, a "You're all set" first-subscribe moment that auto-downloads and cues your first episode, contextual coach marks, and a getting-started checklist — designed to teach the Priority Stack model without forcing playback or asking for permissions up front
 - "Open at launch" setting — choose whether the app opens to the Player, your Subscriptions, or Discover each time
-- Priority Stack: drag-ranked subscriptions feed the queue automatically in order
+- Priority Stack: reliably reorder several active shows in one session; Inactive
+  shows stay fixed below them, and the complete order syncs atomically
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
-- Discover page: browse Apple Podcasts charts (Top-8 hero cards plus per-genre rails) with a storefront country picker, plus two fixed "Top Podcasts · Country" spotlight heroes (US/UK/AU) woven into the feed
+- Discover page: browse Apple Podcasts charts with Top-8 heroes, quick category rails, dedicated Top-50 pages for every category, a storefront country picker, and fixed US/UK/AU country spotlights
 - Podcast search via the iTunes catalog — search by name, author, or keyword; browse episode list before subscribing; 30-day recently viewed history
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
 - Vocal Boost (Off / Light / Standard / Strong, per-podcast) — Pocket Casts-derived dynamics chain (high-pass filter → dynamics processor → peak limiter) targeting clearer spoken audio
 - Per-podcast playback speed (1.0–2.5x), start skip, and end skip, with mirrored trim controls in both Podcast Settings and Default Playback that show compact minute/second values and debounce persistence so live playback stays responsive
+- Per-podcast Mono Audio fold-down for correcting presenter mixes that strongly favour the left or right channel, with a Stereo/Mono default for future subscriptions
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
-- Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history, starts checking daily shows before the expected release time, and protects release-window candidates during short background wakes; HTTP conditional requests (ETag/304) keep checks tiny
-- Deadline-aware background feed refresh, bounded background-audio polling, due-date priority scheduling, protected Release Radar slots, and per-podcast exclude-from-refresh
+- Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history and automatically selects a 2–3 minute active-window, 5 minute pre-window, 5–10 minute missed-release, or 15–60 minute surveillance cadence; HTTP conditional requests (ETag/304) keep checks tiny
+- Deadline-aware background feed refresh, four-minute background-audio cycles (seven routine feeds; hard ceiling ten for urgent windows), resource-aware budget reduction, deferred-feed fairness/age diagnostics, and per-podcast exclude-from-refresh
+- Explainable Auto Archive with a 25-minute execution gate, per-pass eligibility diagnostics, and a local Activity page recording the rule, threshold, and measured age behind each automatic archive
 - Per-podcast Download Filters for automatic RSS downloads by episode duration, title, and description
+- Play Instant for absolute-favourite shows — a newly auto-downloaded episode can gently warn, interrupt active playback, bypass Up Next, then return to the exact interrupted position
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive / Skipped
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
-- Stats page: time listened, time saved, episodes finished, and streaks over calendar-anchored This Week / this month / this year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; all data stays on device
+- Stats page: time listened, time saved, episodes finished, and streaks over 7 Days / displayed month / displayed year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; stats are computed locally and sync only through the user's private iCloud when optional iCloud Sync is enabled
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Episode share cards: rendered artwork card exported through the system share sheet
 - Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned; it uses the same trim-control UI as per-podcast settings
-- Optional iCloud sync (off by default) — keeps played/archived state, per-podcast settings, subscribe/unsubscribe, listening history (including your resume position), per-podcast Download Filters, and stats in step across your devices over your private CloudKit database; downloads and global app settings stay per-device
+- Optional iCloud sync (off by default) — keeps played/archived state,
+  per-podcast settings, subscribe/unsubscribe, the atomic Priority Stack order,
+  listening history (including your resume position), per-podcast Download
+  Filters, and stats in step across your devices over your private CloudKit
+  database; downloads and global app settings stay per-device
 - OPML import and export for subscription portability
 - New episode push notifications (global and per-podcast; permission requested only when you opt in)
 - Keep screen awake during playback and lock screen scrubbing options

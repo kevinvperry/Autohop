@@ -2,7 +2,10 @@
 // global AppSettings defaults that are promised in SettingsView, SupportContent,
 // FEATURES.md, and the website. These tests protect product-facing defaults
 // rather than algorithmic behavior; update them only when the product decision
-// and every user-facing description change together.
+// and every user-facing description change together. Also protects specialist
+// Auto Archive values whose persisted raw value and exact duration are part of
+// the per-podcast settings contract. Play Instant tests also protect its opt-in
+// default and backward-compatible decoding for pre-Version-1.4 subscriptions.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -25,5 +28,39 @@ final class AppSettingsDefaultsTests: XCTestCase {
         XCTAssertFalse(settings.iCloudSyncEnabled)
         XCTAssertFalse(settings.notifyNewEpisodes)
         XCTAssertTrue(settings.showQueueBadge)
+    }
+
+    func testFortyMinuteInactiveArchiveOptionHasStablePersistenceAndDuration() throws {
+        let option = AutoArchiveSettings.AfterInactive.minutes40
+
+        XCTAssertEqual(option.title, "40 Minutes")
+        XCTAssertEqual(option.interval, 40 * 60)
+
+        let encoded = try JSONEncoder().encode(option)
+        XCTAssertEqual(try JSONDecoder().decode(AutoArchiveSettings.AfterInactive.self, from: encoded), option)
+    }
+
+    func testPlayInstantDefaultsOffAndRoundTripsWhenEnabled() throws {
+        XCTAssertFalse(AutoArchiveSettings.default.playInstantEnabled)
+
+        let enabled = AutoArchiveSettings(playInstantEnabled: true)
+        let decoded = try JSONDecoder().decode(
+            AutoArchiveSettings.self,
+            from: JSONEncoder().encode(enabled)
+        )
+        XCTAssertTrue(decoded.playInstantEnabled)
+        XCTAssertEqual(decoded.afterPlayed, enabled.afterPlayed)
+        XCTAssertEqual(decoded.afterInactive, enabled.afterInactive)
+        XCTAssertEqual(decoded.episodeLimit, enabled.episodeLimit)
+    }
+
+    func testLegacyAutoArchivePayloadDefaultsPlayInstantOff() throws {
+        let legacyJSON = Data(#"{"afterPlayed":"afterPlaying","afterInactive":"days7","episodeLimit":1}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AutoArchiveSettings.self, from: legacyJSON)
+        XCTAssertFalse(decoded.playInstantEnabled)
+        XCTAssertEqual(decoded.afterPlayed, .afterPlaying)
+        XCTAssertEqual(decoded.afterInactive, .days7)
+        XCTAssertEqual(decoded.episodeLimit, .one)
     }
 }

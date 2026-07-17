@@ -23,6 +23,11 @@ import UIKit
 // synchronizeSliderWithPlaybackClock(), while the existing clock observer keeps
 // subsequent ticks aligned. Synchronization is visual only: it MUST NOT call
 // appState.seek, start playback, or overwrite an active user drag.
+// SCRUB-END RECOVERY (2026-07-17): some system Slider gesture cancellations do
+// not deliver `onEditingChanged(false)`. Track the last thumb movement and, once
+// playback ticks show the drag has been idle for five seconds, commit it exactly
+// once. This prevents isSeeking from pinning the scrubber/timers indefinitely
+// while audio continues.
 // Top bar (NavRules): quiet list.bullet circle (left) pushes Subscriptions —
 // the only nav exit; next to it a Sleep Schedule indicator pill (bed.double
 // + minutes until the next "still listening?" prompt, icon-only when not
@@ -91,6 +96,7 @@ struct PlayerView: View {
     @State private var podcastDetailRoute: PodcastDetailRoute?
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
+    @State private var lastSeekInteractionAt = Date.distantPast
     @State private var showAudioControlMenu = false
     @State private var showSleepTimer = false
     @State private var showArchiveConfirmation = false
@@ -158,9 +164,18 @@ struct PlayerView: View {
         }
         .preferredColorScheme(.dark)
         .onChange(of: playbackClock.time) { _, time in
-            if !isSeeking { sliderValue = clampedSliderTime(time) }
+            if isSeeking,
+               Date().timeIntervalSince(lastSeekInteractionAt) >= 5 {
+                finishScrubbing()
+            } else if !isSeeking {
+                sliderValue = clampedSliderTime(time)
+            }
         }
         .onChange(of: episode?.id) { _, _ in
+            // An episode boundary cancels any stale drag. Never carry the old
+            // episode's thumb position into the new episode and seek it later.
+            isSeeking = false
+            lastSeekInteractionAt = .distantPast
             synchronizeSliderWithPlaybackClock()
         }
         .onAppear {
@@ -175,6 +190,7 @@ struct PlayerView: View {
             }
         }
         .onDisappear {
+            isSeeking = false
             isPlayerVisible = false
             appState.updateIdleTimer(playerVisible: false)
         }
@@ -864,14 +880,20 @@ struct PlayerView: View {
 
         return VStack(spacing: 6) {
             Slider(
-                value: $sliderValue,
+                value: Binding(
+                    get: { sliderValue },
+                    set: { value in
+                        sliderValue = value
+                        lastSeekInteractionAt = Date()
+                    }
+                ),
                 in: 0...total,
                 onEditingChanged: { editing in
-                    isSeeking = editing
-                    if !editing {
-                        let target = min(max(0, sliderValue), total)
-                        sliderValue = target
-                        appState.seek(to: target)
+                    if editing {
+                        isSeeking = true
+                        lastSeekInteractionAt = Date()
+                    } else {
+                        finishScrubbing()
                     }
                 }
             )
@@ -890,6 +912,18 @@ struct PlayerView: View {
                     .foregroundStyle(Color(white: 0.55))
             }
         }
+    }
+
+    /// Ends either the normal Slider gesture or the defensive idle recovery.
+    /// Clearing `isSeeking` before invoking AppState lets the next clock publish
+    /// immediately resume normal scrubber/timer progression.
+    private func finishScrubbing() {
+        guard isSeeking else { return }
+        let total = max(1, episode?.durationSeconds ?? 0)
+        let target = min(max(0, sliderValue), total)
+        isSeeking = false
+        sliderValue = target
+        appState.seek(to: target)
     }
 
     // MARK: - Controls

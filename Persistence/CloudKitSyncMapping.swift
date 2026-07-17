@@ -20,6 +20,11 @@ import CloudKit
 // re-enabled — and, since July 2026, downloadFilterSettings (JSON blob +
 // stamp, struct-level LWW like the other settings sub-structs; absent on older
 // records → nil stamp → local filters preserved).
+// Priority order is intentionally NOT reconstructed from independent
+// SubscriptionState.priorityRank fields anymore. SubscriptionOrder is one
+// whole-list record (`subscription-order:current`) with generation-aware LWW,
+// preventing mixed ordering generations across devices. Legacy rank fields stay
+// in SubscriptionState for compatibility and recovery.
 
 // Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
 // Generated once and persisted in UserDefaults — stats records are keyed by
@@ -66,6 +71,8 @@ public enum CloudKitSync {
     /// 2026-07-04: the synced Up Next queue (Models/QueueSnapshot.swift) —
     /// ONE record per account, whole-record LWW by the payload's updatedAt.
     public static let queueSnapshotRecordType = "QueueSnapshot"
+    /// Atomic Priority Stack ordering — one whole-list record per account.
+    public static let subscriptionOrderRecordType = "SubscriptionOrder"
 
     private enum RecordName {
         static let episodePrefix = "episode:"
@@ -73,6 +80,7 @@ public enum CloudKitSync {
         static let historyPrefix = "history:"
         static let statsPrefix = "stats:"
         static let queuePrefix = "queue:"
+        static let subscriptionOrderPrefix = "subscription-order:"
     }
 
     private static let jsonEncoder = JSONEncoder()
@@ -156,6 +164,48 @@ public enum CloudKitSync {
             || recordName.hasPrefix(RecordName.historyPrefix)
             || recordName.hasPrefix(RecordName.statsPrefix)
             || recordName.hasPrefix(RecordName.queuePrefix)
+            || recordName.hasPrefix(RecordName.subscriptionOrderPrefix)
+    }
+
+    // MARK: - Subscription order (one record, whole-list LWW by updatedAt)
+
+    public static let subscriptionOrderRecordName = "subscription-order:current"
+
+    public static var subscriptionOrderRecordID: CKRecord.ID {
+        CKRecord.ID(recordName: subscriptionOrderRecordName, zoneID: zoneID)
+    }
+
+    public static func isSubscriptionOrderRecordName(_ recordName: String) -> Bool {
+        recordName == subscriptionOrderRecordName
+    }
+
+    private enum SubscriptionOrderKey {
+        static let state = "state"
+        static let generationID = "generationID"
+        static let updatedAt = "updatedAt"
+        static let sourceDeviceID = "sourceDeviceID"
+        static let schemaVersion = "schemaVersion"
+    }
+
+    public static func populate(_ record: CKRecord, from order: SubscriptionOrderState) {
+        record[SubscriptionOrderKey.state] = try? jsonEncoder.encode(order)
+        record[SubscriptionOrderKey.generationID] = order.generationID.uuidString
+        record[SubscriptionOrderKey.updatedAt] = order.updatedAt
+        record[SubscriptionOrderKey.sourceDeviceID] = order.sourceDeviceID
+        record[SubscriptionOrderKey.schemaVersion] = order.schemaVersion
+    }
+
+    public static func makeRecord(from order: SubscriptionOrderState) -> CKRecord {
+        let record = CKRecord(recordType: subscriptionOrderRecordType, recordID: subscriptionOrderRecordID)
+        populate(record, from: order)
+        return record
+    }
+
+    public static func subscriptionOrder(from record: CKRecord) -> SubscriptionOrderState? {
+        guard let data = record[SubscriptionOrderKey.state] as? Data,
+              let state = try? jsonDecoder.decode(SubscriptionOrderState.self, from: data)
+        else { return nil }
+        return state
     }
 
     // MARK: - Queue snapshot (one record, whole-record LWW by updatedAt)

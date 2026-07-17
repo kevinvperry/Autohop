@@ -12,8 +12,10 @@ import Foundation
 // ANY suspected task for the URL/episode is still alive, else clears stale entries
 // and starts fresh.
 // HANDLES: resume-data save/restore on pause/cancel/failure; a task-aware stall
-// watchdog (a RUNNING task with unchanged URLSession byte counters for 10 min →
-// cancel with resume data and notify AppState). Suspended tasks, connectivity waits,
+// phase-aware watchdog: pre-response/zero-byte work is classified as a first-byte
+// wait and receives a separate 30-minute deadline; only a RUNNING task that has
+// begun receiving payload bytes can hit the 10-minute active-transfer stall rule.
+// Suspended tasks, connectivity waits,
 // process suspension gaps, and out-of-process byte advances reset/hold the clock so
 // iOS scheduling is never mistaken for a network stall; progress throttling (≤1/s/task);
 // background relaunch completion (onBackgroundDownloadCompleted, when the app
@@ -25,6 +27,10 @@ import Foundation
 // start downloaded playback after the phone locks in the car. Media deliberately
 // stays in Application Support (NOT Caches) so iOS never purges it out from under
 // the download-first queue.
+// TERMINAL WATCHDOG CLEANUP: cancelDownload() clears both URLSession identity maps
+// and every per-episode watchdog clock/set even when no live task remains. This is
+// required after retry exhaustion; otherwise the two-minute timer repeatedly
+// rediscovers an orphaned progress timestamp and emits another cancellation callback.
 // CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
 // ENFORCED HERE — AppState gates calls to download().
 public protocol DownloadManaging: AnyObject {
@@ -78,6 +84,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // Watchdog: track last time each episode received any progress bytes.
     private var progressLastReceivedAt: [UUID: Date] = [:]
     private var progressLastObservedBytes: [UUID: Int64] = [:]
+    /// Creation/resume time is intentionally separate from last byte progress. A
+    /// background URLSession task can remain `running` while DNS/CDN/server work is
+    /// still waiting for its first response byte; that phase is not an active stall.
+    private var taskStartedAtByEpisodeID: [UUID: Date] = [:]
+    private var lastFirstByteDiagnosticAtByEpisodeID: [UUID: Date] = [:]
     private var connectivityWaitingTaskIDs = Set<Int>()
     private var downloadWatchdogTimer: Timer?
     /// Wall-clock time of the last watchdog tick. The timer only fires while the app is
@@ -88,6 +99,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private var lastWatchdogTickAt = Date()
     private let progressThrottleInterval: TimeInterval = 1.0
     private let downloadStallThreshold: TimeInterval = 10 * 60
+    private let firstByteWaitThreshold: TimeInterval = 30 * 60
+    private let firstByteDiagnosticInterval: TimeInterval = 10 * 60
     private let watchdogInterval: TimeInterval = 2 * 60
 
     private let fileManager: FileManager
@@ -129,6 +142,10 @@ public final class DownloadManager: NSObject, DownloadManaging {
                     self.taskIDByEpisodeID[meta.episodeID] = task.taskIdentifier
                     self.taskIDByMediaURL[meta.audioURL, default: []].insert(task.taskIdentifier)
                     self.mediaURLByEpisodeID[meta.episodeID] = meta.audioURL
+                    let reconnectedAt = Date()
+                    self.taskStartedAtByEpisodeID[meta.episodeID] = reconnectedAt
+                    self.progressLastReceivedAt[meta.episodeID] = reconnectedAt
+                    self.progressLastObservedBytes[meta.episodeID] = task.countOfBytesReceived
                     self.logger.info("download.taskReconnected", "Reconnected live task from previous session", metadata: [
                         "episodeID": meta.episodeID.uuidString,
                         "taskID": "\(task.taskIdentifier)"
@@ -213,7 +230,9 @@ public final class DownloadManager: NSObject, DownloadManaging {
         taskIDByMediaURL[episode.audioURL, default: []].insert(task.taskIdentifier)
         mediaURLByEpisodeID[episode.id] = episode.audioURL
         lastLoggedProgressBucketByEpisodeID[episode.id] = 0
-        progressLastReceivedAt[episode.id] = Date()
+        let startedAt = Date()
+        progressLastReceivedAt[episode.id] = startedAt
+        taskStartedAtByEpisodeID[episode.id] = startedAt
         progressLastObservedBytes[episode.id] = task.countOfBytesReceived
         logger.info("download.taskResume", "Download task resumed", metadata: [
             "episode": episode.title,
@@ -235,6 +254,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
         progressLastObservedBytes.removeValue(forKey: episodeID)
+        taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
+        lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
         connectivityWaitingTaskIDs.remove(taskID)
     }
 
@@ -286,6 +307,16 @@ public final class DownloadManager: NSObject, DownloadManaging {
             }
             self.resumeDataByEpisodeID.removeValue(forKey: episodeID)
             self.lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
+            // A watchdog-cancelled task may already have disappeared from the
+            // URLSession maps while its progress clock remains. Retire all
+            // episode-scoped watchdog state unconditionally so retry exhaustion
+            // is a true terminal state rather than a callback every two minutes.
+            self.progressLastReceivedAt.removeValue(forKey: episodeID)
+            self.progressLastObservedBytes.removeValue(forKey: episodeID)
+            self.taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
+            self.lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
+            self.watchdogStalledEpisodeIDs.remove(episodeID)
+            self.intentionallyPausedEpisodeIDs.remove(episodeID)
 
             guard let taskID = removedTaskID else {
                 // No live task — map entries already cleared above; nothing more to cancel.
@@ -441,14 +472,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         let taskID = downloadTask.taskIdentifier
         DispatchQueue.main.async { [weak self] in
             guard let self, let episodeID = self.episodeIDByTask[taskID] else { return }
             self.progressLastReceivedAt[episodeID] = Date()
             self.progressLastObservedBytes[episodeID] = totalBytesWritten
             self.connectivityWaitingTaskIDs.remove(taskID)
+            // Unknown Content-Length is still proof that active transfer began.
+            // It cannot drive a fraction bar, but it must move the watchdog out
+            // of first-byte classification.
+            guard totalBytesExpectedToWrite > 0 else { return }
+            let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             let now = Date()
             let shouldDispatch = self.progressLastDispatchedAt[taskID]
                 .map { now.timeIntervalSince($0) >= self.progressThrottleInterval } ?? true
@@ -738,6 +772,8 @@ private extension DownloadManager {
         progressLastDispatchedAt.removeValue(forKey: taskID)
         progressLastReceivedAt.removeValue(forKey: episodeID)
         progressLastObservedBytes.removeValue(forKey: episodeID)
+        taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
+        lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
         connectivityWaitingTaskIDs.remove(taskID)
     }
 
@@ -771,7 +807,14 @@ private extension DownloadManager {
             }
             return
         }
-        let candidates = progressLastReceivedAt.filter { now.timeIntervalSince($0.value) > downloadStallThreshold }
+        // Inspect both phases. First-byte waits use their creation time; active
+        // transfers use the most recent observed byte time.
+        let candidates = progressLastReceivedAt.filter { episodeID, lastProgressAt in
+            let hasPayload = (progressLastObservedBytes[episodeID] ?? 0) > 0
+            let reference = hasPayload ? lastProgressAt : (taskStartedAtByEpisodeID[episodeID] ?? lastProgressAt)
+            let threshold = hasPayload ? downloadStallThreshold : firstByteDiagnosticInterval
+            return now.timeIntervalSince(reference) > threshold
+        }
         guard !candidates.isEmpty else { return }
         session.getAllTasks { [weak self] tasks in
             DispatchQueue.main.async { [weak self] in
@@ -785,11 +828,21 @@ private extension DownloadManager {
                             self.continuations.removeValue(forKey: taskID)
                             self.clearTaskTracking(taskID: taskID)
                         }
+                        // No task can ever make this progress clock advance. Clear
+                        // it before notifying the owner so this orphan generates
+                        // exactly one retry decision.
+                        self.progressLastReceivedAt.removeValue(forKey: episodeID)
+                        self.progressLastObservedBytes.removeValue(forKey: episodeID)
+                        self.taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
+                        self.lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
+                        self.watchdogStalledEpisodeIDs.remove(episodeID)
                         self.onWatchdogCancelled?(episodeID)
                         continue
                     }
 
-                    let observedBytes = max(task.countOfBytesReceived, task.countOfBytesSent)
+                    // Request bytes are not response payload. Only received bytes
+                    // establish that the active-transfer phase has begun.
+                    let observedBytes = task.countOfBytesReceived
                     let previousBytes = self.progressLastObservedBytes[episodeID] ?? 0
                     if observedBytes > previousBytes {
                         self.progressLastObservedBytes[episodeID] = observedBytes
@@ -799,6 +852,48 @@ private extension DownloadManager {
                             "taskID": "\(taskID)",
                             "bytesReceived": "\(observedBytes)"
                         ])
+                        continue
+                    }
+
+                    let hasReceivedPayload = observedBytes > 0
+                    let hasResponse = task.response != nil
+                    if !hasReceivedPayload {
+                        let startedAt = self.taskStartedAtByEpisodeID[episodeID] ?? lastProgressAt
+                        let waitSeconds = now.timeIntervalSince(startedAt)
+                        guard waitSeconds >= self.firstByteWaitThreshold else {
+                            let lastDiagnostic = self.lastFirstByteDiagnosticAtByEpisodeID[episodeID] ?? .distantPast
+                            if now.timeIntervalSince(lastDiagnostic) >= self.firstByteDiagnosticInterval {
+                                self.lastFirstByteDiagnosticAtByEpisodeID[episodeID] = now
+                                self.logger.info("download.watchdogFirstByteWaiting", "Download is still waiting for its first payload byte", metadata: [
+                                    "episodeID": episodeID.uuidString,
+                                    "taskID": "\(taskID)",
+                                    "waitSeconds": "\(Int(waitSeconds))",
+                                    "responseReceived": "\(hasResponse)",
+                                    "taskState": Self.taskStateLabel(task.state)
+                                ])
+                            }
+                            continue
+                        }
+
+                        guard task.state == .running,
+                              !self.connectivityWaitingTaskIDs.contains(taskID) else {
+                            self.taskStartedAtByEpisodeID[episodeID] = now
+                            continue
+                        }
+                        self.logger.warning("download.watchdogFirstByteTimeout", "Cancelling download that exceeded the first-byte deadline", metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "taskID": "\(taskID)",
+                            "waitSeconds": "\(Int(waitSeconds))",
+                            "responseReceived": "\(hasResponse)",
+                            "taskState": Self.taskStateLabel(task.state)
+                        ])
+                        self.watchdogStalledEpisodeIDs.insert(episodeID)
+                        task.cancel(byProducingResumeData: { [weak self] resumeData in
+                            DispatchQueue.main.async {
+                                guard let self, let resumeData else { return }
+                                self.resumeDataByEpisodeID[episodeID] = resumeData
+                            }
+                        })
                         continue
                     }
 
@@ -852,6 +947,7 @@ extension DownloadManager {
             self.connectivityWaitingTaskIDs.insert(task.taskIdentifier)
             if let episodeID = self.episodeIDByTask[task.taskIdentifier] {
                 self.progressLastReceivedAt[episodeID] = Date()
+                self.taskStartedAtByEpisodeID[episodeID] = Date()
             }
             self.logger.info("download.waitingForConnectivity", "Download is waiting for network connectivity", metadata: [
                 "taskID": "\(task.taskIdentifier)"

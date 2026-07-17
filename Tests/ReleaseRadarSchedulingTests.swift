@@ -6,6 +6,8 @@
 // surveillance, daily windows should outrank random backlog work, and short
 // BGAppRefresh wakes should spend protected slots on pre/active/missed release
 // windows before ordinary random/deferred backlog work. Also protects the
+// background-audio hard ceiling: urgent windows may bypass the routine cap but
+// never the resource-aware absolute maximum. Also protects the
 // Download Filters contract: episodes skipped by per-subscription filters must
 // not train Release Radar's learned profile. And the Release Radar v2 Stage-1
 // Also protects the BGProcessing cadence policy: app-launch, useful, empty, and
@@ -64,6 +66,25 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
             selection.deferred.map(\.id),
             ["random-backlog", "daily-missed-release", "fallback"]
         )
+    }
+
+    func testUrgentWindowBypassStopsAtHardMaximum() {
+        let candidates = (0..<12).map {
+            Candidate(id: "urgent-\($0)", state: .activeWindow)
+        }
+
+        let selection = FeedRefreshBudgeting.select(
+            candidates: candidates,
+            policy: FeedRefreshBudgetPolicy(
+                maxSelections: 7,
+                maxTotalSelections: 10,
+                capBypassStates: [.preWindow, .activeWindow, .missedRelease]
+            ),
+            state: { $0.state }
+        )
+
+        XCTAssertEqual(selection.selected.count, 10)
+        XCTAssertEqual(selection.deferred.count, 2)
     }
 
     func testDailyWeekdayPredictionStartsCheckingBeforeExpectedRelease() {

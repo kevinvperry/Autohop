@@ -8,7 +8,8 @@
 // of one show on the phone" mirror exactly on TV/watch.
 // The database tests also protect CKSyncEngine's queued-record contract: after a
 // snapshot is marked clean, the current singleton must remain readable so a late
-// or repeated CKSyncEngine save request can still build `queue:current`.
+// or repeated CKSyncEngine save request can still build `queue:current`. A stale
+// acknowledgement must leave a newer locally authored snapshot pending.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -75,6 +76,21 @@ final class QueueSnapshotSyncTests: XCTestCase {
             "current",
             "A late CKSyncEngine record request must still build from current state"
         )
+    }
+
+    func testOldAcknowledgementLeavesNewerQueueSnapshotPending() throws {
+        let store = SubscriptionStore.inMemory()
+        let db = try XCTUnwrap(store.database)
+        store.updateLocalQueueSnapshot(entries: [makeEntry(key: "old")])
+        let old = try XCTUnwrap(db.pendingQueueSnapshot())
+
+        store.updateLocalQueueSnapshot(entries: [makeEntry(key: "new")])
+        let newer = try XCTUnwrap(db.pendingQueueSnapshot())
+
+        XCTAssertTrue(try db.acknowledgeQueueSnapshot(old))
+        XCTAssertEqual(try db.pendingQueueSnapshot()?.entries.first?.episodeKey, "new")
+        XCTAssertFalse(try db.acknowledgeQueueSnapshot(newer))
+        XCTAssertNil(try db.pendingQueueSnapshot())
     }
 
     func testSaveSyncedSnapshotIsLWWByUpdatedAt() throws {

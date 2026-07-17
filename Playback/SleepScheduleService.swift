@@ -19,6 +19,10 @@ import Foundation
 // called by AppState's tick). onPrompt also drives a lock-screen "Still
 // Listening" notification (AppState → NotificationService); onPromptDismissed
 // fires whenever the prompt tears down so AppState can clear that notification.
+// ACTIVE-WINDOW INVARIANT: every ongoing phase revalidates the configured time
+// window. Crossing the end boundary cancels countdown/chime/notification state
+// and returns to idle without pausing podcast playback. A response received at
+// or after the boundary also disarms instead of starting another prompt cycle.
 // All methods must be called on the main actor.
 @MainActor
 final class SleepScheduleService: ObservableObject {
@@ -98,6 +102,16 @@ final class SleepScheduleService: ObservableObject {
             reset()
             return
         }
+        // Moving the configured window so that "now" is outside it must end a
+        // live countdown or prompt immediately, even before the next playback
+        // tick arrives.
+        if !isWithinWindow() {
+            if phase != .idle {
+                cancelPromptArtifacts()
+                phase = .idle
+            }
+            return
+        }
         // Re-arm with the new duration unless mid-prompt.
         if isPrompting { return }
         if isPlaying, !suspendedForSession, isWithinWindow() {
@@ -149,6 +163,10 @@ final class SleepScheduleService: ObservableObject {
     // MARK: - Tick (called every 0.5 s by AppState's onTimeUpdate)
 
     func tick(isPlaying: Bool) {
+        // The active-hours window is a hard boundary, not merely an arming
+        // condition. This check also tears down an already-visible prompt and
+        // its lock-screen notification if the end time arrives during grace.
+        guard enforceActiveWindow() else { return }
         guard case .counting(let remaining) = phase, isPlaying else { return }
         let next = remaining - 0.5
         if next <= 0 {
@@ -164,6 +182,7 @@ final class SleepScheduleService: ObservableObject {
     /// to the next episode (end-of-episode mode only).
     @discardableResult
     func episodeFinished() -> Bool {
+        guard enforceActiveWindow() else { return false }
         guard case .armedForEpisodeEnd = phase else { return false }
         beginPrompt(atEpisodeBoundary: true)
         return true
@@ -178,7 +197,14 @@ final class SleepScheduleService: ObservableObject {
     func userResponded() -> Bool {
         guard case .prompting(let atEpisodeBoundary) = phase else { return false }
         cancelPromptArtifacts()
-        arm()
+        if config.enabled, !suspendedForSession, isWithinWindow() {
+            arm()
+        } else {
+            // A notification action can arrive just after the configured end
+            // time. Treat it as dismissal only; never leak a new cycle beyond
+            // the active window.
+            phase = .idle
+        }
         return atEpisodeBoundary
     }
 
@@ -220,7 +246,27 @@ final class SleepScheduleService: ObservableObject {
 
     // MARK: - Private
 
+    /// Enforces the configured active-hours interval for every live phase.
+    /// Returns false after disarming outside the window. Repeated idle ticks
+    /// are intentionally side-effect free so notification clearing is emitted
+    /// only when there was schedule state to tear down.
+    @discardableResult
+    private func enforceActiveWindow(_ date: Date = Date()) -> Bool {
+        guard config.enabled, !suspendedForSession, isWithinWindow(date) else {
+            if phase != .idle {
+                cancelPromptArtifacts()
+                phase = .idle
+            }
+            return false
+        }
+        return true
+    }
+
     private func arm() {
+        guard config.enabled, !suspendedForSession, isWithinWindow() else {
+            phase = .idle
+            return
+        }
         if config.isEndOfEpisodeMode {
             phase = .armedForEpisodeEnd
         } else {
@@ -229,6 +275,7 @@ final class SleepScheduleService: ObservableObject {
     }
 
     private func beginPrompt(atEpisodeBoundary: Bool) {
+        guard enforceActiveWindow() else { return }
         phase = .prompting(atEpisodeBoundary: atEpisodeBoundary)
         onPrompt?()
         chimePlayer.play { [weak self] in

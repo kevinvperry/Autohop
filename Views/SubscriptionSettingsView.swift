@@ -3,10 +3,12 @@ import SwiftUI
 // AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
 // gear icon from a podcast's episode list). Per-podcast configuration, all
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
-// (editable title, numeric priority rank, read-only author; rank editing is
-// disabled while a real subscription is Inactive so its hidden return rank can
-// restore cleanly), Playback (speed
-// 1.0–2.5x, Vocal Boost, Trim Silence, start/end skip — live-applied via
+// (editable title, numeric priority rank, read-only author; the rank editor's
+// range counts active real subscriptions only and is disabled while a real
+// subscription is Inactive, so hidden browse/Inactive rows cannot distort its
+// index and the hidden return rank can restore cleanly), Playback (speed
+// 1.0–2.5x, Stereo/Mono Audio, Vocal Boost, per-subscription -3...+3 dB
+// Volume Adjustment, Trim Silence, start/end skip — live-applied via
 // AppState if this podcast is playing; episode trim uses the shared stable
 // EpisodeTrimControlRow, which drafts taps locally and coalesces one store/live-
 // engine update after the user pauses, avoiding Form flicker and playback-time
@@ -19,7 +21,8 @@ import SwiftUI
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
 // Default Playback panel), Download Feed Filters (per-feed auto-download
 // eligibility), Automation (per-podcast notifications, exclude from auto feed
-// refresh), Auto Archive (three rules), Chapter Filter (uses the actively playing
+// refresh, and automatic-download-only Play Instant with explicit sparse-use
+// guidance), Auto Archive (three rules), Chapter Filter (uses the actively playing
 // episode when it belongs to this podcast, otherwise newest; position-based and
 // live-applied through AppState), Feed (read-only URL), Danger (unsubscribe with
 // confirmation). This file also hosts DownloadFiltersView, a pushed
@@ -27,8 +30,14 @@ import SwiftUI
 // (duration/title/description, include/exclude, All/Any, live read-only
 // 50-episode feed preview with greyed skipped rows);
 // since July 2026 these filters roam via iCloud Sync with the other per-podcast
-// settings (struct-level LWW on the SubscriptionState record).
-// AUTO ARCHIVE RULES: Inactive Episodes (Rule 2) only archives episodes with a
+// settings (struct-level LWW on the SubscriptionState record). Play Instant is
+// stored in the same synced automation payload: only a newly auto-downloaded,
+// filter-eligible episode can interrupt active playback; manual downloads cannot.
+// Version 1.3 footer copy is also a website claim source: keep filter-aware
+// Auto Archive, live chapter changes, and Download Feed Filter integration
+// aligned with FEATURES.md and kevmarl-site/support.html.
+// AUTO ARCHIVE RULES: Inactive Episodes includes a per-podcast 40-minute option
+// for frequently replaced hourly bulletins. Rule 2 only archives episodes with a
 // non-nil Episode.downloadedAt — episodes never downloaded are fully exempt.
 // The footer copy describes download-date-based inactivity, not publish-date.
 // Episode Limit (Rule 3) counts only .queued/.downloaded episodes — .failed
@@ -243,7 +252,12 @@ struct SubscriptionSettingsView: View {
         .sheet(isPresented: $showPriorityEditor) {
             EditPrioritySheet(
                 priorityRank: $draftPriorityRank,
-                maxRank: max(appState.subscriptionStore.subscriptions.count, 1)
+                maxRank: max(
+                    appState.subscriptionStore.subscriptions.filter {
+                        $0.browseDate == nil && !$0.excludeFromAutoFeedRefresh
+                    }.count,
+                    1
+                )
             ) {
                 appState.subscriptionStore.updatePriorityRank(
                     subscriptionID: subscriptionID,
@@ -316,7 +330,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Playback")
         } footer: {
-            Text("Vocal Boost lifts speech above music and background sound — Strong targets a −14 LUFS loudness goal for the clearest spoken audio. Trim Silence removes quiet gaps (audio episodes only).")
+            Text("Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only).")
         }
 
         Section {
@@ -367,6 +381,9 @@ struct SubscriptionSettingsView: View {
             onSpeedChange: { appState.updatePlaybackSpeed(for: sub.id, speed: $0) },
             onTrimChange: { appState.updateTrimSilence(for: sub.id, amount: $0) },
             onVocalChange: { appState.updateVocalBoost(for: sub.id, level: $0) },
+            onChannelModeChange: { appState.updateAudioChannelMode(for: sub.id, mode: $0) },
+            onVolumeAdjustmentChange: { appState.updateVolumeAdjustment(for: sub.id, adjustment: $0) },
+            showsVolumeAdjustment: true,
             fill: cardBackground
         )
     }
@@ -392,6 +409,17 @@ struct SubscriptionSettingsView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
+
+                Divider().background(Color(white: 0.20)).padding(.leading, 60)
+
+                // AI CONTEXT — Play Instant is a per-podcast automation, not an
+                // archive rule. It shares this glass card with the other passive
+                // background behaviours to preserve settings-page hierarchy.
+                Toggle(isOn: playInstantBinding(sub)) {
+                    SettingsRowLabel(title: "Play Instant", systemImage: "bolt.fill")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
             .tint(.purple)
             .glassCard(cornerRadius: 12)
@@ -400,7 +428,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Automation")
         } footer: {
-            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.")
+            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Use it sparingly—only for your absolute favourite content. Manual downloads never trigger it.")
         }
 
         Section {
@@ -428,7 +456,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes, archiving older ones — the newest episode always downloads regardless.\n\nAuto Archive runs at most every 30 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 40 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 30 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -468,7 +496,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Chapter filter")
         } footer: {
-            Text("Skips are position-based and apply to all future episodes of this podcast.")
+            Text("Skips are position-based and apply to future episodes of this podcast. Changes apply to active playback immediately; while this podcast is playing, its current chapter is protected here from accidental deselection.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -511,7 +539,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Download Feed Filters")
         } footer: {
-            Text("Control which new episodes Autohop downloads automatically from this podcast's feed. Duration, title, and description rules can skip episodes you do not want; manual downloads still work.")
+            Text("Control which new episodes Autohop downloads automatically from this podcast's feed. Duration, title, and description rules can skip episodes you do not want; manual actions still work. Skipped episodes do not train Release Radar or count as drifting, and the rules sync when iCloud Sync is enabled.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -543,6 +571,17 @@ struct SubscriptionSettingsView: View {
             set: { value in
                 var s = sub.autoArchiveSettings; s.afterPlayed = value
                 appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
+            }
+        )
+    }
+
+    private func playInstantBinding(_ sub: Subscription) -> Binding<Bool> {
+        Binding(
+            get: { sub.autoArchiveSettings.playInstantEnabled },
+            set: { enabled in
+                var settings = sub.autoArchiveSettings
+                settings.playInstantEnabled = enabled
+                appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: settings)
             }
         )
     }

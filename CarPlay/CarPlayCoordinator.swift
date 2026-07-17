@@ -46,7 +46,15 @@ import UIKit
 //    confirmation (depth 5). Confirmed downloads temporarily replace the stack
 //    with a native spinner root to avoid exceeding depth.
 //  - Speed: CPNowPlayingTemplate root -> pushed speed list with slower/faster
-//    controls plus native Back (depth 2).
+//    controls plus native Back (depth 2). The Now Playing speed control uses a
+//    custom text image derived from AppState's effective configured speed. Do not
+//    replace it with CPNowPlayingPlaybackRateButton: that system button renders
+//    MPNowPlayingInfoPropertyPlaybackRate, which legitimately becomes 0 while
+//    paused and can briefly lag engine state, producing the misleading "0x" bug.
+//    The custom glyph uses 34-point heavy compressed digits and an image cropped
+//    to the measured text bounds. Fixed transparent canvases make CarPlay scale
+//    the actual glyph down and must not be reintroduced; the label should have
+//    the same visual prominence as adjacent symbols on real vehicle displays.
 //  - Shared Listening: CPNowPlayingTemplate root -> one action sheet with toggle,
 //    speed picker entry, and Cancel (depth 2), or a pushed short speed list
 //    (depth 2). No action opens another action sheet.
@@ -910,12 +918,43 @@ final class CarPlayCoordinator: NSObject {
         return button
     }
 
-    private func makePlaybackSpeedButton(appState: AppState) -> CPNowPlayingPlaybackRateButton {
-        let button = CPNowPlayingPlaybackRateButton { [weak self] _ in
+    private func makePlaybackSpeedButton(appState: AppState) -> CPNowPlayingImageButton {
+        let speed = currentPlaybackSpeed(appState: appState)
+        let button = CPNowPlayingImageButton(image: playbackSpeedButtonImage(speed: speed)) { [weak self] _ in
             Task { @MainActor in self?.showPlaybackSpeedTemplate() }
         }
         button.isEnabled = appState.currentPlayerEpisode != nil && !appState.sharedListeningActive
         return button
+    }
+
+    /// Renders the configured speed rather than the instantaneous media playback
+    /// rate. CarPlay tints template images, so the glyph is encoded as alpha-only
+    /// text and stays legible across vehicle light/dark appearances. Keep the
+    /// canvas tight around the glyph: CarPlay scales the complete image into its
+    /// standard control slot, so excess transparent width makes the text tiny.
+    private func playbackSpeedButtonImage(speed: Double) -> UIImage {
+        let text = PlaybackPreference.speedLabel(speed)
+            .replacingOccurrences(of: "x", with: "×")
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 34, weight: .heavy, width: .compressed),
+            .foregroundColor: UIColor.white,
+            .kern: -1.0
+        ]
+        let measured = (text as NSString).size(withAttributes: attributes)
+        // Crop to the glyph plus a one-point anti-aliasing margin. CarPlay sizes
+        // the entire UIImage, so a conventional 46×36 transparent canvas made
+        // the previous 24-point label appear much smaller than nearby symbols.
+        let size = CGSize(
+            width: max(1, ceil(measured.width) + 2),
+            height: max(1, ceil(measured.height) + 2)
+        )
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let image = renderer.image { _ in
+            (text as NSString).draw(at: CGPoint(x: 1, y: 1), withAttributes: attributes)
+        }
+        return image.withRenderingMode(.alwaysTemplate)
     }
 
     private func makeSharedListeningButton(appState: AppState) -> CPNowPlayingImageButton {

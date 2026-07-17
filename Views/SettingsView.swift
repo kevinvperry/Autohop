@@ -8,20 +8,24 @@ import UniformTypeIdentifiers
 // Docs/RELAY_TIER1_IMPLEMENTATION.md §4 and that file's own header for the
 // purchase/restore/manage-subscription flow), Startup (Open-at-launch menu picker →
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
-// cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (sensitivity stepper +
+// cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (fully automatic adaptive scheduling +
 // Notification Settings link — the global notifications toggle now lives on
 // NotificationSettingsView as the master switch — plus a warning row + "Open iOS
 // Settings" deep link shown when UIApplication.backgroundRefreshStatus != .available,
 // since iOS then grants no off-app feed checks; re-checked on scenePhase) and a Feed
 // Refresh Schedule link (FeedRefreshScheduleView — a per-active-subscription table of
-// when/why Release Radar watches each feed), Auto Archive (run-now button +
+// when/why Release Radar watches each feed), Auto Archive (run-now button,
+// durable Auto Archive Activity audit-page link +
 // global default pickers for Played/Inactive/EpisodeLimit applied to new
 // subscriptions only — Inactive uses download-date clock, not publish date;
+// its specialist 40-minute bulletin value is intentionally available only in
+// Podcast Settings, not as an all-new-subscriptions global default;
 // Episode Limit counts only .queued/.downloaded episodes, not .failed), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
 // lock screen scrubbing, Up Next badge, skip back/forward duration sheets), Default Playback
 // (global defaults for new + non-subscribed feeds via the shared
-// PlaybackControlsCard + shared, locally drafted start/end trim controls; their
+// PlaybackControlsCard (including the Stereo/Mono default for future subscriptions)
+// + shared, locally drafted start/end trim controls; their
 // 350 ms coalescing prevents an atomic settings-file write and Form rebuild per
 // tap, uses minute/second labels, and writes AppSettings.defaultPlaybackPreference
 // without touching existing subs. Each trim row receives cardBackground directly
@@ -35,7 +39,9 @@ import UniformTypeIdentifiers
 // off-main and returned as one Int64 to keep Swift 6 concurrency checks clean),
 // About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
-// All section footer copy here must stay in sync with FEATURES.md §15.
+// All section footer copy here must stay in sync with FEATURES.md §15 and the
+// website Support page. Version 1.3 wording describes best-effort iOS background
+// opportunities accurately and never implies Relay or Pro availability.
 // Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
 // subtle dark base (black.opacity(0.5)) with a faint white.opacity(0.05) tint on
 // each section card so edges read clearly, 36 pt listSectionSpacing between
@@ -242,14 +248,6 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
             }
-            Stepper(value: pollBinding, in: 1...60, step: 1) {
-                LabeledContent {
-                    Text("\(appState.settingsStore.appSettings.podcastPollMinutes) min")
-                        .foregroundStyle(.secondary)
-                } label: {
-                    rowLabel("Radar sensitivity", systemImage: "antenna.radiowaves.left.and.right")
-                }
-            }
             NavigationLink {
                 NotificationSettingsView()
             } label: {
@@ -263,7 +261,7 @@ struct SettingsView: View {
         } header: {
             Text("Release Radar")
         } footer: {
-            Text("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Radar sensitivity is how often the feed is checked while a drop is imminent — lower means new episodes appear faster.\n\nChecks are tiny (the feed is only downloaded when it has actually changed), so even 1 minute is light on battery and data. Notification Settings controls which podcasts notify you when a new episode arrives.")
+            Text("Autohop automatically adapts each podcast's refresh timing to its learned release schedule, recent empty checks, deferred backlog, network conditions, battery mode and device temperature.\n\nNotification Settings controls which podcasts notify you after Autohop discovers a new episode.")
         }
         .listRowBackground(cardBackground)
     }
@@ -290,6 +288,12 @@ struct SettingsView: View {
             }
             .disabled(isRunningAutoArchive)
 
+            NavigationLink {
+                AutoArchiveActivityView()
+            } label: {
+                rowLabel("Auto Archive Activity", systemImage: "list.bullet.clipboard")
+            }
+
             Picker(selection: defaultAfterPlayedBinding) {
                 ForEach(AutoArchiveSettings.AfterPlayed.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
@@ -300,7 +304,7 @@ struct SettingsView: View {
             .pickerStyle(.menu)
 
             Picker(selection: defaultAfterInactiveBinding) {
-                ForEach(AutoArchiveSettings.AfterInactive.allCases, id: \.self) { v in
+                ForEach(AutoArchiveSettings.AfterInactive.allCases.filter { $0 != .minutes40 }, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
             } label: {
@@ -319,7 +323,7 @@ struct SettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes.")
+            Text("Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains every automatic decision. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes.")
         }
         .listRowBackground(cardBackground)
     }
@@ -402,6 +406,7 @@ struct SettingsView: View {
                 onSpeedChange: { appState.updateDefaultPlaybackSpeed($0) },
                 onTrimChange: { appState.updateDefaultTrimSilence($0) },
                 onVocalChange: { appState.updateDefaultVocalBoost($0) },
+                onChannelModeChange: { appState.updateDefaultAudioChannelMode($0) },
                 fill: cardBackground,
                 // Drop the card's own glass surface so it inherits the section row
                 // background below and matches every other section on the page.
@@ -412,7 +417,7 @@ struct SettingsView: View {
         } header: {
             Text("Default Playback")
         } footer: {
-            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings.\n\nVocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps (audio episodes only).")
+            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings.\n\nMono Audio centres presenters that were mixed toward the left or right. Vocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps. Audio processing options apply to audio episodes only.")
         }
 
         Section {
@@ -447,7 +452,7 @@ struct SettingsView: View {
         } header: {
             Text("Sync")
         } footer: {
-            Text("Private by default — your subscriptions, played state and stats stay on this device unless you turn on iCloud Sync.\n\nWhen enabled, your listening syncs across your devices signed into the same iCloud account.")
+            Text("Private by default — your subscriptions, playback position, per-podcast settings, Up Next order, history and stats stay on this device unless you turn on iCloud Sync.\n\nWhen enabled, those records sync through your private iCloud database across iPhones signed into the same iCloud account. Downloaded media and global app settings remain on each device.")
         }
         .listRowBackground(cardBackground)
     }
@@ -630,13 +635,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Bindings
-
-    private var pollBinding: Binding<Int> {
-        Binding(
-            get: { appState.settingsStore.appSettings.podcastPollMinutes },
-            set: { appState.settingsStore.appSettings.podcastPollMinutes = $0 }
-        )
-    }
 
     private var cellularBinding: Binding<Bool> {
         Binding(
@@ -837,7 +835,9 @@ private struct SkipDurationEditSheet: View {
 // mirror PodcastDetailView exactly: Play / Play Next lead; the far-right trailing
 // action is Download for not-yet-downloaded episodes on active real subscriptions
 // (otherwise Archive/Unarchive), followed by Play Last. Active downloads render
-// the shared purple linear progress bar below the row, aligned past 54pt artwork.
+// the shared purple linear progress bar below the row. Rows deliberately reuse
+// `ListRow-EpisodeRow` geometry: 44pt artwork, subheadline-semibold episode title,
+// caption podcast/metadata text, and the shared historical EpisodeStatusPill.
 struct ListeningHistoryView: View {
     @EnvironmentObject private var appState: AppState
     /// Dedicated progress publisher keeps download ticks separate from AppState's
@@ -926,6 +926,7 @@ struct ListeningHistoryView: View {
                         ListeningHistoryRow(
                             entry: entry,
                             episode: episode,
+                            isCurrent: isCurrent,
                             downloadProgress: episode.flatMap { downloadProgressModel.progress[$0.id] }
                         )
                             .listRowBackground(isCurrent ? Color.purple.opacity(0.08) : Color.clear)
@@ -1099,74 +1100,97 @@ private struct ListeningHistoryRow: View {
     /// Nil when the retained history record can no longer resolve to a current
     /// library episode; such rows remain readable but cannot show live progress.
     let episode: Episode?
+    let isCurrent: Bool
     let downloadProgress: Double?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 54, height: 54)) {
+            HStack(alignment: .top, spacing: 12) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
                             startPoint: .topLeading, endPoint: .bottomTrailing
                         )
                         Image(systemName: "waveform")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 54, height: 54)
+                .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(entry.podcastTitle.uppercased())
-                        .font(.caption.weight(.bold))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.episodeTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    Text(entry.podcastTitle)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Text(entry.episodeTitle)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(2)
-                    HStack(spacing: 16) {
-                        Label(entry.status.title, systemImage: statusIcon)
-                        Text("•")
-                        Text(formattedDuration(entry.listenedSeconds))
-                        if let remaining = remainingText {
-                            Text("•")
-                            Text(remaining)
-                        }
+
+                    HStack(spacing: 4) {
+                        Text(eventMetadata)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 8)
+                        EpisodeStatusPill(kind: historicalStatusKind)
                     }
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 3)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if episode?.downloadState == .downloading, let downloadProgress {
                 ProgressView(value: downloadProgress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: downloadProgress)
-                    // 54pt artwork + 12pt gap: History's equivalent of the
-                    // canonical 56pt indent used by 44pt episode artwork rows.
-                    .padding(.leading, 66)
+                    .padding(.leading, 56)
                     .padding(.top, 6)
             }
         }
         .padding(.vertical, 6)
     }
 
-    private var statusIcon: String {
+    /// AI CONTEXT — History pills describe the outcome recorded by this entry,
+    /// not a later live library mutation. Only unresolved entries consult the
+    /// active player so "Playing" can replace "Paused" while currently audible.
+    private var historicalStatusKind: EpisodeStatusKind {
         switch entry.status {
-        case .listened: return "waveform"
-        case .played: return "checkmark.circle"
-        case .archived: return "archivebox"
+        case .played:
+            return .played
+        case .archived:
+            return .archived
+        case .listened:
+            return isCurrent ? .nowPlaying : .partiallyPlayed
         }
     }
 
-    private var remainingText: String? {
-        guard entry.status == .listened,
-              let duration = entry.durationSeconds,
-              duration > entry.lastPositionSeconds
-        else { return nil }
-        return "\(formattedDuration(duration - entry.lastPositionSeconds)) left"
+    /// The single persisted event timestamp is `lastListenedAt`; terminal
+    /// mutations stamp it at the exact completion/archive action. Legacy entries
+    /// without CompletionKind use their stored status for an honest fallback.
+    private var eventMetadata: String {
+        let action: String
+        switch entry.completionKind {
+        case .finishedNaturally, .markedPlayed:
+            action = "Completed"
+        case .manuallyArchived:
+            action = "Manually Archived"
+        case .autoArchived:
+            action = "Auto Archived"
+        case nil:
+            switch entry.status {
+            case .played: action = "Completed"
+            case .archived: action = "Archived"
+            case .listened: action = "Last listened"
+            }
+        }
+        let timestamp = entry.lastListenedAt.formatted(date: .abbreviated, time: .shortened)
+        return "\(action) • \(timestamp)"
     }
 }
 

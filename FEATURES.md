@@ -20,7 +20,8 @@ Section 7/15.1 documents that feed refresh schedules auto-downloads without
 waiting for media transfer completion, including stale-download cancellation for
 rolling one-item feeds. Section 15.7 documents CloudKit type-namespaced record
 IDs, collision containment, full-record namespace migration, legacy subscription
-settings recovery, and DayStats conflict convergence/storm logging. Section 15.9
+settings recovery, atomic `SubscriptionOrder` generations, stale-ack protection,
+and DayStats conflict convergence/storm logging. Section 15.9
 documents diagnostic resource snapshots (`footprintMB`), watchdog inactive-gap
 classification, main-thread hang context, playback tick timing, and stats-sync
 flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
@@ -107,7 +108,25 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 
 **How it works:** Each subscription has a `priorityRank: Int` (1 = highest priority). Autohop builds the playback queue by walking down this list in rank order, picking the next downloaded, unplayed episode from each podcast. The queue advances automatically when an episode finishes — no manual intervention required.
 
-**Reordering:** Drag-and-drop in Reorder mode (toolbar toggle). Priority rank can also be edited numerically via the individual podcast settings page.
+**Reordering:** Tap Reorder, then drag active shows into the desired order.
+Autohop keeps a stable UUID-based draft until Done, so several moves in one
+session cannot be misapplied through stale filtered-list indices. Inactive shows
+stay visible but fixed below the draggable group; hidden browse previews never
+enter the drag list. Done, navigation away, or scene deactivation validates and
+persists the final order as one transaction. If iCloud delivers another device's
+order during a drag, it waits until the session finishes; a deliberate local
+move wins, while an unchanged session accepts the remote order.
+
+The durable cross-device representation is one atomic `SubscriptionOrder`
+generation containing the full real-subscription UUID list. The displayed
+`priorityRank` values are derived locally from that list. This prevents a
+multi-row reorder from arriving on another device as a mixture of old and new
+per-podcast ranks.
+
+The numeric Priority editor in Podcast Settings follows the same boundary: its
+maximum is the number of active real subscriptions, and it is unavailable for an
+Inactive show. Hidden browse and Inactive rows cannot inflate the selectable
+rank.
 
 **Row layout (2026-07-02):** artwork + rank pill · show title (subheadline-semibold) · the show's **channel-level description** clamped to 2 lines (not the latest episode title) · a metadata line `Updated: <relative age>` (mins/hours → "Yesterday" → "2…6 days ago" → exact date; no episode length). See `ListRow-SubscriptionRow` in DESIGN.md.
 
@@ -246,12 +265,12 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 - **Search shortcut** — a search-field-shaped button that opens the unchanged Podcast Search sheet
 - **Top Episodes hero** — the storefront's Top 8 *episodes* (not shows) as big paging cards at the very top of the page. The header's **See All** button pushes the **Top Episodes** page (`TopEpisodesView`) — an editorial Top-50 episode list where a large feature card appears every 7th entry (ranks 1/8/15/22/29/36/43) and the rest are compact ranked rows, each showing episode artwork (placeholder fallback), episode title, show name, and relative publish time ("4 hours ago"). Tapping resolves the parent podcast and opens Podcast Detail (§2.2). Data: the Marketing Tools `podcast-episodes.json` feed (limit 50), release dates enriched per parent podcast via the iTunes Lookup API, cached per country.
 - **Top Podcasts hero** — the storefront's Top 8 as big sideways-paging cards (purple gradient, oversized ghosted rank numeral, artwork, rank pill, title/artist/genre). The header's **See All** button pushes the **Top Podcasts** page (`TopPodcastsView`) — an editorial Top-50 *show* list with the same layout as Top Episodes (a large feature card every 7th entry, the rest compact ranked rows), each entry showing the show's artwork, title, author/publisher, and category. Tapping resolves the show's feed and opens Podcast Detail (§2.2). Data: `topPodcasts` (limit 50), cached per country. **Only this first hero (the selected-country one) has a See All — the two fixed-country spotlight heroes don't.**
-- **Genre rails** — horizontally scrolling Top-15 shelves for Comedy, News, True Crime, Society & Culture, Business, Sports, Health & Fitness, Technology, Science, and TV & Film; a rail that fails to load is simply omitted
+- **Category shortcuts and rails** — purple chips for Comedy, News, True Crime, Society & Culture, Business, Sports, Health & Fitness, Technology, Science, and TV & Film each push a dedicated `Top 50 - <Category>` page. Every rail heading repeats that link with the category's purple symbol and a trailing chevron. The page reuses the Top Podcasts editorial layout, feed resolution, pull-to-refresh, and mini-player. When its Top-15 rail is already available, the category page paints those entries immediately and extends/replaces them with the canonical Top 50 in the background. Horizontally scrolling Top-15 rails remain on Discover as quick previews; a rail that fails to load is omitted, and its chip is therefore omitted too.
 - **Country spotlight heroes** — two additional "Top Podcasts · <Country>" hero carousels (identical design to the top hero) woven into the rails: spotlight A appears between Sports and Health & Fitness, spotlight B at the very end. They show fixed storefronts — A = United States (or UK if the user's country is already US); B = United Kingdom (or Australia if the user's country is UK, and also Australia when A has taken UK, i.e. a US user). `DiscoverViewModel.spotlightCountries(selected:)` resolves the pair so neither duplicates the user's country or each other. Each spotlight loads independently (omitted on failure, never blocking the page) and resolves taps against *its own* storefront so the show opens reliably.
 
-**Country picker:** Toolbar-leading menu ("🇦🇺 Australia ▾"). Defaults to the device's region (`Locale.current.region`, no location permission needed), falls back to the US, and persists the user's manual choice (`discoverCountryCode` in UserDefaults). 21 storefronts offered.
+**Country picker:** Toolbar menu ("🇦🇺 Australia ▾") shown throughout the Discover chart family: main Discover, Top Episodes, Top Podcasts, and every category Top 50. It defaults to the device's region (`Locale.current.region`, no location permission needed), falls back to the US, and persists the user's manual choice (`discoverCountryCode` in UserDefaults). Changing it on a child page reloads that chart and updates Discover when the user returns. 21 storefronts offered.
 
-**Data source:** Apple's public chart feeds — the Marketing Tools v2 feed for the Top 8 and the legacy iTunes RSS genre endpoint for the rails. No API key or account. Responses are cached on disk for 12 hours (`Caches/discover-charts`), so the page opens instantly on revisit. Pull to refresh re-fetches.
+**Data source and loading:** Apple's public chart feeds — the Marketing Tools v2 feed for the Top 8 and the legacy iTunes RSS genre endpoint for category charts. No API key or account. Discover renders its shell immediately and publishes heroes, rails, and country spotlights independently as each request completes; one slow endpoint does not hold the page behind a global spinner. Responses are cached on disk for 12 hours (`Caches/discover-charts`). A fresh Top-50 podcast cache is an ordered superset that can satisfy Top-8 or Top-15 requests, avoiding duplicate downloads after an expanded chart has been viewed.
 
 **Tapping a chart entry:** The iTunes Lookup API resolves the show's RSS feed URL (spinner overlays the tile), then routing matches Search exactly — every entry opens the Podcast Detail page (§2.2), in its subscribed state for shows already subscribed, otherwise as a preview that creates the invisible 30-day browse subscription (§2.4) with fully interactive Play / Play Next / Play Last rows. Apple-exclusive shows with no public RSS feed show a "Not Available" alert.
 
@@ -484,7 +503,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 3. **Any transport command is "yes"** — play/pause (lock screen, earbud tap, headphone remote), skip forward/back, scrubbing, the oversized on-screen overlay button in `PlayerView` (shown for the screen-on/video case; a deliberately large `minHeight: 160` "Still Listening" target for half-asleep tapping), or the **"Still Listening" action on the lock-screen notification** (see below). The cycle restarts; a pause press both confirms and pauses (the re-armed countdown freezes until resume).
 4. **No response within 60 s = asleep.** Playback fades out over ~2.5 s, pauses, and **rewinds to where the chime started** — the last point plausibly heard, persisted as the morning resume position (start of the auto-advanced episode in End of Episode mode). The session ends; the schedule re-arms on the next playback start inside the window.
 5. **Manual Sleep Timer overrides:** setting the regular Sleep Timer suspends the schedule for the rest of that session (`suspendForSession`, checked on every 0.5 s tick).
-6. The countdown only advances while playing — pausing freezes it. Sessions that started inside the window keep cycling past the end time mid-cycle.
+6. The countdown only advances while playing — pausing freezes it. **Active Hours are a hard boundary:** when the configured end time arrives, any countdown or End-of-Episode arming is cancelled, and an in-progress chime/overlay/lock-screen notification is dismissed without pausing normal playback. A late "Still Listening" action cannot re-arm the schedule outside the window.
 
 **Lock-screen "Still Listening" notification:** When the prompt fires, Autohop also posts a local notification (`NotificationService`) titled "Are you still listening?" carrying a **"Still Listening" action button**. It's a background action (empty options) so tapping it on the lock screen confirms **without unlocking or opening the app** — routed through the notification-centre delegate to `userResponded()`, exactly like a transport command. The notification uses `interruptionLevel = .timeSensitive` so it breaks through Sleep Focus / Do Not Disturb at night (requires the **Time Sensitive Notifications** capability on the app target). It is cleared automatically whenever the prompt ends (confirmed, timed out, suspended, or reset) via the service's `onPromptDismissed` callback.
 
@@ -531,12 +550,14 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 | Setting | Options | Default | Notes |
 |---|---|---|---|
 | Playback speed | 1.0x – 2.5x (0.1x steps) | **1.6x** | A comfortable starting speed that encourages users to explore speed control. |
-| Vocal Boost | Off / Light / Standard / Strong | **Strong** | See [Vocal Boost](#43-vocal-boost) for full chain description. |
 | Trim Silence | Off / Low / Medium / High | **Low** | Audio episodes only. See [Trim Silence](#42-trim-silence). |
+| Vocal Boost | Off / Light / Standard / Strong | **Strong** | See [Vocal Boost](#43-vocal-boost) for full chain description. |
+| Volume Adjustment | −3 dB … +3 dB (whole-number steps) | **0 dB** | Fourth item in the per-podcast Playback card, between Vocal Boost and Mono Audio. A purple stepped slider compensates for a podcast mastered quieter or louder than the rest of the library. Audio uses a dedicated final EQ gain stage, independent of device volume and sleep fading. Stored and synced inside `PlaybackPreference`; changes apply immediately. This is deliberately per-podcast only and is not shown in global Default Playback. |
+| Mono Audio | Stereo / Mono | **Stereo** | Final item in the Playback card, presented as a full-width two-option segmented selector matching Trim Silence and Vocal Boost. Audio episodes only. Mono averages the decoded left and right channels and sends the centred result to both outputs, correcting podcasts whose presenters are mixed heavily toward one side. The System Settings value is the default for future subscriptions; each existing podcast keeps its own value. |
 | Start skip | 0 – 300s (5s steps) | **0 (off)** | Automatically skips N seconds at the start of every episode. Measured in real file time, independent of playback speed. Primary use case: skipping recurring show intros or theme music. |
 | End skip | 0 – 300s (5s steps) | **0 (off)** | Automatically skips N seconds at the end of every episode. Measured in real file time, independent of playback speed. Primary use case: skipping recurring outros or trailing ad reads. |
 
-**Footer notes (shown in app):** "Vocal Boost lifts speech above music and background sound — Strong targets a −14 LUFS loudness goal for the clearest spoken audio. Trim Silence removes quiet gaps (audio episodes only)." and "Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically."
+**Footer notes (shown in app):** "Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only)." and "Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically."
 
 **Trim control UI:** Start skip and End skip use the shared `EpisodeTrimControlRow` component on both the per-podcast page and the global Default Playback page. Each row shows compact elapsed wording (`Off`, `45 secs`, `1 min 30 secs`), steps in 5-second increments, clamps to 0…300 seconds, updates its on-screen value immediately, and debounces persistence so rapid taps do not cause sluggish playback-side updates.
 
@@ -548,20 +569,23 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 |---|---|---|
 | New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
+| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files, filter-skipped episodes, and arrivals while playback is idle do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
+
+**Play Instant footer note (shown in app):** "Play Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Use it sparingly—only for your absolute favourite content. Manual downloads never trigger it."
 
 ---
 
 ### 10.4 Auto Archive section
 
-Three independent rules. All stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every 30 minutes — it is driven by the 30-second foreground poller, so it runs on that cadence whenever the app is alive (foreground or background-audio playback), independent of feed refreshes — plus at app launch, at the end of a completed feed-refresh cycle, and immediately on demand via Settings → Run Auto Archive Now. (Before 2026-07-11 it was driven only by launch and completed refresh cycles, which for a long-lived process left it running rarely — an inactive-timeout that could take days to fire.) New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
+Three independent rules. All are stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every **25 minutes** while the app process is active, including background-audio playback, and is also requested at launch, after a completed feed refresh, and on demand. Every pass writes an `autoArchive.eligibility` diagnostic summary so a zero-result run explains how many episodes were evaluated, protected, still below threshold, or excluded. New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
 
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|
 | Rule 1 | Played Episodes | Never / After Playing / After 24h / After 2 Days / After 1 Week | **After Playing** | Archives a played episode immediately on completion, or after a delay. "After Playing" archives as soon as the episode finishes. |
-| Rule 2 | Inactive Episodes | Never / 4h / 8h / 16h / 24h / 2 Days / 3 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives downloaded-but-unplayed episodes that haven't been played within the set interval of being downloaded. The inactivity clock starts when the file lands on device (`Episode.downloadedAt`) and resets if the user starts playing the episode (`Episode.lastPlayedAt`). Episodes that have **never been downloaded** are completely exempt — this rule only targets episodes you downloaded but didn't get around to. |
+| Rule 2 | Inactive Episodes | Never / **40 Minutes** / 4h / 6h / 8h / 12h / 16h / 24h / 2 Days / 3 Days / 4 Days / 5 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives downloaded-but-unplayed episodes that haven't been played within the set interval of being downloaded. The 40-minute per-podcast option targets hourly news bulletins so an aging downloaded bulletin is removed around the time its replacement becomes available. The inactivity clock starts when the file lands on device (`Episode.downloadedAt`) and resets if the user starts playing the episode (`Episode.lastPlayedAt`). Episodes that have **never been downloaded** are completely exempt. With the 25-minute gate, a 40-minute timeout is normally enforced between approximately 40 and 65 minutes after last activity. |
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes that are downloaded or queued to download, archiving older ones. Episodes in a failed download state and episodes that have never been downloaded do not consume a slot. Default of 1 keeps storage lean. |
 
-**Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published downloaded episodes, archiving older ones. Auto Archive runs at most every 30 minutes."
+**Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published downloaded episodes, archiving older ones. Auto Archive runs at most every 25 minutes."
 
 **Fresh-subscription backlog exemption:** When you subscribe to a show, its pre-existing back-catalogue (every episode published on or before the moment you subscribed, tracked by `Subscription.subscribedAt`) is left **browsable as Unplayed** — the Inactive Episodes and Episode Limit rules skip it. This stops subscribing to an established show from archiving its entire 50-episode backlog (and flooding Stats) on day one. Only episodes that arrive **after** you subscribe flow through the inactive/limit lifecycle. The newest auto-download eligible episode downloads immediately; Download Filters can make Autohop look back to a newer matching eligible episode instead of the raw latest item. Legacy subscriptions created before this field existed have no `subscribedAt` and keep the old behaviour.
 
@@ -618,11 +642,11 @@ When all three filter groups are off, no filtering occurs and Autohop downloads 
 ## 11. Listening History
 
 Listening progress is accumulated from the playback clock and persisted in efficient
-10-second batches. Pause, backgrounding, sleep stops, and episode completion immediately
+30-second batches. Pause, backgrounding, sleep stops, and episode completion immediately
 flush the final batch, retaining accurate resume positions and iCloud history without
 performing disk and sync bookkeeping every half-second.
 
-**Access:** Hamburger menu (☰) on the Priority page → Listening History. Also accessible from Settings → Subscriptions → Listening History.
+**Access:** Hamburger menu (☰) on the Subscriptions page → Listening History.
 
 **What it tracks:** Every episode the user has listened to, recorded in `ListeningHistoryStore` → `listening-history.json`.
 
@@ -635,10 +659,16 @@ Two summary cards at the top of the page:
 
 ### History list
 Episodes grouped by date: Today, Yesterday, then older dates (abbreviated format). Within each group, sorted most recent first. Each row shows:
-- Podcast artwork
-- Podcast name (uppercase caption)
-- Episode title
-- Status label + time listened + time remaining (if partially listened)
+- 44 pt episode/podcast artwork, matching the canonical Subscription episode row
+- Episode title in `.subheadline.semibold`, followed by the podcast name in `.caption.secondary`
+- A shared `EpisodeStatusPill` representing the stored historical outcome: Played, Archived, or Paused (Playing only while an unresolved entry is currently audible)
+- Event metadata with an exact local date and time: Completed, Manually Archived, Auto Archived, legacy Archived, or Last listened
+
+History deliberately resolves status from the stored entry rather than a later
+episode-library mutation. `lastListenedAt` is the event timestamp: terminal
+completion/archive paths stamp it when the action occurs, while unresolved rows
+use it as their latest listening time. Older entries without `CompletionKind`
+fall back honestly to their persisted Played/Archived/Listened status.
 
 Rows that still resolve to a current library episode use the same four swipe
 positions and behavior as Podcast Detail: Play / Play Next on the leading edge,
@@ -787,9 +817,9 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 ### 15.1 Release Radar
 
-Release Radar is Autohop's automatic feed-refresh system. Its job is to detect and download new podcast episodes faster than ordinary podcast apps while avoiding wasteful checks during periods when a feed is predictably quiet.
+Release Radar is Autohop's automatic feed-refresh system. Its job is to prioritise feeds when new podcast episodes are expected while avoiding wasteful checks during periods when a feed is predictably quiet. Exact discovery timing depends on when Autohop is active and when iOS grants background execution.
 
-> **AI CONTEXT — runtime budget update (2026-07-13):** background-audio checking is no longer the same cadence as visible foreground checking. While the scene is inactive, it is bounded to one cycle of at most four due feeds every ten minutes. This statement supersedes the older same-cadence wording below.
+> **AI CONTEXT — automatic policy update (2026-07-15):** Radar Sensitivity is no longer user configurable. During confirmed background playback, polling is bounded to one cycle every four minutes. Seven routine feeds may be checked; pre-window, active-window, and missed-release work may extend the cycle to a hard maximum of ten. Low Power Mode, thermal pressure, constrained/cellular networking, and large active downloads reduce these budgets.
 
 **When checks run:** Autohop checks due feeds (1) on a ~30-second timer while the app is open, (2) **while you're listening with the app in the background** — audio playback keeps the app alive, so due feeds are refreshed and new episodes downloaded on the same cadence as in the foreground, (3) opportunistically via iOS Background App Refresh (`BGAppRefreshTask`), whose timing iOS controls and never guarantees, and (4) as a longer catch-up via a `BGProcessingTask` that iOS runs while the device is **charging and on Wi-Fi** (typically overnight) — a full sweep of every due feed plus downloads, so you wake up current even after a long stretch without opening the app. Newly found episodes download via a background `URLSession` that continues even if the app is later suspended. If the user has turned **Background App Refresh** off for Autohop, iOS grants *no* off-app checks at all; **Settings → Release Radar** then shows a warning with an **Open iOS Settings** link explaining this (and that force-quitting the app also stops background checks). (Background-task reliability research and the design rationale live in `BACKGROUND_REFRESH_RESEARCH.md`.) **Settings → Release Radar → Feed Refresh Schedule** (`FeedRefreshScheduleView`) shows a per-active-subscription table of when Release Radar will and won't check each feed — learned profile + confidence, current state, the recurring watch pattern, and the next concrete window — grouped by behaviour (Inactive subs excluded). Each row has a **Rebuild Prediction** button that fetches the feed's last 100 episodes' publish dates **and times** into the learner (without adding episodes to your library) to form a stronger schedule prediction; episodes skipped by Download Filters are excluded from that learner. For a weekly show this is typically enough history to size its release window from the observed publish-time spread. The page also has a toolbar **export** button that writes a shareable plain-text diagnostic of every active subscription — each show's classification, daily/weekly gate outcomes, learning signal, learned window, observed spread, weekday counts, **per-weekday watch tiers** (probability → Full/Light/Skip), and recent eligible observations — so the whole picture can be exported and analysed for trends.
 
@@ -797,20 +827,19 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
-| Radar sensitivity | Stepper | **5 minutes** | 1 – 60 min | How often a feed is re-checked while a new episode drop is imminent. Lower means new episodes appear faster; checks are tiny, so even 1 minute is light on battery and data. |
 | Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
 
 **Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked, but at a lower surveillance cadence so random releases are not missed without turning every quiet feed into a minute-by-minute poll.
 
 **Data captured from RSS:** Every feed refresh records per-episode release observations in `RefreshStats.releaseObservations` (capped at 200). Each observation stores the episode key, GUID, title, audio URL, RSS `publishedAt`, first/last seen times, whether it was new when first seen, and a publish-date quality marker (`missing`, `plausible`, `futureDated`, `implausiblyOld`). This history is stored on the subscription so schedule learning survives app launches and works even when the current RSS feed only exposes one item.
 
-**Initial seeding:** When a new subscription is added, `SubscriptionStore` seeds release observations from the episodes already present in the fetched feed. New subscriptions then continue to be checked at the Radar sensitivity cadence until enough reliable observations exist to classify the schedule.
+**Initial seeding:** When a new subscription is added, `SubscriptionStore` seeds release observations from the episodes already present in the fetched feed. New subscriptions use an automatic learning cadence until enough reliable observations exist to classify the schedule.
 
 **Schedule profiles:** `FeedScheduleProfiler` classifies each podcast into one of these profile kinds. Hourly / rolling-bulletin / burst are detected first. Everything else is classified by **Release Radar v2** on its *cadence + active-day pattern only* — publish *time of day* never gates classification, it only sizes the watch window. The profiler learns a **recency-weighted** per-weekday publish probability (recent weeks count for more, so a feed that changed its schedule — or whose older history was captured incompletely — self-corrects rather than being held back by stale data) and watches each weekday at a tier set by that probability: **high → full window on high rotation**, **medium → a lighter occasional check**, **low → skipped entirely**. So a Mon–Fri show spends nothing on the weekend, while a show that *occasionally* drops a Saturday still gets a light Saturday check. A weekly show that skips the odd week (holidays/hiatus) is still recognised as weekly via its dominant weekday's share of episodes. Learned windows hug the densest publish-time cluster for tight feeds, but ordinary daily/weekly/multi feeds widen and lower confidence when their full observed spread is genuinely messy.
 
 | Profile | Meaning | Refresh behaviour |
 |---|---|---|
-| `learning` | Not enough reliable publish dates yet. | Check at the Radar sensitivity cadence briefly, then decay after repeated empty checks. |
+| `learning` | Not enough reliable publish dates yet. | Check briefly at the automatic learning cadence, then decay after repeated empty checks. |
 | `unreliableDates` | Most observed episodes have missing or suspicious RSS dates. | Fall back to first-seen surveillance because published times cannot be trusted; recent real releases can temporarily tighten the cadence. |
 | `hourly` | Episodes arrive near-hourly around the same minute of the hour. | Open a short window around the learned minute and check on high rotation. |
 | `rollingBulletin` | Short news-style feeds use predictable minute marks but change cadence, such as hourly most of the day with half-hourly releases during breakfast. | Open short windows around each learned minute-of-hour slot, such as `:00` and `:30`, instead of treating the feed as random. |
@@ -818,7 +847,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | `dailyWeekdays` | A near-daily feed (5+ active days, ~1-day cadence). Classified on cadence + the set of weekdays it reliably publishes on — publish time is irrelevant here. The active-day set distinguishes **Weekdays** (Mon–Fri) from **Daily** (includes the weekend); `FeedScheduleProfile.categoryLabel` reads it to print the right label. | Check across the learned window on each *active* weekday only; never opens weekend slots for a Mon–Fri show; stand down after the expected episode arrives. |
 | `weekly` | One reliable publish day on a ~weekly cadence (4–11 day gap). The publish *time* may drift hours week to week (produced shows post-process late), so classification rests on the day + cadence, not a fixed minute. | Check across the learned window on that day, then stand down until the next expected week. |
 | `multiSlot` | "Several times a week" — a small, consistent set of 2–4 active days. | Check across the learned window on each of those days. |
-| `random` | Reliable dates exist, but no consistent active day or cadence emerges. | Use low-frequency surveillance, usually 15–60 minutes depending on recent activity and the Radar sensitivity setting. |
+| `random` | Reliable dates exist, but no consistent active day or cadence emerges. | Use low-frequency surveillance, normally 15–60 minutes depending on recent activity. |
 
 **Due prediction:** `FeedRefreshScheduling` converts a profile into the next time a feed deserves a fetch. Learned profiles create explicit release windows:
 
@@ -831,7 +860,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to detect a
 | `weekly` | 20 minutes before the learned window start. | The learned `releaseWindow` — a window hugging the densest publish-time cluster (recency-weighted, +20 min margin, 1-hour floor), widened when the observed spread is broad; stragglers outside it are caught by missed-release and safety-sweep checks. Falls back to typical − 10 min … + 120 min if unwindowed. Closes early the moment that week's episode arrives. |
 | `multiSlot` | 10 minutes before the learned window start, on each active day. | The learned `releaseWindow` (densest mode, adaptively widened for messy feeds), repeated on each active day; falls back to typical − 5 min … + 60 min if unwindowed. |
 
-If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop keeps checking on the Radar sensitivity cadence for the first 2 hours, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. Learned non-news profiles also get broad low-priority safety sweeps outside their main window (about twice daily for daily/multi/burst feeds and once daily for weekly feeds). This prevents one late or out-of-window episode from being missed while avoiding indefinite high-frequency polling.
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop normally checks every 5–10 minutes shortly after the miss, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. Learned non-news profiles also get broad low-priority safety sweeps outside their main window (about twice daily for daily/multi/burst feeds and once daily for weekly feeds). This prevents one late or out-of-window episode from being missed while avoiding indefinite high-frequency polling.
 
 **One-item hourly and rolling bulletin feeds:** Feeds that publish frequently but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, a stable single-minute feed can be profiled as `hourly`, while mixed-cadence bulletin feeds can be profiled as `rollingBulletin` when they repeatedly use predictable minute marks such as `:00` and `:30`. This covers feeds that publish hourly most of the day but every half hour during a morning news block, so they receive real release windows instead of being ranked as random surveillance. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
@@ -865,14 +894,15 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| Run Auto Archive Now | Button | — | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 30 minutes. Shows a spinner while running. |
+| Run Auto Archive Now | Button | — | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 25 minutes. Shows a spinner while running. |
+| Auto Archive Activity | Page link | — | Opens the newest-first local audit of automatic archives, including episode, podcast, exact date/time, rule, configured threshold, and measured age. The store retains the latest 500 events recorded after this feature was installed. |
 | Played Episodes | Menu picker | **After Playing** | Global default for Rule 1 (see §10.4) applied to **new subscriptions only**. |
-| Inactive Episodes | Menu picker | **1 Week** | Global default for Rule 2 applied to **new subscriptions only**. |
+| Inactive Episodes | Menu picker | **1 Week** | Global default for Rule 2 applied to **new subscriptions only**. The specialist 40-minute bulletin option is intentionally limited to individual Podcast Settings. |
 | Episode Limit | Menu picker | **1** | Global default for Rule 3 applied to **new subscriptions only**. |
 
 The three pickers mirror the per-podcast Auto Archive rules (§10.4) and set the **global default** seeded into each podcast at the moment it becomes a real subscription. Stored in `AppSettings.defaultAutoArchiveSettings` (an `AutoArchiveSettings`). **Scope:** these defaults only ever apply to *new* subscriptions (add / OPML import / browse-preview activation, via `SubscriptionStore`); editing them **never** changes the Auto Archive settings of podcasts already subscribed — those keep their own per-podcast values (§10.4). There is no bulk "apply to all" action. The initial value matches the historical hardcoded defaults (After Playing / 1 Week / Keep 1), so existing users see no behavioural change.
 
-**Footer note (shown in app):** "Auto Archive normally runs on its own (at most every 30 minutes). These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings. Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published downloaded episodes."
+**Footer note (shown in app):** "Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains automatic decisions. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings. Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published downloaded episodes."
 
 ---
 
@@ -939,7 +969,25 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Per-podcast Download Filters sync as of July 2026 (they were backup/local-only in v1). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
 
-**CloudKit identity and repair:** CloudKit record names are type-namespaced (`episode:`, `subscription:`, `history:`, `stats:`) because record IDs are unique across record types inside the shared zone. Legacy unprefixed records still decode for existing iCloud data. A known permanent legacy collision where a `HistoryEntry` record blocks an `EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the hot retry loop, and left dirty locally so the next queue pass can send it under the new `episode:` name. Restored pre-namespace save attempts are dropped before sending; deletes are preserved. Fresh namespaced EpisodeState and SubscriptionState records are written as full snapshots so clean local fields are not omitted. Sparse remote fields with no modified timestamp are treated as "no remote opinion" and cannot reset local settings to defaults. A one-shot recovery pass reads legacy unprefixed SubscriptionState records, restores settings only for podcasts that still exist locally, and re-uploads complete `subscription:` records. Old unprefixed CloudKit records may remain as recovery orphans until the namespaced data is verified.
+**CloudKit identity and repair:** CloudKit record names are type-namespaced
+(`episode:`, `subscription:`, `subscription-order:`, `queue:`, `history:`,
+`stats:`) because record IDs are unique across record types inside the shared
+zone. Legacy unprefixed records still decode for existing iCloud data. A known
+permanent legacy collision where a `HistoryEntry` record blocks an
+`EpisodeState` save is logged once as `sync.pushQuarantined`, removed from the
+hot retry loop, and left dirty locally so the next queue pass can send it under
+the new `episode:` name. Restored pre-namespace save attempts are dropped before
+sending; deletes are preserved. Fresh namespaced EpisodeState and
+SubscriptionState records are written as full snapshots so clean local fields
+are not omitted. Sparse remote fields with no modified timestamp are treated as
+"no remote opinion" and cannot reset local settings to defaults. Priority Stack
+order is a whole-list `subscription-order:current` generation, and every
+successful upload is acknowledged against the exact version sent so a delayed
+response cannot clear newer local work. A one-shot recovery pass reads legacy
+unprefixed SubscriptionState records, restores settings only for podcasts that
+still exist locally, and re-uploads complete `subscription:` records. Old
+unprefixed CloudKit records may remain as recovery orphans until the namespaced
+data is verified.
 
 ---
 
@@ -959,7 +1007,7 @@ Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **O
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
-| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, `stats.*`, `playback.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory, and — for battery/thermal diagnosis — `cpuPercent` (app CPU as a % of one core, summed over live threads; the primary "warm phone" signal), `threadCount`, `batteryDrainPctPerHour` (discharge rate between real 1% level changes, unplugged only), plus `thermalState`, `lowPowerMode`, and `playingVideo`. Thermal escalations and Low Power Mode changes are also logged as discrete `resources.thermalChange` / `resources.powerModeChange` events. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, download state, and the most recent playback-tick timing (`lastPlaybackTick*`). Slow playback ticks emit `playback.tickSlow`; rolling summaries emit `playback.tickSummary`. Stats-sync breadcrumbs emit `stats.pendingMarked` and `stats.flush`; repeated DayStats CloudKit conflicts emit `sync.conflictStorm`, with `statsConflictResolution` showing whether Autohop will refresh the local partition's server fields or apply another device's partition. Watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses, previous/new route output, deferred restarts, and delayed AVAudioEngine route restarts. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, `stats.*`, `playback.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory, and — for battery/thermal diagnosis — `cpuPercent` (app CPU as a % of one core, summed over live threads; the primary "warm phone" signal), `threadCount`, `batteryDrainPctPerHour` (discharge rate between real 1% level changes, unplugged only), plus `thermalState`, `lowPowerMode`, and `playingVideo`. Physical footprint is the primary memory intervention threshold. Long refresh cycles add a checkpoint every 16 feeds. Thermal escalations and Low Power Mode changes are also logged as discrete `resources.thermalChange` / `resources.powerModeChange` events. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, download state, and the most recent playback-tick timing (`lastPlaybackTick*`). `app.bootstrapTiming` separates construction from wiring/restore and `playback.resumeTiming` measures slow synchronous engine resumes. Slow playback ticks emit `playback.tickSlow`; rolling summaries emit `playback.tickSummary`. Routine Stats/history persistence diagnostics are five-minute summaries, while lifecycle/failure/slow-write events remain immediate. Download diagnostics distinguish a 30-minute first-byte wait from a 10-minute active-transfer stall. Repeated DayStats CloudKit conflicts emit `sync.conflictStorm`, with `statsConflictResolution` showing whether Autohop will refresh the local partition's server fields or apply another device's partition. Watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses, previous/new route output, deferred restarts, delayed AVAudioEngine route restarts, and stale buffer-loop generations. |
 
 ---
 
@@ -1228,6 +1276,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 - **Archive** removes the selected episode from the queue. Archiving the current episode advances to the next downloaded queue item when one exists; otherwise Now Playing is cleared and the empty queue state is shown.
 - **Playback Speed** opens a slower/faster page using Autohop's existing preset speeds and the current episode's podcast settings as the base. The page stays open after each adjustment.
 - **Shared Listening** controls the same global temporary override as iPhone. Disconnecting CarPlay does not change the Shared Listening state.
+- **Playback Speed** shows the episode's configured effective speed directly on the Now Playing button (for example, `1.6x`) even while playback is paused or the audio engine is transitioning routes. Selecting it opens the existing Slower/Faster adjustment page.
 
 **Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.
 

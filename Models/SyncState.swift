@@ -31,6 +31,10 @@ import Foundation
 // which is also what first populates the filters on the server. Old remote
 // records without the field decode with a nil stamp = "no remote opinion", so
 // they can never reset local filters to defaults.
+//
+// ACK SAFETY: markAcknowledged(by:) compares each current field with the exact
+// value+modifiedAt returned by CloudKit. A response for edit A therefore cannot
+// clear newer edit B when B occurred while A was in flight.
 
 // MARK: - Episode
 
@@ -89,6 +93,13 @@ public struct EpisodeSyncState: Codable, Equatable {
         _playedState.markClean()
         _wasCompleted.markClean()
         _lastPlayedAt.markClean()
+    }
+
+    public mutating func markAcknowledged(by acknowledged: EpisodeSyncState) {
+        guard syncKey == acknowledged.syncKey else { return }
+        _playedState.markClean(ifAcknowledgedBy: acknowledged._playedState)
+        _wasCompleted.markClean(ifAcknowledgedBy: acknowledged._wasCompleted)
+        _lastPlayedAt.markClean(ifAcknowledgedBy: acknowledged._lastPlayedAt)
     }
 
     public mutating func markAllDirty(at date: Date = Date()) {
@@ -254,6 +265,20 @@ public struct SubscriptionSyncState: Codable, Equatable {
         _autoArchiveSettings.markClean()
         _chapterFilter.markClean()
         _downloadFilterSettings.markClean()
+    }
+
+    public mutating func markAcknowledged(by acknowledged: SubscriptionSyncState) {
+        guard subscriptionID == acknowledged.subscriptionID else { return }
+        _subscribed.markClean(ifAcknowledgedBy: acknowledged._subscribed)
+        _title.markClean(ifAcknowledgedBy: acknowledged._title)
+        _priorityRank.markClean(ifAcknowledgedBy: acknowledged._priorityRank)
+        _notificationsEnabled.markClean(ifAcknowledgedBy: acknowledged._notificationsEnabled)
+        _excludeFromAutoFeedRefresh.markClean(ifAcknowledgedBy: acknowledged._excludeFromAutoFeedRefresh)
+        _autoFeedRefreshReturnPriorityRank.markClean(ifAcknowledgedBy: acknowledged._autoFeedRefreshReturnPriorityRank)
+        _playbackPreference.markClean(ifAcknowledgedBy: acknowledged._playbackPreference)
+        _autoArchiveSettings.markClean(ifAcknowledgedBy: acknowledged._autoArchiveSettings)
+        _chapterFilter.markClean(ifAcknowledgedBy: acknowledged._chapterFilter)
+        _downloadFilterSettings.markClean(ifAcknowledgedBy: acknowledged._downloadFilterSettings)
     }
 
     public mutating func markAllDirty(at date: Date = Date()) {

@@ -5,6 +5,9 @@
 // `.strong`. The legacy `vocalBoostEnabled` boolean key must still map
 // true→.strong / false→.off. Also protects the shared episode-trim display
 // wording used by both settings pages (including singular/plural boundaries).
+// Mono Audio is also protected as an opt-in preference: legacy payloads and
+// factory defaults are Stereo, while an explicit Mono choice round-trips. Volume
+// Adjustment likewise defaults legacy/new data to 0 and clamps to -3...+3.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -39,6 +42,54 @@ final class PlaybackPreferenceDefaultsTests: XCTestCase {
         let data = try JSONEncoder().encode(pref)
         let decoded = try JSONDecoder().decode(PlaybackPreference.self, from: data)
         XCTAssertEqual(decoded.vocalBoostLevel, .standard)
+    }
+
+    func testAudioChannelModeDefaultsStereoForNewAndLegacyPreferences() throws {
+        XCTAssertEqual(PlaybackPreference.default.audioChannelMode, .stereo)
+        let legacy = #"{"speed":1.2,"startSkipSeconds":0,"endSkipSeconds":0,"trimSilence":"off"}"#
+        let decoded = try JSONDecoder().decode(PlaybackPreference.self, from: Data(legacy.utf8))
+        XCTAssertEqual(decoded.audioChannelMode, .stereo)
+    }
+
+    func testMonoAudioPreferenceRoundTrips() throws {
+        let preference = PlaybackPreference(
+            speed: 1.0,
+            startSkipSeconds: 0,
+            endSkipSeconds: 0,
+            audioChannelMode: .mono
+        )
+        let decoded = try JSONDecoder().decode(
+            PlaybackPreference.self,
+            from: JSONEncoder().encode(preference)
+        )
+        XCTAssertEqual(decoded.audioChannelMode, .mono)
+    }
+
+    func testVolumeAdjustmentDefaultsToZeroAndRoundTrips() throws {
+        XCTAssertEqual(PlaybackPreference.default.volumeAdjustment, 0)
+        let legacy = #"{"speed":1.2,"startSkipSeconds":0,"endSkipSeconds":0}"#
+        XCTAssertEqual(
+            try JSONDecoder().decode(PlaybackPreference.self, from: Data(legacy.utf8)).volumeAdjustment,
+            0
+        )
+        let preference = PlaybackPreference(
+            speed: 1,
+            startSkipSeconds: 0,
+            endSkipSeconds: 0,
+            volumeAdjustment: 3
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(PlaybackPreference.self, from: JSONEncoder().encode(preference)).volumeAdjustment,
+            3
+        )
+    }
+
+    func testVolumeAdjustmentClampsAndFormats() {
+        XCTAssertEqual(PlaybackPreference.clampedVolumeAdjustment(-9), -3)
+        XCTAssertEqual(PlaybackPreference.clampedVolumeAdjustment(9), 3)
+        XCTAssertEqual(PlaybackPreference.volumeAdjustmentLabel(-2), "-2 dB")
+        XCTAssertEqual(PlaybackPreference.volumeAdjustmentLabel(0), "0 dB")
+        XCTAssertEqual(PlaybackPreference.volumeAdjustmentLabel(2), "+2 dB")
     }
 
     func testEpisodeTrimDurationTextUsesMinutesAndSeconds() {

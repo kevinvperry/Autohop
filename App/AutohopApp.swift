@@ -13,7 +13,8 @@ import SwiftUI
 //  - on launch: resume playback position if an episode was mid-play
 //    (startPlaybackOnLaunchIfNeeded)
 //  - on foreground: run the auto-archive pass if 30 min have elapsed
-//  - on background/inactive: flush playback position + listening stats to disk
+//  - on background/inactive: flush playback position, subscription-order
+//    transactions, and listening stats to disk
 //    (these are write-throttled in memory, so leaving foreground must force-save),
 //    then flushDeferredSyncPushes so slow-lane (history/stats) CloudKit changes
 //    held on the sync engine's ~60 s coalescing debounce upload before suspension.
@@ -68,12 +69,15 @@ private struct AutohopRootBootstrapView: View {
                         } else {
                             appState.persistCurrentPlaybackPosition()
                             appState.listeningStatsStore.save()
-                            // After the stats/history saves above, so the sync
-                            // scan sees the freshest rows (see CloudSyncEngine
-                            // slow-lane coalescing).
-                            appState.flushDeferredSyncPushes(
-                                reason: phase == .background ? "scene.background" : "scene.inactive"
-                            )
+                            Task { @MainActor in
+                                // Subscription saves are asynchronous. Finish the
+                                // SQLite transaction first so the following sync
+                                // scan sees the atomic order generation.
+                                _ = await appState.subscriptionStore.flushPendingSaves()
+                                appState.flushDeferredSyncPushes(
+                                    reason: phase == .background ? "scene.background" : "scene.inactive"
+                                )
+                            }
                         }
                     }
             } else {

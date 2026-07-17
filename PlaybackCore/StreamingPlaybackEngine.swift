@@ -232,7 +232,14 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     // DSP effects need the complete-file AVAudioEngine path (iOS engine only);
     // capabilities report them unavailable, so these are deliberate no-ops.
     public func updateVocalBoost(_ level: VocalBoostLevel) {}
+    public func updateVolumeAdjustment(_ adjustment: Int) {
+        // Streaming/tvOS is not a Version 1.4 shipping surface. Keep protocol
+        // compatibility without pretending AVPlayer.volume can amplify above 1.
+    }
     public func updateTrimSilence(_ amount: TrimSilenceAmount) {}
+    /// Streaming/tvOS currently remains AVPlayer-only; the iPhone audio engine
+    /// performs the Mono fold-down. Retain preference compatibility as a no-op.
+    public func updateAudioChannelMode(_ mode: AudioChannelMode) {}
 
     /// AI CONTEXT — tvOS/streaming live trim update. Only end trim can affect an
     /// already-started AVPlayer session; start trim remains a next-play setting.

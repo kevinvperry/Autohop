@@ -1,7 +1,8 @@
 import SwiftUI
 
 // AI CONTEXT — Views/PlaybackControlsCard.swift
-// Reusable sound controls card (Speed / Trim Silence / Vocal Boost). Single
+// Reusable sound controls card (Speed / Trim Silence / Vocal Boost / optional
+// per-subscription Volume Adjustment / Mono Audio). Single
 // source of truth shared by SubscriptionSettingsView and SettingsView.
 // iOS 26: card uses glassCard(cornerRadius:12), stepper uses glassCard(cornerRadius:10).
 // iOS 17–25: card uses the `fill` background param (callers pass white.opacity(0.08)
@@ -19,6 +20,9 @@ struct PlaybackControlsCard: View {
     let onSpeedChange: (Double) -> Void
     let onTrimChange: (TrimSilenceAmount) -> Void
     let onVocalChange: (VocalBoostLevel) -> Void
+    let onChannelModeChange: (AudioChannelMode) -> Void
+    var onVolumeAdjustmentChange: ((Int) -> Void)? = nil
+    var showsVolumeAdjustment = false
     // Card fill colour. Defaults to the standalone near-black used by the audio
     // controls sheet and the per-podcast Playback section. SettingsView overrides
     // it with white.opacity(0.08) so the card matches the other dark cards on the
@@ -41,6 +45,12 @@ struct PlaybackControlsCard: View {
             trimSilenceRow
             Divider().background(dividerColor).padding(.leading, 60)
             vocalBoostRow
+            Divider().background(dividerColor).padding(.leading, 60)
+            if showsVolumeAdjustment {
+                volumeAdjustmentRow
+                Divider().background(dividerColor).padding(.leading, 60)
+            }
+            channelModeRow
         }
         // No horizontal padding: callers zero out listRowInsets, so the row already
         // fills the standard grouped-section region. Any extra padding here would
@@ -59,6 +69,83 @@ struct PlaybackControlsCard: View {
                 .background(fill)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    private var channelModeRow: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 14) {
+                rowIcon("ear")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Mono Audio")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Centre left and right voices")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(white: 0.50))
+                }
+                Spacer()
+            }
+
+            // AI CONTEXT — This binary choice deliberately uses the same full-
+            // width segmented treatment as Trim Silence and Vocal Boost. Stereo
+            // is an explicit selected state, not an ambiguous disabled switch.
+            Picker("Audio channels", selection: Binding(
+                get: { preference.audioChannelMode },
+                set: { onChannelModeChange($0) }
+            )) {
+                ForEach(AudioChannelMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .tint(.purple)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private var volumeAdjustmentRow: some View {
+        let adjustment = PlaybackPreference.clampedVolumeAdjustment(preference.volumeAdjustment)
+        return VStack(spacing: 12) {
+            HStack(spacing: 14) {
+                rowIcon("speaker.wave.1.fill")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Volume Adjustment")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Adjust this podcast only")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(white: 0.50))
+                }
+                Spacer()
+                Text(PlaybackPreference.volumeAdjustmentLabel(adjustment))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.purple)
+                    .frame(minWidth: 52, alignment: .trailing)
+            }
+
+            HStack(spacing: 10) {
+                Text("−3")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(adjustment) },
+                        set: { onVolumeAdjustmentChange?(Int($0.rounded())) }
+                    ),
+                    in: -3...3,
+                    step: 1
+                )
+                .tint(.purple)
+                Text("+3")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 40)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
     }
 
     private func rowIcon(_ name: String) -> some View {

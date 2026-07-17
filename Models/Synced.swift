@@ -31,6 +31,9 @@ import Foundation
 // MERGE SAFETY: remote `modifiedAt == nil` means a CloudKit field was absent,
 // not that its default value should overwrite local data. This protects the
 // namespace migration from sparse remote records resetting per-podcast settings.
+// ACKNOWLEDGMENT SAFETY: a successful CloudKit response may describe an older
+// value than the current local projection when another edit happened in flight.
+// markClean(ifAcknowledgedBy:) clears only an exact value+timestamp match.
 @propertyWrapper
 public struct Synced<Value: Codable & Equatable>: Codable, Equatable {
     public private(set) var value: Value
@@ -60,6 +63,19 @@ public struct Synced<Value: Codable & Equatable>: Codable, Equatable {
 
     /// Clear the dirty stamp — call after the value has been pushed to the server.
     public mutating func markClean() { modifiedAt = nil }
+
+    /// Clears this field only when the server acknowledgment describes the exact
+    /// local version currently pending. A later local edit has a different value
+    /// or timestamp and therefore remains dirty for the next push.
+    @discardableResult
+    public mutating func markClean(ifAcknowledgedBy acknowledged: Synced<Value>) -> Bool {
+        guard let localStamp = modifiedAt,
+              localStamp == acknowledged.modifiedAt,
+              value == acknowledged.value
+        else { return false }
+        modifiedAt = nil
+        return true
+    }
 
     /// Force a dirty stamp — used when seeding a record that has never synced.
     public mutating func markDirty(at date: Date = Date()) { modifiedAt = date }

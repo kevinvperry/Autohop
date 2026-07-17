@@ -25,7 +25,13 @@ import Foundation
 // (seedReleaseObservations records initial ParsedFeed episodes into
 // RefreshStats.releaseObservations so the learned scheduler starts with the
 // feed's current RSS publish-date evidence),
-// priorityRank normalization (contiguous 1..n after any insert/move/delete),
+// priorityRank normalization (contiguous 1..n after any insert/move/delete).
+// Reorder sessions are ID-based: the SwiftUI draft contains ONLY active real
+// subscriptions, Inactive rows are fixed at the bottom, browse previews never
+// enter the drag index space, and one validated commit authors one atomic
+// SubscriptionOrder generation. Remote order changes are deferred while the
+// user is dragging. Persistence retries failed terminal writes with bounded
+// backoff, while lifecycle/Done callers can force `flushPendingSaves()`.
 // browse-subscription lifecycle (creation on preview, 30-day expiry purge,
 // activation on subscribe), and ParsedFeed → Episode conversion.
 // Remote episode sync applies by subscription-scoped sync key and protects the
@@ -60,6 +66,12 @@ public final class SubscriptionStore: ObservableObject {
     // Coalesces rapid save() calls (e.g. during a 70-feed refresh cycle) into one disk write.
     private var pendingSave = false
     private var saveCoalesced = false
+    private var coalescedSaveAuthorsSubscriptionOrder = false
+    private var lastFailedSaveAuthorsSubscriptionOrder = true
+    private var persistenceRetryTask: Task<Void, Never>?
+    private var persistenceRetryAttempt = 0
+    private let maximumPersistenceRetryAttempts = 4
+    public private(set) var lastPersistenceErrorDescription: String?
     /// Snapshot of what last reached disk, keyed by id, so save() writes only
     /// the rows that actually changed.
     private var persistedSnapshot: [UUID: Subscription] = [:]
@@ -90,6 +102,12 @@ public final class SubscriptionStore: ObservableObject {
     /// episode handed in still has its localFileURL/localFileName populated so the
     /// file can be located before those fields are cleared.
     public var onEpisodeFileShouldDelete: ((Episode) -> Void)?
+
+    // MARK: Priority reorder session
+
+    private var priorityReorderSessionInitialIDs: [UUID]?
+    private var deferredRemoteSubscriptionOrder: SubscriptionOrderState?
+    private var deferredLegacyPriorityRanks = false
 
     private var seededDefaultPlaybackPreference: PlaybackPreference {
         defaultPlaybackPreferenceProvider?() ?? .default
@@ -314,8 +332,8 @@ public final class SubscriptionStore: ObservableObject {
         }
 
         subscriptions.append(subscription)
-        resortByCurrentPriorityRank()
-        save()
+        applyStoredSubscriptionOrderIfAvailable()
+        save(authorSubscriptionOrder: false)
         return subscription
     }
 
@@ -424,9 +442,9 @@ public final class SubscriptionStore: ObservableObject {
         if reindexRanks {
             normalizePriorityOrder()
         } else {
-            resortByCurrentPriorityRank()
+            applyStoredSubscriptionOrderIfAvailable()
         }
-        save()
+        save(authorSubscriptionOrder: reindexRanks)
         return subscription
     }
 
@@ -438,18 +456,85 @@ public final class SubscriptionStore: ObservableObject {
         save()
     }
 
-    public func reorder(from source: IndexSet, to destination: Int) {
-        // Array.move(fromOffsets:toOffset:) is a SwiftUI extension not available in the
-        // package's macOS build target, so we implement the same semantics manually.
-        let sorted = source.sorted()
-        let moving = sorted.map { subscriptions[$0] }
-        for index in sorted.reversed() { subscriptions.remove(at: index) }
-        let offset = sorted.filter { $0 < destination }.count
-        let insertAt = max(0, min(destination - offset, subscriptions.count))
-        subscriptions.insert(contentsOf: moving, at: insertAt)
-        enforceInactiveSubscriptionsAtBottom()
-        reindexPriority()
-        save()
+    /// Starts a stable UI reorder session and returns the only IDs eligible for
+    /// dragging: active, real subscriptions. The view owns this draft until Done,
+    /// so repeated SwiftUI moves never depend on delayed AppState publication.
+    @discardableResult
+    public func beginPriorityReorderSession() -> [UUID] {
+        let ids = activeRealSubscriptions.map(\.id)
+        priorityReorderSessionInitialIDs = ids
+        deferredRemoteSubscriptionOrder = nil
+        deferredLegacyPriorityRanks = false
+        AppLogger.shared.info("subscriptions.reorderBegan", "Priority reorder session began", metadata: [
+            "activeCount": "\(ids.count)",
+            "inactiveCount": "\(inactiveRealSubscriptions.count)",
+            "hiddenBrowseCount": "\(browseSubscriptions.count)"
+        ])
+        return ids
+    }
+
+    /// Commits one validated whole-list transaction. Returns false when the draft
+    /// is malformed/stale; no best-effort index guessing is permitted.
+    @discardableResult
+    public func commitPriorityReorderSession(
+        orderedActiveSubscriptionIDs: [UUID],
+        reason: String
+    ) -> Bool {
+        let currentActive = activeRealSubscriptions
+        let currentIDs = currentActive.map(\.id)
+        let inputSet = Set(orderedActiveSubscriptionIDs)
+        let isValid = inputSet.count == orderedActiveSubscriptionIDs.count
+            && inputSet == Set(currentIDs)
+
+        guard isValid else {
+            AppLogger.shared.error("subscriptions.reorderRejected", "Rejected stale or invalid priority reorder draft", metadata: [
+                "reason": reason,
+                "draftCount": "\(orderedActiveSubscriptionIDs.count)",
+                "currentCount": "\(currentIDs.count)",
+                "duplicateDraftIDs": "\(inputSet.count != orderedActiveSubscriptionIDs.count)"
+            ], alwaysPersist: true)
+            priorityReorderSessionInitialIDs = nil
+            applyDeferredPriorityOrderIfNeeded()
+            return false
+        }
+
+        let initialIDs = priorityReorderSessionInitialIDs ?? currentIDs
+        let userChangedOrder = orderedActiveSubscriptionIDs != initialIDs
+        priorityReorderSessionInitialIDs = nil
+
+        if userChangedOrder {
+            deferredRemoteSubscriptionOrder = nil
+            deferredLegacyPriorityRanks = false
+            applyActivePriorityOrder(
+                orderedActiveSubscriptionIDs,
+                authorSubscriptionOrder: true,
+                event: "subscriptions.reorderCommitted",
+                reason: reason
+            )
+        } else {
+            applyDeferredPriorityOrderIfNeeded()
+        }
+        return true
+    }
+
+    /// Receives the authoritative whole-list CloudKit order. During a local drag
+    /// session it is buffered so the List cannot move underneath the user's hand.
+    public func applyRemoteSubscriptionOrder(_ order: SubscriptionOrderState) {
+        if priorityReorderSessionInitialIDs != nil {
+            if deferredRemoteSubscriptionOrder.map({ $0.updatedAt < order.updatedAt }) ?? true {
+                deferredRemoteSubscriptionOrder = order
+            }
+            AppLogger.shared.info("subscriptions.remoteOrderDeferred", "Deferred remote priority order during local reorder", metadata: [
+                "generationID": order.generationID.uuidString,
+                "orderedCount": "\(order.orderedSubscriptionIDs.count)"
+            ])
+            return
+        }
+        applySubscriptionOrder(
+            order,
+            authorSubscriptionOrder: false,
+            event: "subscriptions.remoteOrderApplied"
+        )
     }
 
     public func updateDescription(subscriptionID: UUID, description: String?) {
@@ -503,10 +588,14 @@ public final class SubscriptionStore: ObservableObject {
 
     public func updatePriorityRank(subscriptionID: UUID, priorityRank: Int) {
         guard let currentIndex = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[currentIndex].browseDate == nil,
               !subscriptions[currentIndex].excludeFromAutoFeedRefresh
         else { return }
+        let activeCount = activeRealSubscriptions.count
         var subscription = subscriptions.remove(at: currentIndex)
-        let clampedRank = max(1, min(priorityRank, subscriptions.count + 1))
+        // The visible priority range contains active real subscriptions only.
+        // Inactive and browse rows must not inflate the numeric editor's index.
+        let clampedRank = max(1, min(priorityRank, activeCount))
         subscription.priorityRank = clampedRank
         subscriptions.insert(subscription, at: clampedRank - 1)
         enforceInactiveSubscriptionsAtBottom()
@@ -671,6 +760,144 @@ public final class SubscriptionStore: ObservableObject {
 
         if changed {
             save()
+        }
+    }
+
+    private var activeRealSubscriptions: [Subscription] {
+        subscriptions.filter { $0.browseDate == nil && !$0.excludeFromAutoFeedRefresh }
+    }
+
+    private var inactiveRealSubscriptions: [Subscription] {
+        subscriptions.filter { $0.browseDate == nil && $0.excludeFromAutoFeedRefresh }
+    }
+
+    private var browseSubscriptions: [Subscription] {
+        subscriptions.filter { $0.browseDate != nil }
+    }
+
+    /// Rebuilds storage by stable identity. Hidden browse previews are always
+    /// outside the real-subscription ordering domain.
+    private func rebuiltSubscriptions(realOrderIDs: [UUID]) -> [Subscription] {
+        let real = subscriptions.filter { $0.browseDate == nil }
+        let realByID = Dictionary(real.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<UUID>()
+        var orderedReal = realOrderIDs.compactMap { id -> Subscription? in
+            guard seen.insert(id).inserted else { return nil }
+            return realByID[id]
+        }
+        orderedReal.append(contentsOf: real.filter { seen.insert($0.id).inserted })
+
+        // Inactive is a state boundary, not a user-sortable priority tier.
+        let active = orderedReal.filter { !$0.excludeFromAutoFeedRefresh }
+        let inactive = orderedReal.filter(\.excludeFromAutoFeedRefresh)
+        var rebuilt = active + inactive + browseSubscriptions
+        for index in rebuilt.indices {
+            rebuilt[index].priorityRank = index + 1
+        }
+        return rebuilt
+    }
+
+    private func applyActivePriorityOrder(
+        _ orderedActiveIDs: [UUID],
+        authorSubscriptionOrder: Bool,
+        event: String,
+        reason: String
+    ) {
+        let realOrder = orderedActiveIDs + inactiveRealSubscriptions.map(\.id)
+        let rebuilt = rebuiltSubscriptions(realOrderIDs: realOrder)
+        guard rebuilt != subscriptions else { return }
+        publishChange()
+        subscriptions = rebuilt
+        save(notifyObservers: false, authorSubscriptionOrder: authorSubscriptionOrder)
+        AppLogger.shared.info(event, "Applied stable ID-based priority order", metadata: [
+            "reason": reason,
+            "activeCount": "\(orderedActiveIDs.count)",
+            "generationSource": authorSubscriptionOrder ? "local" : "remote",
+            "orderedIDs": orderedActiveIDs.map(\.uuidString).joined(separator: ",")
+        ])
+    }
+
+    private func applySubscriptionOrder(
+        _ order: SubscriptionOrderState,
+        authorSubscriptionOrder: Bool,
+        event: String
+    ) {
+        let rebuilt = rebuiltSubscriptions(realOrderIDs: order.orderedSubscriptionIDs)
+        guard rebuilt != subscriptions else { return }
+        publishChange()
+        subscriptions = rebuilt
+        save(notifyObservers: false, authorSubscriptionOrder: authorSubscriptionOrder)
+        AppLogger.shared.info(event, "Applied atomic subscription order", metadata: [
+            "generationID": order.generationID.uuidString,
+            "sourceDeviceID": order.sourceDeviceID,
+            "remoteCount": "\(order.orderedSubscriptionIDs.count)",
+            "localRealCount": "\(subscriptions.filter { $0.browseDate == nil }.count)"
+        ])
+    }
+
+    private func applyDeferredPriorityOrderIfNeeded() {
+        if let deferredRemoteSubscriptionOrder {
+            self.deferredRemoteSubscriptionOrder = nil
+            deferredLegacyPriorityRanks = false
+            applySubscriptionOrder(
+                deferredRemoteSubscriptionOrder,
+                authorSubscriptionOrder: false,
+                event: "subscriptions.deferredRemoteOrderApplied"
+            )
+            return
+        }
+        if deferredLegacyPriorityRanks {
+            deferredLegacyPriorityRanks = false
+            applyPriorityRanksFromStoredProjections()
+        }
+    }
+
+    private func applyPriorityRanksFromStoredProjections() {
+        guard let database else { return }
+        // Once this client has an atomic order, independently delivered legacy
+        // rank fields are compatibility data only and must not supersede it.
+        if let atomicOrder = try? database.subscriptionOrder() {
+            applySubscriptionOrder(
+                atomicOrder,
+                authorSubscriptionOrder: false,
+                event: "subscriptions.storedAtomicOrderReapplied"
+            )
+            return
+        }
+        var updated = subscriptions
+        var changed = false
+        for index in updated.indices where updated[index].browseDate == nil {
+            guard let projection = try? database.subscriptionSyncState(id: updated[index].id),
+                  updated[index].priorityRank != projection.priorityRank
+            else { continue }
+            updated[index].priorityRank = projection.priorityRank
+            changed = true
+        }
+        guard changed else { return }
+        updated.sort { $0.priorityRank < $1.priorityRank }
+        let realOrderIDs = updated.filter { $0.browseDate == nil }.map(\.id)
+        let realByID = Dictionary(updated.filter { $0.browseDate == nil }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var orderedReal = realOrderIDs.compactMap { realByID[$0] }
+        orderedReal = orderedReal.filter { !$0.excludeFromAutoFeedRefresh }
+            + orderedReal.filter(\.excludeFromAutoFeedRefresh)
+        var rebuilt = orderedReal + updated.filter { $0.browseDate != nil }
+        for index in rebuilt.indices {
+            rebuilt[index].priorityRank = index + 1
+        }
+        publishChange()
+        subscriptions = rebuilt
+        save(notifyObservers: false, authorSubscriptionOrder: false)
+    }
+
+    /// Reuses a stored atomic order after a remote subscription materializes.
+    /// This prevents CloudKit's arbitrary record-delivery order from becoming
+    /// a new locally-authored list while the library is still filling in.
+    private func applyStoredSubscriptionOrderIfAvailable() {
+        if let database,
+           let order = try? database.subscriptionOrder() {
+            subscriptions = rebuiltSubscriptions(realOrderIDs: order.orderedSubscriptionIDs)
+        } else {
+            resortByCurrentPriorityRank()
         }
     }
 
@@ -1302,7 +1529,14 @@ public final class SubscriptionStore: ObservableObject {
 
         var sub = subscriptions[existingIndex]
         sub.title = merged.title
-        sub.priorityRank = merged.priorityRank
+        if priorityReorderSessionInitialIDs == nil {
+            sub.priorityRank = merged.priorityRank
+        } else if sub.priorityRank != merged.priorityRank {
+            // Keep the visible/local draft stable; the merged projection already
+            // retains this remote rank and will be applied if the user exits
+            // without committing a local change.
+            deferredLegacyPriorityRanks = true
+        }
         sub.notificationsEnabled = merged.notificationsEnabled
         sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
         sub.autoFeedRefreshReturnPriorityRank = merged.autoFeedRefreshReturnPriorityRank
@@ -1311,13 +1545,13 @@ public final class SubscriptionStore: ObservableObject {
         sub.chapterFilter = merged.chapterFilter
         sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
-        // Non-destructive resort — see resortByCurrentPriorityRank's header.
-        // Using normalizePriorityOrder() here would discard merged.priorityRank
-        // (the true synced value) the moment another subscription's own remote
-        // apply/materialize runs, since that reindexes EVERY subscription by
-        // array position, not by this value.
-        resortByCurrentPriorityRank()
-        save()
+        if priorityReorderSessionInitialIDs == nil {
+            // Legacy per-subscription rank compatibility. Atomic
+            // SubscriptionOrder is authoritative when present, but old clients
+            // still send this field.
+            applyStoredSubscriptionOrderIfAvailable()
+        }
+        save(authorSubscriptionOrder: false)
         return .applied
     }
 
@@ -1365,9 +1599,8 @@ public final class SubscriptionStore: ObservableObject {
         // value carried through the merge (nil remote stamp = no opinion).
         sub.downloadFilterSettings = merged.downloadFilterSettings
         subscriptions[existingIndex] = sub
-        // Non-destructive resort — same reasoning as applyRemoteSubscriptionState.
-        resortByCurrentPriorityRank()
-        save()
+        applyStoredSubscriptionOrderIfAvailable()
+        save(authorSubscriptionOrder: false)
         return true
     }
 
@@ -1592,19 +1825,28 @@ public final class SubscriptionStore: ObservableObject {
         }
     }
 
-    private func save(notifyObservers: Bool = true) {
-        if notifyObservers {
-            if changeNotificationsCoalesced {
-                coalescedChangeNotificationPending = true
-            } else {
-                objectWillChange.send()
-            }
+    private func publishChange() {
+        if changeNotificationsCoalesced {
+            coalescedChangeNotificationPending = true
+        } else {
+            objectWillChange.send()
         }
+    }
+
+    private func save(
+        notifyObservers: Bool = true,
+        authorSubscriptionOrder: Bool = true
+    ) {
+        if notifyObservers { publishChange() }
         guard let database else { return }
+        persistenceRetryTask?.cancel()
+        persistenceRetryTask = nil
         // Coalesce saves issued while a write is in flight: rerun once it lands
         // so the final state always reaches disk (dropping them loses data).
         if pendingSave {
             saveCoalesced = true
+            coalescedSaveAuthorsSubscriptionOrder =
+                coalescedSaveAuthorsSubscriptionOrder || authorSubscriptionOrder
             return
         }
         pendingSave = true
@@ -1612,16 +1854,23 @@ public final class SubscriptionStore: ObservableObject {
         // DatabaseQueue is thread-safe, so calling it off-main is fine.
         let snapshot = subscriptions
         let previous = persistedSnapshot
+        let authorsOrder = authorSubscriptionOrder
         Self.saveQueue.async { [weak self, weak database] in
             let didPersist: Bool
+            var persistenceError: String?
             do {
-                try database?.persist(current: snapshot, previous: previous)
+                try database?.persist(
+                    current: snapshot,
+                    previous: previous,
+                    authorSubscriptionOrder: authorsOrder
+                )
                 didPersist = true
             } catch {
                 didPersist = false
+                persistenceError = String(describing: error)
                 AppLogger.shared.error("subscriptions.persistFailed", "Failed to persist subscriptions snapshot", metadata: [
                     "error": String(describing: error)
-                ])
+                ], alwaysPersist: true)
             }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -1631,22 +1880,79 @@ public final class SubscriptionStore: ObservableObject {
                 // diff still includes those changes and retries them.
                 if didPersist {
                     self.persistedSnapshot = self.snapshotByID(snapshot)
+                    self.persistenceRetryAttempt = 0
+                    self.lastPersistenceErrorDescription = nil
+                } else {
+                    self.lastPersistenceErrorDescription = persistenceError
+                    self.lastFailedSaveAuthorsSubscriptionOrder = authorsOrder
                 }
                 self.pendingSave = false
                 if self.saveCoalesced {
+                    let coalescedAuthorsOrder = self.coalescedSaveAuthorsSubscriptionOrder
                     self.saveCoalesced = false
-                    self.save(notifyObservers: false)
+                    self.coalescedSaveAuthorsSubscriptionOrder = false
+                    self.save(
+                        notifyObservers: false,
+                        authorSubscriptionOrder: coalescedAuthorsOrder
+                    )
+                } else if !didPersist {
+                    self.schedulePersistenceRetry()
                 }
             }
         }
     }
 
+    private func schedulePersistenceRetry() {
+        guard persistenceRetryAttempt < maximumPersistenceRetryAttempts else {
+            AppLogger.shared.error("subscriptions.persistRetryExhausted", "Subscription persistence retries exhausted", metadata: [
+                "attempts": "\(persistenceRetryAttempt)",
+                "error": lastPersistenceErrorDescription ?? "unknown"
+            ], alwaysPersist: true)
+            return
+        }
+        persistenceRetryAttempt += 1
+        let attempt = persistenceRetryAttempt
+        let delay = min(4.0, 0.25 * pow(2.0, Double(attempt - 1)))
+        AppLogger.shared.warning("subscriptions.persistRetryScheduled", "Scheduled subscription persistence retry", metadata: [
+            "attempt": "\(attempt)",
+            "delaySeconds": String(format: "%.2f", delay)
+        ])
+        persistenceRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled else { return }
+            self.persistenceRetryTask = nil
+            self.save(
+                notifyObservers: false,
+                authorSubscriptionOrder: self.lastFailedSaveAuthorsSubscriptionOrder
+            )
+        }
+    }
+
     /// Waits until every queued write has reached disk. Lets tests (and shutdown
     /// paths) reload from the store without racing the background save queue.
-    public func flushPendingSaves() async {
-        while pendingSave || saveCoalesced {
-            try? await Task.sleep(for: .milliseconds(10))
+    @discardableResult
+    public func flushPendingSaves() async -> Bool {
+        if persistenceRetryTask != nil {
+            persistenceRetryTask?.cancel()
+            persistenceRetryTask = nil
+            save(
+                notifyObservers: false,
+                authorSubscriptionOrder: lastFailedSaveAuthorsSubscriptionOrder
+            )
         }
+        while pendingSave || saveCoalesced || persistenceRetryTask != nil {
+            // A cancelled lifecycle task must not spin forever: Task.sleep
+            // throws immediately after cancellation while the store's own
+            // retry may still be pending. The retry remains scheduled and a
+            // later lifecycle/Done flush can verify durability.
+            guard !Task.isCancelled else { return false }
+            do {
+                try await Task.sleep(for: .milliseconds(10))
+            } catch {
+                return false
+            }
+        }
+        return lastPersistenceErrorDescription == nil
     }
 
     private static func defaultLegacyFileURL() -> URL? {

@@ -3,10 +3,15 @@ import SwiftUI
 // AI CONTEXT — Views/TopPodcastsView.swift ("Top Podcasts" page — child of
 // Discover, reached via the "See All" button on the FIRST "Top Podcasts ·
 // <selected country>" hero header, i.e. the mid-feed podcastHero, NOT the
-// fixed-country spotlight heroes). An expanded, editorial Top-50 list of Apple
-// Podcasts chart shows for the currently selected Discover country. Data comes
-// from the shared DiscoverViewModel.top50Podcasts (service.topPodcasts limit 50,
-// cached per country); loaded lazily on appear via loadTop50Podcasts. LAYOUT
+// fixed-country spotlight heroes), OR by tapping any category chip. An expanded,
+// editorial Top-50 list of Apple Podcasts chart shows for the selected Discover
+// country, optionally filtered to one ChartGenre. The shared toolbar country
+// picker writes Discover's AppStorage selection and reloads this visible chart.
+// Overall and category data use
+// separate lazy DiscoverViewModel slots; genre charts call the existing legacy
+// endpoint at limit 50 and inherit its 12-hour country+genre cache. A category
+// page renders the parent Discover rail's Top 15 immediately when available,
+// then replaces/extends it with the canonical Top 50 result. LAYOUT
 // mirrors TopEpisodesView — a large feature card every 7th entry (ranks 1, 8, 15,
 // 22, 29, 36, 43 — (rank - 1) % 7 == 0) and the rest compact ranked rows. Each
 // entry shows ChartPodcast artwork, title, author (artist) and genre (genreName)
@@ -18,6 +23,8 @@ import SwiftUI
 struct TopPodcastsView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
+    let genre: ChartGenre?
+    @AppStorage("discoverCountryCode") private var storedCountryCode = ""
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -31,9 +38,49 @@ struct TopPodcastsView: View {
         case episodes(UUID)
     }
 
+    init(viewModel: DiscoverViewModel, country: ChartCountry, genre: ChartGenre? = nil) {
+        self.viewModel = viewModel
+        self.country = country
+        self.genre = genre
+    }
+
+    private var phase: DiscoverViewModel.Phase {
+        if genre != nil, !podcasts.isEmpty { return .loaded }
+        return genre == nil ? viewModel.top50PodcastsPhase : viewModel.top50CategoryPhase
+    }
+
+    private var podcasts: [ChartPodcast] {
+        guard let genre else { return viewModel.top50Podcasts }
+        let fullChart = viewModel.loadedCategoryTop50(genre: genre, country: selectedCountry.code)
+        if !fullChart.isEmpty {
+            return fullChart
+        }
+        return viewModel.categoryPreview(genre: genre, country: selectedCountry.code)
+    }
+
+    private var isLoadingBeyondPreview: Bool {
+        guard let genre, !podcasts.isEmpty,
+              viewModel.loadedCategoryTop50(genre: genre, country: selectedCountry.code).isEmpty
+        else { return false }
+        if case .loading = viewModel.top50CategoryPhase { return true }
+        return false
+    }
+
+    private var pageTitle: String {
+        genre.map { "Top 50 - \($0.name)" } ?? "Top Podcasts"
+    }
+
+    private var selectedCountry: ChartCountry {
+        storedCountryCode.isEmpty ? country : .named(storedCountryCode)
+    }
+
+    private var taskID: String {
+        "\(selectedCountry.code)-\(genre?.id ?? 0)"
+    }
+
     var body: some View {
         Group {
-            switch viewModel.top50PodcastsPhase {
+            switch phase {
             case .loading:
                 ProgressView("Loading podcasts…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -44,7 +91,7 @@ struct TopPodcastsView: View {
                     Text(message)
                 } actions: {
                     Button("Retry") {
-                        Task { await viewModel.reloadTop50Podcasts(country: country.code) }
+                        Task { await reload() }
                     }
                     .buttonStyle(.bordered)
                 }
@@ -52,12 +99,15 @@ struct TopPodcastsView: View {
                 listContent
             }
         }
-        .navigationTitle("Top Podcasts")
+        .navigationTitle(pageTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
             }
         }
         .navigationDestination(item: $pendingRoute) { route in
@@ -70,11 +120,11 @@ struct TopPodcastsView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
-        .task(id: country.code) {
-            await viewModel.loadTop50Podcasts(country: country.code)
+        .task(id: taskID) {
+            await load()
         }
         .refreshable {
-            await viewModel.reloadTop50Podcasts(country: country.code)
+            await reload()
         }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
@@ -88,13 +138,14 @@ struct TopPodcastsView: View {
     private var listContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                Text("Apple Podcasts · \(country.name)")
+                Text(genre.map { "Apple Podcasts · \($0.name) · \(selectedCountry.name)" }
+                    ?? "Apple Podcasts · \(selectedCountry.name)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
 
-                ForEach(viewModel.top50Podcasts) { podcast in
+                ForEach(podcasts) { podcast in
                     // Large feature card every 7th entry (ranks 1, 8, 15, 22, 29, 36, 43).
                     if (podcast.rank - 1) % 7 == 0 {
                         featureCard(podcast)
@@ -105,6 +156,17 @@ struct TopPodcastsView: View {
                         compactRow(podcast)
                             .padding(.horizontal, 20)
                     }
+                }
+
+                if isLoadingBeyondPreview {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading the full Top 50…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
                 }
 
                 Spacer(minLength: 24)
@@ -260,12 +322,28 @@ struct TopPodcastsView: View {
 
     // MARK: - Open a podcast
 
+    private func load() async {
+        if let genre {
+            await viewModel.loadTop50Category(country: selectedCountry.code, genre: genre)
+        } else {
+            await viewModel.loadTop50Podcasts(country: selectedCountry.code)
+        }
+    }
+
+    private func reload() async {
+        if let genre {
+            await viewModel.reloadTop50Category(country: selectedCountry.code, genre: genre)
+        } else {
+            await viewModel.reloadTop50Podcasts(country: selectedCountry.code)
+        }
+    }
+
     private func openPodcast(_ podcast: ChartPodcast) {
         guard resolvingPodcastID == nil else { return }
         resolvingPodcastID = podcast.id
         Task {
             defer { resolvingPodcastID = nil }
-            guard let result = await viewModel.resolve(podcast, country: country.code) else {
+            guard let result = await viewModel.resolve(podcast, country: selectedCountry.code) else {
                 showUnavailableAlert = true
                 return
             }

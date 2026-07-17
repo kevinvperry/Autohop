@@ -4,7 +4,8 @@
 // holds the FULL day bucket, so a throttled flush re-writes the complete value with no
 // data loss — and flushed on lifecycle save() checkpoints. The same test also
 // protects the 2026-07-12 UI optimization: continuous playback may mutate the
-// authoritative bucket every tick, but must not publish a revision every tick.
+// authoritative bucket every tick, but must not publish a revision every tick
+// or publish the first tick twice when its initial persistence checkpoint runs.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -38,7 +39,7 @@ final class StatsWriteCoalescingTests: XCTestCase {
                                  "Playback ticks must coalesce Stats UI invalidations")
 
         // Without coalescing this would be 120 write transactions. The throttle is wall-clock
-        // (10s) and these run in milliseconds, so only the first tick writes through.
+        // (30s) and these run in milliseconds, so only the first tick writes through.
         XCTAssertLessThanOrEqual(db._testStatsDayWriteCount, 2,
                                  "Per-tick stats writes must be coalesced, not one-per-tick")
 

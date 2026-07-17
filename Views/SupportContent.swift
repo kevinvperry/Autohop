@@ -18,6 +18,9 @@ import SwiftUI
 // User-facing references to the old "Queue" page name should say "Up Next";
 // keep lowercase "queue" only when explaining the generic automatic playback
 // order or internal data model.
+// Listening History documentation must describe its historical event semantics:
+// its pill and timestamp record why/when the history entry was created, rather
+// than being rewritten to mirror a later episode-library state.
 
 // MARK: - Block model
 
@@ -110,7 +113,7 @@ enum SupportGuide {
         summary: "Add your first podcast and let the queue fill itself",
         blocks: [
             .heading("Finding and adding podcasts"),
-            .paragraph("Tap the **+** button in the top-right corner of the Priority page to open **Discover** — a browsing page of the Apple Podcasts charts, with a Top-8 carousel, genre rows, and a country picker. Tap the search bar at the top of Discover to search the catalog by show name, author, or keyword — results appear automatically as you type."),
+            .paragraph("Tap the **+** button in the top-right corner of the Priority page to open **Discover** — a browsing page of Apple Podcasts charts, with Top-8 highlights, category rows, and a country picker. Tap a category chip such as News, Comedy, or Technology to open its dedicated Top 50 for the selected country. Tap the search bar to search the catalog by show name, author, or keyword — results appear automatically as you type."),
             .paragraph("Tap any result to open the podcast preview. You'll see the full episode list straight away. You can browse episodes, read descriptions, and even play or queue individual episodes before deciding to subscribe."),
             .paragraph("When you're ready, tap **Subscribe**. The podcast is added to the top of your Priority Stack and Autohop begins checking it for new episodes immediately."),
             .callout(.tip, "**Not sure yet?** Any podcast you open is automatically saved in **Recently Viewed** for 30 days. Come back to it any time from the search screen — your place in the episode list is right where you left it."),
@@ -222,9 +225,11 @@ enum SupportGuide {
 
     private static let audioControls = SupportSection(
         id: "audio-controls", icon: "slider.horizontal.3", title: "Audio Controls",
-        summary: "Speed, Trim Silence, Vocal Boost, Shared Listening",
+        summary: "Speed, Mono Audio, Trim Silence, Vocal Boost, Shared Listening",
         blocks: [
-            .paragraph("Tap the audio controls button in the player to open the Audio Controls sheet. Speed, Trim Silence, and Vocal Boost apply to the **current podcast** and are saved permanently — they are not global settings. The one exception is Shared Listening, a global temporary override at the top of the sheet."),
+            .paragraph("Tap the audio controls button in the player to open the Audio Controls sheet. Speed, Mono Audio, Trim Silence, and Vocal Boost apply to the **current podcast** and are saved permanently — they are not global settings. The one exception is Shared Listening, a global temporary override at the top of the sheet."),
+            .heading("Mono Audio"),
+            .paragraph("Choose Mono when a podcast places one presenter mostly in the left channel and another mostly in the right. Autohop combines both channels and sends the centred result to both ears, retaining content from each side. Stereo remains the default. Mono Audio applies to audio episodes only."),
             .heading("Playback Speed"),
             .paragraph("Tap **−** or **+** to adjust speed in 0.1× steps. Range: 1.0× to 2.5×. The default for new subscriptions is 1.6×."),
             .paragraph("Speed changes take effect immediately and persist for that podcast."),
@@ -257,7 +262,7 @@ enum SupportGuide {
                 ["Your settings", "Untouched — everything resumes instantly when deactivated"],
             ]),
             .callout(.tip, "**Tip:** While Shared Listening is on, the audio controls button in the player turns **white** (just like the sleep timer when it's running), and the per-podcast Speed and Trim Silence rows are greyed out so it's always obvious the override is in charge."),
-            .callout(.note, "**Unique to Autohop:** No mainstream podcast app — Apple Podcasts, Pocket Casts, or Overcast — offers a one-tap global speed override for group listening. Everywhere else you'd have to change each show's speed by hand and change it all back later."),
+            .callout(.note, "**Autohop feature:** Shared Listening gives you one temporary group-friendly speed without rewriting any podcast's saved playback settings."),
         ]
     )
 
@@ -314,7 +319,7 @@ enum SupportGuide {
         blocks: [
             .paragraph("Autohop is a **download-first** player. Episodes must be downloaded before they can be played. The app never streams directly from the internet during playback."),
             .heading("Downloading an episode"),
-            .paragraph("In Up Next or the Priority page, swipe right on an episode that hasn't been downloaded yet and tap **Download**. A progress bar appears in the episode row while downloading."),
+            .paragraph("On a subscribed podcast's episode list, swipe an undownloaded episode and tap **Download**. Listening History offers the same state-aware action for episodes still available in your library. A progress bar appears in the episode row while downloading."),
             .paragraph("You can also tap the **Download** button that appears inline in the episode metadata row for any undownloaded episode."),
             .heading("Background downloads"),
             .paragraph("Downloads continue in the background even when Autohop is not the active app. If a download is in progress and you lock your phone or switch apps, it will complete automatically using iOS background URL sessions."),
@@ -337,7 +342,9 @@ enum SupportGuide {
             .heading("Playback settings"),
             .table(headers: ["Setting", "Description"], rows: [
                 ["Speed", "Playback speed for this podcast (1.0× – 2.5×). Default: 1.6×"],
+                ["Mono Audio", "Stereo by default. Choose Mono to centre presenters mixed toward the left or right channel. Applies to audio episodes and can be changed while listening."],
                 ["Vocal Boost", "EQ enhancement level (Off / Light / Standard / Strong). Default: Strong"],
+                ["Volume Adjustment", "Balances this podcast from −3 dB to +3 dB in whole-number steps. Default: 0 dB. Applies immediately without changing device volume and syncs with the podcast setting."],
                 ["Trim Silence", "Silence removal level (Off / Low / Medium / High). Default: Low"],
                 ["Start Skip", "Seconds to skip at the beginning of every episode. Measured in real file time, independent of playback speed. Range: 0–300s. Default: off. Primary use case: skipping a recurring show intro or theme music."],
                 ["End Skip", "Seconds to skip at the end of every episode. Measured in real file time, independent of playback speed. Range: 0–300s. Default: off. Primary use case: skipping a recurring outro or trailing ad read."],
@@ -354,7 +361,16 @@ enum SupportGuide {
             ]),
             .paragraph("**After Inactive** — how long an unplayed, untouched episode is kept before being archived. Options range from Never to 90 Days. Default: **1 Week**. Useful for news or daily shows where old episodes become irrelevant quickly."),
             .paragraph("**Episode Limit** — keep only the N most recently published episodes; older ones are archived automatically. Options: No Limit, 1 (default), 2, 3, 4, 5, or 10 episodes."),
+            .paragraph("Automatic downloading continues to honour this podcast's Download Feed Filters."),
             .callout(.tip, "**Tip:** The defaults (archive immediately after playing, inactive episodes gone after 1 week, keep 1 episode) are designed for high-volume listeners who want zero maintenance."),
+            .heading("Play Instant"),
+            .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a gentle warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
+            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, episodes excluded by Download Feed Filters, or downloads completed while playback is paused or idle. If you pause, archive, choose another episode, or skip Next during the interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
+            .heading("Chapter Filter"),
+            .paragraph("When an episode contains chapters, toggle chapter positions that Autohop should skip for this podcast. The choices apply to future episodes with the same chapter positions and update active playback immediately. While this podcast is playing, its current chapter is protected from accidental changes on this settings page."),
+            .heading("Download Feed Filters"),
+            .paragraph("Choose which new episodes download automatically using duration limits and title or description text rules. Filtered episodes remain visible and can still be downloaded or queued manually."),
+            .paragraph("Episodes deliberately excluded by these filters do not train Release Radar and do not count as evidence in Shows You're Drifting From. Filter rules sync with your other per-podcast settings when iCloud Sync is enabled."),
             .heading("Exclude from auto-refresh"),
             .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed during automatic/feed-all refreshes. The podcast stays subscribed, moves to the bottom with the Inactive pill, keeps its downloaded episodes and queue eligibility, and can still be manually refreshed from its own podcast page. Turning the setting off restores its saved Priority Stack position."),
             .heading("Notifications"),
@@ -395,6 +411,7 @@ enum SupportGuide {
             .bullets([
                 "**Still awake?** Tap any control — play/pause on the lock screen, an earbud tap, skip forward or back, the on-screen button, or the **\"Still Listening\" button on the lock-screen notification** (no need to unlock your phone). Playback simply continues and the cycle restarts.",
                 "**Asleep?** If you don't respond within a minute, playback fades out gently, pauses, and **rewinds to the moment the chime began** — so in the morning you resume from the last thing you actually heard.",
+                "**Active Hours ended?** Autohop dismisses any pending check-in and its notification. Your podcast continues normally, but Sleep Schedule will not ask again outside the selected window.",
             ]),
             .callout(.tip, "**Tip:** Setting the regular Sleep Timer from the player overrides the schedule for that session — handy for nights when you want a fixed cutoff instead of check-ins."),
         ]
@@ -475,12 +492,13 @@ enum SupportGuide {
             .heading("What syncs"),
             .bullets([
                 "Your subscriptions, and the order you ranked them in",
-                "Each podcast's own settings (speed, Trim Silence, Vocal Boost, skips, auto-archive rules, Download Feed Filters)",
+                "Each podcast's own settings (speed, Mono Audio, Trim Silence, Vocal Boost, skips, auto-archive rules, Download Feed Filters)",
                 "Played, paused and archived state, and your exact position in each episode",
+                "Your exact Up Next order",
                 "Your listening history and your stats",
             ]),
             .heading("What stays on each device"),
-            .paragraph("**Downloaded episode files** are not synced — each device downloads its own copies, so sync never uses your mobile data to move audio around. A few device-specific app settings (like which screen Autohop opens to, and Radar sensitivity) also stay on each device."),
+            .paragraph("**Downloaded episode files** are not synced — each device downloads its own copies, so sync never uses your mobile data to move audio around. Device-specific app settings, such as which screen Autohop opens to, also stay on each device."),
             .callout(.note, "**Private by design:** Sync uses your own **private iCloud** (Apple's CloudKit). Your listening is stored in your personal iCloud account — Autohop has no server and the developer can never see your data. There's no separate account to create and no login beyond the iCloud you already use."),
             .callout(.tip, "**Two devices at once?** If the same episode is playing in two places, the device you're actively listening on wins, so your position never jumps backwards. For everything else, the most recent change is the one that's kept."),
         ]
@@ -492,19 +510,21 @@ enum SupportGuide {
         id: "listening-history", icon: "clock.arrow.circlepath", title: "Listening History",
         summary: "A searchable record of what you've played",
         blocks: [
-            .paragraph("Autohop keeps a searchable record of every episode you've listened to. Access it from the **Menu (☰) → Listening History**, or from **Settings → Subscriptions → Listening History**."),
+            .paragraph("Autohop keeps a searchable record of every episode you've listened to. Access it from **Menu (☰) → Listening History**."),
             .paragraph("Only episodes with at least 1 minute of actual playback are shown — episodes that were archived or skipped before the 1-minute mark are excluded."),
             .heading("Stats header"),
             .paragraph("The top of the page shows two summary stats: **Listening Time** (total audio time consumed across qualifying episodes) and **Episodes** (total count of played or archived episodes with at least 1 minute of playback)."),
             .heading("History list"),
-            .paragraph("Episodes are grouped by date — Today, Yesterday, then older dates. Each row shows the podcast artwork, episode title, podcast name, and a status badge with how much you listened:"),
+            .paragraph("Episodes are grouped by date — Today, Yesterday, then older dates. Rows use the same compact artwork, title, podcast-name, status-pill and download-progress design as Autohop's other episode lists."),
             .bullets([
-                "**Listened** — you played part of the episode but didn't finish it. Shows time remaining.",
-                "**Played** — episode marked as played.",
-                "**Archived** — episode was archived.",
+                "**Played** — the episode was completed naturally or marked as played.",
+                "**Archived** — the episode was manually or automatically archived.",
+                "**Paused** — listening stopped before the episode was completed. If that same episode is currently playing, the pill changes to **Playing**.",
             ]),
+            .paragraph("The metadata records the historical event and its exact local date and time: **Completed**, **Manually Archived**, **Auto Archived**, or **Last listened** for older entries that predate event classification. This history label is preserved even if the episode's current library state changes later."),
             .heading("Search"),
             .paragraph("Tap the search bar at the top to filter history by episode title or podcast name. Results update as you type."),
+            .paragraph("Resolved library rows use the same swipe actions as podcast episode lists: Play Now and Play Next on the leading edge, plus Download, Archive or Unarchive and Play Last on the trailing edge. Actions download first when required, with an animated progress bar beneath the row."),
         ]
     )
 
@@ -515,14 +535,14 @@ enum SupportGuide {
         summary: "On-device listening insights and time saved",
         blocks: [
             .paragraph("Access your listening stats from the **Menu (☰) → Stats**."),
-            .paragraph("Pick a time period at the top of the page — **7 Days, the displayed month (e.g. July or June), the displayed year (e.g. 2026 or 2025), or Lifetime** — and every chart below responds to it. The first three are calendar periods that start fresh and fill in as they go: 7 Days runs Monday to Sunday (resets every Monday), the month resets on the 1st, and the year resets on January 1st. The This/Last bar switches the selected month or year pill between the current and previous period. All stats are computed and stored entirely on your device."),
+            .paragraph("Pick a time period at the top of the page — **7 Days, the displayed month, the displayed year, or Lifetime** — and every chart below responds to it. A separate This/Last bar switches Week, Month, and Year between the current period and the previous completed one. Weeks run Monday to Sunday. Stats are computed locally and sync only through your private iCloud when you enable iCloud Sync."),
             .heading("What the page shows"),
             .table(headers: nil, rows: [
                 ["Hero card", "Total time listened in the period, time saved by Autohop, episodes finished, and your current listening streak (a day counts once you listen for at least a minute)."],
                 ["Listening Heatmap", "A calendar-style grid (7 Days and month views) where each square is a day, with weeks starting on Monday — the deeper the purple, the more you listened. The caption calls out your busiest day. On the year and Lifetime views this becomes a month-by-month bar chart."],
                 ["Listening Clock", "A 24-hour dial showing when you listen — midnight at the top, noon at the bottom. The caption shows your peak listening hour."],
                 ["Top Shows", "Your most-listened podcasts for the period, ranked with artwork and relative listening bars. Shows you've unsubscribed from still appear. Tap any show to expand a detail card — episodes finished, time saved on that show, its share of your listening, average completion, and how soon after release you typically listen. Tap Show All to see your top 50, including how each show's rank moved against the previous comparable period (the previous week, month, or year)."],
-                ["Shows You're Drifting From", "On 7 Days and current-month views, Autohop highlights up to five subscribed shows you appear to be losing interest in — either ones you keep abandoning part-way or archiving unplayed, or “ghost” subscriptions whose episodes keep downloading and aging out without you ever finishing one (a sign you might want to unsubscribe). Each row has a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. A show you genuinely keep up with — finishing some episodes and letting the rest cycle — is never flagged, and the section only appears when a show qualifies."],
+                ["Shows You're Drifting From", "On 7 Days and current-month views, Autohop highlights up to five subscribed shows you appear to be losing interest in — either ones you keep abandoning part-way or archiving unplayed, or “ghost” subscriptions whose episodes keep downloading and aging out without you ever finishing one. Episodes deliberately excluded by Download Feed Filters do not count against a show. Each row has a specific insight and a completion bar. Tap a show to expand its detail card (with a shortcut to the podcast's settings), or long-press to hide it or unsubscribe. A show you genuinely keep up with — finishing some episodes and letting the rest cycle — is never flagged, and the section only appears when a show qualifies."],
                 ["Data Downloaded", "How much data Autohop downloaded in the selected period, with the number of episodes and the average size each. Only successful downloads count (a re-download counts again). This is measured on your device and counts from the update that introduced it — it won't include downloads from before then, so the Lifetime figure builds up over time."],
             ]),
             .heading("Time Saved breakdown"),
@@ -548,14 +568,15 @@ enum SupportGuide {
                 ["Open at launch", "Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. Default: Player. (New users see a quick welcome first.)"],
             ]),
             .heading("Release Radar"),
-            .paragraph("Autohop learns each podcast's release schedule and starts watching its feed just before a new episode is expected. Checks are tiny — the feed is only downloaded when it has actually changed — so new episodes appear within minutes of release without draining battery or data."),
+            .paragraph("Autohop learns each podcast's release schedule and prioritises its feed when a new episode is expected. Refresh timing depends on whether Autohop is active and when iOS grants background execution, so Release Radar improves the chance of prompt discovery without promising an exact delivery time."),
             .table(headers: nil, rows: [
-                ["Radar sensitivity", "How often a feed is re-checked while a new episode drop is imminent. Range: 1–60 minutes. Default: 5 minutes. Lower means new episodes appear faster."],
+                ["Automatic refresh timing", "Release Radar controls its own timing from each feed's learned schedule: about 2–3 minutes in a strong active release window, 5 minutes before a predicted release, 5–10 minutes shortly after a missed release, and 15–60 minutes for random or unreliable feeds. Broader safety checks cover unexpected releases."],
                 ["Notification Settings", "Opens the Notification Settings page — the global master toggle (off by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
             ]),
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [
-                ["Run Auto Archive Now", "Manually trigger the auto-archive pass across all podcasts. Checks every subscription against its per-podcast Auto Archive rules. Runs automatically at most every 30 minutes."],
+                ["Run Auto Archive Now", "Manually trigger the auto-archive pass across all podcasts. Checks every subscription against its per-podcast Auto Archive rules. Runs automatically at most every 25 minutes."],
+                ["Auto Archive Activity", "Opens the local audit trail for automatic archives, including the episode, podcast, exact archive time, responsible rule, configured threshold, and measured age."],
                 ["Played / Inactive / Episode Limit defaults", "The auto-archive rules given to every new podcast you subscribe to. Changing them never touches podcasts you've already added — each show keeps its own rules. See Per-Podcast Settings for what each rule does."],
             ]),
             .heading("Downloading"),
@@ -576,14 +597,13 @@ enum SupportGuide {
             .table(headers: nil, rows: [
                 ["Manage podcasts", "Navigate to the Priority page to reorder, add, or remove subscriptions."],
                 ["Add RSS Feed", "Enter a podcast RSS URL directly to subscribe to a show not found in the search directory."],
-                ["Listening History", "View your full listening history — grouped by date, searchable. Also accessible from the Menu (☰)."],
                 ["Import OPML", "Import subscriptions from another podcast app. See the OPML Import & Export section."],
                 ["Export OPML", "Export your subscription list as an OPML file for backup or migration."],
             ]),
             .heading("Default Playback"),
-            .paragraph("Sets the speed, Vocal Boost, Trim Silence, and start/end skip given to every **new** subscription, and used to play feeds you're only previewing. Changing these never affects podcasts you've already subscribed to — adjust those from each podcast's own settings."),
+            .paragraph("Sets the speed, Stereo/Mono Audio mode, Vocal Boost, Trim Silence, and start/end skip given to every **new** subscription, and used to play feeds you're only previewing. Stereo is the factory default. Changing these never affects podcasts you've already subscribed to — adjust those from each podcast's own settings."),
             .heading("Sync"),
-            .paragraph("Turn on **iCloud Sync** to keep your listening in step across your devices. Off by default. See the iCloud Sync section for the full picture."),
+            .paragraph("Turn on **iCloud Sync** to sync subscriptions, per-podcast settings, played and archived state, playback positions, Up Next order, history, and stats through your private iCloud database across your iPhones. Downloaded media and global app settings remain local. Off by default. See the iCloud Sync section for the full picture."),
             .heading("Storage"),
             .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes from Up Next or adjust the Episode Limit in your per-podcast auto-archive settings."),
             .heading("About"),

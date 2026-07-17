@@ -1,4 +1,26 @@
-# Overnight Performance Remediation — Final Resolution Ledger
+# Overnight Performance Remediation — Resolution Ledger
+
+## AI CONTEXT — Version 1.4 follow-up (implemented 2026-07-14)
+
+- The download watchdog now has explicit phases. A running task with no received
+  payload is a first-byte wait with a 30-minute deadline, not a 10-minute active
+  transfer stall. Request bytes do not count as payload; unknown-length response
+  bodies still transition the phase when `didWriteData` arrives.
+- Listening-history and Stats sync persistence batches increased from 10 to 30
+  seconds. Routine persistence diagnostics are summarized at most every five
+  minutes; lifecycle flushes, failures, and slow writes remain immediately logged.
+- AVAudioEngine buffer loops carry a generation token. Callbacks from a stopped,
+  sought, or route-replaced loop may return semaphore capacity but cannot mutate
+  playback time, finish an episode, or request recovery. A pending route restart
+  owns recovery until it completes or is cancelled.
+- Cold bootstrap emits construction versus wiring/restore timing, and playback
+  resume emits synchronous engine-start/fallback timing when the path exceeds
+  100 ms. These events instrument the two main-thread hang locations observed in
+  the Monday diagnostic.
+- Feed parsing and store merging use per-feed autorelease boundaries. Refresh
+  cycles checkpoint memory every 16 feeds; large manual cycles yield and pause for
+  25 ms between batches. Physical footprint remains the trim/intervention metric;
+  resident memory remains supporting context.
 
 ## AI CONTEXT — Monday diagnostic follow-up (implemented 2026-07-13)
 
@@ -31,7 +53,7 @@
 5. **BGProcessing frequency:** replacement scheduling occurs after outcome, with
    persisted earliest dates, 18/24-hour success cadence, exponential expiry retry,
    jitter, and pending-request protection.
-6. **Playback tick persistence:** history updates batch over 10 seconds and flush at
+6. **Playback tick persistence:** history updates batch over 30 seconds and flush at
    lifecycle/completion/merge boundaries; Stats retains per-tick numerical accuracy
    while coalescing UI publication and sync writes.
 7. **Release Radar main-thread work:** profile fallback, prediction, scoring, fairness
