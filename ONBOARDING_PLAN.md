@@ -6,7 +6,12 @@ Phased, code-grounded build plan for the onboarding strategy in ONBOARDING.md.
 Includes the final UI copy deck (§Copy Deck) — every string is drafted here so
 implementation is copy-complete. Each phase lists files touched, steps, copy,
 and acceptance criteria. Grounded in the real launch architecture: RootView owns
-navigationPath + the PlayerView-as-permanent-root; AppSettings holds first-run
+the local NavigationPath. Decomposition Stage 5 moved real-subscription
+counting, reconciliation, first-subscription coalescing, tip policy, and toast
+state to App/OnboardingCoordinator.swift. Typed presentation output flows
+through App/AppRoutingCoordinator.swift; AppState names below are compatibility
+façades or historical implementation notes. PlayerView remains the permanent
+root. AppSettings holds first-run
 flags following the existing *Migrated flag pattern (Models/AppSettings.swift,
 applied in AppState.swift ~L747); subscribe paths are SubscriptionStore.add()
 and activateAndMoveToTop(); PodcastsView already uses ContentUnavailableView.
@@ -21,7 +26,7 @@ When a phase ships, update FEATURES.md (First-Run Experience), SupportContent.sw
 - ✅ **Phase 0** — `AppSettings` first-run flags (`hasCompletedWelcome`,
   `hasSubscribedFirstShow`, `hasPlayedFirstEpisode`, `hasSeenDownloadFirstNote`,
   `dismissedGettingStarted`); `AppState.realSubscriptionCount` /
-  `isFirstRunNoSubscriptions` / `checkFirstSubscriptionMilestone()` (wired into the
+  `isFirstRunNoSubscriptions` / OnboardingCoordinator milestone output (wired into the
   existing `subscriptionStore.objectWillChange` sink); bootstrap reconciliation marks
   existing users onboarded; `.autohopFirstSubscription` notification declared.
 - ✅ **Phase 1** — empty `PlayerView` state (no-subs → Find shows; subscribed-but-

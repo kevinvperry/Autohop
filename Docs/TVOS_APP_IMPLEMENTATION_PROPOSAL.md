@@ -453,14 +453,15 @@ CarPlay, Apple Watch, and tvOS. Current state and the five moves that fix it:
 2. **AppState decomposition (strangler-fig, facade-preserving)**: extract
    platform-neutral domain objects into AutohopCore —
    - `LibraryModel` (subscriptions + episodes read model over SubscriptionStore),
-   - `QueueModel` (Priority Stack + pinned overrides + memoization — the logic
-     currently in AppState around `orderedQueueWithOverrides()` /
-     `cachedDownloadedQueue`),
+   - `QueueModel` (pure Priority Stack + pinned override policy) and the iPhone
+     `QueueCoordinator` (memoization, pins, narrow invalidation, Up Next, and
+     changed-only snapshot publication),
    - `PlaybackSession` (current episode, position, speed, chapter state,
      auto-advance policy — the orchestration currently spread through
      `startPlayback` / `handleEpisodeFinished` / seek / chapter methods),
    - `SyncController` (start/stop + status over CloudSyncEngine).
-   `AppState` REMAINS the iOS composition root and keeps its public surface —
+   `AppCompositionRoot` owns iOS construction; `AppState` REMAINS the process
+   singleton/compatibility façade and keeps its public surface —
    existing views, CarPlay routing, and the watch snapshot serialiser keep
    working — but its bodies delegate to the extracted objects. Views migrate
    to observing domain objects opportunistically, never forced.

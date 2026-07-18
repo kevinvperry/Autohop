@@ -22,14 +22,15 @@ REVIEW SNAPSHOT:
   names outside App/AppState.swift.
 
 IMPLEMENTATION SNAPSHOT:
-- Stages 0–2 implemented: 2026-07-18, Australia/Melbourne.
+- Stages 0–5 implemented: 2026-07-18, Australia/Melbourne.
 - Implementation task-entry commit: d95f29ab4b81b9609ac4f565260d253c4c08e3a0.
 - Stage 0 evidence: APPSTATE_DECOMPOSITION_BASELINE.md.
 - AppCompositionRoot now constructs the production dependency graph.
 - AppState construction and idempotent runtime start are separate.
 - ListeningHistoryStore, ReleaseRadarCyclePlanner/DTOs, PlaybackClock,
   DownloadProgressModel, and warning-cue generation are physically separated.
-- No domain coordinator ownership has moved; Stage 3 remains not started.
+- HistoryStatsCoordinator, QueueCoordinator, OnboardingCoordinator, and
+  AppRoutingCoordinator own their approved domains. Stage 6 remains not started.
 
 AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
 1. Re-read the current code before implementing any stage. Symbol names, line
@@ -114,12 +115,15 @@ The recommended implementation order is deliberately risk-weighted:
 | Stage 0 characterization work | Complete — see `APPSTATE_DECOMPOSITION_BASELINE.md` |
 | Stage 1 explicit composition/start | Complete |
 | Stage 2 independent leaf moves | Complete |
-| Runtime coordinator extraction | Not started by this document |
-| Stage 3 and later | Not started |
+| Stage 3 HistoryStatsCoordinator | Complete |
+| Stage 4 QueueCoordinator | Complete |
+| Stage 5 onboarding/routing adapter | Complete |
+| Stage 6 and later | Not started |
 
-Stages 0–2 are complete. Existing policy extractions such as
+Stages 0–5 are complete. Existing policy extractions such as
 PlaybackPositionStore, PlaybackSessionPolicy, and QueueModel remain current-state
-inputs. No coordinator extraction has started.
+inputs. Playback, downloads, feed refresh, Auto Archive, sync/Relay, import, and
+lifecycle ownership remain in AppState pending later stages.
 
 ## 2. Scope and non-goals
 
@@ -154,9 +158,10 @@ inputs. No coordinator extraction has started.
 
 ### 3.1 Physical layout
 
-The reviewed App/AppState.swift was 6,645 lines. After Stage 2 it is
-approximately 6,250 lines because independent leaf declarations moved to their
-domain files; the table below remains the authoritative pre-migration inventory.
+The reviewed App/AppState.swift was 6,645 lines. After Stage 2 it was
+approximately 6,250 lines; after Stages 3–5 it is approximately 6,150 lines
+because independent declarations and approved domain ownership moved out. The
+table below remains the authoritative pre-migration inventory.
 
 | Approximate range | Current responsibility |
 |---|---|
@@ -450,8 +455,11 @@ snapshot. A read accessor therefore has an external persistence side effect.
 This is difficult to reason about, can make tests order-dependent, and can produce
 unexpected work from diagnostic or badge reads.
 
-The target QueueCoordinator must publish queue snapshots explicitly when its
-input revision changes. A getter must be side-effect free.
+**Resolution status: complete in Stage 4 (2026-07-18).** QueueCoordinator
+publishes snapshots only when the ordered episode identity sequence changes and
+all compatibility getters are side-effect free. SubscriptionStore exposes a
+narrow queue-affecting event instead of using broad objectWillChange for queue
+work.
 
 #### D-R3 — Persistence ownership is not exclusive
 
@@ -707,6 +715,12 @@ Repair direction:
   after RootView behavior is characterized;
 - keep PlayerView as the permanent root.
 
+**Resolution status: Stage 5 foundation complete (2026-07-18).**
+AppRoutingCoordinator now owns typed launch and presentation commands and
+translates the existing NotificationCenter producers. RootView intentionally
+retains its local NavigationPath and permanent PlayerView root; migrating every
+legacy producer is deferred without changing navigation behavior.
+
 #### AS-11 — History persistence is physically misplaced
 
 Severity: low runtime risk, medium ownership confusion.
@@ -717,7 +731,7 @@ bottom of AppState.swift.
 **Resolution status: complete in Stage 2 (2026-07-18).** The implementation now
 lives in `Persistence/ListeningHistoryStore.swift`; its JSON path, Codable
 payload, sync projection, batching, repair rules, and MainActor isolation remain
-unchanged. AppState still owns history orchestration until Stage 3.
+unchanged. HistoryStatsCoordinator now owns history/Stats orchestration.
 
 #### AS-12 — Core AppState orchestration has limited direct tests
 
@@ -1826,6 +1840,11 @@ Playback, and Downloads with API/persistence behavior retained.
 
 Risk: medium.
 
+**Status: complete 2026-07-18.** Playback tick history/Stats accumulation,
+completion marking, grouped projections, discrete Stats credits, lifecycle
+checkpoints, and remote history/Stats adapters now route through
+`App/HistoryStatsCoordinator.swift`. AppState retains compatibility accessors.
+
 ### Actions
 
 - Move playback tick history/Stats accumulation.
@@ -1858,6 +1877,10 @@ The values delegate to the coordinator until views migrate.
 
 Risk: medium.
 
+**Status: complete 2026-07-18.** `App/QueueCoordinator.swift` owns queue
+projection, pins and their legacy JSON format, Up Next, badges, changed-only
+QueueSnapshot publication, and narrow invalidation. Queue reads no longer write.
+
 ### Actions
 
 - Move queue cache, pin arrays, pin persistence, Up Next, and badge projection.
@@ -1877,6 +1900,11 @@ Risk: medium.
 ## Stage 5 — Extract OnboardingCoordinator and begin routing adapter
 
 Risk: low to medium.
+
+**Status: complete 2026-07-18.** `App/OnboardingCoordinator.swift` owns
+first-run/milestone/tip/toast policy and emits typed output.
+`App/AppRoutingCoordinator.swift` owns typed commands and the temporary legacy
+NotificationCenter input adapter. RootView keeps its local NavigationPath.
 
 ### Actions
 

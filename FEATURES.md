@@ -1125,7 +1125,7 @@ Successful feed refreshes update stored subscription artwork URLs and authors wh
 
 **What it is:** The experience a brand-new user gets on first install, designed to teach Autohop's core model — *subscribe → Autohop builds a download-first queue from your Priority Stack → it just plays* — and get them from install to first audio without forcing playback or any launch-time permission prompts. Strategy and the full phased plan live in `ONBOARDING.md` and `ONBOARDING_PLAN.md`.
 
-**First-run state (`AppSettings`):** five flags, all default `false`, persisted like the other settings: `hasCompletedWelcome`, `hasSubscribedFirstShow`, `hasPlayedFirstEpisode`, `hasSeenDownloadFirstNote`, `dismissedGettingStarted`. On launch, `AppState.bootstrap` **reconciles existing users**: anyone who already has a real (non-browse) subscription is marked onboarded so upgraders never see the first-run flow (idempotent, only flips false→true). A brand-new install has zero subscriptions at bootstrap, so its flags stay false.
+**First-run state (`AppSettings`):** five flags, all default `false`, persisted like the other settings: `hasCompletedWelcome`, `hasSubscribedFirstShow`, `hasPlayedFirstEpisode`, `hasSeenDownloadFirstNote`, `dismissedGettingStarted`. On launch, `OnboardingCoordinator.reconcileExistingUser()` **reconciles existing users**: anyone who already has a real (non-browse) subscription is marked onboarded so upgraders never see the first-run flow (idempotent, only flips false→true). A brand-new install has zero subscriptions at bootstrap, so its flags stay false.
 
 **"Real" vs browse subscriptions:** onboarding counts only real subscriptions (`browseDate == nil`) via `AppState.realSubscriptionCount`. Opening a Podcast Detail preview creates an invisible browse subscription (§2.4) and does **not** count as "subscribed".
 
@@ -1149,7 +1149,13 @@ A first-run "not sure where to start?" helper. Each pack is a genre's current To
 A dismissible momentum card at the top of the Priority Stack tracking three steps — subscribe (`hasSubscribedFirstShow`), play (`hasPlayedFirstEpisode`), reorder (a `UserDefaults` signal set in `PodcastsView.onMove`). Auto-hides when all three are done or the user dismisses it (`dismissedGettingStarted`). Its footer carries the one-time lean-defaults expectation note ("Autohop keeps the latest episode and tidies older ones…").
 
 ### First-subscription milestone + "You're all set" card
-`AppState.checkFirstSubscriptionMilestone()` (wired into the `subscriptionStore.objectWillChange` sink) fires once when the first real subscription appears: it sets `hasSubscribedFirstShow` and, for a **single deliberate subscribe** (exactly one real sub), posts `.autohopFirstSubscription` with the new subscription's id. A **bulk OPML import** (more than one real sub at once) flips the flag **silently** — no celebration.
+`OnboardingCoordinator` observes the narrow SubscriptionStore membership stream
+and coalesces same-turn additions before evaluating the milestone. It sets
+`hasSubscribedFirstShow` and emits typed `.firstSubscription(id)` output for a
+**single deliberate subscribe**. AppRoutingCoordinator presents the existing
+first-subscribe card and a temporary `.autohopFirstSubscription` compatibility
+notification remains for un-migrated observers. A **bulk OPML import** (more than
+one real sub in the coalesced change) flips the flag **silently** — no celebration.
 
 `RootView` presents `FirstSubscribeCard` (a bottom sheet) in response. The card fires a success haptic, ensures the show's latest episode is downloading (`AppState.downloadLatestEpisode`, idempotent), and shows live download progress. **Play latest** plays immediately if the file is ready, or *arms a wait* and auto-starts the instant the download completes — a cued first listen with no autoplay ambush. On play it dismisses and returns to the full Player. **Add more shows** just dismisses (the user is already in the browse flow).
 
@@ -1157,7 +1163,7 @@ A dismissible momentum card at the top of the Priority Stack tracking three step
 The first time the first-subscribe card runs a download (`hasSeenDownloadFirstNote == false`), it shows a one-time note — "Autohop downloads episodes before playing, so they start instantly and work offline" — then sets the flag so it never repeats.
 
 ### Coach marks (tips)
-A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`). AppState enforces the policy: **one visible at a time**, **never re-shown** once dismissed (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session** (the rest surface later). Views call `appState.requestTip(_:)` on first arrival; `CoachMarkOverlay` (mounted once in RootView, behind sheets) renders the active tip as a dismissible bottom card with a "Got it" button. Triggers: **priorityStack** (Subscriptions with ≥1 show), **swipeActions** (Podcast Detail, once the user has a real subscription), **playerPanels** + **speed** (Player, when an episode is loaded), **sleepSchedule** (the Sleep Schedule page). Everything a tip teaches also lives in Menu → Support, so dismissing loses nothing.
+A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`). OnboardingCoordinator enforces the policy: **one visible at a time**, **never re-shown** once dismissed (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session** (the rest surface later). Views call the AppState compatibility façade `requestTip(_:)` on first arrival; `CoachMarkOverlay` (mounted once in RootView, behind sheets) renders the active tip as a dismissible bottom card with a "Got it" button. Triggers: **priorityStack** (Subscriptions with ≥1 show), **swipeActions** (Podcast Detail, once the user has a real subscription), **playerPanels** + **speed** (Player, when an episode is loaded), **sleepSchedule** (the Sleep Schedule page). Everything a tip teaches also lives in Menu → Support, so dismissing loses nothing.
 
 ### Empty states (every new-user-reachable screen points forward)
 - **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.

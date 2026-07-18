@@ -5,7 +5,7 @@ import Foundation
 //
 // PURPOSE:
 // Narrow MainActor observable containing per-episode download fractions. AppState
-// owns this leaf during decomposition Stages 0–2 and retains `downloadProgress`
+// owns this leaf through decomposition Stage 5 and retains `downloadProgress`
 // as a compatibility proxy. Episode-list surfaces observe this model directly so
 // transfer progress does not invalidate unrelated AppState views.
 //

@@ -67,8 +67,7 @@ private struct AutohopRootBootstrapView: View {
                             // started (persisted in AutoDownloadIntentStore).
                             Task { await appState.drainAutoDownloadIntents(reason: "foreground") }
                         } else {
-                            appState.persistCurrentPlaybackPosition()
-                            appState.listeningStatsStore.save()
+                            appState.preparePlaybackHistoryAndStatsCheckpoint()
                             Task { @MainActor in
                                 // Subscription saves are asynchronous. Finish the
                                 // SQLite transaction first so the following sync

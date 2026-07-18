@@ -4,8 +4,8 @@ import Foundation
 // Phase 0 of Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md (§4.2 move 2): the pure,
 // platform-neutral Priority Stack composition — base ordering (QueueService)
 // plus the Play Next / Play Last pin overrides that previously lived only in
-// AppState.orderedQueueWithOverrides(). AppState now delegates here (its
-// memoization + pin persistence + invalidation signals stay in AppState);
+// AppState.orderedQueueWithOverrides(). QueueCoordinator now delegates here and
+// owns memoization, pin persistence, and narrow invalidation;
 // tvOS/watch compose their queues from this same logic so ordering can never
 // drift between surfaces. PIN SEMANTICS (must match the historical AppState
 // behavior exactly): pins referencing episodes not in the base queue are

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 // AI CONTEXT — Persistence/SubscriptionStore.swift
@@ -14,6 +15,11 @@ import Foundation
 // lets CloudSyncEngine apply a fetched-changes burst with ONE objectWillChange at
 // the end instead of one per record (post-launch sync bursts were a main-thread
 // hang source); disk persistence is unaffected.
+// DECOMPOSITION STAGES 4–5: queueDidChange fingerprints only fields capable of
+// changing the downloaded Priority Stack; membershipDidChange fingerprints
+// subscription identity/browse status. QueueCoordinator and
+// OnboardingCoordinator observe these narrow streams instead of using broad
+// objectWillChange for domain work. Keep signatures free of display-only fields.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted/downloadedAt — the merge also reconstructs wasCompleted from
@@ -56,6 +62,15 @@ import Foundation
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     public private(set) var subscriptions: [Subscription] = []
+    /// Stage 4 narrow invalidation stream. QueueCoordinator observes this
+    /// instead of broad objectWillChange, so metadata/settings-only saves cannot
+    /// trigger queue recomputation or QueueSnapshot publication.
+    let queueDidChange = PassthroughSubject<Void, Never>()
+    /// Stage 5 narrow membership stream. OnboardingCoordinator observes only
+    /// real/browse subscription membership changes, never episode merges.
+    let membershipDidChange = PassthroughSubject<Void, Never>()
+    private var lastQueueAffectingSignature: [String] = []
+    private var lastMembershipSignature: [String] = []
     /// Record store. Exposed within the module so CloudSyncEngine can read
     /// pending sync-state and cached CKRecord system fields.
     let database: AutohopDatabase?
@@ -132,6 +147,7 @@ public final class SubscriptionStore: ObservableObject {
             ?? Self.defaultDatabasePath()
         self.database = try? AutohopDatabase(path: resolvedPath)
         load()
+        seedDomainChangeSignatures()
     }
 
     /// DEFERRED-LOAD variant (2026-07-11, tvOS launch-freeze fix): opens the
@@ -174,6 +190,7 @@ public final class SubscriptionStore: ObservableObject {
         // Non-destructive resort — same reasoning as load()'s note.
         resortByCurrentPriorityRank()
         persistedSnapshot = snapshotByID(subscriptions)
+        seedDomainChangeSignatures()
     }
 
     /// Test seam: a store backed entirely by an in-memory database (no disk).
@@ -185,6 +202,7 @@ public final class SubscriptionStore: ObservableObject {
         self.legacyFileURL = nil
         self.database = inMemoryDatabase
         load()
+        seedDomainChangeSignatures()
     }
 
     // MARK: - Add
@@ -1837,7 +1855,10 @@ public final class SubscriptionStore: ObservableObject {
         notifyObservers: Bool = true,
         authorSubscriptionOrder: Bool = true
     ) {
-        if notifyObservers { publishChange() }
+        if notifyObservers {
+            publishNarrowDomainChangesIfNeeded()
+            publishChange()
+        }
         guard let database else { return }
         persistenceRetryTask?.cancel()
         persistenceRetryTask = nil
@@ -1899,6 +1920,63 @@ public final class SubscriptionStore: ObservableObject {
                     self.schedulePersistenceRetry()
                 }
             }
+        }
+    }
+
+    /// Computes only the fields capable of changing downloaded queue identity or
+    /// ordering. This deliberately excludes titles, artwork, descriptions,
+    /// playback preferences, refresh stats, and other broad store mutations.
+    private func queueAffectingSignature() -> [String] {
+        subscriptions
+            .sorted { $0.priorityRank < $1.priorityRank }
+            .flatMap { subscription in
+                let episodes = subscription.episodes.isEmpty
+                    ? subscription.latestEpisode.map { [$0] } ?? []
+                    : subscription.episodes
+                return episodes
+                    .filter {
+                        $0.downloadState == .downloaded
+                            && ($0.localFileURL != nil || $0.localFileName != nil)
+                            && $0.playedState != .played
+                            && $0.playedState != .archived
+                    }
+                    .map { episode in
+                    [
+                        subscription.id.uuidString,
+                        "\(subscription.priorityRank)",
+                        episode.id.uuidString,
+                        episode.title,
+                        episode.downloadState.rawValue,
+                        episode.localFileURL?.path ?? "",
+                        episode.localFileName ?? "",
+                        episode.playedState.rawValue,
+                        "\(episode.publishedAt?.timeIntervalSince1970 ?? 0)"
+                    ].joined(separator: "|")
+                    }
+            }
+    }
+
+    private func membershipSignature() -> [String] {
+        subscriptions
+            .map { "\($0.id.uuidString)|\($0.browseDate == nil ? "real" : "browse")" }
+            .sorted()
+    }
+
+    private func seedDomainChangeSignatures() {
+        lastQueueAffectingSignature = queueAffectingSignature()
+        lastMembershipSignature = membershipSignature()
+    }
+
+    private func publishNarrowDomainChangesIfNeeded() {
+        let queueSignature = queueAffectingSignature()
+        if queueSignature != lastQueueAffectingSignature {
+            lastQueueAffectingSignature = queueSignature
+            queueDidChange.send()
+        }
+        let membership = membershipSignature()
+        if membership != lastMembershipSignature {
+            lastMembershipSignature = membership
+            membershipDidChange.send()
         }
     }
 

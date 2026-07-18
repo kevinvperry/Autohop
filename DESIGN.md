@@ -193,6 +193,13 @@ ToolbarItem(placement: .topBarLeading) {
 
 **Label: `MiniPlayer-Bar`** — `MiniPlayerBar` (`Views/RootView.swift`), docked via `.miniPlayerBar()` on every pushed page. Artwork · episode title · remaining time · play/pause, with a purple progress hairline on top. Tapping it posts `.autohopReturnToPlayer` to pop to the Player. Hidden on Subscriptions while Reorder mode is active.
 
+**Navigation ownership:** `PlayerView` remains the permanent
+`NavigationStack` root. `AppRoutingCoordinator` emits typed launch, menu,
+notification, Stats-recap, and onboarding presentation commands; `RootView`
+retains and mutates the local `NavigationPath`, so routing never recreates the
+player or playback engine. Existing NotificationCenter producers are translated
+through a temporary adapter until their call sites migrate.
+
 The Individual Subscription episodes page uses an empty nav title (the channel name is shown in `Header-SubscriptionPage` instead):
 
 ```swift

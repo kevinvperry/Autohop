@@ -25,8 +25,10 @@ import SwiftUI
 // RootView also hosts the onboarding chrome layered into its ZStack (above pages,
 // BELOW sheets + splash): CoachMarkOverlay (appState.activeTip), the
 // onboardingToast overlay, plus the FirstSubscribeCard .sheet (keyed by
-// FirstSubscribeContext on the .autohopFirstSubscription notification). handleWelcome
-// records hasCompletedWelcome and routes per the user's Welcome choice.
+// FirstSubscribeContext from AppRoutingCoordinator's typed onboarding output).
+// RootView retains its local NavigationPath; AppRoutingCoordinator selects typed
+// launch/menu/notification commands and translates legacy notifications.
+// handleWelcome records hasCompletedWelcome and routes per the user's choice.
 // LISTENING RECAPS: a launch .task re-arms the opt-in recap notifications from
 // saved settings (NotificationService.scheduleRecaps, idempotent) so they
 // survive relaunch/reinstall even if the user never reopens the Recaps screen.
@@ -51,10 +53,8 @@ extension Notification.Name {
     /// app home page sitting beneath the Menu sheet, so this just dismisses the
     /// Menu to reveal it as a full page — never a duplicate pushed inside the sheet.
     static let autohopOpenSubscriptions = Notification.Name("autohopOpenSubscriptions")
-    /// Posted by AppState when the user's first ever real subscription is added
-    /// via a single deliberate Subscribe (not a bulk OPML import). `object` is the
-    /// new Subscription's `id` (UUID). Drives the first-run "You're all set"
-    /// moment (ONBOARDING_PLAN.md Phase 3); harmless if no one is listening yet.
+    /// Temporary compatibility output posted alongside OnboardingCoordinator's
+    /// typed first-subscription event for any observer not migrated yet.
     static let autohopFirstSubscription = Notification.Name("autohopFirstSubscription")
 }
 
@@ -274,46 +274,47 @@ struct RootView: View {
             )
         }
         .task {
-            // First-run routing (ONBOARDING_PLAN.md Phase 2). Decided while the
-            // splash is still up so the Welcome cover (same purple background)
-            // is already in place when the splash fades.
-            if appState.isFirstRunNoSubscriptions {
-                showWelcome = true
-            } else if !handledExplicitLaunchRoute {
-                // Honour the user's chosen launch screen (App Settings → Startup).
-                // Discover/Subscriptions are pushed above the always-alive Player
-                // root, so the back chevron unwinds Discover → Subscriptions → Player.
-                switch appState.settingsStore.appSettings.launchScreen {
-                case .player:
-                    break
-                case .subscriptions:
-                    navigationPath.append(AppRoute.podcasts)
-                case .discover:
-                    navigationPath.append(AppRoute.podcasts)
-                    navigationPath.append(AppRoute.discover)
-                }
+            // Stage 5: typed launch selection, while RootView deliberately keeps
+            // ownership of its local NavigationPath.
+            if !handledExplicitLaunchRoute,
+               let command = appState.routingCoordinator.launchCommand(
+                    isFirstRun: appState.isFirstRunNoSubscriptions,
+                    launchScreen: appState.settingsStore.appSettings.launchScreen
+               ) {
+                handleRouteCommand(command)
             }
             try? await Task.sleep(for: .milliseconds(1200))
             withAnimation(.easeOut(duration: 0.35)) {
                 showLaunchView = false
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopReturnToPlayer)) { _ in
+        .onReceive(appState.routingCoordinator.commands) { command in
+            handleRouteCommand(command)
+        }
+    }
+
+    private func handleRouteCommand(_ command: AppRouteCommand) {
+        switch command {
+        case .returnToPlayer:
             navigationPath = NavigationPath()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenDiscover)) { _ in
-            navigationPath.append(AppRoute.discover)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenStats)) { note in
-            let recapPeriod = note.object as? ListeningRecapPeriod
-            openStats(recapPeriod: recapPeriod)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .autohopFirstSubscription)) { note in
-            // Posted by AppState on the user's first deliberate subscribe. Present
-            // the "You're all set" card (ONBOARDING_PLAN.md Phase 3).
-            if let id = note.object as? UUID {
-                firstSubscribeContext = FirstSubscribeContext(id: id)
+        case .openDiscover:
+            handledExplicitLaunchRoute = true
+            showWelcome = false
+            if navigationPath.isEmpty {
+                navigationPath.append(AppRoute.podcasts)
             }
+            navigationPath.append(AppRoute.discover)
+        case .openStats(let recapPeriod):
+            openStats(recapPeriod: recapPeriod)
+        case .openSubscriptions:
+            handledExplicitLaunchRoute = true
+            showWelcome = false
+            navigationPath = NavigationPath()
+            navigationPath.append(AppRoute.podcasts)
+        case .presentWelcome:
+            showWelcome = true
+        case .presentFirstSubscription(let subscriptionID):
+            firstSubscribeContext = FirstSubscribeContext(id: subscriptionID)
         }
     }
 
@@ -331,13 +332,7 @@ struct RootView: View {
     private func handleWelcome(_ outcome: WelcomeOutcome) {
         appState.settingsStore.appSettings.hasCompletedWelcome = true
         showWelcome = false
-        switch outcome {
-        case .findShows:
-            navigationPath.append(AppRoute.podcasts)
-            navigationPath.append(AppRoute.discover)
-        case .importedSubscriptions, .skip:
-            navigationPath.append(AppRoute.podcasts)
-        }
+        handleRouteCommand(appState.routingCoordinator.welcomeCompleted(outcome))
     }
 }
 

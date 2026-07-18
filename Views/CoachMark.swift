@@ -3,9 +3,10 @@ import SwiftUI
 // AI CONTEXT — Views/CoachMark.swift (onboarding coach marks / tips).
 // A small, deliberately non-annoying tip system (ONBOARDING_PLAN.md Phase 5).
 // `OnboardingTip` defines each tip's copy and per-tip "seen" persistence
-// (UserDefaults `tip.<case>.seen`). AppState owns the policy — one visible at a
-// time, never re-shown after "Got it", capped per session (see requestTip /
-// dismissActiveTip). Views call `appState.requestTip(_:)` on first arrival at
+// (UserDefaults `tip.<case>.seen`). OnboardingCoordinator owns the policy — one
+// visible at a time, never re-shown after "Got it", capped per session. AppState
+// retains requestTip/dismissActiveTip compatibility façades. Views call
+// `appState.requestTip(_:)` on first arrival at
 // their surface; `CoachMarkOverlay` (mounted once in RootView, behind sheets)
 // renders the active tip as a bottom card. Everything a tip teaches also lives
 // permanently in Menu → Support, so dismissing loses nothing.

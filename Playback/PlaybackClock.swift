@@ -5,7 +5,7 @@ import Foundation
 //
 // PURPOSE:
 // Narrow MainActor observable for Autohop's high-frequency playback position.
-// AppState owns this leaf during decomposition Stages 0–2 and exposes
+// AppState owns this leaf through decomposition Stage 5 and exposes
 // `currentPlayerTime` as a compatibility proxy. PlayerView and MiniPlayerBar
 // observe this object directly so the engine's 2 Hz time callback does not
 // invalidate every AppState observer.

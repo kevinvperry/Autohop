@@ -6,8 +6,8 @@ import Foundation
 // PURPOSE / OWNERSHIP:
 // Persists the per-episode listening log to Application Support/Autohop/
 // listening-history.json. This already-independent store moved verbatim from the
-// bottom of App/AppState.swift during decomposition Stage 2. AppState remains its
-// orchestration owner until Stage 3 introduces HistoryStatsCoordinator.
+// bottom of App/AppState.swift during decomposition Stage 2.
+// HistoryStatsCoordinator has owned its iOS orchestration since Stage 3.
 //
 // IDENTITY / FORMAT:
 // Entries are keyed by subscription-scoped episode GUID/URL (`historyKey`) so a
@@ -61,7 +61,9 @@ final class ListeningHistoryStore: ObservableObject {
     /// Record store for cross-device history sync; set by AppState. nil = no sync.
     var syncDatabase: AutohopDatabase?
 
-    private static let fileURL: URL? = {
+    private let fileURL: URL?
+
+    private static let defaultFileURL: URL? = {
         guard let appSupport = try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -71,7 +73,14 @@ final class ListeningHistoryStore: ObservableObject {
         return appSupport.appendingPathComponent("Autohop/listening-history.json")
     }()
 
-    init() {
+    convenience init() {
+        self.init(fileURL: Self.defaultFileURL)
+    }
+
+    /// Explicit location is a characterization-test seam. Production continues
+    /// using the historical Application Support path through `init()`.
+    init(fileURL: URL?) {
+        self.fileURL = fileURL
         load()
     }
 
@@ -294,7 +303,7 @@ final class ListeningHistoryStore: ObservableObject {
         // sync-visible before encoding. flushPendingProgress may call saveThrottled;
         // lastProgressFlushAt prevents recursion because the buffer is already empty.
         flushPendingProgress(reason: "save")
-        guard let url = Self.fileURL else { return }
+        guard let url = fileURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(entries)
@@ -315,7 +324,7 @@ final class ListeningHistoryStore: ObservableObject {
     }
 
     private func load() {
-        guard let url = Self.fileURL,
+        guard let url = fileURL,
               FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
               let loadedEntries = try? JSONDecoder().decode([ListeningHistoryEntry].self, from: data)

@@ -12,8 +12,9 @@ import Foundation
 // OWNERSHIP:
 // This value owns no runtime state, callback, Task, persistence rule, or policy.
 // AppState remains the compatibility façade and still installs every existing
-// callback during Stages 0–2. Later decomposition stages move callback/task
-// ownership one domain at a time.
+// callback graph. Stages 3–5 moved history/Stats, queue, onboarding, and routing
+// ownership into explicit coordinators constructed below; later stages continue
+// one domain at a time.
 //
 // TESTABILITY:
 // `Dependencies` and the explicit initializer form the Stage 0 application
@@ -82,14 +83,33 @@ struct AppCompositionRoot {
     }
 
     func makeAppState() -> AppState {
-        AppState(
+        let historyStatsCoordinator = HistoryStatsCoordinator(
+            historyStore: ListeningHistoryStore(),
+            statsStore: ListeningStatsStore(),
+            subscriptionStore: dependencies.subscriptionStore
+        )
+        let queueCoordinator = QueueCoordinator(
+            subscriptionStore: dependencies.subscriptionStore,
+            queueService: dependencies.queueService,
+            currentEpisode: { nil },
+            showBadge: { dependencies.settingsStore.appSettings.showQueueBadge }
+        )
+        let onboardingCoordinator = OnboardingCoordinator(
+            subscriptionStore: dependencies.subscriptionStore,
+            settingsStore: dependencies.settingsStore
+        )
+        return AppState(
             feedService: dependencies.feedService,
             downloadManager: dependencies.downloadManager,
             playbackEngine: dependencies.playbackEngine,
             chapterService: dependencies.chapterService,
             queueService: dependencies.queueService,
             settingsStore: dependencies.settingsStore,
-            subscriptionStore: dependencies.subscriptionStore
+            subscriptionStore: dependencies.subscriptionStore,
+            historyStatsCoordinator: historyStatsCoordinator,
+            queueCoordinator: queueCoordinator,
+            onboardingCoordinator: onboardingCoordinator,
+            routingCoordinator: AppRoutingCoordinator()
         )
     }
 }

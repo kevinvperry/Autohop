@@ -389,6 +389,7 @@ final class CarPlayBehaviorTests: XCTestCase {
             settingsStore: settings,
             subscriptionStore: store
         )
+        appState.queueCoordinator.start()
         return Harness(
             appState: appState,
             store: store,
@@ -447,6 +448,7 @@ private struct Harness {
                 localFileURL: try makeLocalFile(episode.id)
             )
         }
+        appState.queueCoordinator.recompute(reason: "test.installEpisodes")
     }
 }
 

@@ -11,7 +11,8 @@ import UIKit
 // PURPOSE: Central @MainActor coordinator and single source of truth for the
 // whole app during the compatibility phase. Every view still observes this
 // façade, while AppCompositionRoot now owns concrete production construction
-// and explicit startup. Domain ownership moves out only in later approved stages.
+// and explicit startup. Stages 3–5 moved history/Stats, queue, onboarding, and
+// typed routing ownership behind compatibility properties and methods.
 //
 // PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
 // observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
@@ -52,14 +53,11 @@ import UIKit
 //    ephemeral session) so a slow endpoint never delays the first audio frame,
 //    then applies chapters live to the store, currentPlayerEpisode, and the
 //    engine (PlaybackControlling.updateChapters) iff that episode still plays.
-//  - Queue: downloadedQueue = QueueService priority order + manual overrides
-//    (pin application now lives in AutohopCore's QueueModel.applyPins — tvOS
-//    Phase 0 — with AppState delegating via orderedQueueWithOverrides),
-//    MEMOIZED in cachedDownloadedQueue (P3) and invalidated synchronously in the
-//    subscriptionStore.objectWillChange sink + the pin didSets.
-//    queueOverrideEpisodeIDs = "Play Next" pins (front of queue, in order);
-//    queueDemotedEpisodeIDs = "Play Last" pins (end of queue). Pins persist in
-//    Application Support/Autohop/queue-pins.json and clear on play/archive.
+//  - Queue: QueueCoordinator owns the downloaded Priority Stack projection,
+//    Play Next/Last pins, pin persistence, Up Next, badge count, narrow
+//    queue-change invalidation, and changed-composition QueueSnapshot writes.
+//    AppState downloadedQueue/nextPlayableEpisode/upNextEpisode and pin commands
+//    are compatibility façades; reads are side-effect free.
 //    Queue pins and playback-position.json are marked available-after-first-unlock
 //    so CarPlay can render queue/progress and archive/play-next while locked.
 //  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
@@ -176,26 +174,27 @@ import UIKit
 //    subscription-scoped GUID/URL keys, resume normalization, legacy decode.
 //    AppState keeps same-named thin wrappers (savePlaybackPosition /
 //    savedPlaybackTime / clearPlaybackPosition) and the ~10 s tick throttle.
-//    Listening history + stats recorded on playback ticks (recordProgress only
-//    accrues time; played/archived status transitions go through mark()).
+//    HistoryStatsCoordinator owns listening tick accumulation, completion marks,
+//    derived history groups/counts, Stats credits, remote apply adapters, and
+//    local-save-before-sync lifecycle checkpoints.
 //  - OPML import/export with progress reporting.
-//  - First-run onboarding state + helpers (ONBOARDING_PLAN.md): realSubscriptionCount
-//    (filters browseDate==nil), isFirstRunNoSubscriptions, checkFirstSubscriptionMilestone
-//    (posts .autohopFirstSubscription on the first deliberate single subscribe; silent
-//    on bulk import/starter-pack), subscribeToFeedURLs (starter packs), the coach-mark
-//    TipCenter (activeTip / requestTip / dismissActiveTip — one-at-a-time, ≤3/session,
-//    UserDefaults seen-flags), and onboardingToast. Bootstrap reconciles existing users
-//    (real subs ⇒ mark onboarded). NOTE: tip animation is applied by CoachMarkOverlay's
-//    .animation(value:) — AppState has no `import SwiftUI`, so never call withAnimation here.
+//  - OnboardingCoordinator owns real-subscription counting, first-run and
+//    existing-user reconciliation, coalesced single-vs-bulk first-subscription
+//    output, coach-mark limits/seen state, and onboarding toast. AppRoutingCoordinator
+//    carries typed launch/menu/notification/onboarding commands; RootView retains
+//    the permanent PlayerView NavigationPath and a temporary NotificationCenter
+//    input adapter preserves existing producers.
 //
-// STAGE 1–2 ARCHITECTURE (2026-07-18): AppCompositionRoot constructs the
+// STAGE 1–5 ARCHITECTURE (2026-07-18): AppCompositionRoot constructs the
 // complete protocol-backed production graph. AppState init is side-effect-light;
 // idempotent start() installs this compatibility callback graph before starting
 // services, migrations, restoration, pollers, or launch tasks. Physically
 // independent observables/policies/stores now live in their domain folders:
 // PlaybackClock, PlaybackCueService, DownloadProgressModel,
-// ReleaseRadarCyclePlanner, and ListeningHistoryStore. This is physical
-// separation only; AppState remains the runtime owner until later stages.
+// ReleaseRadarCyclePlanner, and ListeningHistoryStore. HistoryStatsCoordinator,
+// QueueCoordinator, OnboardingCoordinator, and AppRoutingCoordinator now own
+// their domains; AppState remains the compatibility façade and retains playback,
+// downloads, feed refresh, Auto Archive, sync/Relay, import, and lifecycle work.
 //
 // KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
 // FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
@@ -206,8 +205,8 @@ import UIKit
 //
 // INVARIANTS / GOTCHAS:
 //  - Queue only ever contains DOWNLOADED, unplayed episodes (download-first).
-//  - upNextEpisode refreshes are debounced via scheduleUpNextRefresh; mutate
-//    suppressUpNextRefresh around bulk operations to avoid churn.
+//  - QueueCoordinator coalesces queue-affecting store events; transactional
+//    playback advancement forces one synchronous recompute before reading.
 //  - Listening history requires ≥ 60 s listened before an entry is shown.
 //  - AppState.shared is created through bootstrap/sharedOrBootstrap (used by
 //    AppDelegate/background tasks and CarPlay-only cold launches). bootstrap() is
@@ -224,7 +223,7 @@ import UIKit
 // the constructed singleton first, then `start()` advances synchronously through
 // starting → started. Re-entrant/repeated starts are ignored. `stopped` is
 // reserved for Stage 12's deterministic process/test teardown; no restart from
-// stopped is permitted during Stages 0–2.
+// stopped is permitted during Stages 0–5.
 enum AppStartupState: String, Equatable {
     case constructed
     case starting
@@ -241,8 +240,12 @@ final class AppState: ObservableObject {
     let queueService: QueueServicing
     let settingsStore: SettingsStoring
     let subscriptionStore: SubscriptionStore
-    let listeningHistoryStore = ListeningHistoryStore()
-    let listeningStatsStore = ListeningStatsStore()
+    let historyStatsCoordinator: HistoryStatsCoordinator
+    let queueCoordinator: QueueCoordinator
+    let onboardingCoordinator: OnboardingCoordinator
+    let routingCoordinator: AppRoutingCoordinator
+    var listeningHistoryStore: ListeningHistoryStore { historyStatsCoordinator.historyStore }
+    var listeningStatsStore: ListeningStatsStore { historyStatsCoordinator.statsStore }
     let autoArchiveActivityStore = AutoArchiveActivityStore()
     /// Durable auto-download intents (AH-2026-06-28-01): recorded before the
     /// fire-and-forget download Task so a BG-wake suspension can't lose a
@@ -291,7 +294,7 @@ final class AppState: ObservableObject {
 
     // Player state
     @Published var currentPlayerEpisode: Episode? {
-        didSet { scheduleUpNextRefresh(reason: "player.currentChanged") }
+        didSet { queueCoordinator.currentEpisodeDidChange() }
     }
     /// 2 Hz scrubber time lives on its own observable (PERF-1) so the tick no longer
     /// invalidates every AppState observer; this proxy keeps all existing call sites
@@ -302,13 +305,7 @@ final class AppState: ObservableObject {
         set { playbackClock.time = newValue }
     }
     @Published var isPlaying: Bool = false
-    @Published private(set) var upNextEpisode: Episode?
-    @Published private var queueOverrideEpisodeIDs: [UUID] = [] {
-        didSet { invalidateDownloadedQueueCache() }
-    }
-    @Published private var queueDemotedEpisodeIDs: [UUID] = [] {
-        didSet { invalidateDownloadedQueueCache() }
-    }
+    var upNextEpisode: Episode? { queueCoordinator.upNextEpisode }
 
     /// Per-episode download progress (0.0 – 1.0) lives on its own observable so
     /// progress ticks don't invalidate every AppState observer; this proxy keeps
@@ -319,16 +316,20 @@ final class AppState: ObservableObject {
         get { downloadProgressModel.progress }
         set { downloadProgressModel.progress = newValue }
     }
-    // Onboarding coach mark currently on screen (nil = none). See OnboardingTip.
-    @Published var activeTip: OnboardingTip?
-    // Transient onboarding confirmation toast (e.g. after an import). Auto-cleared
-    // by the RootView toast overlay.
-    @Published var onboardingToast: String?
+    var activeTip: OnboardingTip? {
+        get { onboardingCoordinator.activeTip }
+        set { onboardingCoordinator.activeTip = newValue }
+    }
+    var onboardingToast: String? {
+        get { onboardingCoordinator.toast }
+        set { onboardingCoordinator.toast = newValue }
+    }
     // Cached list of episodes currently on device — updated at state transitions only, not on progress ticks.
     @Published private(set) var downloadedActivities: [DownloadActivity] = []
-    // Cached listening history groups — updated only when entries change, not on every playback tick.
-    @Published private(set) var listeningHistoryGroups: [(String, [ListeningHistoryEntry])] = []
-    @Published private(set) var completedEpisodeCount: Int = 0
+    var listeningHistoryGroups: [(String, [ListeningHistoryEntry])] {
+        historyStatsCoordinator.historyGroups
+    }
+    var completedEpisodeCount: Int { historyStatsCoordinator.completedEpisodeCount }
 
     // Sleep timer
     let sleepTimerService = SleepTimerService()
@@ -386,20 +387,6 @@ final class AppState: ObservableObject {
     private let networkMonitor = NWPathMonitor()
     private var latestNetworkPath: NWPath?
 
-    // Persisted queue pin file
-    private static let queuePinsFileURL: URL? = {
-        guard let appSupport = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true
-        ) else { return nil }
-        return appSupport.appendingPathComponent("Autohop/queue-pins.json")
-    }()
-
-    private struct SavedQueuePins: Codable {
-        var overrideIDs: [UUID]
-        var demotedIDs: [UUID]
-    }
-
     /// Playback-position persistence (file + cache + key/normalization rules),
     /// extracted to Persistence/PlaybackPositionStore.swift (AppState-split
     /// first carve). AppState keeps same-named thin wrappers below; the 10 s
@@ -412,54 +399,19 @@ final class AppState: ObservableObject {
     private var activeRefreshCycle: Task<Bool, Never>?
     private var activeRefreshCycleDiagnostics: RefreshCycleDiagnostics?
     private var deferredRefreshBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
-    private var suppressUpNextRefresh = false
-    private var upNextRefreshTask: Task<Void, Never>?
     private var lastPlaybackTickDiagnostics: PlaybackTickDiagnostics?
     private var playbackTickSummary = PlaybackTickSummary()
     private var feedFailureBackoffUntil: [UUID: Date] = [:]
     private var supersededDownloadCancellationIDs = Set<UUID>()
     private var cancellables = Set<AnyCancellable>()
-    private var historyTrackingEpisodeID: UUID?
-    private var historyTrackingLastTime: TimeInterval?
-
     // MARK: - Computed queue
 
-    /// Memoized result of `downloadedQueue` (P3). The underlying filter+sort over
-    /// every subscription is O(n log n) and the property is read many times per UI
-    /// update (badge, resourceContext, up-next refresh, …). Invalidated whenever
-    /// the subscriptions change (subscriptionStore.objectWillChange) or a queue pin
-    /// mutates (the @Published pin didSets). nil = needs recompute.
-    private var cachedDownloadedQueue: [Episode]?
-
     var downloadedQueue: [Episode] {
-        if let cachedDownloadedQueue { return cachedDownloadedQueue }
-        let computed = orderedQueueWithOverrides(
-            queueService.downloadedQueue(from: subscriptionStore.subscriptions)
-        )
-        cachedDownloadedQueue = computed
-        // 2026-07-04: the Up Next queue's COMPOSITION now roams (Kevin's
-        // decision — the queue is the product's centre). The iPhone is the
-        // authoring device: publish its ordered episode identities whenever
-        // the queue actually changes. The store dedupes on entry equality, so
-        // recomputes with no real change never dirty the sync record; the
-        // recompute-on-cache-miss cadence (store change / pin change) is
-        // exactly the set of moments the queue can differ.
-        subscriptionStore.updateLocalQueueSnapshot(entries: computed.map { episode in
-            QueueSnapshotEntry(
-                episodeKey: PlaybackPositionStore.key(for: episode),
-                subscriptionID: episode.subscriptionID,
-                episodeTitle: episode.title
-            )
-        })
-        return computed
-    }
-
-    private func invalidateDownloadedQueueCache() {
-        cachedDownloadedQueue = nil
+        queueCoordinator.episodes
     }
 
     var nextPlayableEpisode: Episode? {
-        downloadedQueue.first
+        queueCoordinator.nextPlayableEpisode
     }
 
     // MARK: - Onboarding / first-run
@@ -468,52 +420,28 @@ final class AppState: ObservableObject {
     /// opening a Podcast Detail page (browseDate != nil) are invisible and must
     /// not count as "the user has subscribed". See ONBOARDING_PLAN.md.
     var realSubscriptionCount: Int {
-        subscriptionStore.subscriptions.filter { $0.browseDate == nil }.count
+        onboardingCoordinator.realSubscriptionCount
     }
 
     /// True for a brand-new user who hasn't passed Welcome and has no real
     /// subscriptions — the signal RootView uses to route into the first-run flow.
     var isFirstRunNoSubscriptions: Bool {
-        !settingsStore.appSettings.hasCompletedWelcome && realSubscriptionCount == 0
-    }
-
-    /// Fires the first-subscription milestone exactly once. A single deliberate
-    /// subscribe (count == 1) posts `.autohopFirstSubscription` for the "You're
-    /// all set" moment; a bulk OPML import (count > 1) flips the flag silently.
-    private func checkFirstSubscriptionMilestone() {
-        guard !settingsStore.appSettings.hasSubscribedFirstShow else { return }
-        let realSubs = subscriptionStore.subscriptions.filter { $0.browseDate == nil }
-        guard !realSubs.isEmpty else { return }
-        settingsStore.appSettings.hasSubscribedFirstShow = true
-        if realSubs.count == 1 {
-            NotificationCenter.default.post(name: .autohopFirstSubscription, object: realSubs[0].id)
-        }
+        onboardingCoordinator.isFirstRunNoSubscriptions
     }
 
     // MARK: - Onboarding tips (coach marks)
-
-    private var tipsShownThisSession = 0
-    private let maxTipsPerSession = 3
 
     /// Surfaces a coach mark the first time a view asks for it. Enforces the
     /// policy: one visible at a time, never re-shown once seen, and at most
     /// `maxTipsPerSession` per launch (the rest surface in later sessions).
     /// Safe to call from `onAppear` repeatedly — unmet conditions are no-ops.
     func requestTip(_ tip: OnboardingTip) {
-        guard activeTip == nil else { return }
-        guard !tip.isSeen else { return }
-        guard tipsShownThisSession < maxTipsPerSession else { return }
-        // Animation is applied by CoachMarkOverlay (.animation(value:)); AppState
-        // stays free of SwiftUI so it doesn't need `withAnimation` here.
-        activeTip = tip
+        onboardingCoordinator.requestTip(tip)
     }
 
     /// Dismisses the active tip via "Got it" — marks it seen so it never returns.
     func dismissActiveTip() {
-        guard let tip = activeTip else { return }
-        tip.markSeen()
-        tipsShownThisSession += 1
-        activeTip = nil
+        onboardingCoordinator.dismissActiveTip()
     }
 
     var currentVideoPlayer: AVPlayer? {
@@ -545,11 +473,11 @@ final class AppState: ObservableObject {
     }
 
     func isQueuePinnedNext(_ episode: Episode) -> Bool {
-        queueOverrideEpisodeIDs.contains(episode.id)
+        queueCoordinator.isPinnedNext(episode)
     }
 
     func isQueuePinnedLast(_ episode: Episode) -> Bool {
-        queueDemotedEpisodeIDs.contains(episode.id)
+        queueCoordinator.isPinnedLast(episode)
     }
 
     func episodeIsCurrent(_ episode: Episode) -> Bool {
@@ -567,22 +495,6 @@ final class AppState: ObservableObject {
             return currentPlayerTime
         }
         return savedPlaybackTime(for: episode)
-    }
-
-    private func resolvedUpNextEpisode() -> Episode? {
-        let queue = downloadedQueue
-        guard let current = currentPlayerEpisode else { return queue.first }
-        return queue.first { $0.id != current.id }
-    }
-
-    /// Pin application moved to QueueModel.applyPins (AutohopCore, Phase 0 of
-    /// the tvOS proposal) so every surface shares one Priority Stack
-    /// composition; this wrapper feeds it the persisted pin lists.
-    private func orderedQueueWithOverrides(_ baseQueue: [Episode]) -> [Episode] {
-        QueueModel.applyPins(baseQueue, pins: QueuePins(
-            playNextIDs: queueOverrideEpisodeIDs,
-            playLastIDs: queueDemotedEpisodeIDs
-        ))
     }
 
     private let defaultFeedEpisodeLimit = 50
@@ -739,7 +651,11 @@ final class AppState: ObservableObject {
         chapterService: ChapterServicing,
         queueService: QueueServicing,
         settingsStore: SettingsStoring,
-        subscriptionStore: SubscriptionStore
+        subscriptionStore: SubscriptionStore,
+        historyStatsCoordinator: HistoryStatsCoordinator,
+        queueCoordinator: QueueCoordinator,
+        onboardingCoordinator: OnboardingCoordinator,
+        routingCoordinator: AppRoutingCoordinator
     ) {
         self.feedService = feedService
         self.downloadManager = downloadManager
@@ -748,6 +664,10 @@ final class AppState: ObservableObject {
         self.queueService = queueService
         self.settingsStore = settingsStore
         self.subscriptionStore = subscriptionStore
+        self.historyStatsCoordinator = historyStatsCoordinator
+        self.queueCoordinator = queueCoordinator
+        self.onboardingCoordinator = onboardingCoordinator
+        self.routingCoordinator = routingCoordinator
         self.cloudSyncEngine = CloudSyncEngine(
             containerIdentifier: AppState.cloudKitContainerID,
             subscriptionStore: subscriptionStore,
@@ -759,6 +679,49 @@ final class AppState: ObservableObject {
         self.relayObservedFeedURLs = ReleaseFeatures.relayService
             ? Self.relayFeedURLs(in: subscriptionStore.subscriptions)
             : []
+        queueCoordinator.installCurrentEpisodeProvider { [weak self] in
+            self?.currentPlayerEpisode
+        }
+    }
+
+    /// Compatibility initializer retained for existing tests and transitional
+    /// call sites. Production construction is owned by AppCompositionRoot.
+    convenience init(
+        feedService: FeedServicing,
+        downloadManager: DownloadManaging,
+        playbackEngine: PlaybackControlling,
+        chapterService: ChapterServicing,
+        queueService: QueueServicing,
+        settingsStore: SettingsStoring,
+        subscriptionStore: SubscriptionStore
+    ) {
+        let historyStatsCoordinator = HistoryStatsCoordinator(
+            historyStore: ListeningHistoryStore(),
+            statsStore: ListeningStatsStore(),
+            subscriptionStore: subscriptionStore
+        )
+        let queueCoordinator = QueueCoordinator(
+            subscriptionStore: subscriptionStore,
+            queueService: queueService,
+            currentEpisode: { nil },
+            showBadge: { settingsStore.appSettings.showQueueBadge }
+        )
+        self.init(
+            feedService: feedService,
+            downloadManager: downloadManager,
+            playbackEngine: playbackEngine,
+            chapterService: chapterService,
+            queueService: queueService,
+            settingsStore: settingsStore,
+            subscriptionStore: subscriptionStore,
+            historyStatsCoordinator: historyStatsCoordinator,
+            queueCoordinator: queueCoordinator,
+            onboardingCoordinator: OnboardingCoordinator(
+                subscriptionStore: subscriptionStore,
+                settingsStore: settingsStore
+            ),
+            routingCoordinator: AppRoutingCoordinator()
+        )
     }
 
     /// Installs the existing compatibility callback graph exactly once.
@@ -776,13 +739,12 @@ final class AppState: ObservableObject {
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
-        listeningHistoryStore.syncDatabase = subscriptionStore.database
+        historyStatsCoordinator.attachSyncDatabase(subscriptionStore.database)
         cloudSyncEngine.onRemoteHistoryEntry = { [weak self] entry in
-            await MainActor.run { self?.listeningHistoryStore.applyRemote(entry) }
+            await MainActor.run { self?.historyStatsCoordinator.applyRemoteHistory(entry) }
         }
-        listeningStatsStore.syncDatabase = subscriptionStore.database
         cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
-            await MainActor.run { self?.listeningStatsStore.reloadRemoteStats() }
+            await MainActor.run { self?.historyStatsCoordinator.reloadRemoteStats() }
         }
         // Relay sync-nudge send-side (§6.4) — see AppState's "Autohop Relay" MARK
         // section for scheduleRelaySyncNudge()'s debounce/gating.
@@ -812,23 +774,43 @@ final class AppState: ObservableObject {
         }
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
-                // Drop the memoized queue synchronously (P3): SubscriptionStore
-                // publishes visible saves after mutating in memory, so the next
-                // read recomputes from the updated subscriptions.
-                self?.invalidateDownloadedQueueCache()
                 Task { @MainActor in
                     guard let self else { return }
-                    self.scheduleUpNextRefresh(reason: "state.changed")
-                    self.checkFirstSubscriptionMilestone()
                     self.objectWillChange.send()
-                    let badgeCount = self.settingsStore.appSettings.showQueueBadge ? self.downloadedQueue.count : 0
-                    NotificationService.shared.updateBadge(count: badgeCount)
                     if ReleaseFeatures.relayService {
                         self.scheduleRelayFeedSyncIfMembershipChanged()
                     }
                 }
             }
             .store(in: &cancellables)
+
+        queueCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        historyStatsCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        onboardingCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        queueCoordinator.onBadgeCountChanged = { count in
+            NotificationService.shared.updateBadge(count: count)
+        }
+        onboardingCoordinator.onOutput = { [weak self] output in
+            guard let self else { return }
+            switch output {
+            case .firstSubscription(let subscriptionID):
+                self.routingCoordinator.send(.presentFirstSubscription(subscriptionID))
+                // Temporary compatibility adapter for any observer not yet moved
+                // to AppRoutingCoordinator's typed command stream.
+                NotificationCenter.default.post(
+                    name: .autohopFirstSubscription,
+                    object: subscriptionID
+                )
+            }
+        }
+        routingCoordinator.startLegacyNotificationAdapter()
 
         // Autohop Pro gate (§4.1): register with the relay the moment BOTH an
         // active entitlement and an APNs token are available; unregister the
@@ -1008,7 +990,7 @@ final class AppState: ObservableObject {
         if settingsStore.appSettings.iCloudSyncEnabled {
             cloudSyncEngine.start()
         }
-        refreshUpNextEpisode()
+        queueCoordinator.start()
         startNetworkMonitor()
         subscriptionStore.cleanupExpiredPreviewSubscriptions(
             subscriptionIDsWithHistory: Set(listeningHistoryStore.entries.map(\.subscriptionID))
@@ -1086,11 +1068,10 @@ final class AppState: ObservableObject {
                     if state.isPlaying,
                        tickEpisode != nil,
                        let sub = tickSubscription {
-                        state.listeningStatsStore.addListeningTime(
+                        state.historyStatsCoordinator.recordListeningTime(
                             0.5,
                             speed: state.effectiveSpeed(for: sub),
-                            subscriptionID: sub.id,
-                            showTitle: sub.title
+                            subscription: sub
                         )
                         statsCredited = true
                     }
@@ -1158,7 +1139,7 @@ final class AppState: ObservableObject {
         // Playback stats
         state.playbackEngine.onManualSkipForward = { [weak state] seconds in
             Task { @MainActor in
-                state?.listeningStatsStore.addManualSkipForward(
+                state?.historyStatsCoordinator.recordManualSkipForward(
                     seconds,
                     subscriptionID: state?.currentPlayerEpisode?.subscriptionID
                 )
@@ -1166,7 +1147,7 @@ final class AppState: ObservableObject {
         }
         state.playbackEngine.onAutoSkip = { [weak state] seconds in
             Task { @MainActor in
-                state?.listeningStatsStore.addAutoSkip(
+                state?.historyStatsCoordinator.recordAutoSkip(
                     seconds,
                     subscriptionID: state?.currentPlayerEpisode?.subscriptionID
                 )
@@ -1174,7 +1155,7 @@ final class AppState: ObservableObject {
         }
         state.playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
             Task { @MainActor in
-                state?.listeningStatsStore.addTrimSilenceSaved(
+                state?.historyStatsCoordinator.recordTrimSilenceSaved(
                     seconds,
                     subscriptionID: state?.currentPlayerEpisode?.subscriptionID
                 )
@@ -1206,7 +1187,7 @@ final class AppState: ObservableObject {
                 // Background downloads are the bulk of auto-downloads — record
                 // their actual on-disk size against today's download-data stat too.
                 let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
-                state.listeningStatsStore.recordDownload(bytes: downloadedBytes)
+                state.historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
                 if let sub = state.subscriptionStore.subscription(id: subscriptionID),
                    let ep = state.subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID) {
                     state.downloadActivityStore.complete(
@@ -1300,9 +1281,8 @@ final class AppState: ObservableObject {
                 // push any coalesced history/stats sync rows (the scene usually
                 // resigned long before a sleep-timer fire, so this is the only
                 // checkpoint that catches the tail of the session).
-                state.persistCurrentPlaybackPosition()
-                state.listeningStatsStore.save()
-                state.flushDeferredSyncPushes(reason: "sleepTimer.pause")
+                state.savePlaybackPosition()
+                state.checkpointHistoryAndStats(reason: "sleepTimer.pause")
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NowPlayingService.shared.updateTime(
@@ -1366,9 +1346,7 @@ final class AppState: ObservableObject {
                 let rewindTarget = atEpisodeBoundary ? 0 : state.sleepSchedulePromptAnchorTime
                 state.seek(to: rewindTarget)
                 state.savePlaybackPosition()
-                state.listeningHistoryStore.save()
-                state.listeningStatsStore.save()
-                state.flushDeferredSyncPushes(reason: "sleepSchedule.asleep")
+                state.checkpointHistoryAndStats(reason: "sleepSchedule.asleep")
                 if let ep = state.currentPlayerEpisode,
                    let sub = state.subscriptionStore.subscription(id: ep.subscriptionID) {
                     NowPlayingService.shared.updateTime(
@@ -1446,12 +1424,7 @@ final class AppState: ObservableObject {
         // only ever flips false→true, so a user who later unsubscribes from
         // everything still won't see Welcome again. A brand-new install has zero
         // subscriptions at bootstrap, so its flags correctly stay false.
-        if state.realSubscriptionCount > 0 && !state.settingsStore.appSettings.hasCompletedWelcome {
-            state.settingsStore.appSettings.hasCompletedWelcome = true
-            state.settingsStore.appSettings.hasSubscribedFirstShow = true
-            state.settingsStore.appSettings.hasPlayedFirstEpisode = true
-            state.logger.info("onboarding.reconcile", "Existing user with subscriptions marked onboarded")
-        }
+        state.onboardingCoordinator.reconcileExistingUser()
         state.syncDiagnosticLogging()
         state.logger.info("app.bootstrap", "App state bootstrapped")
         state.restorePlaybackPosition()
@@ -1571,12 +1544,11 @@ final class AppState: ObservableObject {
             }
             playbackEngine.pause()
             isPlaying = false
-            listeningStatsStore.save()
             // Capture the freshest position + history row (mirrors the
             // scene-background path) so the flush pushes the exact pause point,
             // not the last periodic progress tick.
-            persistCurrentPlaybackPosition()
-            flushDeferredSyncPushes(reason: "playback.pause")
+            savePlaybackPosition()
+            checkpointHistoryAndStats(reason: "playback.pause")
             if let ep = currentPlayerEpisode,
                let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                 NowPlayingService.shared.updateTime(
@@ -1686,7 +1658,7 @@ final class AppState: ObservableObject {
             duration: duration
         )
         if actualSkipped > 0 {
-            listeningStatsStore.addManualSkipForward(
+            historyStatsCoordinator.recordManualSkipForward(
                 actualSkipped,
                 subscriptionID: currentPlayerEpisode?.subscriptionID
             )
@@ -2161,9 +2133,7 @@ final class AppState: ObservableObject {
         }
 
         subscriptionStore.markEpisodeArchived(subscriptionID: episode.subscriptionID, episodeID: episode.id)
-        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
-        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
-        saveQueuePins()
+        queueCoordinator.removePins(for: episode.id)
         downloadProgress.removeValue(forKey: episode.id)
         downloadMessage = "Archived \(episode.title)."
         refreshDownloadedActivities()
@@ -2311,7 +2281,7 @@ final class AppState: ObservableObject {
             // back to the feed-declared size if the file can't be stat'd.
             let downloadedBytes = ((try? FileManager.default.attributesOfItem(atPath: localFileURL.path))?[.size] as? NSNumber)?.int64Value
                 ?? episode.fileSizeBytes ?? 0
-            listeningStatsStore.recordDownload(bytes: downloadedBytes)
+            historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
             if showCompletionMessage {
                 downloadMessage = "Downloaded \(episode.title)."
             }
@@ -2450,19 +2420,7 @@ final class AppState: ObservableObject {
     }
 
     func refreshListeningHistory() {
-        let calendar = Calendar.current
-        let commenced = listeningHistoryStore.entries.filter { $0.listenedSeconds >= 60 || $0.lastPositionSeconds >= 60 }
-        let grouped = Dictionary(grouping: commenced) { entry -> String in
-            if calendar.isDateInToday(entry.lastListenedAt) { return "Today" }
-            if calendar.isDateInYesterday(entry.lastListenedAt) { return "Yesterday" }
-            return entry.lastListenedAt.formatted(date: .abbreviated, time: .omitted)
-        }
-        listeningHistoryGroups = grouped
-            .map { ($0.key, $0.value.sorted { $0.lastListenedAt > $1.lastListenedAt }) }
-            .sorted { lhs, rhs in
-                (lhs.1.first?.lastListenedAt ?? .distantPast) > (rhs.1.first?.lastListenedAt ?? .distantPast)
-            }
-        completedEpisodeCount = commenced.filter { $0.status == .played || $0.status == .archived }.count
+        historyStatsCoordinator.refreshHistoryProjection()
     }
 
     private func drainDownloadQueue() {
@@ -2642,6 +2600,10 @@ final class AppState: ObservableObject {
 
     func playNextEpisode(excluding excludedEpisodeIDs: Set<UUID> = []) async {
         savePlaybackPosition()
+        // QueueCoordinator normally coalesces store events for UI efficiency.
+        // Playback advancement is a transactional read boundary and therefore
+        // resolves synchronously after a just-finished/archive mutation.
+        queueCoordinator.recompute(reason: "queue.playNextRead")
         resourceMonitor.logSnapshot(reason: "queue.playNext", context: resourceContext())
         logger.info("queue.playNext", "Looking for next playable episode", metadata: [
             "queueCount": "\(downloadedQueue.count)",
@@ -2677,9 +2639,7 @@ final class AppState: ObservableObject {
             cancelPlayInstantSession(reason: "selectedDifferentEpisode")
         }
         savePlaybackPosition()
-        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
-        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
-        saveQueuePins()
+        queueCoordinator.removePins(for: episode.id)
         let resumeTime = savedPlaybackTime(for: episode)
         resourceMonitor.logSnapshot(reason: "player.playEpisode", context: resourceContext([
             "episode": episode.title
@@ -2693,11 +2653,7 @@ final class AppState: ObservableObject {
 
     func playEpisodeNext(_ episode: Episode) {
         guard currentPlayerEpisode?.id != episode.id else { return }
-        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
-        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
-        queueOverrideEpisodeIDs.insert(episode.id, at: 0)
-        saveQueuePins()
-        refreshUpNextEpisode(reason: "queue.playNextOverride")
+        queueCoordinator.playNext(episode)
         logger.info("queue.playNextOverride", "Episode moved to play next", metadata: [
             "episode": episode.title,
             "current": currentPlayerEpisode?.title ?? "none"
@@ -2705,26 +2661,17 @@ final class AppState: ObservableObject {
     }
 
     func unpinEpisode(_ episode: Episode) {
-        let wasOverride = queueOverrideEpisodeIDs.contains(episode.id)
-        let wasDemoted = queueDemotedEpisodeIDs.contains(episode.id)
-        guard wasOverride || wasDemoted else { return }
-        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
-        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
-        saveQueuePins()
-        refreshUpNextEpisode(reason: "queue.unpin")
+        let result = queueCoordinator.unpin(episode)
+        guard result.wasNext || result.wasLast else { return }
         logger.info("queue.unpin", "Episode unpinned", metadata: [
             "episode": episode.title,
-            "wasOverride": "\(wasOverride)"
+            "wasOverride": "\(result.wasNext)"
         ])
     }
 
     func playEpisodeLast(_ episode: Episode) {
         guard currentPlayerEpisode?.id != episode.id else { return }
-        queueOverrideEpisodeIDs.removeAll { $0 == episode.id }
-        queueDemotedEpisodeIDs.removeAll { $0 == episode.id }
-        queueDemotedEpisodeIDs.append(episode.id)
-        saveQueuePins()
-        refreshUpNextEpisode(reason: "queue.playLastDemotion")
+        queueCoordinator.playLast(episode)
         logger.info("queue.playLastDemotion", "Episode moved to play last", metadata: [
             "episode": episode.title,
             "current": currentPlayerEpisode?.title ?? "none"
@@ -3129,7 +3076,10 @@ final class AppState: ObservableObject {
 
             subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: playableEpisode.id)
             if start.isFreshStart {
-                listeningStatsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
+                historyStatsCoordinator.recordEpisodeStarted(
+                    subscriptionID: subscription.id,
+                    showTitle: subscription.title
+                )
             }
             currentPlayerEpisode = playableEpisode
             isPlaying = true
@@ -3140,8 +3090,10 @@ final class AppState: ObservableObject {
                 settingsStore.appSettings.hasPlayedFirstEpisode = true
             }
             positionSaveCounter = 0
-            historyTrackingEpisodeID = playableEpisode.id
-            historyTrackingLastTime = currentPlayerTime
+            historyStatsCoordinator.beginPlaybackTracking(
+                episodeID: playableEpisode.id,
+                at: currentPlayerTime
+            )
             playbackMessage = nil
 
             // CROSS-DEVICE "NOW PLAYING" FRESHNESS (2026-07-11, Kevin's TV
@@ -3155,15 +3107,13 @@ final class AppState: ObservableObject {
             // (which wins the hero's recency comparison everywhere) and the
             // starting position. max(…, 1) because the TV-side hero filter
             // requires a usable (> 0) resume position.
-            listeningHistoryStore.recordProgress(
+            historyStatsCoordinator.recordPlaybackStart(
                 episode: playableEpisode,
-                podcastTitle: subscription.title,
-                artworkURL: playableEpisode.artworkURL ?? subscription.artworkURL,
-                listenedSeconds: 0,
-                positionSeconds: max(start.reportedStartTime, 1),
-                durationSeconds: playableEpisode.durationSeconds
-            )
-            flushDeferredSyncPushes(reason: "playback.start")
+                subscription: subscription,
+                position: start.reportedStartTime
+            ) { [weak self] reason in
+                self?.flushDeferredSyncPushes(reason: reason)
+            }
 
             // Chapters from an external `podcast:chapters` feed are fetched AFTER
             // playback has started (P7) so a slow/hung endpoint never delays the
@@ -3255,7 +3205,7 @@ final class AppState: ObservableObject {
 
         // Episode reached EOF: use its full duration as the position.
         let finishedPos = episode.durationSeconds
-        listeningStatsStore.recordEpisodeCompleted(subscriptionID: episode.subscriptionID)
+        historyStatsCoordinator.recordEpisodeCompleted(subscriptionID: episode.subscriptionID)
         clearPlaybackPosition(for: episode)
         markListeningHistory(
             episode,
@@ -4033,8 +3983,6 @@ final class AppState: ObservableObject {
         onlyDueFeeds: Bool,
         targetSubscriptionIDs: Set<UUID>?
     ) async -> Bool {
-        suppressUpNextRefresh = true
-        defer { suppressUpNextRefresh = false }
 
         let refreshContext = diagnostics.metadata(currentSceneActive: isSceneActive)
         resourceMonitor.logSnapshot(
@@ -5179,15 +5127,30 @@ final class AppState: ObservableObject {
 
     func persistCurrentPlaybackPosition() {
         savePlaybackPosition()
-        listeningHistoryStore.save()
+        historyStatsCoordinator.saveHistory()
+    }
+
+    /// Stage 3 lifecycle adapter. Local history and Stats (including pending
+    /// sync rows) become durable before CloudSyncEngine scans and pushes them.
+    func checkpointHistoryAndStats(reason: String) {
+        historyStatsCoordinator.checkpoint(reason: reason) { [weak self] checkpointReason in
+            self?.flushDeferredSyncPushes(reason: checkpointReason)
+        }
+    }
+
+    /// Scene-lifecycle two-phase checkpoint: make playback/history/Stats durable,
+    /// then AutohopApp awaits SubscriptionStore's pending SQLite transaction
+    /// before requesting the one final CloudKit scan.
+    func preparePlaybackHistoryAndStatsCheckpoint() {
+        savePlaybackPosition()
+        historyStatsCoordinator.prepareLocalCheckpoint()
     }
 
     /// Lifecycle checkpoint for sync: pushes any slow-lane (history/stats)
     /// CloudKit changes the engine is holding on its ~60 s coalescing debounce.
-    /// Call AFTER `listeningStatsStore.save()` (or `flushPendingStatsDays`) so
-    /// the day buckets are in the sync database before the engine scans for
-    /// pending rows. Wired to pause, sleep-timer/schedule pause, and scene
-    /// backgrounding/resign-active (AutohopApp).
+    /// HistoryStatsCoordinator calls this only after local history and Stats
+    /// stores have flushed their pending sync rows. Other domains may also call
+    /// it after their own durable checkpoint.
     func flushDeferredSyncPushes(reason: String) {
         cloudSyncEngine.flushDeferredPushes(reason: reason)
     }
@@ -5586,25 +5549,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func saveQueuePins() {
-        guard let url = Self.queuePinsFileURL else { return }
-        let pins = SavedQueuePins(overrideIDs: queueOverrideEpisodeIDs, demotedIDs: queueDemotedEpisodeIDs)
-        guard let data = try? JSONEncoder().encode(pins) else { return }
-        try? LockedDeviceFileAccess.writeDataAtomically(data, to: url)
-    }
-
     private func loadQueuePins() {
-        guard let url = Self.queuePinsFileURL,
-              let data = try? Data(contentsOf: url),
-              let pins = try? JSONDecoder().decode(SavedQueuePins.self, from: data)
-        else { return }
-        LockedDeviceFileAccess.applyToCarPlayCriticalFile(at: url)
-        queueOverrideEpisodeIDs = pins.overrideIDs
-        queueDemotedEpisodeIDs = pins.demotedIDs
-        logger.info("queue.pinsLoaded", "Queue pins restored", metadata: [
-            "overrideCount": "\(pins.overrideIDs.count)",
-            "demotedCount": "\(pins.demotedIDs.count)"
-        ])
+        queueCoordinator.loadPins()
     }
 
     private func restorePlaybackPosition() {
@@ -5656,32 +5602,14 @@ final class AppState: ObservableObject {
     }
 
     private func recordListeningProgress(at time: TimeInterval) {
-        guard isPlaying,
-              let episode = currentPlayerEpisode,
-              let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
-        else {
-            historyTrackingEpisodeID = nil
-            historyTrackingLastTime = nil
-            return
-        }
-
-        guard historyTrackingEpisodeID == episode.id, let lastTime = historyTrackingLastTime else {
-            historyTrackingEpisodeID = episode.id
-            historyTrackingLastTime = time
-            return
-        }
-
-        historyTrackingLastTime = time
-        let delta = time - lastTime
-        guard delta > 0, delta <= 3 else { return }
-
-        listeningHistoryStore.recordProgress(
+        let episode = currentPlayerEpisode
+        historyStatsCoordinator.recordPlaybackProgress(
+            at: time,
+            isPlaying: isPlaying,
             episode: episode,
-            podcastTitle: subscription.title,
-            artworkURL: episode.artworkURL ?? subscription.artworkURL,
-            listenedSeconds: delta,
-            positionSeconds: time,
-            durationSeconds: episode.durationSeconds
+            subscription: episode.flatMap {
+                subscriptionStore.subscription(id: $0.subscriptionID)
+            }
         )
     }
 
@@ -5691,16 +5619,12 @@ final class AppState: ObservableObject {
         completionKind: CompletionKind,
         positionSeconds: TimeInterval? = nil
     ) {
-        let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
-        listeningHistoryStore.mark(
-            episode: episode,
-            podcastTitle: subscription?.title ?? episode.author ?? "Podcast",
-            artworkURL: episode.artworkURL ?? subscription?.artworkURL,
+        historyStatsCoordinator.mark(
+            episode,
             status: status,
             completionKind: completionKind,
             positionSeconds: positionSeconds
         )
-        refreshListeningHistory()
     }
 
     private func reusableDownloadedEpisode(for episode: Episode) -> Episode? {
@@ -5727,28 +5651,11 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleUpNextRefresh(reason: String = "state.changed") {
-        guard !suppressUpNextRefresh else { return }
-        upNextRefreshTask?.cancel()
-        upNextRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            self?.refreshUpNextEpisode(reason: reason)
-        }
+        queueCoordinator.scheduleRecompute(reason: reason)
     }
 
     private func refreshUpNextEpisode(reason: String = "state.changed") {
-        let latest = resolvedUpNextEpisode()
-        let didChange = latest?.id != upNextEpisode?.id
-        guard didChange || reason != "state.changed" else { return }
-        logger.info("queue.upNextRefresh", "Resolved Up Next episode", metadata: [
-            "reason": reason,
-            "current": currentPlayerEpisode?.title ?? "none",
-            "previous": upNextEpisode?.title ?? "none",
-            "resolved": latest?.title ?? "none",
-            "queueCount": "\(downloadedQueue.count)",
-            "changed": "\(didChange)"
-        ])
-        upNextEpisode = latest
+        queueCoordinator.recompute(reason: reason)
     }
 
     private func isCancellationError(_ error: Error) -> Bool {

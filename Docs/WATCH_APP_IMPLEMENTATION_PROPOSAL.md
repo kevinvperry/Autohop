@@ -265,7 +265,7 @@ possible without a UI rewrite.
 | `PlaybackManager.shared` | `App/AppState.swift` (@MainActor coordinator) + `Playback/PlaybackEngine.swift` | AppState is the only PlaybackEngine caller; the watch bridge must go through AppState, never the engine directly |
 | Phone-side `WatchManager` | NEW `Watch/WatchBridge.swift` (phone target) | Model on `NowPlaying/NowPlayingService.swift`: singleton bridge, wired once in `AppState.bootstrap()`, pushed on the same tick/transition points |
 | NotificationCenter fan-out triggers | AppState closure/observable hooks | Autohop doesn't use NotificationCenter for app events; add explicit `watchBridge.pushState()` calls at the same points AppState updates NowPlayingService |
-| Up Next (stored, user-ordered list) | **Derived** Priority Stack: `Queue/QueueService.swift` + AppState pinned-ID overrides (`orderedQueueWithOverrides()`, memoized `cachedDownloadedQueue`) | Biggest semantic difference — see D4 |
+| Up Next (stored, user-ordered list) | **Derived** Priority Stack: `Queue/QueueService.swift` + iPhone `App/QueueCoordinator.swift` pins/projection | Biggest semantic difference — see D4 |
 | Episode `uuid` (server-global) | `Episode.id` (local UUID) | Fine for remote mode: the phone resolves its own IDs. Phase 3 cross-device identity rides on existing CloudKit record naming (`SYNC_DESIGN.md`) |
 | Effects (speed / trim / boost) | Per-podcast speed, Trim Silence, Vocal Boost (`Models/PlaybackPreference.swift`, applied live via AppState) | Availability flags per source; see D7 |
 | Podcast tint colour (server-computed, sent as hex) | Derive from artwork or use Autohop accent | Send optional hex in the snapshot; fall back to accent colour |
@@ -411,7 +411,7 @@ state pushed from AppState at explicit points.
 - **Push triggers:** call `WatchBridge.shared.pushState()` from AppState at the
   same transition points that update NowPlayingService: playback
   start/pause/finish, seek, episode change, speed/effects change, queue
-  change (the synchronous `cachedDownloadedQueue` invalidation points), and
+  change (QueueCoordinator's changed-composition publication), and
   the periodic position-persist cadence. Do NOT hook the 2 Hz PlaybackClock (D5).
   Debounce pushes (~0.5 s trailing) so a burst of queue mutations sends once.
 - **Delivery tiering** (replicate PC exactly): reachable → `sendMessage` (no

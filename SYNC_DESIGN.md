@@ -394,13 +394,11 @@ push is requested.
   ~60 s deferred push (`CloudSyncEngine.slowLaneDebounceSeconds`) instead of
   queueing. If fast-lane dirt is present, slow rows **piggyback** on that push
   (a CloudKit request is going out anyway).
-- **Lifecycle flush** — `AppState.flushDeferredSyncPushes(reason:)` →
-  `CloudSyncEngine.flushDeferredPushes(reason:)` queues everything immediately
-  at pause (`togglePlayPause`), sleep-timer and sleep-schedule pause, and scene
-  background/resign-active (AutohopApp). These calls run AFTER
-  `ListeningStatsStore.save()`/`flushPendingStatsDays` so the engine's scan
-  sees the freshest day buckets. Engine activation and account sign-in also
-  flush unconditionally.
+- **Lifecycle flush** — `HistoryStatsCoordinator.checkpoint` saves history and
+  Stats/sync rows before its AppState compatibility adapter requests
+  `CloudSyncEngine.flushDeferredPushes(reason:)`. Pause, sleep-timer,
+  sleep-schedule, and scene background/resign-active use this ordered boundary.
+  Engine activation and account sign-in also flush unconditionally.
 
 Coalescing only delays WHEN records are queued, never what they contain: dirty
 rows stay pending in the local database until a push succeeds (`markSaved`), so

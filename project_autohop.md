@@ -14,8 +14,9 @@ not a set of independently authoritative `priorityRank` fields. Reorder UI draft
 active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
-AppState decomposition Stages 0–2 completed on 2026-07-18. Do not assume domain
-coordinators exist yet: AppState still owns the callback/workflow graph.
+AppState decomposition Stages 0–5 completed on 2026-07-18. History/Stats, queue,
+onboarding, and typed routing have coordinators; AppState remains their
+compatibility façade and still owns Stage 6+ domains.
 -->
 
 ## Identity
@@ -38,8 +39,14 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Composition: `App/AppCompositionRoot.swift` constructs the protocol-backed
   production graph. `AppState.bootstrap()` publishes one process singleton and
   invokes an explicit idempotent `start()`; constructed/starting/started/stopped
-  are visible lifecycle states. During Stages 0–2, AppState still owns every
-  runtime callback and cross-domain workflow.
+  are visible lifecycle states. AppState still owns playback, downloads, feed
+  refresh, Auto Archive, sync/Relay, import, and lifecycle callbacks.
+- Extracted application owners:
+  `App/HistoryStatsCoordinator.swift` owns tick/history/Stats/checkpoint work;
+  `App/QueueCoordinator.swift` owns the downloaded queue, pins, Up Next, badge,
+  and changed-only queue snapshots; `App/OnboardingCoordinator.swift` owns
+  first-run/milestone/tip/toast policy; `App/AppRoutingCoordinator.swift`
+  provides typed commands while RootView retains its NavigationPath.
 - Persistence: GRDB/SQLite through `Persistence/AutohopDatabase.swift` and
   `Persistence/SubscriptionStore.swift`; app settings are JSON through
   `Persistence/SettingsStore.swift`.
@@ -57,8 +64,8 @@ compilation conditions are provided. The iPhone target remains device family 1;
   elapsed time and `Playback/PlaybackCueService.swift` generates the existing
   Play Instant warning WAV without owning playback state.
 - History: `Persistence/ListeningHistoryStore.swift` owns the unchanged local
-  listening-history JSON/sync projection. AppState remains its orchestration
-  owner until decomposition Stage 3.
+  listening-history JSON/sync projection. HistoryStatsCoordinator owns its iOS
+  orchestration and delegates remote merges/lifecycle checkpoints.
 - Sync: optional CloudKit via `Persistence/CloudSyncEngine.swift` and
   `Persistence/CloudKitSyncMapping.swift`. Record types are `EpisodeState`,
   `SubscriptionState`, `SubscriptionOrder`, `HistoryEntry`, `DayStats`, and the

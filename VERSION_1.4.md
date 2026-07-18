@@ -10,6 +10,29 @@ release notes should be derived from completed entries and omit internal detail.
 
 ## Completed
 
+### AppState decomposition Stages 0–5 — 18 July 2026
+
+- Established a frozen regression baseline and explicit AppCompositionRoot with
+  side-effect-light construction and idempotent runtime startup.
+- Moved independent playback-clock, download-progress, warning-cue, Release
+  Radar planning, and listening-history persistence leaves into domain files.
+- Added HistoryStatsCoordinator as the exclusive iOS owner of listening tick
+  accumulation, completion history, Stats credits, derived history summaries,
+  remote adapters, and local-save-before-sync lifecycle checkpoints.
+- Added QueueCoordinator as the exclusive owner of the downloaded Priority
+  Stack projection, Play Next/Last pins, Up Next, badge count, and changed-only
+  queue snapshots. Queue reads are now side-effect free, and queue work listens
+  to a narrow queue-affecting store event rather than every subscription edit.
+- Added OnboardingCoordinator for first-run, first-subscription, coach-mark, and
+  toast policy. Single subscriptions retain the “You’re all set” moment while
+  bulk imports remain silent.
+- Added typed AppRoutingCoordinator commands for launch, menu, notification,
+  recap, return-to-player, and onboarding presentation. RootView keeps its local
+  NavigationPath and permanent PlayerView root; legacy notification producers
+  continue through a compatibility adapter.
+- Preserved existing JSON formats, CloudKit schemas, queue ordering, CarPlay
+  entry points, playback behavior, and user-facing navigation.
+
 ### Reliable Priority Stack reordering — 18 July 2026
 
 - Rebuilt Subscriptions Reorder around a stable local UUID draft. Users can move
