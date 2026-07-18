@@ -10,7 +10,7 @@ release notes should be derived from completed entries and omit internal detail.
 
 ## Completed
 
-### AppState decomposition Stages 0–5 — 18 July 2026
+### AppState decomposition Stages 0–8 — 18 July 2026
 
 - Established a frozen regression baseline and explicit AppCompositionRoot with
   side-effect-light construction and idempotent runtime startup.
@@ -30,6 +30,16 @@ release notes should be derived from completed entries and omit internal detail.
   recap, return-to-player, and onboarding presentation. RootView keeps its local
   NavigationPath and permanent PlayerView root; legacy notification producers
   continue through a compatibility adapter.
+- Added DownloadCoordinator ownership for network download policy, bounded
+  concurrency state, progress/activity projections, watchdog/backoff state,
+  orphan-facing state, and downloaded-media activity projection.
+- Added FeedRefreshCoordinator ownership for refresh-cycle attribution and
+  cancellation, feed backoff, deferred-feed fairness, background-audio cadence,
+  and the Release Radar cache. Added AutoDownloadWorkflow as the durable,
+  serialized automatic-download intent boundary.
+- Added AutoArchiveCoordinator as the exclusive owner of the 25-minute gate,
+  After Playing, Inactive Episodes, Episode Limit, active/backlog protection,
+  eligibility diagnostics, and Auto Archive Activity audit records.
 - Preserved existing JSON formats, CloudKit schemas, queue ordering, CarPlay
   entry points, playback behavior, and user-facing navigation.
 

@@ -8,7 +8,7 @@ This document is the authoritative architecture review and staged implementation
 proposal and execution ledger for decomposing the iOS App/AppState.swift file.
 It does not authorize a future AI model to change runtime behavior or combine
 unapproved migration stages into one edit. Completed stages are recorded below;
-all later stages remain proposals.
+Stages 9 and later remain proposals.
 
 REVIEW SNAPSHOT:
 - Review date: 2026-07-17, Australia/Melbourne.
@@ -22,15 +22,17 @@ REVIEW SNAPSHOT:
   names outside App/AppState.swift.
 
 IMPLEMENTATION SNAPSHOT:
-- Stages 0–5 implemented: 2026-07-18, Australia/Melbourne.
+- Stages 0–8 implemented: 2026-07-18, Australia/Melbourne.
 - Implementation task-entry commit: d95f29ab4b81b9609ac4f565260d253c4c08e3a0.
 - Stage 0 evidence: APPSTATE_DECOMPOSITION_BASELINE.md.
 - AppCompositionRoot now constructs the production dependency graph.
 - AppState construction and idempotent runtime start are separate.
 - ListeningHistoryStore, ReleaseRadarCyclePlanner/DTOs, PlaybackClock,
   DownloadProgressModel, and warning-cue generation are physically separated.
-- HistoryStatsCoordinator, QueueCoordinator, OnboardingCoordinator, and
-  AppRoutingCoordinator own their approved domains. Stage 6 remains not started.
+- HistoryStatsCoordinator, QueueCoordinator, OnboardingCoordinator,
+  AppRoutingCoordinator, DownloadCoordinator, FeedRefreshCoordinator,
+  AutoDownloadWorkflow, and AutoArchiveCoordinator own their approved domains.
+- Stage 9 remains not started.
 
 AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
 1. Re-read the current code before implementing any stage. Symbol names, line
@@ -118,12 +120,17 @@ The recommended implementation order is deliberately risk-weighted:
 | Stage 3 HistoryStatsCoordinator | Complete |
 | Stage 4 QueueCoordinator | Complete |
 | Stage 5 onboarding/routing adapter | Complete |
-| Stage 6 and later | Not started |
+| Stage 6 DownloadCoordinator | Complete |
+| Stage 7 FeedRefreshCoordinator and AutoDownloadWorkflow | Complete |
+| Stage 8 AutoArchiveCoordinator | Complete |
+| Stage 9 and later | Not started |
 
-Stages 0–5 are complete. Existing policy extractions such as
+Stages 0–8 are complete. Existing policy extractions such as
 PlaybackPositionStore, PlaybackSessionPolicy, and QueueModel remain current-state
-inputs. Playback, downloads, feed refresh, Auto Archive, sync/Relay, import, and
-lifecycle ownership remain in AppState pending later stages.
+inputs. AppState retains compatibility entry points while download runtime state,
+refresh/Radar state, durable intent draining, and Auto Archive policy have
+exclusive owners. Playback, sync/Relay, import, and lifecycle ownership remain
+in AppState pending later stages.
 
 ## 2. Scope and non-goals
 
@@ -159,8 +166,9 @@ lifecycle ownership remain in AppState pending later stages.
 ### 3.1 Physical layout
 
 The reviewed App/AppState.swift was 6,645 lines. After Stage 2 it was
-approximately 6,250 lines; after Stages 3–5 it is approximately 6,150 lines
-because independent declarations and approved domain ownership moved out. The
+approximately 6,250 lines; after Stages 3–5 it was approximately 6,150 lines.
+After Stages 6–8 it is approximately 5,880 lines because domain state and the
+Auto Archive rule engine moved into dedicated owners. The
 table below remains the authoritative pre-migration inventory.
 
 | Approximate range | Current responsibility |
@@ -1928,6 +1936,12 @@ NotificationCenter input adapter. RootView keeps its local NavigationPath.
 
 Risk: high.
 
+**Status: complete 2026-07-18.** `App/DownloadCoordinator.swift` is the
+exclusive owner of download network policy, three-slot FIFO runtime state,
+progress/activity projections, watchdog/backoff state, superseded cancellation
+identity, and downloaded-activity projection. AppState retains compatibility
+commands for current SwiftUI, CarPlay, feed, and playback callers.
+
 ### Actions
 
 - Move network monitoring and policy.
@@ -1956,6 +1970,12 @@ compared in diagnostics. Side effects must never run twice.
 ## Stage 7 — Extract FeedRefreshCoordinator and AutoDownloadWorkflow
 
 Risk: very high.
+
+**Status: complete 2026-07-18.** `App/FeedRefreshCoordinator.swift` owns the
+active refresh cycle, attribution, feed backoff, fairness backlog,
+background-audio cadence, and Release Radar cache. `AutoDownloadWorkflow` owns
+the durable intent store and serialized drain boundary. Existing selection,
+merge, cadence, memory, and diagnostic behavior is preserved.
 
 ### Actions
 
@@ -1986,6 +2006,11 @@ Risk: very high.
 ## Stage 8 — Extract AutoArchiveCoordinator
 
 Risk: high.
+
+**Status: complete 2026-07-18.** `App/AutoArchiveCoordinator.swift` owns the
+25-minute gate, all three rules, protection/deduplication policy, eligibility
+summaries, inline pre-download limit enforcement, and activity audit writes.
+Archive effects use one narrow AppState workflow adapter.
 
 ### Actions
 

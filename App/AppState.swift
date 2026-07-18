@@ -11,8 +11,9 @@ import UIKit
 // PURPOSE: Central @MainActor coordinator and single source of truth for the
 // whole app during the compatibility phase. Every view still observes this
 // façade, while AppCompositionRoot now owns concrete production construction
-// and explicit startup. Stages 3–5 moved history/Stats, queue, onboarding, and
-// typed routing ownership behind compatibility properties and methods.
+// and explicit startup. Stages 3–8 moved history/Stats, queue, onboarding,
+// typed routing, download runtime, feed-refresh/Radar state, durable automatic
+// intent draining, and Auto Archive policy behind compatibility façades.
 //
 // PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
 // observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
@@ -223,7 +224,7 @@ import UIKit
 // the constructed singleton first, then `start()` advances synchronously through
 // starting → started. Re-entrant/repeated starts are ignored. `stopped` is
 // reserved for Stage 12's deterministic process/test teardown; no restart from
-// stopped is permitted during Stages 0–5.
+// stopped is permitted during the current staged migration.
 enum AppStartupState: String, Equatable {
     case constructed
     case starting
@@ -244,13 +245,21 @@ final class AppState: ObservableObject {
     let queueCoordinator: QueueCoordinator
     let onboardingCoordinator: OnboardingCoordinator
     let routingCoordinator: AppRoutingCoordinator
+    let downloadCoordinator: DownloadCoordinator
+    let feedRefreshCoordinator: FeedRefreshCoordinator
+    let autoDownloadWorkflow: AutoDownloadWorkflow
+    let autoArchiveCoordinator: AutoArchiveCoordinator
     var listeningHistoryStore: ListeningHistoryStore { historyStatsCoordinator.historyStore }
     var listeningStatsStore: ListeningStatsStore { historyStatsCoordinator.statsStore }
-    let autoArchiveActivityStore = AutoArchiveActivityStore()
+    var autoArchiveActivityStore: AutoArchiveActivityStore {
+        autoArchiveCoordinator.activityStore
+    }
     /// Durable auto-download intents (AH-2026-06-28-01): recorded before the
     /// fire-and-forget download Task so a BG-wake suspension can't lose a
     /// discovered episode; drained at launch/foreground/BG-task end.
-    let autoDownloadIntentStore = AutoDownloadIntentStore()
+    var autoDownloadIntentStore: AutoDownloadIntentStore {
+        autoDownloadWorkflow.intentStore
+    }
 
     /// Opt-in cross-device sync engine (CloudKit). Started only while
     /// AppSettings.iCloudSyncEnabled is true. History/stats pushes are coalesced
@@ -259,7 +268,9 @@ final class AppState: ObservableObject {
     /// sleep-timer/schedule pause, scene background/resign-active).
     private let cloudSyncEngine: CloudSyncEngine
     static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
-    let downloadActivityStore = DownloadActivityStore()
+    var downloadActivityStore: DownloadActivityStore {
+        downloadCoordinator.activityStore
+    }
 
     /// Autohop Pro entitlement (StoreKit 2) + the relay client it gates. See
     /// Docs/RELAY_TIER1_IMPLEMENTATION.md §4. autohopProStore owns purchase/
@@ -311,7 +322,9 @@ final class AppState: ObservableObject {
     /// progress ticks don't invalidate every AppState observer; this proxy keeps
     /// all existing call sites working. Views that RENDER progress must observe
     /// `downloadProgressModel` instead (reading this proxy in body renders stale).
-    let downloadProgressModel = DownloadProgressModel()
+    var downloadProgressModel: DownloadProgressModel {
+        downloadCoordinator.progressModel
+    }
     var downloadProgress: [UUID: Double] {
         get { downloadProgressModel.progress }
         set { downloadProgressModel.progress = newValue }
@@ -325,7 +338,9 @@ final class AppState: ObservableObject {
         set { onboardingCoordinator.toast = newValue }
     }
     // Cached list of episodes currently on device — updated at state transitions only, not on progress ticks.
-    @Published private(set) var downloadedActivities: [DownloadActivity] = []
+    var downloadedActivities: [DownloadActivity] {
+        downloadCoordinator.downloadedActivities
+    }
     var listeningHistoryGroups: [(String, [ListeningHistoryEntry])] {
         historyStatsCoordinator.historyGroups
     }
@@ -340,21 +355,24 @@ final class AppState: ObservableObject {
     private var sleepSchedulePromptAnchorTime: TimeInterval = 0
 
     // User-facing messages
-    @Published var downloadMessage: String?
+    var downloadMessage: String? {
+        get { downloadCoordinator.message }
+        set { downloadCoordinator.message = newValue }
+    }
     @Published var playbackMessage: String?
     @Published private(set) var opmlImportProgress: (current: Int, total: Int)?
 
-    // Download concurrency cap — at most 3 active downloads; extras wait in pendingDownloadQueue.
-    private let maxConcurrentDownloads = 3
-    private struct PendingDownload {
-        let episode: Episode
-        let subscriptionID: UUID
-        let podcastTitle: String
-        let showCompletionMessage: Bool
-        let isAutomatic: Bool
+    // Stage 6 compatibility aliases. Storage and network policy are owned by
+    // DownloadCoordinator; these aliases disappear when view façades migrate.
+    private var maxConcurrentDownloads: Int { downloadCoordinator.maxConcurrentDownloads }
+    private var pendingDownloadQueue: [DownloadCoordinator.PendingDownload] {
+        get { downloadCoordinator.pendingQueue }
+        set { downloadCoordinator.pendingQueue = newValue }
     }
-    private var pendingDownloadQueue: [PendingDownload] = []
-    private var activeDownloadCount = 0
+    private var activeDownloadCount: Int {
+        get { downloadCoordinator.activeCount }
+        set { downloadCoordinator.activeCount = newValue }
+    }
 
     // MARK: Play Instant
 
@@ -379,13 +397,9 @@ final class AppState: ObservableObject {
 
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
-    private let autoArchiveInterval: TimeInterval = 25 * 60
-    private var lastAutoArchiveSkipLogAt: Date?
     private var backgroundPlaybackDiagnosticsGeneration = 0
 
-    // Network path monitor — tracks current interface type for download enforcement.
-    private let networkMonitor = NWPathMonitor()
-    private var latestNetworkPath: NWPath?
+    private var latestNetworkPath: NWPath? { downloadCoordinator.latestNetworkPath }
 
     /// Playback-position persistence (file + cache + key/normalization rules),
     /// extracted to Persistence/PlaybackPositionStore.swift (AppState-split
@@ -396,13 +410,28 @@ final class AppState: ObservableObject {
     // Throttle disk writes: save at most once every 10 s.
     private var positionSaveCounter = 0
     private var hasHandledLaunchPlayback = false
-    private var activeRefreshCycle: Task<Bool, Never>?
-    private var activeRefreshCycleDiagnostics: RefreshCycleDiagnostics?
-    private var deferredRefreshBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
+    private var activeRefreshCycle: Task<Bool, Never>? {
+        get { feedRefreshCoordinator.activeCycle }
+        set { feedRefreshCoordinator.activeCycle = newValue }
+    }
+    private var activeRefreshCycleDiagnostics: RefreshCycleDiagnostics? {
+        get { feedRefreshCoordinator.activeCycleDiagnostics }
+        set { feedRefreshCoordinator.activeCycleDiagnostics = newValue }
+    }
+    private var deferredRefreshBacklog: [UUID: DeferredRefreshBacklogEntry] {
+        get { feedRefreshCoordinator.deferredBacklog }
+        set { feedRefreshCoordinator.deferredBacklog = newValue }
+    }
     private var lastPlaybackTickDiagnostics: PlaybackTickDiagnostics?
     private var playbackTickSummary = PlaybackTickSummary()
-    private var feedFailureBackoffUntil: [UUID: Date] = [:]
-    private var supersededDownloadCancellationIDs = Set<UUID>()
+    private var feedFailureBackoffUntil: [UUID: Date] {
+        get { feedRefreshCoordinator.failureBackoffUntil }
+        set { feedRefreshCoordinator.failureBackoffUntil = newValue }
+    }
+    private var supersededDownloadCancellationIDs: Set<UUID> {
+        get { downloadCoordinator.supersededCancellationIDs }
+        set { downloadCoordinator.supersededCancellationIDs = newValue }
+    }
     private var cancellables = Set<AnyCancellable>()
     // MARK: - Computed queue
 
@@ -513,7 +542,10 @@ final class AppState: ObservableObject {
     private let backgroundAudioRefreshFeedLimit = 7
     private let backgroundAudioRefreshHardLimit = 10
     private let backgroundAudioRefreshMinimumInterval: TimeInterval = 4 * 60
-    private var lastBackgroundAudioRefreshAt: Date?
+    private var lastBackgroundAudioRefreshAt: Date? {
+        get { feedRefreshCoordinator.lastBackgroundAudioRefreshAt }
+        set { feedRefreshCoordinator.lastBackgroundAudioRefreshAt = newValue }
+    }
     private let foregroundRefreshCapBypassStates: Set<FeedRefreshWindowState> = [.activeWindow, .preWindow]
     private let backgroundAudioCapBypassStates: Set<FeedRefreshWindowState> = [.preWindow, .activeWindow, .missedRelease]
     /// Automatic base cadence. State-specific scheduling expands this to five
@@ -522,49 +554,6 @@ final class AppState: ObservableObject {
     private let automaticReleaseRadarBaseInterval: TimeInterval = 3 * 60
     private let playbackTickSlowThresholdMs = 120.0
     private let playbackTickSummarySampleInterval = 120
-
-    private enum FeedRefreshTrigger: String, Sendable {
-        case manualButton
-        case foregroundTimer
-        case backgroundRefreshTask = "BGAppRefreshTask"
-        case backgroundProcessingTask = "BGProcessingTask"
-        // Autohop Pro silent push (RELAY_TIER1_IMPLEMENTATION.md §4.4) — tagged
-        // separately from the BGTask triggers so a log review can finally answer
-        // "did the relay actually cause this refresh, or would the on-device
-        // poller have found it anyway" — the question the whole feature exists
-        // to answer, previously unanswerable from diagnostics.
-        case relayPush = "AutohopRelay"
-    }
-
-    private enum FeedRefreshExecutionContext: String, Sendable {
-        case manual
-        case foregroundVisible
-        case backgroundRefreshTask
-        case backgroundAudioAlive
-        case backgroundProcessingTask
-        case relayPush
-    }
-
-    private struct RefreshCycleDiagnostics: Sendable {
-        var cycleID: String
-        var reason: String
-        var trigger: FeedRefreshTrigger
-        var executionContext: FeedRefreshExecutionContext
-        var startSceneActive: Bool
-        var backgroundTaskIdentifier: String?
-
-        func metadata(currentSceneActive: Bool) -> [String: String] {
-            [
-                "refreshCycleID": cycleID,
-                "refreshReason": reason,
-                "trigger": trigger.rawValue,
-                "executionContext": executionContext.rawValue,
-                "startSceneActive": "\(startSceneActive)",
-                "currentSceneActive": "\(currentSceneActive)",
-                "backgroundTaskIdentifier": backgroundTaskIdentifier ?? "none"
-            ]
-        }
-    }
 
     private struct PlaybackTickStageTiming {
         var name: String
@@ -668,6 +657,13 @@ final class AppState: ObservableObject {
         self.queueCoordinator = queueCoordinator
         self.onboardingCoordinator = onboardingCoordinator
         self.routingCoordinator = routingCoordinator
+        self.downloadCoordinator = DownloadCoordinator()
+        self.feedRefreshCoordinator = FeedRefreshCoordinator()
+        self.autoDownloadWorkflow = AutoDownloadWorkflow()
+        self.autoArchiveCoordinator = AutoArchiveCoordinator(
+            subscriptionStore: subscriptionStore,
+            settingsStore: settingsStore
+        )
         self.cloudSyncEngine = CloudSyncEngine(
             containerIdentifier: AppState.cloudKitContainerID,
             subscriptionStore: subscriptionStore,
@@ -682,6 +678,16 @@ final class AppState: ObservableObject {
         queueCoordinator.installCurrentEpisodeProvider { [weak self] in
             self?.currentPlayerEpisode
         }
+        autoArchiveCoordinator.installRuntimeAdapters(
+            archive: { [weak self] episode, completionKind in
+                await self?.archiveEpisode(episode, completionKind: completionKind)
+            },
+            currentEpisodeID: { [weak self] in self?.currentPlayerEpisode?.id },
+            refreshQueue: { [weak queueCoordinator] reason in
+                queueCoordinator?.recompute(reason: reason)
+            },
+            resourceContext: { [weak self] in self?.resourceContext() ?? [:] }
+        )
     }
 
     /// Compatibility initializer retained for existing tests and transitional
@@ -791,6 +797,12 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         onboardingCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        downloadCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        autoArchiveCoordinator.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
@@ -907,27 +919,11 @@ final class AppState: ObservableObject {
     }
 
     private func startNetworkMonitor() {
-        networkMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in self?.latestNetworkPath = path }
-        }
-        networkMonitor.start(queue: DispatchQueue(label: "au.com.autohop.networkmonitor", qos: .utility))
+        downloadCoordinator.startNetworkMonitoring()
     }
 
     private func isDownloadAllowed() -> Bool {
-        let settings = settingsStore.appSettings
-        // Network path not yet known (NWPathMonitor hasn't reported its first update
-        // at launch, or there is no connectivity). Honour the Wi-Fi toggle here: a
-        // user who has turned OFF Wi-Fi downloads must not have one slip through this
-        // pre-monitor window. Default users (Wi-Fi downloads on) are unaffected, and
-        // cellular is independently enforced at the transport layer via
-        // URLRequest.allowsCellularAccess (DownloadManager.startDownloadTask), so
-        // gating on just the Wi-Fi toggle is sufficient here (BG1).
-        guard let path = latestNetworkPath, path.status == .satisfied else {
-            return settings.downloadOverWifi
-        }
-        if path.usesInterfaceType(.wifi) && !settings.downloadOverWifi { return false }
-        if path.usesInterfaceType(.cellular) && !settings.downloadOverCellular { return false }
-        return true
+        downloadCoordinator.isAllowed(settings: settingsStore.appSettings)
     }
 
     /// Resolves the process-wide AppState. Concrete production construction lives
@@ -2206,7 +2202,7 @@ final class AppState: ObservableObject {
                 "activeCount": "\(activeDownloadCount)",
                 "queueDepth": "\(pendingDownloadQueue.count + 1)"
             ])
-            pendingDownloadQueue.append(PendingDownload(
+            pendingDownloadQueue.append(DownloadCoordinator.PendingDownload(
                 episode: episode,
                 subscriptionID: subscriptionID,
                 podcastTitle: podcastTitle,
@@ -2387,36 +2383,9 @@ final class AppState: ObservableObject {
     }
 
     func refreshDownloadedActivities() {
-        let completedByEpisodeID = downloadActivityStore.completedActivities.reduce(
-            into: [UUID: DownloadActivity]()
-        ) { result, activity in
-            if result[activity.episodeID] == nil { result[activity.episodeID] = activity }
-        }
-        downloadedActivities = subscriptionStore.subscriptions.flatMap { subscription in
-            subscription.episodes.compactMap { episode -> DownloadActivity? in
-                guard episode.downloadState == .downloaded, episode.localFileURL != nil else { return nil }
-                if let existing = completedByEpisodeID[episode.id] { return existing }
-                return DownloadActivity(
-                    id: episode.id,
-                    episodeID: episode.id,
-                    subscriptionID: subscription.id,
-                    episodeTitle: episode.title,
-                    podcastTitle: subscription.title,
-                    mediaURL: episode.audioURL,
-                    artworkURL: subscription.artworkURL ?? episode.artworkURL,
-                    mediaKind: episode.mediaKind,
-                    expectedBytes: episode.fileSizeBytes,
-                    writtenBytes: episode.fileSizeBytes ?? 0,
-                    progress: 1,
-                    status: .completed,
-                    startedAt: episode.publishedAt ?? .distantPast,
-                    updatedAt: episode.publishedAt ?? .distantPast,
-                    completedAt: episode.publishedAt,
-                    localFileName: episode.localFileName ?? episode.localFileURL?.lastPathComponent
-                )
-            }
-        }
-        .sorted { ($0.completedAt ?? $0.updatedAt) > ($1.completedAt ?? $1.updatedAt) }
+        downloadCoordinator.rebuildDownloadedActivities(
+            from: subscriptionStore.subscriptions
+        )
     }
 
     func refreshListeningHistory() {
@@ -3556,7 +3525,9 @@ final class AppState: ObservableObject {
         // Still wanted and not yet downloading — keep for the next drain.
     }
 
-    private var isDrainingAutoDownloadIntents = false
+    private var isDrainingAutoDownloadIntents: Bool {
+        autoDownloadWorkflow.isDraining
+    }
 
     /// Retries persisted auto-download intents (AH-2026-06-28-01). Idempotent:
     /// every intent is first settled against current state, in-flight transfers
@@ -3571,53 +3542,58 @@ final class AppState: ObservableObject {
     /// exponential cooldown so it's skipped until the cooldown passes. In-memory: a fresh
     /// launch grants one more attempt (the server may have recovered) and a successful
     /// download clears the entry.
-    private var downloadFailureBackoff: [String: (failures: Int, retryAfter: Date)] = [:]
+    private var downloadFailureBackoff: [String: (failures: Int, retryAfter: Date)] {
+        get { downloadCoordinator.failureBackoff }
+        set { downloadCoordinator.failureBackoff = newValue }
+    }
     /// Process-local ceiling for watchdog-triggered retries. Genuine user retries
     /// and future launches remain possible, but one bad transfer cannot loop forever.
-    private var downloadWatchdogRetryCounts: [UUID: Int] = [:]
+    private var downloadWatchdogRetryCounts: [UUID: Int] {
+        get { downloadCoordinator.watchdogRetryCounts }
+        set { downloadCoordinator.watchdogRetryCounts = newValue }
+    }
 
     /// Records a genuine download failure and schedules an exponential cooldown before the
     /// episode is eligible for another AUTO attempt: 2, 8, 32, then 120 min (capped).
     private func recordDownloadFailure(guid: String, title: String) {
-        guard !guid.isEmpty else { return }
-        let failures = (downloadFailureBackoff[guid]?.failures ?? 0) + 1
-        let cooldownMinutes = min(2.0 * pow(4.0, Double(failures - 1)), 120.0)
-        downloadFailureBackoff[guid] = (failures, Date().addingTimeInterval(cooldownMinutes * 60))
-        logger.info("download.backoffScheduled", "Backing off repeated download failure", metadata: [
-            "episode": title,
-            "failures": "\(failures)",
-            "retryAfterMinutes": String(format: "%.0f", cooldownMinutes)
-        ])
+        downloadCoordinator.recordFailure(guid: guid, title: title, logger: logger)
     }
 
     func drainAutoDownloadIntents(reason: String) async {
         guard !isDrainingAutoDownloadIntents else { return }
         let pending = autoDownloadIntentStore.intents
         guard !pending.isEmpty else { return }
-        isDrainingAutoDownloadIntents = true
-        defer { isDrainingAutoDownloadIntents = false }
-
-        logger.info("download.intentDrain", "Draining persisted auto-download intents", metadata: [
-            "reason": reason,
-            "count": "\(pending.count)"
-        ])
-        for intent in pending {
-            resolveAutoDownloadIntentIfSettled(episodeID: intent.episodeID, subscriptionID: intent.subscriptionID)
-            guard autoDownloadIntentStore.contains(episodeID: intent.episodeID),
-                  let episode = subscriptionStore.episode(
+        await autoDownloadWorkflow.withExclusiveDrain { [weak self] in
+            guard let self else { return }
+            self.logger.info("download.intentDrain", "Draining persisted auto-download intents", metadata: [
+                "reason": reason,
+                "count": "\(pending.count)"
+            ])
+            for intent in pending {
+                self.resolveAutoDownloadIntentIfSettled(
+                    episodeID: intent.episodeID,
+                    subscriptionID: intent.subscriptionID
+                )
+                guard self.autoDownloadIntentStore.contains(episodeID: intent.episodeID),
+                      let episode = self.subscriptionStore.episode(
+                        subscriptionID: intent.subscriptionID,
+                        episodeID: intent.episodeID
+                      )
+                else { continue }
+                if episode.downloadState == .downloading || episode.downloadState == .queued {
+                    continue
+                }
+                await self.runAutoDownloadAfterRefresh(
+                    episode: episode,
                     subscriptionID: intent.subscriptionID,
-                    episodeID: intent.episodeID
-                  )
-            else { continue }
-            // In flight already — leave it to finish; the intent settles later.
-            if episode.downloadState == .downloading || episode.downloadState == .queued { continue }
-            await runAutoDownloadAfterRefresh(
-                episode: episode,
-                subscriptionID: intent.subscriptionID,
-                podcastTitle: intent.podcastTitle,
-                refreshUpNextAfterMerge: true
-            )
-            resolveAutoDownloadIntentIfSettled(episodeID: intent.episodeID, subscriptionID: intent.subscriptionID)
+                    podcastTitle: intent.podcastTitle,
+                    refreshUpNextAfterMerge: true
+                )
+                self.resolveAutoDownloadIntentIfSettled(
+                    episodeID: intent.episodeID,
+                    subscriptionID: intent.subscriptionID
+                )
+            }
         }
     }
 
@@ -4270,8 +4246,11 @@ final class AppState: ObservableObject {
     /// fingerprint-validated cache is self-invalidating with no hooks needed at
     /// mutation sites. A 15-min TTL bounds drift from the profiler's time-dependent
     /// recency windows (they move over days, not minutes).
-    private var releaseRadarProfileCache: [UUID: ReleaseRadarProfileCacheEntry] = [:]
-    private static let releaseRadarProfileCacheTTL: TimeInterval = 15 * 60
+    private var releaseRadarProfileCache: [UUID: ReleaseRadarProfileCacheEntry] {
+        get { feedRefreshCoordinator.profileCache }
+        set { feedRefreshCoordinator.profileCache = newValue }
+    }
+    private static let releaseRadarProfileCacheTTL = FeedRefreshCoordinator.profileCacheTTL
 
     /// Cold-launch cache warm-up: computes every active subscription's profile OFF the
     /// main actor (the profiler is a pure function over value-type snapshots) so the
@@ -4301,7 +4280,7 @@ final class AppState: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 // Don't clobber entries the main actor computed while we were warming.
-                self.releaseRadarProfileCache.merge(entries) { existing, _ in existing }
+                self.feedRefreshCoordinator.mergeWarmedProfiles(entries)
                 self.logger.info("radar.profileCacheWarmed", "Release Radar profile cache warmed off-main", metadata: [
                     "profiles": "\(entries.count)"
                 ])
@@ -4357,18 +4336,6 @@ final class AppState: ObservableObject {
             minRecheckInterval: automaticReleaseRadarBaseInterval,
             now: now
         )
-    }
-
-    private struct DeferredRefreshBacklogEntry {
-        var subscriptionID: UUID
-        var title: String
-        var feedURL: URL
-        var firstDeferredAt: Date
-        var lastDeferredAt: Date
-        var lastDueAt: Date
-        var deferralCount: Int
-        var state: FeedRefreshWindowState
-        var score: Double
     }
 
     /// Priority queue for feeds already due. Learned active windows and missed
@@ -4686,42 +4653,9 @@ final class AppState: ObservableObject {
     /// the limit is a gate at the door, not a cleanup afterwards. Never touches
     /// the currently-playing episode.
     private func enforceEpisodeLimitBeforeDownload(subscriptionID: UUID) async {
-        guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
-        let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
-        guard limit > 0 else { return }
-
-        // Pre-subscription backlog stays browsable — only count episodes published
-        // after subscribing toward the keep-N limit (mirrors runAutoArchive).
-        let backlogCutoff = subscription.subscribedAt
-        let active = subscription.episodes
-            .filter { episode in
-                guard episode.playedState != .archived else { return false }
-                if let backlogCutoff, let published = episode.publishedAt, published <= backlogCutoff {
-                    return false
-                }
-                return true
-            }
-            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
-        guard active.count > limit else { return }
-
-        for episode in active.dropFirst(limit) where episode.id != currentPlayerEpisode?.id {
-            logger.info("autoArchive.inlineLimit", "Archiving excess episode before new download", metadata: [
-                "podcast": subscription.title,
-                "episode": episode.title,
-                "limit": "\(limit)"
-            ])
-            await archiveEpisode(episode, completionKind: .autoArchived)
-            autoArchiveActivityStore.record(AutoArchiveActivity(
-                episodeID: episode.id,
-                subscriptionID: subscription.id,
-                episodeTitle: episode.title,
-                podcastTitle: subscription.title,
-                archivedAt: Date(),
-                rule: .episodeLimit,
-                configuredThreshold: "Keep \(limit)",
-                measuredAgeSeconds: max(0, Date().timeIntervalSince(episode.publishedAt ?? episode.downloadedAt ?? Date()))
-            ))
-        }
+        await autoArchiveCoordinator.enforceEpisodeLimitBeforeDownload(
+            subscriptionID: subscriptionID
+        )
     }
 
     func loadFullEpisodeHistory(for subscription: Subscription) async {
@@ -4736,219 +4670,7 @@ final class AppState: ObservableObject {
     }
 
     func runAutoArchiveIfNeeded(reason: String, force: Bool = false) async {
-        let lastRun = settingsStore.appSettings.lastAutoArchiveRunAt
-        if !force,
-           let lastRun,
-           Date().timeIntervalSince(lastRun) < autoArchiveInterval {
-            // Triggers arrive with every refresh cycle (~30 s apart) — log the skip
-            // at most once a few minutes so the gate stays visible without spam.
-            let now = Date()
-            if lastAutoArchiveSkipLogAt.map({ now.timeIntervalSince($0) >= 5 * 60 }) ?? true {
-                lastAutoArchiveSkipLogAt = now
-                logger.info("autoArchive.skip", "Auto archive skipped", metadata: [
-                    "reason": reason,
-                    "lastRun": lastRun.formatted(date: .numeric, time: .standard),
-                    "nextRun": lastRun.addingTimeInterval(autoArchiveInterval).formatted(date: .numeric, time: .standard)
-                ])
-            }
-            return
-        }
-
-        settingsStore.appSettings.lastAutoArchiveRunAt = Date()
-        await runAutoArchive(reason: reason)
-    }
-
-    private func runAutoArchive(reason: String) async {
-        logger.info("autoArchive.start", "Auto archive started", metadata: ["reason": reason])
-        resourceMonitor.logSnapshot(reason: "autoArchive.before", context: resourceContext(), force: true)
-
-        var archivedCount = 0
-        let now = Date()
-        let playingID = currentPlayerEpisode?.id
-
-        // AI CONTEXT — Eligibility counters explain zero-result passes. They
-        // count rule-specific candidates and the principal reason work remained
-        // pending/protected, then emit one compact diagnostic at pass completion.
-        var playedEvaluated = 0
-        var playedWaiting = 0
-        var inactiveEvaluated = 0
-        var inactiveNeverDownloaded = 0
-        var inactiveWaiting = 0
-        var protectedCurrent = 0
-        var limitCandidates = 0
-        var limitBacklogProtected = 0
-        var archivedPlayed = 0
-        var archivedInactive = 0
-        var archivedLimit = 0
-
-        // Collect all non-archived episodes grouped by subscription.
-        let allSubscriptions = subscriptionStore.subscriptions
-        var archivedIDs = Set<UUID>()   // track within this run to avoid double-archiving
-
-        for subscription in allSubscriptions {
-            let settings = subscription.autoArchiveSettings
-            let allEpisodes = subscription.episodes.filter { $0.playedState != .archived }
-
-            // Episodes that already existed when the user subscribed are the
-            // pre-existing back-catalogue — leave them browsable (unplayed) rather
-            // than archiving the whole feed the moment you subscribe. Only episodes
-            // published after subscribing flow through the inactive/limit passes.
-            let backlogCutoff = subscription.subscribedAt
-            func isPreSubscriptionBacklog(_ episode: Episode) -> Bool {
-                guard let backlogCutoff, let published = episode.publishedAt else { return false }
-                return published <= backlogCutoff
-            }
-
-            // ── Pass 1: After Played ──────────────────────────────────────────
-            if let interval = settings.afterPlayed.interval {
-                for episode in allEpisodes {
-                    guard episode.playedState == .played else { continue }
-                    playedEvaluated += 1
-                    guard episode.id != playingID,
-                          !archivedIDs.contains(episode.id)
-                    else {
-                        if episode.id == playingID { protectedCurrent += 1 }
-                        continue
-                    }
-
-                    let playedAt = episode.lastPlayedAt ?? now  // if no timestamp, archive immediately
-                    let playedAge = now.timeIntervalSince(playedAt)
-                    if playedAge >= interval {
-                        await archiveEpisode(episode, completionKind: .autoArchived)
-                        autoArchiveActivityStore.record(AutoArchiveActivity(
-                            episodeID: episode.id,
-                            subscriptionID: subscription.id,
-                            episodeTitle: episode.title,
-                            podcastTitle: subscription.title,
-                            archivedAt: Date(),
-                            rule: .afterPlaying,
-                            configuredThreshold: settings.afterPlayed.title,
-                            measuredAgeSeconds: playedAge
-                        ))
-                        archivedIDs.insert(episode.id)
-                        archivedCount += 1
-                        archivedPlayed += 1
-                        logger.info("autoArchive.played", "Archived played episode", metadata: [
-                            "podcast": subscription.title, "episode": episode.title
-                        ])
-                    } else { playedWaiting += 1 }
-                }
-            }
-
-            // ── Pass 2: After Inactive ────────────────────────────────────────
-            if let interval = settings.afterInactive.interval {
-                for episode in allEpisodes {
-                    guard episode.playedState == .unplayed else { continue }
-                    inactiveEvaluated += 1
-                    guard episode.id != playingID,
-                          !archivedIDs.contains(episode.id)
-                    else {
-                        if episode.id == playingID { protectedCurrent += 1 }
-                        continue
-                    }
-
-                    // Only downloaded episodes are eligible — an episode that has
-                    // never been downloaded has never been "touched" and should not
-                    // be archived by this rule. A non-nil downloadedAt is itself
-                    // proof of user engagement, so it overrides the backlog
-                    // exemption above (bug fix 2026-07-05: an old backlog episode
-                    // the user explicitly downloaded was being permanently
-                    // protected from the inactive-timeout rule by publish date).
-                    guard let downloadedAt = episode.downloadedAt else {
-                        inactiveNeverDownloaded += 1
-                        continue
-                    }
-
-                    // "Last activity" = the most recent of: download date, play date.
-                    // The clock starts when the file lands on device, and resets any
-                    // time the user starts playing the episode.
-                    let downloadAge = now.timeIntervalSince(downloadedAt)
-                    let playAge     = episode.lastPlayedAt.map { now.timeIntervalSince($0) }
-                    let lastActivityAge = [downloadAge, playAge].compactMap { $0 }.min() ?? downloadAge
-
-                    if lastActivityAge >= interval {
-                        await archiveEpisode(episode, completionKind: .autoArchived)
-                        autoArchiveActivityStore.record(AutoArchiveActivity(
-                            episodeID: episode.id,
-                            subscriptionID: subscription.id,
-                            episodeTitle: episode.title,
-                            podcastTitle: subscription.title,
-                            archivedAt: Date(),
-                            rule: .inactiveEpisodes,
-                            configuredThreshold: settings.afterInactive.title,
-                            measuredAgeSeconds: lastActivityAge
-                        ))
-                        archivedIDs.insert(episode.id)
-                        archivedCount += 1
-                        archivedInactive += 1
-                        logger.info("autoArchive.inactive", "Archived inactive episode", metadata: [
-                            "podcast": subscription.title, "episode": episode.title
-                        ])
-                    } else { inactiveWaiting += 1 }
-                }
-            }
-
-            // ── Pass 3: Episode Limit ─────────────────────────────────────────
-            let limit = settings.episodeLimit.rawValue
-            if limit > 0 {
-                limitBacklogProtected += subscription.episodes.filter {
-                    $0.playedState != .archived && isPreSubscriptionBacklog($0)
-                }.count
-                // Sort all non-archived episodes newest-first; keep the top N, archive the rest.
-                let candidates = subscription.episodes
-                    .filter { $0.playedState != .archived && !archivedIDs.contains($0.id) && ($0.downloadState == .queued || $0.downloadState == .downloaded) && !isPreSubscriptionBacklog($0) }
-                    .sorted {
-                        ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast)
-                    }
-                limitCandidates += candidates.count
-                for (index, episode) in candidates.enumerated() {
-                    guard index >= limit,
-                          episode.id != playingID
-                    else { continue }
-                    await archiveEpisode(episode, completionKind: .autoArchived)
-                    autoArchiveActivityStore.record(AutoArchiveActivity(
-                        episodeID: episode.id,
-                        subscriptionID: subscription.id,
-                        episodeTitle: episode.title,
-                        podcastTitle: subscription.title,
-                        archivedAt: Date(),
-                        rule: .episodeLimit,
-                        configuredThreshold: "Keep \(limit)",
-                        measuredAgeSeconds: max(0, now.timeIntervalSince(episode.publishedAt ?? episode.downloadedAt ?? now))
-                    ))
-                    archivedIDs.insert(episode.id)
-                    archivedCount += 1
-                    archivedLimit += 1
-                    logger.info("autoArchive.limit", "Archived episode over limit", metadata: [
-                        "podcast": subscription.title, "episode": episode.title, "limit": "\(limit)"
-                    ])
-                }
-            }
-        }
-
-        refreshUpNextEpisode(reason: "autoArchive.finished")
-        logger.info("autoArchive.eligibility", "Auto Archive eligibility summary", metadata: [
-            "reason": reason,
-            "subscriptions": "\(allSubscriptions.count)",
-            "playedEvaluated": "\(playedEvaluated)",
-            "playedWaiting": "\(playedWaiting)",
-            "inactiveEvaluated": "\(inactiveEvaluated)",
-            "inactiveNeverDownloaded": "\(inactiveNeverDownloaded)",
-            "inactiveWaiting": "\(inactiveWaiting)",
-            "protectedCurrent": "\(protectedCurrent)",
-            "limitCandidates": "\(limitCandidates)",
-            "limitBacklogProtected": "\(limitBacklogProtected)",
-            "archivedPlayed": "\(archivedPlayed)",
-            "archivedInactive": "\(archivedInactive)",
-            "archivedLimit": "\(archivedLimit)"
-        ])
-        logger.info("autoArchive.finished", "Auto archive finished", metadata: [
-            "reason": reason,
-            "archivedCount": "\(archivedCount)"
-        ])
-        resourceMonitor.logSnapshot(reason: "autoArchive.after", context: resourceContext([
-            "archivedCount": "\(archivedCount)"
-        ]), force: true)
+        await autoArchiveCoordinator.runIfNeeded(reason: reason, force: force)
     }
 
     // MARK: - OPML

@@ -91,6 +91,14 @@ not part of the CloudKit sync projection; refresh-stat-only saves publish no
 engine. DownloadFilterSettings is persisted on the local Subscription payload
 and, since July 2026, is also part of the sync projection.
 
+AppState decomposition Stages 6–8 do not change CloudKit schemas or merge
+policy. DownloadCoordinator owns device-local transfer runtime,
+FeedRefreshCoordinator owns device-local Release Radar runtime,
+AutoDownloadWorkflow owns device-local durable transfer intents, and
+AutoArchiveCoordinator owns device-local archive activity. Existing
+SubscriptionState, episode, history, Stats, queue, and order sync boundaries
+remain unchanged.
+
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
 dirty-tracking; nil local stamp = clean. A nil **remote** stamp means the field

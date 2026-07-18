@@ -1132,7 +1132,7 @@ Purple, animated progress bar shown whenever an episode is actively downloading.
 | Listening History | Below the history row HStack, indented 56 pt (matching canonical 44 pt artwork + 12 pt gap) |
 | Downloads page | Inside the activity row, below the text stack |
 
-Progress values publish in ≥1% steps (coalesced by AppState's download callback
+Progress values publish in ≥1% steps (coalesced by the DownloadCoordinator-backed callback
 into the narrow `Downloads/DownloadProgressModel`) so several concurrent
 downloads don't re-invalidate whole pages every second — don't expect sub-1% bar
 movement.

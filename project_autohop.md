@@ -14,9 +14,10 @@ not a set of independently authoritative `priorityRank` fields. Reorder UI draft
 active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
-AppState decomposition Stages 0–5 completed on 2026-07-18. History/Stats, queue,
-onboarding, and typed routing have coordinators; AppState remains their
-compatibility façade and still owns Stage 6+ domains.
+AppState decomposition Stages 0–8 completed on 2026-07-18. History/Stats, queue,
+onboarding, typed routing, downloads, feed refresh/Release Radar, durable
+auto-download intents, and Auto Archive have coordinators; AppState remains
+their compatibility façade and still owns Stage 9+ domains.
 -->
 
 ## Identity
@@ -39,8 +40,8 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Composition: `App/AppCompositionRoot.swift` constructs the protocol-backed
   production graph. `AppState.bootstrap()` publishes one process singleton and
   invokes an explicit idempotent `start()`; constructed/starting/started/stopped
-  are visible lifecycle states. AppState still owns playback, downloads, feed
-  refresh, Auto Archive, sync/Relay, import, and lifecycle callbacks.
+  are visible lifecycle states. AppState still owns playback, sync/Relay,
+  import, and lifecycle callbacks.
 - Extracted application owners:
   `App/HistoryStatsCoordinator.swift` owns tick/history/Stats/checkpoint work;
   `App/QueueCoordinator.swift` owns the downloaded queue, pins, Up Next, badge,

@@ -12,9 +12,9 @@ import Foundation
 // OWNERSHIP:
 // This value owns no runtime state, callback, Task, persistence rule, or policy.
 // AppState remains the compatibility façade and still installs every existing
-// callback graph. Stages 3–5 moved history/Stats, queue, onboarding, and routing
-// ownership into explicit coordinators constructed below; later stages continue
-// one domain at a time.
+// callback graph. Stages 3–8 moved history/Stats, queue, onboarding, routing,
+// download runtime, refresh/Radar state, automatic intents, and Auto Archive
+// ownership into explicit coordinators; later stages continue one domain at a time.
 //
 // TESTABILITY:
 // `Dependencies` and the explicit initializer form the Stage 0 application

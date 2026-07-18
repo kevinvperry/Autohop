@@ -1,6 +1,6 @@
 // AI CONTEXT — Tests/AppStateCoordinatorExtractionTests.swift
 //
-// Characterization gates for AppState decomposition Stages 3–5. These tests
+// Characterization gates for AppState decomposition Stages 3–8. These tests
 // verify exclusive history/Stats tick ownership and checkpoint ordering, narrow
 // queue invalidation plus side-effect-free reads and legacy pin persistence,
 // onboarding single-vs-bulk milestone behavior, and typed routing commands.
@@ -268,6 +268,93 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(received, [.presentFirstSubscription(subscriptionID)])
     }
 
+    func testDownloadCoordinatorOwnsBoundedSlotsBackoffAndActivityProjection() throws {
+        let subject = DownloadCoordinator()
+        XCTAssertEqual(subject.maxConcurrentDownloads, 3)
+
+        subject.recordFailure(guid: "failure-guid", title: "Failure", logger: .shared)
+        XCTAssertEqual(subject.failureBackoff["failure-guid"]?.failures, 1)
+        XCTAssertNotNil(subject.failureBackoff["failure-guid"]?.retryAfter)
+
+        let subscriptionID = UUID()
+        var episode = makeEpisode(subscriptionID: subscriptionID, guid: "downloaded")
+        let localURL = temporaryURL("downloaded.mp3")
+        try Data("audio".utf8).write(to: localURL)
+        episode.downloadState = .downloaded
+        episode.localFileURL = localURL
+        var subscription = Subscription(
+            id: subscriptionID,
+            feedURL: URL(string: "https://example.com/downloaded.xml")!,
+            title: "Downloaded",
+            priorityRank: 1
+        )
+        subscription.episodes = [episode]
+        subject.rebuildDownloadedActivities(from: [subscription])
+        XCTAssertEqual(subject.downloadedActivities.map(\.episodeID), [episode.id])
+    }
+
+    func testAutoDownloadWorkflowSerializesReentrantDrain() async {
+        let subject = AutoDownloadWorkflow(
+            intentStore: AutoDownloadIntentStore(fileURL: temporaryURL("intents.json"))
+        )
+        var operations = 0
+        await subject.withExclusiveDrain {
+            operations += 1
+            await subject.withExclusiveDrain {
+                operations += 100
+            }
+        }
+        XCTAssertEqual(operations, 1)
+        XCTAssertFalse(subject.isDraining)
+    }
+
+    func testAutoArchiveCoordinatorAppliesInactiveRuleAndHonorsGate() async throws {
+        let store = SubscriptionStore.inMemory()
+        let settingsStore = TestSettingsStore()
+        let activityURL = temporaryURL("auto-archive.json")
+        let activityStore = AutoArchiveActivityStore(fileURL: activityURL)
+        let subscriptionID = UUID()
+        var episode = makeEpisode(subscriptionID: subscriptionID, guid: "inactive")
+        episode.downloadedAt = Date().addingTimeInterval(-5 * 3600)
+        episode.downloadState = .downloaded
+        _ = try store.addSubscription(
+            id: subscriptionID,
+            feedURL: URL(string: "https://example.com/inactive.xml")!,
+            title: "Inactive",
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: episode
+        )
+        store.updateAutoArchiveSettings(
+            subscriptionID: subscriptionID,
+            settings: AutoArchiveSettings(
+                afterPlayed: .never,
+                afterInactive: .hours4,
+                episodeLimit: .noLimit
+            )
+        )
+
+        let subject = AutoArchiveCoordinator(
+            subscriptionStore: store,
+            settingsStore: settingsStore,
+            activityStore: activityStore
+        )
+        var archivedIDs: [UUID] = []
+        subject.installRuntimeAdapters(
+            archive: { episode, _ in archivedIDs.append(episode.id) },
+            currentEpisodeID: { nil },
+            refreshQueue: { _ in },
+            resourceContext: { [:] }
+        )
+
+        await subject.runIfNeeded(reason: "test", force: true)
+        XCTAssertEqual(archivedIDs, [episode.id])
+        XCTAssertEqual(activityStore.entries.first?.rule, .inactiveEpisodes)
+
+        await subject.runIfNeeded(reason: "test.gated")
+        XCTAssertEqual(archivedIDs.count, 1)
+    }
+
     private func makeEpisode(subscriptionID: UUID, guid: String) -> Episode {
         Episode(
             subscriptionID: subscriptionID,
@@ -279,7 +366,7 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
 
     private func temporaryURL(_ name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("autohop-stage345-\(UUID().uuidString)-\(name)")
+            .appendingPathComponent("autohop-stage3-8-\(UUID().uuidString)-\(name)")
         temporaryURLs.append(url)
         return url
     }

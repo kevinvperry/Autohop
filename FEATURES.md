@@ -577,7 +577,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 ### 10.4 Auto Archive section
 
-Three independent rules. All are stored in `AutoArchiveSettings` on the `Subscription` model. The archive pass runs at most every **25 minutes** while the app process is active, including background-audio playback, and is also requested at launch, after a completed feed refresh, and on demand. Every pass writes an `autoArchive.eligibility` diagnostic summary so a zero-result run explains how many episodes were evaluated, protected, still below threshold, or excluded. New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
+Three independent rules. All are stored in `AutoArchiveSettings` on the `Subscription` model. `AutoArchiveCoordinator` exclusively owns rule evaluation, activity auditing, and the pass that runs at most every **25 minutes** while the app process is active, including background-audio playback; the pass is also requested at launch, after a completed feed refresh, and on demand. Every pass writes an `autoArchive.eligibility` diagnostic summary so a zero-result run explains how many episodes were evaluated, protected, still below threshold, or excluded. New subscriptions are seeded from the **global Auto Archive default** (App Settings → Auto Archive, §15.2); the defaults below are the factory values of that global default. Changing a podcast's rules here only affects that podcast.
 
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|
@@ -817,7 +817,7 @@ The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md):
 
 ### 15.1 Release Radar
 
-Release Radar is Autohop's automatic feed-refresh system. Its job is to prioritise feeds when new podcast episodes are expected while avoiding wasteful checks during periods when a feed is predictably quiet. Exact discovery timing depends on when Autohop is active and when iOS grants background execution.
+Release Radar is Autohop's automatic feed-refresh system. Its job is to prioritise feeds when new podcast episodes are expected while avoiding wasteful checks during periods when a feed is predictably quiet. `FeedRefreshCoordinator` owns refresh-cycle state, backoff, deferred-feed fairness, background-audio cadence, and the Release Radar profile cache; `AutoDownloadWorkflow` owns the durable serialized intent-drain boundary. Exact discovery timing depends on when Autohop is active and when iOS grants background execution.
 
 > **AI CONTEXT — automatic policy update (2026-07-15):** Radar Sensitivity is no longer user configurable. During confirmed background playback, polling is bounded to one cycle every four minutes. Seven routine feeds may be checked; pre-window, active-window, and missed-release work may extend the cycle to a hard maximum of ten. Low Power Mode, thermal pressure, constrained/cellular networking, and large active downloads reduce these budgets.
 
