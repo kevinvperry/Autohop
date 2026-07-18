@@ -11,9 +11,10 @@ import UIKit
 // PURPOSE: Central @MainActor coordinator and single source of truth for the
 // whole app during the compatibility phase. Every view still observes this
 // façade, while AppCompositionRoot now owns concrete production construction
-// and explicit startup. Stages 3–8 moved history/Stats, queue, onboarding,
+// and explicit startup. Stages 3–11 moved history/Stats, queue, onboarding,
 // typed routing, download runtime, feed-refresh/Radar state, durable automatic
-// intent draining, and Auto Archive policy behind compatibility façades.
+// intents, Auto Archive, subscription import, CloudKit/Relay, and playback
+// session state behind compatibility façades.
 //
 // PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
 // observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
@@ -236,7 +237,11 @@ enum AppStartupState: String, Equatable {
 final class AppState: ObservableObject {
     let feedService: FeedServicing
     let downloadManager: DownloadManaging
-    var playbackEngine: PlaybackControlling
+    let playbackCoordinator: PlaybackCoordinator
+    var playbackEngine: PlaybackControlling {
+        get { playbackCoordinator.engine }
+        set { playbackCoordinator.engine = newValue }
+    }
     let chapterService: ChapterServicing
     let queueService: QueueServicing
     let settingsStore: SettingsStoring
@@ -249,6 +254,9 @@ final class AppState: ObservableObject {
     let feedRefreshCoordinator: FeedRefreshCoordinator
     let autoDownloadWorkflow: AutoDownloadWorkflow
     let autoArchiveCoordinator: AutoArchiveCoordinator
+    let subscriptionImportCoordinator: SubscriptionImportCoordinator
+    let syncCoordinator: SyncCoordinator
+    let relayCoordinator: RelayCoordinator
     var listeningHistoryStore: ListeningHistoryStore { historyStatsCoordinator.historyStore }
     var listeningStatsStore: ListeningStatsStore { historyStatsCoordinator.statsStore }
     var autoArchiveActivityStore: AutoArchiveActivityStore {
@@ -266,8 +274,7 @@ final class AppState: ObservableObject {
     /// on a ~60 s slow lane inside the engine; flushDeferredSyncPushes(reason:)
     /// is the lifecycle checkpoint that pushes them immediately (pause,
     /// sleep-timer/schedule pause, scene background/resign-active).
-    private let cloudSyncEngine: CloudSyncEngine
-    static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
+    static let cloudKitContainerID = SyncCoordinator.cloudKitContainerID
     var downloadActivityStore: DownloadActivityStore {
         downloadCoordinator.activityStore
     }
@@ -277,45 +284,25 @@ final class AppState: ObservableObject {
     /// entitlement state only; AppState owns WHEN to call the relay (register on
     /// entitlement gain, unregister on loss, feed-sync on subscription changes,
     /// dispatch wake-pushes) — wired in init() and relayTokenReceived(_:) below.
-    let autohopProStore = AutohopProStore(enabled: ReleaseFeatures.autohopPro)
-    private let relayClient = RelayClient.shared
-    private var relayAPNsToken: String?
-    private var relayRegistrationInFlight = false
-    private var relayFeedSyncDebounceTask: Task<Void, Never>?
-    private var relayFeedSyncInFlight = false
-    private var relayFeedSyncNeedsReconcile = false
-    private var relayForceFullFeedSync = false
-    private var relayObservedFeedURLs = Set<String>()
-    private static let relayAcknowledgedFeedsKey = "com.autohop.relay.acknowledgedFeeds.v2"
-    private static let relayFeedFailureCountKey = "com.autohop.relay.feedSyncFailureCount.v2"
-    private static let relayFeedNextAttemptKey = "com.autohop.relay.feedSyncNextAttempt.v2"
-    /// CKContainer.fetchUserRecordID(), cached — the anonymous per-USER (not
-    /// per-device) id the relay's Glossary calls `sync_group_id`, used to fan
-    /// sync-nudge between a user's own devices (§6.4). Resolved lazily and
-    /// cached in-memory only (re-fetches each cold launch — cheap, no local
-    /// account-status caching needed since CloudKit already caches internally).
-    private var relaySyncGroupID: String?
-    private var relaySyncNudgeDebounceTask: Task<Void, Never>?
-    private var relaySyncNudgeInFlight = false
-    private var relaySyncNudgeDirty = false
-    private static let relayNudgeFailureCountKey = "com.autohop.relay.nudgeFailureCount.v2"
-    private static let relayNudgeNextAttemptKey = "com.autohop.relay.nudgeNextAttempt.v2"
-    private static let relayNudgeLastSuccessKey = "com.autohop.relay.nudgeLastSuccess.v2"
-    private static let relayNudgeMinimumInterval: TimeInterval = 5 * 60
+    var autohopProStore: AutohopProStore { relayCoordinator.proStore }
 
     // Player state
-    @Published var currentPlayerEpisode: Episode? {
-        didSet { queueCoordinator.currentEpisodeDidChange() }
+    var currentPlayerEpisode: Episode? {
+        get { playbackCoordinator.currentEpisode }
+        set { playbackCoordinator.currentEpisode = newValue }
     }
     /// 2 Hz scrubber time lives on its own observable (PERF-1) so the tick no longer
     /// invalidates every AppState observer; this proxy keeps all existing call sites
     /// working. Views that render the ticking time observe `playbackClock` instead.
-    let playbackClock = PlaybackClock()
+    var playbackClock: PlaybackClock { playbackCoordinator.clock }
     var currentPlayerTime: TimeInterval {
         get { playbackClock.time }
         set { playbackClock.time = newValue }
     }
-    @Published var isPlaying: Bool = false
+    var isPlaying: Bool {
+        get { playbackCoordinator.isPlaying }
+        set { playbackCoordinator.isPlaying = newValue }
+    }
     var upNextEpisode: Episode? { queueCoordinator.upNextEpisode }
 
     /// Per-episode download progress (0.0 – 1.0) lives on its own observable so
@@ -347,20 +334,28 @@ final class AppState: ObservableObject {
     var completedEpisodeCount: Int { historyStatsCoordinator.completedEpisodeCount }
 
     // Sleep timer
-    let sleepTimerService = SleepTimerService()
+    var sleepTimerService: SleepTimerService { playbackCoordinator.sleepTimerService }
 
     // Sleep Schedule (recurring nightly sleep timer with "still listening?" prompts)
-    let sleepScheduleService = SleepScheduleService()
+    var sleepScheduleService: SleepScheduleService { playbackCoordinator.sleepScheduleService }
     // Playback position when the prompt fired — the asleep rewind target.
-    private var sleepSchedulePromptAnchorTime: TimeInterval = 0
+    private var sleepSchedulePromptAnchorTime: TimeInterval {
+        get { playbackCoordinator.sleepSchedulePromptAnchorTime }
+        set { playbackCoordinator.sleepSchedulePromptAnchorTime = newValue }
+    }
 
     // User-facing messages
     var downloadMessage: String? {
         get { downloadCoordinator.message }
         set { downloadCoordinator.message = newValue }
     }
-    @Published var playbackMessage: String?
-    @Published private(set) var opmlImportProgress: (current: Int, total: Int)?
+    var playbackMessage: String? {
+        get { playbackCoordinator.message }
+        set { playbackCoordinator.message = newValue }
+    }
+    var opmlImportProgress: (current: Int, total: Int)? {
+        subscriptionImportCoordinator.progress
+    }
 
     // Stage 6 compatibility aliases. Storage and network policy are owned by
     // DownloadCoordinator; these aliases disappear when view façades migrate.
@@ -376,20 +371,26 @@ final class AppState: ObservableObject {
 
     // MARK: Play Instant
 
-    private struct PlayInstantCandidate: Equatable {
-        let episodeID: UUID
-        let subscriptionID: UUID
+    private var playInstantQueue: [PlaybackCoordinator.PlayInstantCandidate] {
+        get { playbackCoordinator.playInstantQueue }
+        set { playbackCoordinator.playInstantQueue = newValue }
     }
-    private struct PlayInstantInterruptedSession {
-        let episodeID: UUID
-        let subscriptionID: UUID
-        var position: TimeInterval
+    private var playInstantInterruptedSession: PlaybackCoordinator.InterruptedSession? {
+        get { playbackCoordinator.interruptedSession }
+        set { playbackCoordinator.interruptedSession = newValue }
     }
-    private var playInstantQueue: [PlayInstantCandidate] = []
-    private var playInstantInterruptedSession: PlayInstantInterruptedSession?
-    private var activePlayInstantEpisodeID: UUID?
-    private var playInstantTransitionTask: Task<Void, Never>?
-    private var playInstantWarningPlayer: AVAudioPlayer?
+    private var activePlayInstantEpisodeID: UUID? {
+        get { playbackCoordinator.activePlayInstantEpisodeID }
+        set { playbackCoordinator.activePlayInstantEpisodeID = newValue }
+    }
+    private var playInstantTransitionTask: Task<Void, Never>? {
+        get { playbackCoordinator.playInstantTransitionTask }
+        set { playbackCoordinator.playInstantTransitionTask = newValue }
+    }
+    private var playInstantWarningPlayer: AVAudioPlayer? {
+        get { playbackCoordinator.playInstantWarningPlayer }
+        set { playbackCoordinator.playInstantWarningPlayer = newValue }
+    }
 
     private(set) static var shared: AppState!
     private(set) var startupState: AppStartupState = .constructed
@@ -648,7 +649,7 @@ final class AppState: ObservableObject {
     ) {
         self.feedService = feedService
         self.downloadManager = downloadManager
-        self.playbackEngine = playbackEngine
+        self.playbackCoordinator = PlaybackCoordinator(engine: playbackEngine)
         self.chapterService = chapterService
         self.queueService = queueService
         self.settingsStore = settingsStore
@@ -664,19 +665,59 @@ final class AppState: ObservableObject {
             subscriptionStore: subscriptionStore,
             settingsStore: settingsStore
         )
-        self.cloudSyncEngine = CloudSyncEngine(
-            containerIdentifier: AppState.cloudKitContainerID,
+        self.subscriptionImportCoordinator = SubscriptionImportCoordinator(
+            feedService: feedService,
             subscriptionStore: subscriptionStore,
-            database: subscriptionStore.database
+            episodeLimit: defaultFeedEpisodeLimit
         )
-        // Seed the observed membership before subscribing to the store's broad
-        // change publisher. Episode merges will still invalidate UI state, but
-        // only an actual feed-membership difference will reach the relay.
-        self.relayObservedFeedURLs = ReleaseFeatures.relayService
-            ? Self.relayFeedURLs(in: subscriptionStore.subscriptions)
-            : []
+        self.syncCoordinator = SyncCoordinator(
+            feedService: feedService,
+            subscriptionStore: subscriptionStore,
+            historyStatsCoordinator: historyStatsCoordinator
+        )
+        self.relayCoordinator = RelayCoordinator(subscriptionStore: subscriptionStore)
         queueCoordinator.installCurrentEpisodeProvider { [weak self] in
             self?.currentPlayerEpisode
+        }
+        playbackCoordinator.onCurrentEpisodeChanged = { [weak queueCoordinator] in
+            queueCoordinator?.currentEpisodeDidChange()
+        }
+        syncCoordinator.installCurrentEpisodeProvider { [weak self] in
+            self?.playbackEngine.currentEpisode
+        }
+        relayCoordinator.installWorkflows(
+            legacyRefresh: { [weak self] in
+                guard let self else { return false }
+                return await self.refreshSubscriptions(
+                    reason: "relay.legacy",
+                    trigger: .relayPush,
+                    executionContext: .relayPush,
+                    maxSubscriptions: backgroundRefreshFeedLimit,
+                    includeBackoffFeeds: false,
+                    onlyDueFeeds: true,
+                    joinActiveCycle: true
+                )
+            },
+            targetedRefresh: { [weak self] targetIDs in
+                guard let self else { return false }
+                return await self.refreshSubscriptions(
+                    reason: "relay.targeted",
+                    trigger: .relayPush,
+                    executionContext: .relayPush,
+                    maxSubscriptions: targetIDs.count,
+                    includeBackoffFeeds: true,
+                    onlyDueFeeds: false,
+                    joinActiveCycle: true,
+                    targetSubscriptionIDs: targetIDs,
+                    refreshAfterJoiningActiveCycle: true
+                )
+            },
+            syncPull: { [weak syncCoordinator] in
+                await syncCoordinator?.fetchAllNow(reason: "relay.syncNudge")
+            }
+        )
+        syncCoordinator.onLocalChangesPushed = { [weak relayCoordinator] in
+            await MainActor.run { relayCoordinator?.localChangesPushed() }
         }
         autoArchiveCoordinator.installRuntimeAdapters(
             archive: { [weak self] episode, completionKind in
@@ -742,28 +783,7 @@ final class AppState: ObservableObject {
         guard !callbacksInstalled else { return }
         callbacksInstalled = true
 
-        cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
-            await self?.materializeRemoteSubscription(state)
-        }
         historyStatsCoordinator.attachSyncDatabase(subscriptionStore.database)
-        cloudSyncEngine.onRemoteHistoryEntry = { [weak self] entry in
-            await MainActor.run { self?.historyStatsCoordinator.applyRemoteHistory(entry) }
-        }
-        cloudSyncEngine.onRemoteStatsChanged = { [weak self] in
-            await MainActor.run { self?.historyStatsCoordinator.reloadRemoteStats() }
-        }
-        // Relay sync-nudge send-side (§6.4) — see AppState's "Autohop Relay" MARK
-        // section for scheduleRelaySyncNudge()'s debounce/gating.
-        cloudSyncEngine.onLocalChangesPushed = { [weak self] in
-            guard ReleaseFeatures.relayService else { return }
-            await MainActor.run { self?.scheduleRelaySyncNudge() }
-        }
-        // Active-player-wins: tell the store which episode is loaded in the
-        // player so a remote played/archived change can't interrupt it.
-        subscriptionStore.nowPlayingEpisodeSyncKeyProvider = { [weak self] in
-            guard let episode = self?.playbackEngine.currentEpisode else { return nil }
-            return EpisodeSyncState.syncKey(subscriptionID: episode.subscriptionID, guid: episode.guid)
-        }
         // New/activated subscriptions seed their playback settings from the
         // global default panel; browse feeds resolve it live (effectivePreference).
         subscriptionStore.defaultPlaybackPreferenceProvider = { [weak self] in
@@ -783,9 +803,6 @@ final class AppState: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     self.objectWillChange.send()
-                    if ReleaseFeatures.relayService {
-                        self.scheduleRelayFeedSyncIfMembershipChanged()
-                    }
                 }
             }
             .store(in: &cancellables)
@@ -803,6 +820,12 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         autoArchiveCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        subscriptionImportCoordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        playbackCoordinator.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
@@ -824,28 +847,6 @@ final class AppState: ObservableObject {
         }
         routingCoordinator.startLegacyNotificationAdapter()
 
-        // Autohop Pro gate (§4.1): register with the relay the moment BOTH an
-        // active entitlement and an APNs token are available; unregister the
-        // instant entitlement lapses so a lapsed subscriber's feeds/token stop
-        // being crawled/pushed. relayTokenReceived(_:) drives the other half of
-        // this (token arriving after entitlement is already active).
-        if ReleaseFeatures.relayService {
-            autohopProStore.$isPro
-                .removeDuplicates()
-                .sink { [weak self] isPro in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        if isPro {
-                            await self.registerWithRelayIfPossible()
-                        } else if self.relayClient.isRegistered {
-                            _ = try? await self.relayClient.unregister()
-                            self.clearRelayFeedProtocolState()
-                        }
-                    }
-                }
-                .store(in: &cancellables)
-        }
-
         sleepTimerService.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -866,56 +867,13 @@ final class AppState: ObservableObject {
                         guard let self else { return }
                         self.syncDiagnosticLogging()
                         self.syncSleepScheduleConfig()
-                        self.cloudSyncEngine.syncEnabledChanged(self.settingsStore.appSettings.iCloudSyncEnabled)
+                        self.syncCoordinator.syncEnabledChanged(self.settingsStore.appSettings.iCloudSyncEnabled)
                     }
                 }
                 .store(in: &cancellables)
         }
 
         syncSleepScheduleConfig()
-    }
-
-    /// Creates a podcast that another device subscribed to, by fetching its feed,
-    /// then applies the synced per-podcast settings on top. Invoked by the sync
-    /// engine when a remote subscription record has no local match.
-    /// RANK-CORRUPTION FIX (2026-07-04): passes `reindexRanks: false` to
-    /// `addSubscription` below — remote materialization must NOT compact
-    /// every subscription's rank to its array position, or later-arriving
-    /// absolute synced ranks collide with the compacted 1..n values and the
-    /// library ends up in arrival order (the same bug class fixed for TV's
-    /// `materialize` path; see `SubscriptionStore.addSubscription`'s
-    /// `reindexRanks` doc). Local paths (subscribe, OPML import) keep the
-    /// default reindexing, which is correct for them.
-    private func materializeRemoteSubscription(_ state: SubscriptionSyncState) async {
-        // Already present (by id or feed) — just apply settings.
-        if subscriptionStore.subscription(id: state.subscriptionID) != nil
-            || subscriptionStore.subscriptions.contains(where: { $0.feedURL == state.feedURL }) {
-            subscriptionStore.applyRemoteSubscriptionState(state)
-            return
-        }
-
-        do {
-            let result = try await feedService.refresh(
-                feedURL: state.feedURL,
-                subscriptionID: state.subscriptionID,
-                episodeLimit: defaultFeedEpisodeLimit
-            )
-            _ = try subscriptionStore.addSubscription(
-                id: state.subscriptionID, feedURL: state.feedURL,
-                title: result.subscriptionTitle, description: result.description,
-                author: result.author, artworkURL: result.artworkURL,
-                categories: result.categories, isExplicit: result.isExplicit,
-                latestEpisode: result.latestEpisode, insertAtBottom: true,
-                reindexRanks: false
-            )
-            subscriptionStore.updateEpisodes(subscriptionID: state.subscriptionID, episodes: result.episodes)
-            // Apply the synced settings (priority, playback, auto-archive, …) on top.
-            subscriptionStore.applyRemoteSubscriptionState(state)
-        } catch {
-            logger.error("sync.materializeFailed", "Could not materialise synced subscription", metadata: [
-                "url": state.feedURL.absoluteString
-            ])
-        }
     }
 
     private func startNetworkMonitor() {
@@ -983,9 +941,8 @@ final class AppState: ObservableObject {
         // These effects previously ran during/after bootstrap. Keeping them at
         // the beginning of explicit start makes construction side-effect-light
         // while preserving their order relative to the callback graph.
-        if settingsStore.appSettings.iCloudSyncEnabled {
-            cloudSyncEngine.start()
-        }
+        syncCoordinator.startIfEnabled(settingsStore.appSettings.iCloudSyncEnabled)
+        relayCoordinator.start()
         queueCoordinator.start()
         startNetworkMonitor()
         subscriptionStore.cleanupExpiredPreviewSubscriptions(
@@ -994,7 +951,14 @@ final class AppState: ObservableObject {
 
         // Episode completion
         state.playbackEngine.onEpisodeFinished = { [weak state] episode in
-            Task { @MainActor in await state?.handleEpisodeFinished(episode) }
+            Task { @MainActor in
+                guard let state else { return }
+                let generation = state.playbackCoordinator.generation
+                await state.handleEpisodeFinished(
+                    episode,
+                    expectedGeneration: generation
+                )
+            }
         }
 
         // Scrubber + Now Playing time sync (fires every 0.5 s)
@@ -2428,7 +2392,10 @@ final class AppState: ObservableObject {
               isPlaying || playbackEngine.isPlaying
         else { return }
 
-        let candidate = PlayInstantCandidate(episodeID: episodeID, subscriptionID: subscriptionID)
+        let candidate = PlaybackCoordinator.PlayInstantCandidate(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID
+        )
         guard activePlayInstantEpisodeID != episodeID,
               !playInstantQueue.contains(candidate) else { return }
         playInstantQueue.append(candidate)
@@ -2448,7 +2415,7 @@ final class AppState: ObservableObject {
               isPlaying || playbackEngine.isPlaying else { return }
 
         if playInstantInterruptedSession == nil {
-            playInstantInterruptedSession = PlayInstantInterruptedSession(
+            playInstantInterruptedSession = PlaybackCoordinator.InterruptedSession(
                 episodeID: interruptedEpisode.id,
                 subscriptionID: interruptedEpisode.subscriptionID,
                 position: currentPlayerTime
@@ -3092,7 +3059,8 @@ final class AppState: ObservableObject {
                 fetchExternalChaptersInBackground(
                     url: chaptersURL,
                     episodeID: playableEpisode.id,
-                    subscriptionID: subscription.id
+                    subscriptionID: subscription.id,
+                    generation: playbackCoordinator.generation
                 )
             }
 
@@ -3146,7 +3114,22 @@ final class AppState: ObservableObject {
         }
     }
 
-    func handleEpisodeFinished(_ episode: Episode) async {
+    func handleEpisodeFinished(
+        _ episode: Episode,
+        expectedGeneration: UInt64? = nil
+    ) async {
+        if let expectedGeneration,
+           !playbackCoordinator.isCurrent(
+                generation: expectedGeneration,
+                episodeID: episode.id
+           ) {
+            logger.info("player.staleCompletionIgnored", "Ignored stale episode completion callback", metadata: [
+                "episodeID": episode.id.uuidString,
+                "expectedGeneration": "\(expectedGeneration)",
+                "currentGeneration": "\(playbackCoordinator.generation)"
+            ])
+            return
+        }
         logger.info("player.finished", "Episode finished playback", metadata: [
             "episode": episode.title
         ])
@@ -4675,84 +4658,16 @@ final class AppState: ObservableObject {
 
     // MARK: - OPML
 
-    struct OPMLImportSummary { var imported: Int; var failed: Int }
+    typealias OPMLImportSummary = SubscriptionImportSummary
 
     func importOPML(from fileURL: URL) async -> OPMLImportSummary {
-        let canAccess = fileURL.startAccessingSecurityScopedResource()
-        defer { if canAccess { fileURL.stopAccessingSecurityScopedResource() } }
-
-        let existingURLs = Set(subscriptionStore.subscriptions.map(\.feedURL))
-        let newURLs: [URL]
-        do {
-            newURLs = try await OPMLService().importSubscriptions(
-                from: fileURL, existingFeedURLs: existingURLs
-            )
-        } catch {
-            downloadMessage = "Could not read the OPML file."
-            logger.error("opml.importFailed", "Could not read OPML file", metadata: [
-                "file": fileURL.lastPathComponent,
-                "error": String(describing: error)
-            ])
-            return OPMLImportSummary(imported: 0, failed: 0)
-        }
-
-        guard !newURLs.isEmpty else {
-            downloadMessage = "No new podcasts found in the OPML file."
-            logger.info("opml.import", "No new podcasts found", metadata: [
-                "file": fileURL.lastPathComponent
-            ])
-            return OPMLImportSummary(imported: 0, failed: 0)
-        }
-
-        var imported = 0; var failed = 0
-        let total = newURLs.count
-        for (index, url) in newURLs.enumerated() {
-            opmlImportProgress = (current: index + 1, total: total)
-            let subscriptionID = UUID()
-            do {
-                let result = try await feedService.refresh(
-                    feedURL: url,
-                    subscriptionID: subscriptionID,
-                    episodeLimit: defaultFeedEpisodeLimit
-                )
-                _ = try subscriptionStore.addSubscription(
-                    id: subscriptionID, feedURL: url,
-                    title: result.subscriptionTitle, description: result.description,
-                    author: result.author,
-                    artworkURL: result.artworkURL,
-                    categories: result.categories,
-                    isExplicit: result.isExplicit,
-                    latestEpisode: result.latestEpisode,
-                    insertAtBottom: true
-                )
-                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, episodes: result.episodes)
-                logger.info("opml.importPodcast", "Imported podcast", metadata: [
-                    "podcast": result.subscriptionTitle,
-                    "url": url.absoluteString
-                ])
-                imported += 1
-            } catch {
-                logger.error("opml.importPodcastFailed", "Could not import podcast", metadata: [
-                    "url": url.absoluteString,
-                    "error": String(describing: error)
-                ])
-                failed += 1
-            }
-        }
-
-        opmlImportProgress = nil
-        downloadMessage = imported > 0
-            ? "Imported \(imported) podcast\(imported == 1 ? "" : "s")."
-            : "No podcasts could be imported (\(failed) failed)."
-        logger.info("opml.importComplete", "OPML import complete", metadata: [
-            "imported": "\(imported)",
-            "failed": "\(failed)"
-        ])
-        return OPMLImportSummary(imported: imported, failed: failed)
+        let summary = await subscriptionImportCoordinator.importOPML(from: fileURL)
+        downloadMessage = subscriptionImportCoordinator.message
+        return summary
     }
 
     func exportOPML() -> Data? {
-        try? OPMLService().exportSubscriptions(subscriptionStore.subscriptions)
+        subscriptionImportCoordinator.exportOPML()
     }
 
     /// Subscribes to a list of feed URLs in one go (used by starter packs —
@@ -4763,36 +4678,7 @@ final class AppState: ObservableObject {
     /// exactly like a bulk OPML import.
     @discardableResult
     func subscribeToFeedURLs(_ urls: [URL]) async -> Int {
-        let existing = Set(subscriptionStore.subscriptions.map(\.feedURL))
-        var imported = 0
-        for url in urls where !existing.contains(url) {
-            let subscriptionID = UUID()
-            do {
-                let result = try await feedService.refresh(
-                    feedURL: url,
-                    subscriptionID: subscriptionID,
-                    episodeLimit: defaultFeedEpisodeLimit
-                )
-                _ = try subscriptionStore.addSubscription(
-                    id: subscriptionID, feedURL: url,
-                    title: result.subscriptionTitle, description: result.description,
-                    author: result.author,
-                    artworkURL: result.artworkURL,
-                    categories: result.categories,
-                    isExplicit: result.isExplicit,
-                    latestEpisode: result.latestEpisode,
-                    insertAtBottom: true
-                )
-                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, episodes: result.episodes)
-                imported += 1
-            } catch {
-                logger.error("starterPack.subscribeFailed", "Could not subscribe to feed", metadata: [
-                    "url": url.absoluteString,
-                    "error": String(describing: error)
-                ])
-            }
-        }
-        return imported
+        await subscriptionImportCoordinator.subscribeToFeedURLs(urls)
     }
 
     // MARK: - Playback position persistence
@@ -4874,7 +4760,7 @@ final class AppState: ObservableObject {
     /// stores have flushed their pending sync rows. Other domains may also call
     /// it after their own durable checkpoint.
     func flushDeferredSyncPushes(reason: String) {
-        cloudSyncEngine.flushDeferredPushes(reason: reason)
+        syncCoordinator.flushDeferredPushes(reason: reason)
     }
 
     // MARK: - Autohop Relay (Autohop Pro — RELAY_TIER1_IMPLEMENTATION.md §4)
@@ -4884,11 +4770,14 @@ final class AppState: ObservableObject {
     /// so this is frequently a no-op token refresh; registerWithRelayIfPossible
     /// only actually calls the relay when isPro is also true.
     func relayTokenReceived(_ token: String) {
-        guard ReleaseFeatures.relayService else { return }
-        relayAPNsToken = token
-        Task { await registerWithRelayIfPossible() }
+        relayCoordinator.tokenReceived(token)
     }
 
+#if false
+    // AI CONTEXT — Stage 10 source-preservation block. RelayCoordinator now
+    // owns this implementation. Keep the legacy body temporarily visible to
+    // code archaeology during the next migration stage; it is not compiled and
+    // cannot own state or execute side effects.
     private func registerWithRelayIfPossible() async {
         guard ReleaseFeatures.relayService,
               autohopProStore.isPro,
@@ -5263,12 +5152,21 @@ final class AppState: ObservableObject {
             // prime uses (TV/App/AutohopTVApp.swift primeLibraryFromCloudSoon),
             // just without its retry loop (a background push has no time for
             // 15 s of activation retries; a not-yet-activated engine is a no-op).
-            await cloudSyncEngine.fetchAllSubscriptionsNow(reason: "relay.syncNudge")
-            await cloudSyncEngine.fetchAllHistoryNow(reason: "relay.syncNudge")
+            await syncCoordinator.fetchAllNow(reason: "relay.syncNudge")
             return true
         default:
             return false
         }
+    }
+#endif
+
+    func sendRelayHeartbeatIfDue() async {
+        await relayCoordinator.sendHeartbeatIfDue()
+    }
+
+    @discardableResult
+    func handleRelayPush(type: String, feedIDs: [String] = []) async -> Bool {
+        await relayCoordinator.handlePush(type: type, feedIDs: feedIDs)
     }
 
     private func loadQueuePins() {
@@ -5466,11 +5364,19 @@ final class AppState: ObservableObject {
 
     /// Fetches external chapters off the playback-start path and applies them live
     /// when (and only if) the same episode is still the one playing. (P7)
-    private func fetchExternalChaptersInBackground(url: URL, episodeID: UUID, subscriptionID: UUID) {
+    private func fetchExternalChaptersInBackground(
+        url: URL,
+        episodeID: UUID,
+        subscriptionID: UUID,
+        generation: UInt64
+    ) {
         Task { [weak self] in
             guard let self,
                   let fetched = await self.fetchExternalChapters(url: url, episodeID: episodeID),
-                  self.currentPlayerEpisode?.id == episodeID
+                  self.playbackCoordinator.isCurrent(
+                    generation: generation,
+                    episodeID: episodeID
+                  )
             else { return }
 
             self.subscriptionStore.updateEpisodeChapters(

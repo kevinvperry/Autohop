@@ -14,10 +14,11 @@ not a set of independently authoritative `priorityRank` fields. Reorder UI draft
 active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
-AppState decomposition Stages 0–8 completed on 2026-07-18. History/Stats, queue,
+AppState decomposition Stages 0–11 completed on 2026-07-18. History/Stats, queue,
 onboarding, typed routing, downloads, feed refresh/Release Radar, durable
-auto-download intents, and Auto Archive have coordinators; AppState remains
-their compatibility façade and still owns Stage 9+ domains.
+auto-download intents, Auto Archive, subscription import, CloudKit/Relay, and
+playback have coordinators. AppState remains their compatibility façade;
+Stage 12+ lifecycle and view-observation migration remain.
 -->
 
 ## Identity
@@ -40,8 +41,9 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Composition: `App/AppCompositionRoot.swift` constructs the protocol-backed
   production graph. `AppState.bootstrap()` publishes one process singleton and
   invokes an explicit idempotent `start()`; constructed/starting/started/stopped
-  are visible lifecycle states. AppState still owns playback, sync/Relay,
-  import, and lifecycle callbacks.
+  are visible lifecycle states. Dedicated coordinators own playback session
+  state, CloudKit/Relay, and subscription import; AppState retains compatibility
+  commands and lifecycle/bootstrap callback wiring until Stage 12.
 - Extracted application owners:
   `App/HistoryStatsCoordinator.swift` owns tick/history/Stats/checkpoint work;
   `App/QueueCoordinator.swift` owns the downloaded queue, pins, Up Next, badge,
@@ -51,11 +53,13 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Persistence: GRDB/SQLite through `Persistence/AutohopDatabase.swift` and
   `Persistence/SubscriptionStore.swift`; app settings are JSON through
   `Persistence/SettingsStore.swift`.
-- Playback: `Playback/PlaybackEngine.swift`, `NowPlaying/NowPlayingService.swift`,
-  `Playback/SilenceDetector.swift`, and `Playback/SleepScheduleService.swift`.
+- Playback: `App/PlaybackCoordinator.swift` owns the engine-facing session,
+  PlaybackClock, sleep services, Play Instant state, and episode generation;
+  DSP and transport remain in `Playback/PlaybackEngine.swift`.
 - Feeds: RSS parsing/loading in `Feeds/`; pure immutable candidate planning is in
-  `Feeds/ReleaseRadarCyclePlanner.swift`, while AppState still owns refresh-cycle
-  execution. Diagnostics live in `Views/FeedRefreshScheduleView.swift`
+  `Feeds/ReleaseRadarCyclePlanner.swift`; `App/FeedRefreshCoordinator.swift`
+  owns refresh-cycle state and planning. Diagnostics live in
+  `Views/FeedRefreshScheduleView.swift`
   / `Views/SubscriptionRadarDiagnosticsView.swift`.
 - Downloads: `Downloads/DownloadManager.swift` uses a background URLSession and
   validates response status, MIME type, and implausibly small files before moving
@@ -67,7 +71,10 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - History: `Persistence/ListeningHistoryStore.swift` owns the unchanged local
   listening-history JSON/sync projection. HistoryStatsCoordinator owns its iOS
   orchestration and delegates remote merges/lifecycle checkpoints.
-- Sync: optional CloudKit via `Persistence/CloudSyncEngine.swift` and
+- Sync: `App/SyncCoordinator.swift` owns optional CloudKit lifecycle,
+  callbacks, and remote materialization over
+  `Persistence/CloudSyncEngine.swift`; `App/RelayCoordinator.swift` exclusively
+  owns the compile-time-gated Relay transport. The durable schemas remain in
   `Persistence/CloudKitSyncMapping.swift`. Record types are `EpisodeState`,
   `SubscriptionState`, `SubscriptionOrder`, `HistoryEntry`, `DayStats`, and the
   existing queue singleton. `SubscriptionOrder` stores the real-subscription UUID

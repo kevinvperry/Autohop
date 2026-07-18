@@ -10,7 +10,7 @@ release notes should be derived from completed entries and omit internal detail.
 
 ## Completed
 
-### AppState decomposition Stages 0–8 — 18 July 2026
+### AppState decomposition Stages 0–11 — 18 July 2026
 
 - Established a frozen regression baseline and explicit AppCompositionRoot with
   side-effect-light construction and idempotent runtime startup.
@@ -40,6 +40,20 @@ release notes should be derived from completed entries and omit internal detail.
 - Added AutoArchiveCoordinator as the exclusive owner of the 25-minute gate,
   After Playing, Inactive Episodes, Episode Limit, active/backlog protection,
   eligibility diagnostics, and Auto Archive Activity audit records.
+- Added SubscriptionImportCoordinator as the owner of OPML import/export,
+  security-scoped file access, duplicate filtering, partial-failure handling,
+  bulk subscription, and import progress.
+- Added SyncCoordinator as the owner of CloudKit lifecycle, callbacks, remote
+  subscription materialization, history/Stats routing, active-player identity
+  protection, lifecycle flushes, and explicit pulls.
+- Added RelayCoordinator as the exclusive owner of entitlement-gated APNs
+  registration, feed-membership reconciliation, circuit breakers, sync nudges,
+  heartbeat, and silent-push routing. Existing release gates and schemas remain
+  unchanged.
+- Added PlaybackCoordinator as the owner of the playback engine-facing session,
+  loaded episode, playing state, high-frequency clock, sleep services, Play
+  Instant state, and episode generation. Delayed chapter and completion work now
+  rejects stale episode generations.
 - Preserved existing JSON formats, CloudKit schemas, queue ordering, CarPlay
   entry points, playback behavior, and user-facing navigation.
 

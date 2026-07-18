@@ -961,7 +961,7 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 
 ### 15.7 Sync (iCloud)
 
-Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **Off by default** — the on-device privacy stance holds until the user enables it. Stored in `AppSettings.iCloudSyncEnabled`; the engine is `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper), started/stopped by AppState as the toggle changes.
+Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **Off by default** — the on-device privacy stance holds until the user enables it. Stored in `AppSettings.iCloudSyncEnabled`; `App/SyncCoordinator.swift` owns lifecycle, callbacks, remote materialization, and explicit pulls over `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper). AppState only forwards compatibility and lifecycle entry points.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|

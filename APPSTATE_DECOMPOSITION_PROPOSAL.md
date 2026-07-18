@@ -8,7 +8,7 @@ This document is the authoritative architecture review and staged implementation
 proposal and execution ledger for decomposing the iOS App/AppState.swift file.
 It does not authorize a future AI model to change runtime behavior or combine
 unapproved migration stages into one edit. Completed stages are recorded below;
-Stages 9 and later remain proposals.
+Stages 12 and later remain proposals.
 
 REVIEW SNAPSHOT:
 - Review date: 2026-07-17, Australia/Melbourne.
@@ -22,7 +22,7 @@ REVIEW SNAPSHOT:
   names outside App/AppState.swift.
 
 IMPLEMENTATION SNAPSHOT:
-- Stages 0–8 implemented: 2026-07-18, Australia/Melbourne.
+- Stages 0–11 implemented: 2026-07-18, Australia/Melbourne.
 - Implementation task-entry commit: d95f29ab4b81b9609ac4f565260d253c4c08e3a0.
 - Stage 0 evidence: APPSTATE_DECOMPOSITION_BASELINE.md.
 - AppCompositionRoot now constructs the production dependency graph.
@@ -32,7 +32,9 @@ IMPLEMENTATION SNAPSHOT:
 - HistoryStatsCoordinator, QueueCoordinator, OnboardingCoordinator,
   AppRoutingCoordinator, DownloadCoordinator, FeedRefreshCoordinator,
   AutoDownloadWorkflow, and AutoArchiveCoordinator own their approved domains.
-- Stage 9 remains not started.
+- SubscriptionImportCoordinator, SyncCoordinator, RelayCoordinator, and
+  PlaybackCoordinator own their approved domains.
+- Stage 12 remains not started.
 
 AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
 1. Re-read the current code before implementing any stage. Symbol names, line
@@ -123,14 +125,18 @@ The recommended implementation order is deliberately risk-weighted:
 | Stage 6 DownloadCoordinator | Complete |
 | Stage 7 FeedRefreshCoordinator and AutoDownloadWorkflow | Complete |
 | Stage 8 AutoArchiveCoordinator | Complete |
-| Stage 9 and later | Not started |
+| Stage 9 SubscriptionImportCoordinator | Complete |
+| Stage 10 SyncCoordinator and RelayCoordinator | Complete |
+| Stage 11 PlaybackCoordinator | Complete |
+| Stage 12 and later | Not started |
 
-Stages 0–8 are complete. Existing policy extractions such as
+Stages 0–11 are complete. Existing policy extractions such as
 PlaybackPositionStore, PlaybackSessionPolicy, and QueueModel remain current-state
 inputs. AppState retains compatibility entry points while download runtime state,
 refresh/Radar state, durable intent draining, and Auto Archive policy have
-exclusive owners. Playback, sync/Relay, import, and lifecycle ownership remain
-in AppState pending later stages.
+exclusive owners. Import, CloudKit, Relay, and playback session state now also
+have exclusive owners. Lifecycle/bootstrap callback ownership and narrow view
+observation remain pending later stages.
 
 ## 2. Scope and non-goals
 
@@ -2031,6 +2037,11 @@ Archive effects use one narrow AppState workflow adapter.
 
 Risk: medium.
 
+**Status: complete 2026-07-18.** `App/SubscriptionImportCoordinator.swift`
+owns OPML import/export, bulk starter-pack subscription, scoped file access,
+partial-failure continuation, and dedicated progress/message projection.
+SubscriptionStore membership changes continue to drive OnboardingCoordinator.
+
 ### Actions
 
 - Move OPML and bulk subscription loops.
@@ -2047,6 +2058,13 @@ Risk: medium.
 ## Stage 10 — Extract SyncCoordinator and RelayCoordinator
 
 Risk: very high.
+
+**Status: complete 2026-07-18.** `App/SyncCoordinator.swift` owns
+CloudSyncEngine construction/lifecycle, callbacks, remote materialization,
+history/Stats routing, active-player identity, flushes, and explicit pulls.
+`App/RelayCoordinator.swift` owns entitlement/APNs registration, membership
+reconciliation, circuit breakers, nudges, heartbeat, mapping, and push dispatch.
+Release gates and all external schemas are unchanged.
 
 ### Actions
 
@@ -2076,6 +2094,12 @@ Risk: very high.
 ## Stage 11 — Extract PlaybackCoordinator
 
 Risk: highest.
+
+**Status: complete 2026-07-18.** `App/PlaybackCoordinator.swift` owns the
+engine, loaded episode, playing state, PlaybackClock, playback messages,
+Sleep Timer/Schedule services, Play Instant storage, and episode generation.
+AppState retains command façades for SwiftUI and CarPlay. Delayed external
+chapter and completion callbacks validate episode generation before applying.
 
 Playback moves late because it depends on stable queue, download, history/Stats,
 sync, auto-archive, and lifecycle interfaces.

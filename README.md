@@ -14,12 +14,13 @@ its move-index space.
 Version 1.3 is an iPhone-only production release. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
 features and are not offered, advertised, or contacted by the 1.3 build.
-AppState decomposition Stages 0–8 are complete: production construction and
+AppState decomposition Stages 0–11 are complete: production construction and
 idempotent start are explicit; independent leaves live in domain folders; and
 history/Stats, queue, onboarding, routing, downloads, feed refresh/Release
 Radar, durable automatic-download intents, and Auto Archive have explicit
 owners. AppState remains the compatibility façade for existing views and
-platform entry points. Stage 9 and later ownership transfers are not implemented.
+platform entry points. Import, CloudKit/Relay, and playback now also have
+dedicated owners. Stage 12 and later ownership transfers are not implemented.
 -->
 
 **The podcast player for people who are serious about listening.**

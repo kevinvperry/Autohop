@@ -1,10 +1,12 @@
 // AI CONTEXT — Tests/AppStateCoordinatorExtractionTests.swift
 //
-// Characterization gates for AppState decomposition Stages 3–8. These tests
+// Characterization gates for AppState decomposition Stages 3–11. These tests
 // verify exclusive history/Stats tick ownership and checkpoint ordering, narrow
 // queue invalidation plus side-effect-free reads and legacy pin persistence,
 // onboarding single-vs-bulk milestone behavior, and typed routing commands.
-// They use isolated temporary persistence paths and no CloudKit/network/audio.
+// They use isolated temporary persistence paths and no live CloudKit, Relay,
+// network, or audio endpoints. Stage 10's device-only CloudKit/Relay gates are
+// deliberately covered by their existing mapping and staging suites.
 import Combine
 import XCTest
 
