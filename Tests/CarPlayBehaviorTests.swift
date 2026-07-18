@@ -22,6 +22,72 @@ final class CarPlayBehaviorTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - AppState decomposition Stage 0–1 characterization
+
+    func testCompositionRootConstructsInjectedGraphWithoutStartingRuntime() throws {
+        let harness = try makeHarness()
+        let root = AppCompositionRoot(
+            feedService: harness.appState.feedService,
+            downloadManager: harness.download,
+            playbackEngine: harness.playback,
+            chapterService: harness.appState.chapterService,
+            queueService: harness.appState.queueService,
+            settingsStore: harness.settings,
+            subscriptionStore: harness.store
+        )
+
+        let subject = root.makeAppState()
+
+        XCTAssertEqual(subject.startupState, .constructed)
+        XCTAssertTrue((subject.feedService as AnyObject) === (harness.appState.feedService as AnyObject))
+        XCTAssertTrue(subject.downloadManager === harness.download)
+        XCTAssertTrue((subject.playbackEngine as AnyObject) === harness.playback)
+        XCTAssertTrue((subject.chapterService as AnyObject) === (harness.appState.chapterService as AnyObject))
+        XCTAssertTrue((subject.queueService as AnyObject) === (harness.appState.queueService as AnyObject))
+        XCTAssertTrue((subject.settingsStore as AnyObject) === harness.settings)
+        XCTAssertTrue(subject.subscriptionStore === harness.store)
+        XCTAssertNil(harness.download.onProgressUpdate)
+        XCTAssertNil(harness.playback.onTimeUpdate)
+    }
+
+    func testStartupStateGuardAllowsOneInstallationOnly() throws {
+        let harness = try makeHarness()
+        var installationCount = 0
+
+        XCTAssertTrue(harness.appState._runCharacterizationStart {
+            installationCount += 1
+        })
+        XCTAssertFalse(harness.appState._runCharacterizationStart {
+            installationCount += 1
+        })
+
+        XCTAssertEqual(installationCount, 1)
+        XCTAssertEqual(harness.appState.startupState, .started)
+    }
+
+    func testBootstrapPublishesOneSharedConstructedInstanceForPhoneAndCarPlay() throws {
+        let harness = try makeHarness()
+        let root = AppCompositionRoot(
+            feedService: harness.appState.feedService,
+            downloadManager: harness.download,
+            playbackEngine: harness.playback,
+            chapterService: harness.appState.chapterService,
+            queueService: harness.appState.queueService,
+            settingsStore: harness.settings,
+            subscriptionStore: harness.store
+        )
+        AppState._resetSharedForCharacterization()
+        defer { AppState._resetSharedForCharacterization() }
+
+        let phoneEntry = AppState.bootstrap(compositionRoot: root, startRuntime: false)
+        let carPlayEntry = AppState.sharedOrBootstrap()
+
+        XCTAssertTrue(phoneEntry === carPlayEntry)
+        XCTAssertEqual(phoneEntry.startupState, .constructed)
+        XCTAssertNil(harness.download.onProgressUpdate)
+        XCTAssertNil(harness.playback.onTimeUpdate)
+    }
+
     func testQueueProjectionShowsDownloadedRowsOnlyWithProgress() throws {
         let harness = try makeHarness()
         let downloaded = makeEpisode(subscriptionID: harness.subscriptionID, guid: "downloaded", title: "Downloaded", duration: 100)

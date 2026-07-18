@@ -1,9 +1,10 @@
 // AI CONTEXT — Tests/HistorySyncTests.swift. Tests listening-history sync
 // (SYNC_DESIGN.md step 5a): the type-namespaced CKRecord round-trip and the
 // AutohopDatabase pending/record accessors. Record-level LWW by lastListenedAt.
-// No CloudKit network. (The applyRemote merge itself lives in
-// ListeningHistoryStore in the app target and is exercised by the on-device
-// build.) The record-name parser assertions protect the Phase-2 legacy fallback
+// No CloudKit network. Decomposition Stage 2 moved ListeningHistoryStore into
+// Persistence and retained its shared-core target membership; its record-level
+// merge and local JSON format remain unchanged. The record-name parser
+// assertions protect the Phase-2 legacy fallback
 // for old unprefixed HistoryEntry records. Version-aware acknowledgement tests
 // ensure an older in-flight save cannot clear a newer resume/history update.
 import XCTest
@@ -34,6 +35,39 @@ final class HistorySyncTests: XCTestCase {
     }
 
     // MARK: - CKRecord round-trip
+
+    func testLegacyListeningHistoryJSONRoundTripsWithoutSchemaLoss() throws {
+        // AI CONTEXT — This is the pre-rich-completion local JSON shape written
+        // by ListeningHistoryStore before CompletionKind fields existed. Stage 2
+        // physically moved the store; the fixture protects its on-disk decoding
+        // compatibility independently of CloudKit.
+        let legacyJSON = """
+        [{
+          "id": "sub|guid:g1",
+          "subscriptionID": "11111111-1111-1111-1111-111111111111",
+          "episodeID": "22222222-2222-2222-2222-222222222222",
+          "episodeTitle": "Legacy Episode",
+          "podcastTitle": "Legacy Podcast",
+          "durationSeconds": 1800,
+          "listenedSeconds": 600,
+          "lastPositionSeconds": 650,
+          "lastListenedAt": 721692800,
+          "status": "listened"
+        }]
+        """
+
+        let decoded = try JSONDecoder().decode(
+            [ListeningHistoryEntry].self,
+            from: Data(legacyJSON.utf8)
+        )
+        let reencoded = try JSONEncoder().encode(decoded)
+        let reloaded = try JSONDecoder().decode([ListeningHistoryEntry].self, from: reencoded)
+
+        XCTAssertEqual(reloaded, decoded)
+        XCTAssertEqual(reloaded.first?.episodeTitle, "Legacy Episode")
+        XCTAssertNil(reloaded.first?.completionKind)
+        XCTAssertNil(reloaded.first?.completionPercent)
+    }
 
     func testHistoryRecordRoundTrip() {
         let e = entry()

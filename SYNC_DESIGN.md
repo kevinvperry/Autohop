@@ -451,7 +451,7 @@ adopted clean. Settings sub-structs
 5. ✅ **Listening history + stats**
    - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
      current recordName = `history:<historyID>`, migration v5).
-     ListeningHistoryStore (iOS app target) records pending on mutation +
+     ListeningHistoryStore (shared Persistence source; iOS orchestration) records pending on mutation +
      merges via applyRemote; denormalized title/artwork kept. Since tvOS Phase
      3 (2026-07-04), `SubscriptionStore.recordListeningProgress` /
      `markListeningHistoryFinished` (AutohopCore) expose the same write path

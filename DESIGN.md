@@ -1125,9 +1125,10 @@ Purple, animated progress bar shown whenever an episode is actively downloading.
 | Listening History | Below the history row HStack, indented 56 pt (matching canonical 44 pt artwork + 12 pt gap) |
 | Downloads page | Inside the activity row, below the text stack |
 
-Progress values publish in ≥1% steps (coalesced in AppState.onProgressUpdate) so
-several concurrent downloads don't re-invalidate whole pages every second — don't
-expect sub-1% bar movement.
+Progress values publish in ≥1% steps (coalesced by AppState's download callback
+into the narrow `Downloads/DownloadProgressModel`) so several concurrent
+downloads don't re-invalidate whole pages every second — don't expect sub-1% bar
+movement.
 
 ```swift
 ProgressView(value: progress, total: 1.0)
@@ -2791,5 +2792,5 @@ Read-only browse UI, lean-back and artwork-forward (Docs/TVOS_APP_IMPLEMENTATION
 
 **Navigation shell:** `TabView` + `.tabViewStyle(.sidebarAdaptable)`, tvOS 18 `Tab(_:systemImage:value:)` builder (`TVMainTabView`) — this is why `AutohopTV`'s deployment target is 18.0, not the Phase 1 scaffold's 17.0 (see project.yml's inline note). Library pushes by subscription UUID (`TVRouter.libraryPath`), not the `Subscription` value, so a pushed detail page always resolves the live model instead of a stale snapshot.
 
-**Known simplification:** `Continue Listening` identifies an in-progress episode via the synced `Episode.playedState == .playing` field, not a real resume-position bar — there is no core-level listening-history reader the TV target can reach yet (`ListeningHistoryStore` lives in the iOS app target). Revisit when Phase 0 item 5 or a dedicated history-core exposure lands.
+**Known simplification:** `Continue Listening` identifies an in-progress episode via the synced `Episode.playedState == .playing` field, not a real resume-position bar. Decomposition Stage 2 moved `ListeningHistoryStore` into shared-core Persistence, where it remains module-internal; the TV UI has not been wired to a public history reader, so physical target membership alone does not change this screen's current behavior.
 | Podcast hero cards | `TabView(.page)` carousel, same card style as before |

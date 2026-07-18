@@ -60,6 +60,7 @@ let package = Package(
             exclude: [
                 "App",
                 "Chapters",
+                "Downloads/DownloadProgressModel.swift",
                 "Feeds/FeedPreviewViewModel.swift",
                 "Feeds/FeedService.swift",
                 "OPMLSmokeTests",
@@ -99,11 +100,16 @@ let package = Package(
                 "Feeds/PodcastSearch.swift",
                 "Feeds/PodcastCharts.swift",
                 "Feeds/EpisodeFeedLoader.swift",
+                // AppState decomposition Stage 2: the pure refresh planner and
+                // history store retain shared-core membership so tvOS and future
+                // surfaces compile against one implementation.
+                "Feeds/ReleaseRadarCyclePlanner.swift",
                 "Persistence/SubscriptionStore.swift",
                 "Persistence/AutohopDatabase.swift",
                 "Persistence/LockedDeviceFileAccess.swift",
                 "Persistence/CloudKitSyncMapping.swift",
                 "Persistence/CloudSyncEngine.swift",
+                "Persistence/ListeningHistoryStore.swift",
                 "Persistence/ListeningStatsStore.swift",
                 "Persistence/AutoDownloadIntentStore.swift",
                 "Persistence/PlaybackPositionStore.swift",

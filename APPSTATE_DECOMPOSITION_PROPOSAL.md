@@ -5,9 +5,10 @@ AI CONTEXT — APPSTATE_DECOMPOSITION_PROPOSAL.md
 
 PURPOSE:
 This document is the authoritative architecture review and staged implementation
-proposal for decomposing the iOS App/AppState.swift file. It is a planning
-artifact only. It does not authorize a future AI model to change runtime behavior
-or combine multiple migration stages into one edit.
+proposal and execution ledger for decomposing the iOS App/AppState.swift file.
+It does not authorize a future AI model to change runtime behavior or combine
+unapproved migration stages into one edit. Completed stages are recorded below;
+all later stages remain proposals.
 
 REVIEW SNAPSHOT:
 - Review date: 2026-07-17, Australia/Melbourne.
@@ -20,6 +21,16 @@ REVIEW SNAPSHOT:
 - Approximately 31 Swift files access `appState`, using about 100 distinct member
   names outside App/AppState.swift.
 
+IMPLEMENTATION SNAPSHOT:
+- Stages 0–2 implemented: 2026-07-18, Australia/Melbourne.
+- Implementation task-entry commit: d95f29ab4b81b9609ac4f565260d253c4c08e3a0.
+- Stage 0 evidence: APPSTATE_DECOMPOSITION_BASELINE.md.
+- AppCompositionRoot now constructs the production dependency graph.
+- AppState construction and idempotent runtime start are separate.
+- ListeningHistoryStore, ReleaseRadarCyclePlanner/DTOs, PlaybackClock,
+  DownloadProgressModel, and warning-cue generation are physically separated.
+- No domain coordinator ownership has moved; Stage 3 remains not started.
+
 AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
 1. Re-read the current code before implementing any stage. Symbol names, line
    numbers, behavior, and dependencies may have changed after this review.
@@ -29,8 +40,9 @@ AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
    rewrite of AppState.
 4. Keep exactly one writer for each mutable domain. Never run legacy and new
    coordinators as simultaneous side-effecting implementations.
-5. AppState remains the iOS composition root and compatibility façade until the
-   final migration stage.
+5. AppCompositionRoot owns iOS construction from Stage 1 onward. AppState
+   remains the process singleton and compatibility façade until the final
+   migration stage.
 6. Preserve the current iPhone, CarPlay, background-download, lock-screen,
    CloudKit, and background-task entry points throughout the migration.
 7. Update AI CONTEXT headers in every moved or newly created file. Headers must
@@ -93,20 +105,21 @@ The recommended implementation order is deliberately risk-weighted:
 
 ### 1.1 Implementation status
 
-| Item | Status at 2026-07-17 |
+| Item | Status at 2026-07-18 |
 |---|---|
 | Current-code inventory | Complete |
 | Durability and reliability review | Complete |
 | Target ownership design | Complete |
 | Staged implementation strategy | Complete |
-| Stage 0 characterization work | Not started by this document |
+| Stage 0 characterization work | Complete — see `APPSTATE_DECOMPOSITION_BASELINE.md` |
+| Stage 1 explicit composition/start | Complete |
+| Stage 2 independent leaf moves | Complete |
 | Runtime coordinator extraction | Not started by this document |
-| Swift code changed by this planning task | None |
+| Stage 3 and later | Not started |
 
-This document does not mark any migration stage complete. Existing partial
-extractions such as PlaybackPositionStore, PlaybackSessionPolicy, QueueModel,
-PlaybackClock, and DownloadProgressModel predate this plan and are recorded as
-current-state inputs.
+Stages 0–2 are complete. Existing policy extractions such as
+PlaybackPositionStore, PlaybackSessionPolicy, and QueueModel remain current-state
+inputs. No coordinator extraction has started.
 
 ## 2. Scope and non-goals
 
@@ -125,7 +138,8 @@ current-state inputs.
 
 ### 2.2 Out of scope
 
-- No Swift implementation is performed by this document.
+- The original review did not implement Swift. The later Stage 0–2 execution
+  recorded by this ledger changes structure only, not product behavior.
 - No user-visible behavior, settings default, persistence format, sync schema,
   queue rule, release scheduling rule, or background policy is changed.
 - No tvOS feature expansion is proposed.
@@ -140,7 +154,9 @@ current-state inputs.
 
 ### 3.1 Physical layout
 
-The reviewed App/AppState.swift is 6,645 lines.
+The reviewed App/AppState.swift was 6,645 lines. After Stage 2 it is
+approximately 6,250 lines because independent leaf declarations moved to their
+domain files; the table below remains the authoritative pre-migration inventory.
 
 | Approximate range | Current responsibility |
 |---|---|
@@ -158,7 +174,7 @@ The reviewed App/AppState.swift is 6,645 lines.
 | 5,257–5,650 | Autohop Relay registration, membership sync, circuit breaking, sync nudge, heartbeat, push dispatch |
 | 5,651–5,956 | Queue pin persistence, position restore, history helpers, media-file repair, external chapter loading |
 | 5,957–6,332 | Scene lifecycle, resource diagnostics, foreground/background-audio polling, settings synchronization, notifications |
-| 6,333–6,645 | `ListeningHistoryStore`, a distinct persistence class physically embedded in AppState.swift |
+| 6,333–6,645 | Pre-Stage-2 location of `ListeningHistoryStore` inside AppState.swift |
 
 The physical ranges are snapshot guidance, not stable source anchors. Future work
 must locate symbols by name.
@@ -695,9 +711,13 @@ Repair direction:
 
 Severity: low runtime risk, medium ownership confusion.
 
-`ListeningHistoryStore` is a separate class but is defined at the bottom of
-AppState.swift. It should move verbatim to Persistence before broader history
-orchestration moves.
+Review finding: `ListeningHistoryStore` was a separate class defined at the
+bottom of AppState.swift.
+
+**Resolution status: complete in Stage 2 (2026-07-18).** The implementation now
+lives in `Persistence/ListeningHistoryStore.swift`; its JSON path, Codable
+payload, sync projection, batching, repair rules, and MainActor isolation remain
+unchanged. AppState still owns history orchestration until Stage 3.
 
 #### AS-12 — Core AppState orchestration has limited direct tests
 
@@ -1690,6 +1710,9 @@ changes.
 
 Risk: mandatory prerequisite.
 
+**Status: complete 2026-07-18.** Evidence and device-only boundaries are recorded
+in `APPSTATE_DECOMPOSITION_BASELINE.md`.
+
 ### Actions
 
 - Record the current source revision and dirty working-tree state.
@@ -1740,6 +1763,10 @@ Not applicable; this stage should add tests and test seams only.
 
 Risk: medium.
 
+**Status: complete 2026-07-18.** `AppCompositionRoot` owns concrete production
+construction. `AppState` remains the compatibility façade/callback owner and now
+uses an explicit idempotent startup-state guard.
+
 ### Actions
 
 - Add `AppCompositionRoot` or equivalently named factory.
@@ -1770,6 +1797,9 @@ No persisted format changes should exist.
 ## Stage 2 — Move physically independent leaf types
 
 Risk: low.
+
+**Status: complete 2026-07-18.** The listed leaves moved to Persistence, Feeds,
+Playback, and Downloads with API/persistence behavior retained.
 
 ### Actions
 

@@ -38,6 +38,51 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         var state: FeedRefreshWindowState
     }
 
+    func testExtractedCyclePlannerRetainsDeferredFairnessAndDeterministicOrder() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        var first = Subscription(
+            feedURL: URL(string: "https://example.com/first.xml")!,
+            title: "First",
+            priorityRank: 1
+        )
+        var deferred = Subscription(
+            feedURL: URL(string: "https://example.com/deferred.xml")!,
+            title: "Deferred",
+            priorityRank: 2
+        )
+        first.refreshStats.lastFetchedAt = now.addingTimeInterval(-24 * 60 * 60)
+        deferred.refreshStats.lastFetchedAt = now.addingTimeInterval(-24 * 60 * 60)
+        let randomProfile = FeedScheduleProfile(
+            kind: .random,
+            confidence: 0.2,
+            observationCount: 0,
+            reliableDateCount: 0,
+            activeWeekdays: [],
+            reason: "characterization"
+        )
+
+        let result = ReleaseRadarCyclePlanner.candidates(
+            subscriptions: [first, deferred],
+            cachedProfiles: [
+                first.id: randomProfile,
+                deferred.id: randomProfile
+            ],
+            deferred: [
+                deferred.id: RefreshPlanningDeferredSnapshot(
+                    firstDeferredAt: now.addingTimeInterval(-2 * 60 * 60),
+                    deferralCount: 2
+                )
+            ],
+            minimumRecheckInterval: 5 * 60,
+            now: now
+        )
+
+        XCTAssertEqual(result.map(\.subscription.id), [deferred.id, first.id])
+        XCTAssertEqual(result.first?.deferredCount, 2)
+        XCTAssertEqual(result.first?.deferredScoreBoost, 28)
+        XCTAssertTrue(result.first?.priority.factors.contains("deferred 2x") == true)
+    }
+
     func testBackgroundBudgetProtectsReleaseRadarCandidatesFirst() {
         let candidates = [
             Candidate(id: "random-high-score", state: .randomSurveillance),

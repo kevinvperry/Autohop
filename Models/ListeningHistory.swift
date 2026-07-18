@@ -13,8 +13,9 @@ import Foundation
 //
 // Moved out of App/AppState.swift (June 2026) so AutohopCore — and the
 // ShowEngagementAnalyzer smoke tests — can consume listening history entries.
-// `ListeningHistoryStore` itself stays in AppState.swift; only the value types
-// live here.
+// Decomposition Stage 2 (2026-07-18) physically moved
+// `ListeningHistoryStore` to Persistence/ListeningHistoryStore.swift without
+// changing this model, its Codable schema, or persistence behavior.
 
 public enum ListeningHistoryStatus: String, Codable {
     case listened

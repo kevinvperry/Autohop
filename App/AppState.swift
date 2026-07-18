@@ -9,8 +9,9 @@ import UIKit
 // AI CONTEXT — App/AppState.swift
 //
 // PURPOSE: Central @MainActor coordinator and single source of truth for the
-// whole app. Every view observes this object; every service (feeds, downloads,
-// playback, queue, stats, history, notifications) is owned and orchestrated here.
+// whole app during the compatibility phase. Every view still observes this
+// façade, while AppCompositionRoot now owns concrete production construction
+// and explicit startup. Domain ownership moves out only in later approved stages.
 //
 // PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
 // observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
@@ -187,11 +188,20 @@ import UIKit
 //    (real subs ⇒ mark onboarded). NOTE: tip animation is applied by CoachMarkOverlay's
 //    .animation(value:) — AppState has no `import SwiftUI`, so never call withAnimation here.
 //
+// STAGE 1–2 ARCHITECTURE (2026-07-18): AppCompositionRoot constructs the
+// complete protocol-backed production graph. AppState init is side-effect-light;
+// idempotent start() installs this compatibility callback graph before starting
+// services, migrations, restoration, pollers, or launch tasks. Physically
+// independent observables/policies/stores now live in their domain folders:
+// PlaybackClock, PlaybackCueService, DownloadProgressModel,
+// ReleaseRadarCyclePlanner, and ListeningHistoryStore. This is physical
+// separation only; AppState remains the runtime owner until later stages.
+//
 // KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
 // FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
 // store), QueueService (pure queue ordering), ListeningHistoryStore &
-// ListeningStatsStore (JSON persistence, defined at bottom of this file and
-// in Persistence/), NotificationService, SleepTimerService,
+// ListeningStatsStore (persistence, both in Persistence/), NotificationService,
+// SleepTimerService,
 // SleepScheduleService (recurring nightly "still listening?" timer).
 //
 // INVARIANTS / GOTCHAS:
@@ -207,132 +217,19 @@ import UIKit
 //  - All methods assume MainActor; long work hops to detached tasks/services.
 // ============================================================================
 
-/// Cached Release Radar profile + the fingerprint that validates it (PERF-2 memo —
-/// see AppState.releaseRadarProfile). File-scope (not nested in AppState) on purpose:
-/// nested types inherit the class's @MainActor isolation, and the cold-launch
-/// warm-up constructs these OFF the main actor in a detached task.
-private struct ReleaseRadarProfileCacheEntry {
-    var observationCount: Int
-    var newestObservationKey: String?
-    var filterSettings: DownloadFilterSettings
-    var generatedAt: Date
-    var profile: FeedScheduleProfile
-}
-
-// AI CONTEXT — Immutable Release Radar cycle-planning DTOs. They are file-scoped
-// so they do not inherit AppState's MainActor isolation. AppState snapshots all
-// mutable inputs, then ReleaseRadarCyclePlanner performs profile calculation,
-// prediction, priority scoring, deferred boosting, and sorting off-main. Only the
-// returned values are reconciled into observable state on MainActor.
-private struct RefreshCycleCandidate: Sendable {
-    var subscription: Subscription
-    var profile: FeedScheduleProfile
-    var prediction: FeedRefreshPrediction
-    var priority: FeedRefreshPriority
-    var deferredCount: Int = 0
-    var deferredSince: Date?
-    var deferredScoreBoost: Double = 0
-}
-
-private struct RefreshPlanningDeferredSnapshot: Sendable {
-    var firstDeferredAt: Date
-    var deferralCount: Int
-}
-
-private enum ReleaseRadarCyclePlanner {
-    static func candidates(
-        subscriptions: [Subscription],
-        cachedProfiles: [UUID: FeedScheduleProfile],
-        deferred: [UUID: RefreshPlanningDeferredSnapshot],
-        minimumRecheckInterval: TimeInterval,
-        now: Date
-    ) -> [RefreshCycleCandidate] {
-        subscriptions.compactMap { subscription in
-            let filter = subscription.downloadFilterSettings
-            let profile = cachedProfiles[subscription.id]
-                ?? subscription.refreshStats.scheduleProfile(downloadFilterSettings: filter)
-            let episodeDates = subscription.episodes
-                .filter { filter.evaluation(for: $0).isIncluded }
-                .compactMap(\.publishedAt)
-            let learnedDates = subscription.refreshStats
-                .releaseObservations(includedBy: filter)
-                .compactMap(\.publishedAt)
-            let fallbackDates = filter.hasActiveFilters
-                ? learnedDates
-                : subscription.refreshStats.recentPublishDates
-            let eligibleEpisodes = subscription.episodes.filter { filter.evaluation(for: $0).isIncluded }
-            let latestPublishedAt = eligibleEpisodes.compactMap(\.publishedAt).max()
-            let prediction = FeedRefreshScheduling.prediction(
-                profile: profile,
-                latestPublishedAt: latestPublishedAt,
-                publishDates: Array(Set(episodeDates).union(fallbackDates)),
-                stats: subscription.refreshStats,
-                minRecheckInterval: minimumRecheckInterval,
-                now: now
-            )
-            guard prediction.nextDueAt <= now else { return nil }
-            var priority = FeedRefreshPrioritizer.priority(
-                prediction: prediction,
-                profile: profile,
-                priorityRank: subscription.priorityRank,
-                lastFetchedAt: subscription.refreshStats.lastFetchedAt,
-                now: now
-            )
-            var candidate = RefreshCycleCandidate(subscription: subscription, profile: profile, prediction: prediction, priority: priority)
-            if let deferred = deferred[subscription.id] {
-                let ageHours = max(0, now.timeIntervalSince(deferred.firstDeferredAt) / 3600)
-                let boost = min(40, Double(deferred.deferralCount) * 12 + ageHours * 2)
-                let rounded = (boost * 10).rounded() / 10
-                if rounded > 0 {
-                    candidate.deferredCount = deferred.deferralCount
-                    candidate.deferredSince = deferred.firstDeferredAt
-                    candidate.deferredScoreBoost = rounded
-                    priority.score = ((priority.score + rounded) * 10).rounded() / 10
-                    priority.factors.append("deferred \(deferred.deferralCount)x")
-                    priority.reason = priority.factors.joined(separator: ", ")
-                    candidate.priority = priority
-                }
-            }
-            return candidate
-        }.sorted { lhs, rhs in
-            if lhs.priority.score != rhs.priority.score { return lhs.priority.score > rhs.priority.score }
-            if lhs.deferredSince != rhs.deferredSince { return (lhs.deferredSince ?? .distantFuture) < (rhs.deferredSince ?? .distantFuture) }
-            if lhs.prediction.nextDueAt != rhs.prediction.nextDueAt { return lhs.prediction.nextDueAt < rhs.prediction.nextDueAt }
-            if lhs.subscription.priorityRank != rhs.subscription.priorityRank { return lhs.subscription.priorityRank < rhs.subscription.priorityRank }
-            return lhs.subscription.title.localizedCaseInsensitiveCompare(rhs.subscription.title) == .orderedAscending
-        }
-    }
-}
-
-/// Dedicated 2 Hz playback-time publisher (PERF-1 targeted fix). The scrubber tick
-/// used to be `@Published` directly on AppState, so every 0.5 s write invalidated
-/// EVERY view observing AppState (24 files) for the whole duration of playback.
-/// Only the surfaces that genuinely render the ticking time (PlayerView scrubber,
-/// MiniPlayerBar progress/remaining) observe this object; everything else observes
-/// AppState and no longer wakes on the tick. AppState.currentPlayerTime remains the
-/// canonical accessor — it proxies to this clock, so all existing read/write sites
-/// behave unchanged. Injected into the environment at the app root alongside
-/// AppState (AutohopApp).
-@MainActor
-final class PlaybackClock: ObservableObject {
-    @Published var time: TimeInterval = 0
-}
-
-/// Dedicated per-episode download-progress publisher (2026-07-04, deep-scan
-/// "reduce broad SwiftUI invalidations" — same targeted pattern as PlaybackClock).
-/// `downloadProgress` used to be `@Published` directly on AppState, so every ≥1%
-/// progress step of every active download (1–3 publishes/sec with concurrent
-/// transfers) invalidated EVERY AppState observer. Only the surfaces that render
-/// per-episode progress observe this object (episode rows in PodcastsView /
-/// PodcastDetailView / EpisodeDetailView, ListeningHistoryView,
-/// FirstSubscribeCard; DownloadsView reads
-/// DownloadActivityStore instead). AppState.downloadProgress remains the
-/// canonical accessor — it proxies here, so all existing read/write sites behave
-/// unchanged. Injected into the environment at the app root (AutohopApp).
-@MainActor
-final class DownloadProgressModel: ObservableObject {
-    /// Fraction complete (0.0 – 1.0) keyed by episode UUID.
-    @Published var progress: [UUID: Double] = [:]
+// AI CONTEXT — Explicit AppState startup lifecycle introduced by decomposition
+// Stage 1. Construction stores a complete dependency graph but does not start
+// CloudKit, NWPathMonitor, service callbacks, pollers, resource monitoring,
+// migrations, restoration, or launch maintenance. Production bootstrap publishes
+// the constructed singleton first, then `start()` advances synchronously through
+// starting → started. Re-entrant/repeated starts are ignored. `stopped` is
+// reserved for Stage 12's deterministic process/test teardown; no restart from
+// stopped is permitted during Stages 0–2.
+enum AppStartupState: String, Equatable {
+    case constructed
+    case starting
+    case started
+    case stopped
 }
 
 @MainActor
@@ -476,6 +373,8 @@ final class AppState: ObservableObject {
     private var playInstantWarningPlayer: AVAudioPlayer?
 
     private(set) static var shared: AppState!
+    private(set) var startupState: AppStartupState = .constructed
+    private var callbacksInstalled = false
 
     private let logger = AppLogger.shared
     private let resourceMonitor = ResourceMonitor.shared
@@ -860,6 +759,20 @@ final class AppState: ObservableObject {
         self.relayObservedFeedURLs = ReleaseFeatures.relayService
             ? Self.relayFeedURLs(in: subscriptionStore.subscriptions)
             : []
+    }
+
+    /// Installs the existing compatibility callback graph exactly once.
+    ///
+    /// AI CONTEXT — Stage 1 intentionally moves ownership of no callback. This
+    /// method is still AppState code; its sole purpose is to keep synchronous
+    /// dependency construction separate from runtime activation. Production
+    /// `start()` calls it before CloudKit, the network monitor, restoration,
+    /// migrations, pollers, and launch tasks, preserving the former bootstrap
+    /// ordering. Later stages transfer each callback to its domain coordinator.
+    private func installRuntimeCallbacksIfNeeded() {
+        guard !callbacksInstalled else { return }
+        callbacksInstalled = true
+
         cloudSyncEngine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
         }
@@ -897,10 +810,6 @@ final class AppState: ObservableObject {
         subscriptionStore.onEpisodeFileShouldDelete = { [weak self] episode in
             Task { try? await self?.downloadManager.deleteLocalFile(for: episode) }
         }
-        if settingsStore.appSettings.iCloudSyncEnabled {
-            cloudSyncEngine.start()
-        }
-
         subscriptionStore.objectWillChange
             .sink { [weak self] _ in
                 // Drop the memoized queue synchronously (P3): SubscriptionStore
@@ -970,12 +879,6 @@ final class AppState: ObservableObject {
         }
 
         syncSleepScheduleConfig()
-
-        refreshUpNextEpisode()
-        startNetworkMonitor()
-        subscriptionStore.cleanupExpiredPreviewSubscriptions(
-            subscriptionIDsWithHistory: Set(listeningHistoryStore.entries.map(\.subscriptionID))
-        )
     }
 
     /// Creates a podcast that another device subscribed to, by fetching its feed,
@@ -1045,7 +948,13 @@ final class AppState: ObservableObject {
         return true
     }
 
-    static func bootstrap() -> AppState {
+    /// Resolves the process-wide AppState. Concrete production construction lives
+    /// in AppCompositionRoot; the optional root/start flag are Stage 0 test seams
+    /// used to verify singleton identity without launching OS-owned services.
+    static func bootstrap(
+        compositionRoot: AppCompositionRoot? = nil,
+        startRuntime: Bool = true
+    ) -> AppState {
         let bootstrapStartedAt = CFAbsoluteTimeGetCurrent()
         // Re-entrancy / single-instance guard. bootstrap() runs on the @MainActor and is
         // synchronous, so two *concurrent* callers can't interleave — but a caller reached
@@ -1054,33 +963,64 @@ final class AppState: ObservableObject {
         // instance here, and publishing `shared` the instant it exists (below), guarantees
         // one instance no matter how many sharedOrBootstrap() callers race (e.g. a CarPlay
         // cold-launch scene and the phone WindowGroup both bootstrapping at startup).
-        if let shared { return shared }
+        if let shared {
+            if startRuntime { shared.start() }
+            return shared
+        }
 
-        let chapterService = ChapterService()
-        let queueService = QueueService()
-        let playbackEngine = PlaybackEngine(chapterService: chapterService, queueService: queueService)
-        let downloadManager = DownloadManager()
-        let state = AppState(
-            feedService: FeedService(chapterService: chapterService),
-            downloadManager: downloadManager,
-            playbackEngine: playbackEngine,
-            chapterService: chapterService,
-            queueService: queueService,
-            settingsStore: SettingsStore(),
-            subscriptionStore: SubscriptionStore()
-        )
+        let state = (compositionRoot ?? AppCompositionRoot.production()).makeAppState()
         let constructionFinishedAt = CFAbsoluteTimeGetCurrent()
         // Publish immediately, before the remaining setup, so any re-entrant
         // sharedOrBootstrap() during bootstrap resolves to THIS instance.
         AppState.shared = state
+        if startRuntime {
+            state.start(
+                bootstrapStartedAt: bootstrapStartedAt,
+                constructionFinishedAt: constructionFinishedAt
+            )
+        }
+        return state
+    }
+
+    /// Explicit, idempotent runtime start. All Stage 0–2 callbacks remain owned
+    /// by AppState; later stages transfer them one domain at a time.
+    func start() {
+        let now = CFAbsoluteTimeGetCurrent()
+        start(bootstrapStartedAt: now, constructionFinishedAt: now)
+    }
+
+    private func start(
+        bootstrapStartedAt: CFAbsoluteTime,
+        constructionFinishedAt: CFAbsoluteTime
+    ) {
+        guard beginStartupTransition() else {
+            return
+        }
+
+        let state = self
+        // Install the complete pre-existing callback graph before any service can
+        // emit runtime events. This preserves the former init → bootstrap order.
+        installRuntimeCallbacksIfNeeded()
+
+        // These effects previously ran during/after bootstrap. Keeping them at
+        // the beginning of explicit start makes construction side-effect-light
+        // while preserving their order relative to the callback graph.
+        if settingsStore.appSettings.iCloudSyncEnabled {
+            cloudSyncEngine.start()
+        }
+        refreshUpNextEpisode()
+        startNetworkMonitor()
+        subscriptionStore.cleanupExpiredPreviewSubscriptions(
+            subscriptionIDsWithHistory: Set(listeningHistoryStore.entries.map(\.subscriptionID))
+        )
 
         // Episode completion
-        playbackEngine.onEpisodeFinished = { [weak state] episode in
+        state.playbackEngine.onEpisodeFinished = { [weak state] episode in
             Task { @MainActor in await state?.handleEpisodeFinished(episode) }
         }
 
         // Scrubber + Now Playing time sync (fires every 0.5 s)
-        playbackEngine.onTimeUpdate = { [weak state] time in
+        state.playbackEngine.onTimeUpdate = { [weak state] time in
             Task { @MainActor in
                 guard let state else { return }
                 let tickStartedAt = CFAbsoluteTimeGetCurrent()
@@ -1169,7 +1109,7 @@ final class AppState: ObservableObject {
         }
 
         // Interruption (phone call, AirPods disconnect, etc.)
-        playbackEngine.onPlaybackInterrupted = { [weak state] in
+        state.playbackEngine.onPlaybackInterrupted = { [weak state] in
             Task { @MainActor in
                 guard let state else { return }
                 state.isPlaying = false
@@ -1188,12 +1128,14 @@ final class AppState: ObservableObject {
         // session (PlaybackEngine.scheduleNowPlayingReassertAfterRouteRestore)
         // — re-push the FULL Now Playing card so an AirPods stem-press lands
         // on Autohop instead of falling through to Apple Music.
-        playbackEngine.onRouteRestored = { [weak state] in
-            Task { @MainActor in
-                state?.reassertNowPlayingCard(reason: "routeRestored")
+        if let routeAwarePlaybackEngine = state.playbackEngine as? PlaybackEngine {
+            routeAwarePlaybackEngine.onRouteRestored = { [weak state] in
+                Task { @MainActor in
+                    state?.reassertNowPlayingCard(reason: "routeRestored")
+                }
             }
         }
-        playbackEngine.onPlaybackResumed = { [weak state] in
+        state.playbackEngine.onPlaybackResumed = { [weak state] in
             Task { @MainActor in
                 guard let state else { return }
                 state.isPlaying = true
@@ -1214,7 +1156,7 @@ final class AppState: ObservableObject {
         }
 
         // Playback stats
-        playbackEngine.onManualSkipForward = { [weak state] seconds in
+        state.playbackEngine.onManualSkipForward = { [weak state] seconds in
             Task { @MainActor in
                 state?.listeningStatsStore.addManualSkipForward(
                     seconds,
@@ -1222,7 +1164,7 @@ final class AppState: ObservableObject {
                 )
             }
         }
-        playbackEngine.onAutoSkip = { [weak state] seconds in
+        state.playbackEngine.onAutoSkip = { [weak state] seconds in
             Task { @MainActor in
                 state?.listeningStatsStore.addAutoSkip(
                     seconds,
@@ -1230,7 +1172,7 @@ final class AppState: ObservableObject {
                 )
             }
         }
-        playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
+        state.playbackEngine.onTrimSilenceSaved = { [weak state] seconds in
             Task { @MainActor in
                 state?.listeningStatsStore.addTrimSilenceSaved(
                     seconds,
@@ -1542,8 +1484,36 @@ final class AppState: ObservableObject {
             "subscriptionCount": "\(state.subscriptionStore.subscriptions.count)",
             "historyCount": "\(state.listeningHistoryStore.entries.count)"
         ])
-        return state
+        startupState = .started
     }
+
+    private func beginStartupTransition() -> Bool {
+        guard startupState == .constructed else {
+            logger.info("app.startSkipped", "AppState start ignored because runtime is already starting or started", metadata: [
+                "startupState": startupState.rawValue
+            ])
+            return false
+        }
+        startupState = .starting
+        return true
+    }
+
+#if DEBUG
+    /// Stage 0 harness seam: exercises the exact production startup-state guard
+    /// without installing OS callbacks or launching long-lived work.
+    @discardableResult
+    func _runCharacterizationStart(_ work: () -> Void) -> Bool {
+        guard beginStartupTransition() else { return false }
+        work()
+        startupState = .started
+        return true
+    }
+
+    /// Tests must restore the process singleton after identity characterization.
+    static func _resetSharedForCharacterization() {
+        shared = nil
+    }
+#endif
 
     static func sharedOrBootstrap() -> AppState {
         if let shared {
@@ -2661,43 +2631,11 @@ final class AppState: ObservableObject {
     /// no network/file dependency. AVAudioPlayer shares Autohop's active audio
     /// session, allowing the warning to sound gently over the interrupted show.
     private func playPlayInstantWarningTone() {
-        guard let data = Self.makePlayInstantWarningWAV() else { return }
+        guard let data = PlaybackCueService.makePlayInstantWarningWAV() else { return }
         playInstantWarningPlayer = try? AVAudioPlayer(data: data)
         playInstantWarningPlayer?.volume = 0.22
         playInstantWarningPlayer?.prepareToPlay()
         playInstantWarningPlayer?.play()
-    }
-
-    private static func makePlayInstantWarningWAV() -> Data? {
-        let sampleRate = 22_050
-        let duration = 0.55
-        let sampleCount = Int(Double(sampleRate) * duration)
-        var pcm = Data(capacity: sampleCount * 2)
-        for index in 0..<sampleCount {
-            let time = Double(index) / Double(sampleRate)
-            let frequency = time < 0.25 ? 523.25 : (time < 0.30 ? 0 : 659.25)
-            let localTime = time < 0.30 ? time : time - 0.30
-            let noteDuration = time < 0.30 ? 0.25 : 0.25
-            let envelope = frequency == 0 ? 0 : min(1, localTime / 0.025) * min(1, (noteDuration - localTime) / 0.05)
-            let value = Int16((sin(2 * .pi * frequency * time) * max(0, envelope) * 8_000).rounded())
-            var littleEndian = value.littleEndian
-            withUnsafeBytes(of: &littleEndian) { pcm.append(contentsOf: $0) }
-        }
-        var wav = Data()
-        func appendASCII(_ value: String) { wav.append(value.data(using: .ascii)!) }
-        func appendUInt16(_ value: UInt16) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { wav.append(contentsOf: $0) }
-        }
-        func appendUInt32(_ value: UInt32) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { wav.append(contentsOf: $0) }
-        }
-        appendASCII("RIFF"); appendUInt32(UInt32(36 + pcm.count)); appendASCII("WAVE")
-        appendASCII("fmt "); appendUInt32(16); appendUInt16(1); appendUInt16(1)
-        appendUInt32(UInt32(sampleRate)); appendUInt32(UInt32(sampleRate * 2)); appendUInt16(2); appendUInt16(16)
-        appendASCII("data"); appendUInt32(UInt32(pcm.count)); wav.append(pcm)
-        return wav
     }
 
     // MARK: - Playback
@@ -6309,337 +6247,5 @@ final class AppState: ObservableObject {
         }
         extra.forEach { context[$0.key] = $0.value }
         return context
-    }
-}
-
-
-// AI CONTEXT — ListeningHistoryStore: persists per-episode listening log to
-// Application Support/Autohop/listening-history.json (max 500 entries, oldest
-// dropped). Entries are keyed by subscription-scoped episode GUID/URL
-// (historyKey) so the same episode re-fetched from a feed merges into one entry
-// without colliding across feeds. recordProgress() is called from AppState's 0.5 s
-// playback ticks, but deliberately accumulates those samples in memory and applies
-// one entry mutation/sort/sync marker per 30-second batch. Routine diagnostics
-// are summarized at most every five minutes; lifecycle flushes remain immediate.
-// save() and mark() flush
-// the buffer first, preserving pause/background/completion durability. mark() sets
-// played/archived status with a CompletionKind used. A later `.autoArchived`
-// storage cleanup cannot replace an existing Played/finished/marked-played event;
-// history records how listening ended, not the episode's later library state.
-// later by ShowEngagementAnalyzer ("drifting" stats).
-// UI filters out entries with < 60 s listened — that rule lives in the views,
-// not here. Value types live in Models/ListeningHistory.swift.
-@MainActor
-final class ListeningHistoryStore: ObservableObject {
-    @Published private(set) var entries: [ListeningHistoryEntry] = []
-
-    private var lastSavedAt: Date?
-    private let maxEntries = 500
-    private let progressFlushInterval: TimeInterval = 30
-    private var lastProgressFlushAt: Date?
-    private var lastProgressDiagnosticAt: Date?
-    private let progressDiagnosticInterval: TimeInterval = 5 * 60
-
-    /// Latest metadata plus accumulated wall-clock listening for one episode.
-    /// Playback normally has only one pending key; the dictionary makes an episode
-    /// switch safe even if its final lifecycle checkpoint arrives asynchronously.
-    private struct PendingProgress {
-        var episode: Episode
-        var podcastTitle: String
-        var artworkURL: URL?
-        var listenedSeconds: TimeInterval
-        var positionSeconds: TimeInterval
-        var durationSeconds: TimeInterval?
-        var lastListenedAt: Date
-    }
-    private var pendingProgress: [String: PendingProgress] = [:]
-    /// Record store for cross-device history sync; set by AppState. nil = no sync.
-    var syncDatabase: AutohopDatabase?
-
-    private static let fileURL: URL? = {
-        guard let appSupport = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ) else { return nil }
-        return appSupport.appendingPathComponent("Autohop/listening-history.json")
-    }()
-
-    init() {
-        load()
-    }
-
-    var totalListeningSeconds: TimeInterval {
-        entries.reduce(0) { $0 + $1.listenedSeconds }
-    }
-
-    func recordProgress(
-        episode: Episode,
-        podcastTitle: String,
-        artworkURL: URL?,
-        listenedSeconds: TimeInterval,
-        positionSeconds: TimeInterval,
-        durationSeconds: TimeInterval?
-    ) {
-        let key = historyKey(for: episode)
-        let now = Date()
-
-        if var pending = pendingProgress[key] {
-            pending.episode = episode
-            pending.podcastTitle = podcastTitle
-            pending.artworkURL = artworkURL
-            pending.listenedSeconds += listenedSeconds
-            pending.positionSeconds = positionSeconds
-            pending.durationSeconds = durationSeconds ?? episode.durationSeconds
-            pending.lastListenedAt = now
-            pendingProgress[key] = pending
-        } else {
-            pendingProgress[key] = PendingProgress(
-                episode: episode,
-                podcastTitle: podcastTitle,
-                artworkURL: artworkURL,
-                listenedSeconds: listenedSeconds,
-                positionSeconds: positionSeconds,
-                durationSeconds: durationSeconds ?? episode.durationSeconds,
-                lastListenedAt: now
-            )
-        }
-
-        guard lastProgressFlushAt.map({ now.timeIntervalSince($0) >= progressFlushInterval }) ?? true else {
-            return
-        }
-        flushPendingProgress(reason: "playbackBatch")
-    }
-
-    /// Applies all buffered tick samples as a single published array mutation.
-    /// This is the expensive boundary: lookup/update, one final sort, one sync-row
-    /// marker per affected episode, and at most one throttled JSON save.
-    private func flushPendingProgress(reason: String) {
-        guard !pendingProgress.isEmpty else { return }
-        let pending = pendingProgress
-        pendingProgress.removeAll(keepingCapacity: true)
-        lastProgressFlushAt = Date()
-
-        for (key, progress) in pending {
-            let episode = progress.episode
-            if let index = entries.firstIndex(where: { $0.id == key }) {
-                entries[index].episodeID = episode.id
-                entries[index].episodeTitle = episode.title
-                entries[index].podcastTitle = progress.podcastTitle
-                entries[index].artworkURL = progress.artworkURL
-                entries[index].publishedAt = episode.publishedAt
-                entries[index].durationSeconds = progress.durationSeconds
-                entries[index].listenedSeconds += progress.listenedSeconds
-                entries[index].lastPositionSeconds = progress.positionSeconds
-                entries[index].lastListenedAt = progress.lastListenedAt
-                // Status remains unchanged: only mark() owns completion state.
-            } else {
-                entries.append(ListeningHistoryEntry(
-                    id: key,
-                    subscriptionID: episode.subscriptionID,
-                    episodeID: episode.id,
-                    episodeTitle: episode.title,
-                    podcastTitle: progress.podcastTitle,
-                    artworkURL: progress.artworkURL,
-                    publishedAt: episode.publishedAt,
-                    durationSeconds: progress.durationSeconds,
-                    listenedSeconds: progress.listenedSeconds,
-                    lastPositionSeconds: progress.positionSeconds,
-                    lastListenedAt: progress.lastListenedAt,
-                    status: .listened
-                ))
-            }
-        }
-
-        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
-        if entries.count > maxEntries {
-            entries.removeLast(entries.count - maxEntries)
-        }
-        for key in pending.keys { recordPending(id: key) }
-        let now = Date()
-        let routineSummaryDue = lastProgressDiagnosticAt.map({ now.timeIntervalSince($0) >= progressDiagnosticInterval }) ?? true
-        if reason != "playbackBatch" || routineSummaryDue {
-            lastProgressDiagnosticAt = now
-            AppLogger.shared.info("history.progressFlush", "Applied coalesced listening-history progress", metadata: [
-                "reason": reason,
-                "episodeCount": "\(pending.count)",
-                "listenedSeconds": String(format: "%.1f", pending.values.reduce(0) { $0 + $1.listenedSeconds })
-            ])
-        }
-        if reason == "playbackBatch" {
-            saveThrottled()
-        }
-    }
-
-    func mark(
-        episode: Episode,
-        podcastTitle: String,
-        artworkURL: URL?,
-        status: ListeningHistoryStatus,
-        completionKind: CompletionKind? = nil,
-        positionSeconds: TimeInterval? = nil
-    ) {
-        let key = historyKey(for: episode)
-        // Completion must include every tick accumulated since the last batch.
-        flushPendingProgress(reason: "mark")
-        let now = Date()
-        let epDuration = episode.durationSeconds
-        let pct: Double? = {
-            guard let pos = positionSeconds, let dur = epDuration, dur > 0 else { return nil }
-            return min(pos / dur, 1.0)
-        }()
-
-        if let index = entries.firstIndex(where: { $0.id == key }) {
-            // AI CONTEXT — Auto Archive's After Played pass runs after playback
-            // completion and changes the library row to Archived. It is not a new
-            // listening outcome. Preserve both modern CompletionKind events and
-            // legacy Played entries so the UI continues to say Completed.
-            let existing = entries[index]
-            if completionKind == .autoArchived,
-               existing.status == .played
-                || existing.completionKind == .finishedNaturally
-                || existing.completionKind == .markedPlayed {
-                AppLogger.shared.info("history.autoArchivePreservedCompletion", "Preserved completed history event during automatic storage cleanup", metadata: [
-                    "episode": episode.title,
-                    "existingKind": existing.completionKind?.rawValue ?? "legacyPlayed"
-                ])
-                return
-            }
-            entries[index].status = status
-            entries[index].podcastTitle = podcastTitle
-            entries[index].artworkURL = artworkURL
-            entries[index].lastListenedAt = now
-            entries[index].completionKind = completionKind
-            if let pos = positionSeconds {
-                entries[index].listenedDurationSeconds = pos
-                entries[index].lastPositionSeconds = pos
-            }
-            if let dur = epDuration {
-                entries[index].episodeDurationSeconds = dur
-            }
-            entries[index].completionPercent = pct
-        } else {
-            let pos = positionSeconds ?? 0
-            entries.append(ListeningHistoryEntry(
-                id: key,
-                subscriptionID: episode.subscriptionID,
-                episodeID: episode.id,
-                episodeTitle: episode.title,
-                podcastTitle: podcastTitle,
-                artworkURL: artworkURL,
-                publishedAt: episode.publishedAt,
-                durationSeconds: epDuration,
-                listenedSeconds: 0,
-                lastPositionSeconds: pos,
-                lastListenedAt: now,
-                status: status,
-                completionKind: completionKind,
-                completionPercent: pct,
-                listenedDurationSeconds: positionSeconds,
-                episodeDurationSeconds: epDuration
-            ))
-        }
-        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
-        recordPending(id: key)
-        save()
-    }
-
-    /// Records a changed entry as pending for cross-device sync.
-    private func recordPending(id: String) {
-        guard let syncDatabase, let entry = entries.first(where: { $0.id == id }) else { return }
-        do {
-            try syncDatabase.recordHistoryEntry(entry)
-        } catch {
-            // A swallowed failure here means the entry saved locally but the
-            // outgoing CloudKit row was never queued — log so a "history didn't
-            // sync" report leaves a trace (alwaysPersist survives the Diagnostics
-            // toggle being off).
-            AppLogger.shared.error("sync.historyMarkerFailed", "Failed to record pending history entry for sync", metadata: [
-                "entryID": id,
-                "error": String(describing: error)
-            ], alwaysPersist: true)
-        }
-    }
-
-    /// Merges a remote history entry with record-level last-write-wins
-    /// (the entry with the newer `lastListenedAt` wins the whole record).
-    @MainActor
-    func applyRemote(_ remote: ListeningHistoryEntry) {
-        // Resolve local buffered ticks before record-level LWW compares timestamps.
-        flushPendingProgress(reason: "remoteMerge")
-        var normalizedRemote = remote
-        normalizedRemote.repairAutoArchiveOverwriteIfClearlyCompleted()
-        if let index = entries.firstIndex(where: { $0.id == normalizedRemote.id }) {
-            guard normalizedRemote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
-            entries[index] = normalizedRemote
-        } else {
-            entries.append(normalizedRemote)
-        }
-        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
-        if entries.count > maxEntries {
-            entries.removeLast(entries.count - maxEntries)
-        }
-        try? syncDatabase?.saveSyncedHistoryEntry(normalizedRemote) // clean — don't re-push
-        save()
-    }
-
-    func save() {
-        // Lifecycle checkpoints call save(), so make buffered progress durable and
-        // sync-visible before encoding. flushPendingProgress may call saveThrottled;
-        // lastProgressFlushAt prevents recursion because the buffer is already empty.
-        flushPendingProgress(reason: "save")
-        guard let url = Self.fileURL else { return }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(entries)
-            try data.write(to: url, options: [.atomic])
-            lastSavedAt = Date()
-        } catch {
-            AppLogger.shared.warning("history.saveFailed", "Could not save listening history", metadata: [
-                "error": String(describing: error)
-            ])
-        }
-    }
-
-    private func saveThrottled() {
-        if let lastSavedAt, Date().timeIntervalSince(lastSavedAt) < 10 {
-            return
-        }
-        save()
-    }
-
-    private func load() {
-        guard let url = Self.fileURL,
-              FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let loadedEntries = try? JSONDecoder().decode([ListeningHistoryEntry].self, from: data)
-        else { return }
-        var repairedCount = 0
-        entries = loadedEntries.map { entry in
-            var normalized = entry
-            if normalized.repairAutoArchiveOverwriteIfClearlyCompleted() {
-                repairedCount += 1
-            }
-            return normalized
-        }.sorted { $0.lastListenedAt > $1.lastListenedAt }
-        if repairedCount > 0 {
-            AppLogger.shared.info("history.autoArchiveRepair", "Repaired completed history events overwritten by automatic storage cleanup", metadata: [
-                "entryCount": "\(repairedCount)"
-            ])
-            save()
-        }
-    }
-
-    private func historyKey(for episode: Episode) -> String {
-        let subscriptionPrefix = episode.subscriptionID.uuidString
-        let trimmedGUID = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedGUID.isEmpty {
-            return "\(subscriptionPrefix)|guid:\(trimmedGUID)"
-        }
-        if let publishedAt = episode.publishedAt {
-            return "\(subscriptionPrefix)|title-date:\(episode.title.lowercased())|\(Int(publishedAt.timeIntervalSince1970))"
-        }
-        return "\(subscriptionPrefix)|title-url:\(episode.title.lowercased())|\(episode.audioURL.absoluteString)"
     }
 }

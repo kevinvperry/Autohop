@@ -14,6 +14,10 @@ its move-index space.
 Version 1.3 is an iPhone-only production release. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
 features and are not offered, advertised, or contacted by the 1.3 build.
+AppState decomposition Stages 0–2 are complete: production construction now
+lives in AppCompositionRoot, runtime start is idempotent, and independent leaf
+types live in domain folders. AppState remains the compatibility façade; no
+domain coordinator ownership has moved yet.
 -->
 
 **The podcast player for people who are serious about listening.**
@@ -103,6 +107,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`Docs/CARPLAY_CODE_STRATEGY.md`](Docs/CARPLAY_CODE_STRATEGY.md) | CarPlay implementation plan, phase gates, and release sequencing. |
 | [`Docs/CARPLAY_PHASE9_QA.md`](Docs/CARPLAY_PHASE9_QA.md) | CarPlay simulator/hardware QA status and manual checklist. |
 | [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
+| [`APPSTATE_DECOMPOSITION_PROPOSAL.md`](APPSTATE_DECOMPOSITION_PROPOSAL.md) | Authoritative staged AppState ownership-migration design and implementation status. |
+| [`APPSTATE_DECOMPOSITION_BASELINE.md`](APPSTATE_DECOMPOSITION_BASELINE.md) | Stage 0 source, automated-test, diagnostic, and device-only regression baseline. |
 | [`project_autohop.md`](project_autohop.md) | Fast machine-readable project brief: architecture, feature map, sync coverage, build notes, and licensing orientation. |
 | [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) | Latest detailed code, feature, settings, sync, documentation, website, performance, security, and Apple-design assessment. |
 | [`ASSESSMENT.md`](ASSESSMENT.md) | Historical machine-oriented code/feature/security assessment. Superseded by the deep scan above for current work. |
