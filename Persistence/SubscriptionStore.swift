@@ -93,24 +93,26 @@ public final class SubscriptionStore: ObservableObject {
     /// Returns the subscription-scoped sync key of the episode loaded in the
     /// player on this device, so a remote played/archived change can't interrupt
     /// it (active-player-wins).
-    /// Set by AppState; nil when nothing is loaded.
+    /// Installed by SyncCoordinator; nil when nothing is loaded.
     public var nowPlayingEpisodeSyncKeyProvider: (() -> String?)?
 
     /// Supplies the global default PlaybackPreference (from AppSettings). Used to
     /// seed a subscription's own playbackPreference at the moment it becomes a
-    /// real subscription. Set by AppState; falls back to `.default` when nil.
+    /// real subscription. Installed by SettingsViewModel; falls back to
+    /// `.default` when nil.
     /// Browse-only (preview) subscriptions resolve their preference live through
-    /// AppState.effectivePreference(for:), so seeding only matters once a feed is
+    /// PlaybackPreferenceWorkflow.effectivePreference(for:), so seeding only matters once a feed is
     /// actually subscribed to — after which the snapshot is independent.
     public var defaultPlaybackPreferenceProvider: (() -> PlaybackPreference)?
 
     /// Supplies the global default AutoArchiveSettings (from AppSettings). Applied
-    /// to each new subscription at subscribe time. Set by AppState; falls back to
-    /// `.default` when nil. Never applied to existing subscriptions.
+    /// to each new subscription at subscribe time. Installed by
+    /// SettingsViewModel; falls back to `.default` when nil. Never applied to
+    /// existing subscriptions.
     public var defaultAutoArchiveSettingsProvider: (() -> AutoArchiveSettings)?
 
-    /// Requests deletion of an episode's downloaded media file. Set by AppState to
-    /// call DownloadManager.deleteLocalFile(for:) — the store can't reach the
+    /// Requests deletion of an episode's downloaded media file. Installed by
+    /// DownloadCoordinator to call DownloadManager.deleteLocalFile(for:) — the store can't reach the
     /// DownloadManager directly. Invoked when a remote played/archived state merges
     /// in (applyRemoteEpisodeState) and this device still holds the download, so a
     /// cross-device archive doesn't leave an orphaned file (ASSESSMENT.md B1). The
@@ -409,7 +411,7 @@ public final class SubscriptionStore: ObservableObject {
 
     /// Used by OPML import to add a subscription whose metadata came from a live feed fetch.
     /// - Parameter reindexRanks: pass FALSE from remote-sync materialization
-    ///   (iPhone's AppState.materializeRemoteSubscription) so the insert does
+    ///   (`SyncCoordinator.materializeRemoteSubscription` on iPhone) so the insert does
     ///   a non-destructive resort instead of compacting every subscription's
     ///   rank to its array position. The compaction is correct for LOCAL adds
     ///   (subscribe, OPML import — the array IS the whole truth there), but
@@ -1401,7 +1403,7 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     /// Replaces the complete position filter with one persistence/UI publication.
-    /// AppState owns propagation into an active playback engine.
+    /// PlaybackChapterWorkflow owns propagation into an active playback engine.
     public func updateChapterFilter(subscriptionID: UUID, filter: ChapterFilter) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
               subscriptions[index].chapterFilter != filter else { return }
@@ -1470,8 +1472,9 @@ public final class SubscriptionStore: ObservableObject {
         // updateEpisodes(). Without this, a cross-device archive leaves an orphaned
         // media file (storage leak) and a "downloaded + archived" episode
         // (ASSESSMENT.md B1). The actual file delete is surfaced through
-        // onEpisodeFileShouldDelete (set by AppState) since the store can't reach
-        // DownloadManager directly — mirroring nowPlayingEpisodeSyncKeyProvider.
+        // onEpisodeFileShouldDelete (installed by DownloadCoordinator) since the
+        // store can't reach DownloadManager directly — mirroring the active
+        // player identity provider.
         if merged.playedState == .played || merged.playedState == .archived {
             let hadLocalDownload = episode.downloadState == .downloaded
                 || episode.localFileURL != nil

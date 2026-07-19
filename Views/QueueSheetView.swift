@@ -3,7 +3,9 @@ import SwiftUI
 // AI CONTEXT — Views/QueueSheetView.swift ("Up Next" sheet — labelled "Up Next"
 // in-app; the canonical design-system reference page per DESIGN.md; internal
 // struct name remains QueueSheetView). Shows Up Next + the priority-ordered
-// downloaded queue from appState.downloadedQueue (overrides applied).
+// downloaded queue from QueueCoordinator.episodes (overrides applied). It reads
+// subscription metadata from SubscriptionStore and current identity from
+// PlaybackCoordinator; AppState is retained only for cross-domain commands.
 // Chrome (NavRules): centered title "Up Next", SheetCloseButton ✕ top-right,
 // pull-to-refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by
 // design): leading Play / Play Next, trailing Archive / Play Last. Pin badges
@@ -34,6 +36,9 @@ import SwiftUI
 // variant for reuse during repeated queue opens.
 struct QueueSheetView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var queueCoordinator: QueueCoordinator
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var isRefreshing = false
     @State private var appearTime: Date?
@@ -63,7 +68,7 @@ struct QueueSheetView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if appState.downloadedQueue.isEmpty {
+                if queueCoordinator.episodes.isEmpty {
                     ContentUnavailableView(
                         "Up Next builds itself",
                         systemImage: "square.stack",
@@ -71,9 +76,9 @@ struct QueueSheetView: View {
                     )
                 } else {
                     List {
-                        ForEach(Array(appState.downloadedQueue.enumerated()), id: \.element.id) { index, episode in
-                            let sub = appState.subscriptionStore.subscription(id: episode.subscriptionID)
-                            let isCurrent = appState.currentPlayerEpisode?.id == episode.id
+                        ForEach(Array(queueCoordinator.episodes.enumerated()), id: \.element.id) { index, episode in
+                            let sub = subscriptionStore.subscription(id: episode.subscriptionID)
+                            let isCurrent = playbackCoordinator.currentEpisode?.id == episode.id
 
                             let pinnedNext = appState.isQueuePinnedNext(episode)
                             let pinnedLast = appState.isQueuePinnedLast(episode)
@@ -270,7 +275,7 @@ struct QueueSheetView: View {
                     // Animate structural changes (row moves to top/bottom, archive
                     // gap-close) whenever the queue order/membership changes. `.smooth`
                     // is a no-bounce spring tuned for fluid position changes.
-                    .animation(.smooth(duration: 0.45), value: appState.downloadedQueue.map(\.id))
+                    .animation(.smooth(duration: 0.45), value: queueCoordinator.episodes.map(\.id))
                     .sensoryFeedback(.impact(weight: .light), trigger: moveHapticTrigger)
                     .sensoryFeedback(.success, trigger: archiveHapticTrigger)
                 }
@@ -292,7 +297,7 @@ struct QueueSheetView: View {
             let t = Date()
             appearTime = t
             logger.info("nav.appear", "QueueSheetView appeared", metadata: [
-                "queueCount": "\(appState.downloadedQueue.count)"
+                "queueCount": "\(queueCoordinator.episodes.count)"
             ])
             ResourceMonitor.shared.logSnapshot(reason: "nav.queueAppear")
         }

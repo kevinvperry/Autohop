@@ -48,6 +48,9 @@ import SwiftUI
 
 struct PodcastDetailView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
@@ -115,11 +118,11 @@ struct PodcastDetailView: View {
     /// The subscription backing this feed, if any (active OR inactive / browse).
     private var subscription: Subscription? {
         if let directSubscriptionID,
-           let sub = appState.subscriptionStore.subscription(id: directSubscriptionID) {
+           let sub = subscriptionStore.subscription(id: directSubscriptionID) {
             return sub
         }
         if let url = feedURL {
-            return appState.subscriptionStore.subscriptions.first { $0.feedURL == url }
+            return subscriptionStore.subscriptions.first { $0.feedURL == url }
         }
         return nil
     }
@@ -160,11 +163,11 @@ struct PodcastDetailView: View {
             }
 
             guard let url = feedURL else { return }
-            if let sub = appState.subscriptionStore.subscriptions.first(where: { $0.feedURL == url }) {
+            if let sub = subscriptionStore.subscriptions.first(where: { $0.feedURL == url }) {
                 if sub.browseDate != nil {
                     // Returning visitor to a browse-only preview: reset the 30-day
                     // clock and refresh episodes so new content appears.
-                    appState.subscriptionStore.refreshBrowseDate(subscriptionID: sub.id)
+                    subscriptionStore.refreshBrowseDate(subscriptionID: sub.id)
                     await appState.refreshSubscription(sub)
                 }
             } else if searchResult != nil {
@@ -172,7 +175,7 @@ struct PodcastDetailView: View {
                 await viewModel.load()
                 if let feed = viewModel.loadedFeed {
                     do {
-                        try appState.subscriptionStore.addPreviewSubscription(
+                        try subscriptionStore.addPreviewSubscription(
                             parsedFeed: feed,
                             feedURL: url
                         )
@@ -189,7 +192,7 @@ struct PodcastDetailView: View {
             // Teach episode swipe actions — but only once the user has a real
             // subscription, so it never competes with the Subscribe button on a
             // brand-new user's first preview.
-            if appState.realSubscriptionCount > 0 { appState.requestTip(.swipeActions) }
+            if onboardingCoordinator.realSubscriptionCount > 0 { onboardingCoordinator.requestTip(.swipeActions) }
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -207,7 +210,7 @@ struct PodcastDetailView: View {
         ) {
             Button("Unsubscribe", role: .destructive) {
                 if let id = subscription?.id {
-                    appState.subscriptionStore.remove(subscriptionID: id)
+                    subscriptionStore.remove(subscriptionID: id)
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -521,7 +524,7 @@ struct PodcastDetailView: View {
         if let sub = subscription, isRealSubscription {
             let enabled = sub.notificationsEnabled
             Button {
-                appState.subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: !enabled)
+                subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: !enabled)
             } label: {
                 let icon = Image(systemName: enabled ? "bell.fill" : "bell.slash")
                     .font(.subheadline)
@@ -580,7 +583,7 @@ struct PodcastDetailView: View {
                     // Idle rows are clear so the card's glass shows through; the
                     // playing row keeps the faint purple tint.
                     .listRowBackground(
-                        appState.currentPlayerEpisode?.id == episode.id
+                        playbackCoordinator.currentEpisode?.id == episode.id
                             ? Color.purple.opacity(0.08)
                             : Color.clear
                     )
@@ -765,14 +768,14 @@ struct PodcastDetailView: View {
 
     @ViewBuilder
     private func leadingSwipe(episode: Episode, sub: Subscription) -> some View {
-        let isCurrentlyPlaying = appState.currentPlayerEpisode?.id == episode.id
+        let isCurrentlyPlaying = playbackCoordinator.currentEpisode?.id == episode.id
         if !isCurrentlyPlaying {
             Button {
                 Task {
                     if episode.downloadState != .downloaded {
                         await appState.downloadEpisodeForQueue(episode)
                     }
-                    if let updated = appState.subscriptionStore.episode(subscriptionID: sub.id, episodeID: episode.id) {
+                    if let updated = subscriptionStore.episode(subscriptionID: sub.id, episodeID: episode.id) {
                         await appState.playEpisode(updated)
                     }
                 }
@@ -797,7 +800,7 @@ struct PodcastDetailView: View {
 
     @ViewBuilder
     private func trailingSwipe(episode: Episode, sub: Subscription) -> some View {
-        let isCurrentlyPlaying = appState.currentPlayerEpisode?.id == episode.id
+        let isCurrentlyPlaying = playbackCoordinator.currentEpisode?.id == episode.id
         if !isCurrentlyPlaying {
             // Far-right (edge) button. Global rules: a DOWNLOADED episode always offers
             // Archive; an un-downloaded episode on a subscribed + ACTIVE feed offers
@@ -857,7 +860,7 @@ struct PodcastDetailView: View {
             if let existing = subscription {
                 if existing.browseDate != nil {
                     // Browse preview → activate and move to top of Priority Stack.
-                    appState.subscriptionStore.activateAndMoveToTop(subscriptionID: existing.id)
+                    subscriptionStore.activateAndMoveToTop(subscriptionID: existing.id)
                 }
             } else if let url = feedURL {
                 // No subscription at all — fetch the feed (if needed) and add it.
@@ -867,7 +870,7 @@ struct PodcastDetailView: View {
                 } else {
                     feed = try await EpisodeFeedLoader().fetch(feedURL: url, limit: 50)
                 }
-                _ = try appState.subscriptionStore.add(parsedFeed: feed, feedURL: url)
+                _ = try subscriptionStore.add(parsedFeed: feed, feedURL: url)
             }
         } catch SubscriptionStoreError.duplicateFeed {
             // Already subscribed — nothing to do.
@@ -879,7 +882,7 @@ struct PodcastDetailView: View {
     private func statusKind(for episode: Episode, sub: Subscription) -> EpisodeStatusKind {
         switch episode.playedState {
         case .playing:
-            return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
+            return playbackCoordinator.currentEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
         case .played:   return .played
         case .archived: return episode.wasCompleted ? .played : .archived
         case .unplayed:

@@ -19,11 +19,12 @@ import SwiftUI
 struct PodcastSearchView: View {
     @StateObject private var viewModel = PodcastSearchViewModel()
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
     private var recentlyViewed: [Subscription] {
-        appState.subscriptionStore.subscriptions
+        subscriptionStore.subscriptions
             .filter { $0.browseDate != nil }
             .sorted { ($0.browseDate ?? .distantPast) > ($1.browseDate ?? .distantPast) }
     }
@@ -63,7 +64,7 @@ struct PodcastSearchView: View {
             // Search result → check for a real subscription first; Inactive
             // subscriptions are still subscribed and must open with Settings.
             .navigationDestination(for: PodcastSearchResult.self) { result in
-                if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+                if let activeSub = subscriptionStore.subscriptions.first(where: {
                     $0.feedURL == result.feedURL && $0.browseDate == nil
                 }) {
                     PodcastDetailView(subscriptionID: activeSub.id)
@@ -73,7 +74,7 @@ struct PodcastSearchView: View {
             }
             // Recently viewed row → subscription ID routes to preview or active view.
             .navigationDestination(for: UUID.self) { subscriptionID in
-                if let sub = appState.subscriptionStore.subscriptions.first(where: { $0.id == subscriptionID }) {
+                if let sub = subscriptionStore.subscriptions.first(where: { $0.id == subscriptionID }) {
                     if sub.browseDate != nil {
                         PodcastDetailView(browseSubscription: sub)
                     } else {

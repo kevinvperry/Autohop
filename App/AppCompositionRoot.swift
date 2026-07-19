@@ -11,16 +11,15 @@ import Foundation
 //
 // OWNERSHIP:
 // This value owns no runtime state, callback, Task, persistence rule, or policy.
-// AppState remains the compatibility façade and still installs every existing
-// compatibility callback graph. Stages 3–11 moved history/Stats, queue,
-// onboarding, routing, download runtime, refresh/Radar state, automatic intents,
-// Auto Archive, import, sync/Relay, and playback session ownership into explicit
-// coordinators. Stage 12 will transfer lifecycle/bootstrap wiring.
+// AppState remains the singleton/high-level compatibility façade. Domain
+// callbacks, startup sequencing, runtime policy, and mutable state are owned by
+// named coordinators/workflows; AppState only connects the typed graph.
 //
 // TESTABILITY:
 // `Dependencies` and the explicit initializer form the Stage 0 application
 // harness seam. Tests can supply protocol-backed fakes without invoking concrete
-// production construction. `makeAppState()` never starts long-lived work.
+// production construction. `makeAppState()` never starts long-lived work;
+// AppStartupWorkflow begins it only after AppState publishes the singleton.
 //
 // CONCURRENCY / INVARIANTS:
 // MainActor-only because AppState and several concrete services are MainActor

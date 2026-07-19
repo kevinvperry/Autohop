@@ -22,7 +22,7 @@ import SwiftUI
 // not the preview — see PAGES.md "Browse Subscription Lifecycle". Chart cards use CachedArtworkImage
 // with an explicit square target size so the shared artwork cache decodes covers
 // at card scale instead of retaining full-resolution storefront art in memory.
-// FIRST-RUN: while the user has no real subscriptions (appState.realSubscriptionCount
+// FIRST-RUN: while the user has no real subscriptions (OnboardingCoordinator
 // == 0) a starterPacksBanner sits above the rails and presents StarterPacksView.
 // TOP EPISODES: the Top Episodes hero header has a "See All" button that pushes
 // TopEpisodesView (the Top-50 child page) via AppRoute-style pendingRoute.
@@ -38,6 +38,8 @@ import SwiftUI
 // (was a plain VStack/HStack, which laid everything out eagerly and stuttered).
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var viewModel = DiscoverViewModel()
@@ -195,7 +197,7 @@ struct DiscoverView: View {
                             .padding(.horizontal, 20)
                             .padding(.top, 4)
 
-                        if appState.realSubscriptionCount == 0 {
+                        if onboardingCoordinator.realSubscriptionCount == 0 {
                             starterPacksBanner
                                 .padding(.horizontal, 20)
                         }
@@ -419,7 +421,7 @@ struct DiscoverView: View {
                 showUnavailableAlert = true
                 return
             }
-            if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+            if let activeSub = subscriptionStore.subscriptions.first(where: {
                 $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)
@@ -708,7 +710,7 @@ struct DiscoverView: View {
             }
             // Same routing rule as search results: real subscriptions go to
             // their episode page, everything else to the browse preview.
-            if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+            if let activeSub = subscriptionStore.subscriptions.first(where: {
                 $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)

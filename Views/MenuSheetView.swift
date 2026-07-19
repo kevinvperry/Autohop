@@ -12,6 +12,7 @@ import SwiftUI
 // lives in Settings → Subscriptions.
 struct MenuSheetView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var queueCoordinator: QueueCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @State private var appearTime: Date?
@@ -98,7 +99,7 @@ struct MenuSheetView: View {
             let t = Date()
             appearTime = t
             logger.info("nav.appear", "MenuSheetView appeared", metadata: [
-                "queueCount": "\(appState.downloadedQueue.count)"
+                "queueCount": "\(queueCoordinator.episodes.count)"
             ])
             ResourceMonitor.shared.logSnapshot(reason: "nav.menuAppear")
         }

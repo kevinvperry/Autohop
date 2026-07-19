@@ -10,14 +10,15 @@ import SwiftUI
 // expectation note (Phase 7 / §5-E).
 struct GettingStartedChecklist: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
 
     static let reorderedKey = "onboarding.reorderedPriority"
 
-    private var subscribed: Bool { appState.settingsStore.appSettings.hasSubscribedFirstShow }
-    private var played: Bool { appState.settingsStore.appSettings.hasPlayedFirstEpisode }
+    private var subscribed: Bool { settingsViewModel.appSettings.hasSubscribedFirstShow }
+    private var played: Bool { settingsViewModel.appSettings.hasPlayedFirstEpisode }
     private var reordered: Bool { UserDefaults.standard.bool(forKey: Self.reorderedKey) }
     private var allDone: Bool { subscribed && played && reordered }
-    private var dismissed: Bool { appState.settingsStore.appSettings.dismissedGettingStarted }
+    private var dismissed: Bool { settingsViewModel.appSettings.dismissedGettingStarted }
 
     var body: some View {
         if !dismissed && !allDone {
@@ -33,7 +34,7 @@ struct GettingStartedChecklist: View {
                     .foregroundStyle(.white)
                 Spacer()
                 Button {
-                    appState.settingsStore.appSettings.dismissedGettingStarted = true
+                    settingsViewModel.appSettings.dismissedGettingStarted = true
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))

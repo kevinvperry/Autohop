@@ -9,12 +9,15 @@ import UIKit
 // PURPOSE: Coordinator for Autohop's CarPlay scene. It owns the
 // CPInterfaceController reference while CarPlay is connected, installs a safe
 // root template immediately, runs launch readiness for CarPlay-only starts, and
-// projects shared AppState into read-only CarPlay templates.
+// projects shared domain coordinators into read-only CarPlay templates while
+// retaining AppState only as the high-level command façade.
 //
 // CURRENT SCOPE: Real-hardware CarPlay adapter. The coordinator renders Now
 // Playing, Up Next, Subscriptions, subscription episode lists, download progress,
-// and empty states from AppState,
-// observes AppState conservatively, and delegates behavior decisions to
+// and empty states from the shared stores/coordinators. It observes those
+// domain owners directly (plus SettingsStore for Shared Listening and speed)
+// instead of subscribing to AppState's broad compatibility publisher, and
+// delegates behavior decisions to
 // CarPlayActionRouter so Play/Play Next/Archive/speed/Shared Listening paths can
 // be tested without a live CarPlay runtime. Dialog-style templates always include
 // a visible Cancel action; pushed list pages rely on the native Back button only.
@@ -351,8 +354,28 @@ final class CarPlayCoordinator: NSObject {
     private func observeAppState() {
         cancellables.removeAll()
         guard let appState = AppState.shared else { return }
-        appState.objectWillChange
-            .sink { [weak self] _ in
+        var changePublishers: [AnyPublisher<Void, Never>] = [
+            appState.playbackCoordinator.objectWillChange
+                .map { _ in () }
+                .eraseToAnyPublisher(),
+            appState.queueCoordinator.objectWillChange
+                .map { _ in () }
+                .eraseToAnyPublisher(),
+            appState.subscriptionStore.objectWillChange
+                .map { _ in () }
+                .eraseToAnyPublisher(),
+            appState.downloadCoordinator.objectWillChange
+                .map { _ in () }
+                .eraseToAnyPublisher()
+        ]
+        changePublishers.append(
+            appState.settingsCoordinator.objectWillChange
+                .map { _ in () }
+                .eraseToAnyPublisher()
+        )
+
+        Publishers.MergeMany(changePublishers)
+            .sink { [weak self] in
                 Task { @MainActor in self?.scheduleRefresh() }
             }
             .store(in: &cancellables)

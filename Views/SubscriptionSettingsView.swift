@@ -9,7 +9,9 @@ import SwiftUI
 // index and the hidden return rank can restore cleanly), Playback (speed
 // 1.0–2.5x, Stereo/Mono Audio, Vocal Boost, per-subscription -3...+3 dB
 // Volume Adjustment, Trim Silence, start/end skip — live-applied via
-// AppState if this podcast is playing; episode trim uses the shared stable
+// AppState if this podcast is playing; rendered subscription/current-episode
+// state is observed directly from SubscriptionStore and PlaybackCoordinator,
+// while AppState remains the cross-domain command façade. Episode trim uses the shared stable
 // EpisodeTrimControlRow, which drafts taps locally and coalesces one store/live-
 // engine update after the user pauses, avoiding Form flicker and playback-time
 // UI stalls. Durations use the shared minute/second formatter and place the
@@ -121,6 +123,8 @@ private let namedHTMLEntities: [(String, String)] = [
 struct SubscriptionSettingsView: View {
     let subscriptionID: UUID
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @State private var showDeleteConfirm = false
     @State private var isRefreshing = false
     @State private var showTitleEditor = false
@@ -131,7 +135,7 @@ struct SubscriptionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
+        subscriptionStore.subscription(id: subscriptionID)
     }
 
     // iOS 26: "defined glass" — a faint white tint lifts each native glass section
@@ -236,7 +240,7 @@ struct SubscriptionSettingsView: View {
             titleVisibility: .visible
         ) {
             Button("Unsubscribe", role: .destructive) {
-                appState.subscriptionStore.remove(subscriptionID: subscriptionID)
+                subscriptionStore.remove(subscriptionID: subscriptionID)
                 dismiss()
             }
         } message: {
@@ -244,7 +248,7 @@ struct SubscriptionSettingsView: View {
         }
         .sheet(isPresented: $showTitleEditor) {
             EditTitleSheet(title: $draftTitle) {
-                appState.subscriptionStore.updateTitle(subscriptionID: subscriptionID, title: draftTitle)
+                subscriptionStore.updateTitle(subscriptionID: subscriptionID, title: draftTitle)
                 showTitleEditor = false
             }
             .presentationDetents([.height(220)])
@@ -253,13 +257,13 @@ struct SubscriptionSettingsView: View {
             EditPrioritySheet(
                 priorityRank: $draftPriorityRank,
                 maxRank: max(
-                    appState.subscriptionStore.subscriptions.filter {
+                    subscriptionStore.subscriptions.filter {
                         $0.browseDate == nil && !$0.excludeFromAutoFeedRefresh
                     }.count,
                     1
                 )
             ) {
-                appState.subscriptionStore.updatePriorityRank(
+                subscriptionStore.updatePriorityRank(
                     subscriptionID: subscriptionID,
                     priorityRank: draftPriorityRank
                 )
@@ -456,7 +460,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 40 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 30 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 40 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -465,7 +469,7 @@ struct SubscriptionSettingsView: View {
     private func chapterSection(_ sub: Subscription, episode: Episode) -> some View {
         Section {
             ForEach(episode.chapters.sorted { $0.position < $1.position }) { chapter in
-                let isPlaying = appState.currentChapter?.position == chapter.position && appState.currentPlayerEpisode?.id == episode.id
+                let isPlaying = playbackCoordinator.currentChapter?.position == chapter.position && playbackCoordinator.currentEpisode?.id == episode.id
                 let allowed = sub.chapterFilter.allows(position: chapter.position)
 
                 Button {
@@ -505,7 +509,7 @@ struct SubscriptionSettingsView: View {
     /// previous newest-only list could show unrelated positions for an older
     /// playing episode from the same subscription.
     private func chapterSettingsEpisode(for subscription: Subscription) -> Episode? {
-        if let playing = appState.currentPlayerEpisode,
+        if let playing = playbackCoordinator.currentEpisode,
            playing.subscriptionID == subscription.id,
            !playing.chapters.isEmpty {
             return playing
@@ -560,7 +564,7 @@ struct SubscriptionSettingsView: View {
         Binding(
             get: { sub.notificationsEnabled },
             set: { enabled in
-                appState.subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: enabled)
+                subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: enabled)
             }
         )
     }
@@ -570,7 +574,7 @@ struct SubscriptionSettingsView: View {
             get: { sub.autoArchiveSettings.afterPlayed },
             set: { value in
                 var s = sub.autoArchiveSettings; s.afterPlayed = value
-                appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
+                subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
             }
         )
     }
@@ -581,7 +585,7 @@ struct SubscriptionSettingsView: View {
             set: { enabled in
                 var settings = sub.autoArchiveSettings
                 settings.playInstantEnabled = enabled
-                appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: settings)
             }
         )
     }
@@ -591,7 +595,7 @@ struct SubscriptionSettingsView: View {
             get: { sub.autoArchiveSettings.afterInactive },
             set: { value in
                 var s = sub.autoArchiveSettings; s.afterInactive = value
-                appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
+                subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
             }
         )
     }
@@ -601,7 +605,7 @@ struct SubscriptionSettingsView: View {
             get: { sub.autoArchiveSettings.episodeLimit },
             set: { value in
                 var s = sub.autoArchiveSettings; s.episodeLimit = value
-                appState.subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
+                subscriptionStore.updateAutoArchiveSettings(subscriptionID: sub.id, settings: s)
             }
         )
     }
@@ -610,7 +614,7 @@ struct SubscriptionSettingsView: View {
         Binding(
             get: { sub.excludeFromAutoFeedRefresh },
             set: { excluded in
-                appState.subscriptionStore.updateExcludeFromAutoFeedRefresh(
+                subscriptionStore.updateExcludeFromAutoFeedRefresh(
                     subscriptionID: sub.id,
                     excluded: excluded
                 )
@@ -690,11 +694,12 @@ private struct EditPrioritySheet: View {
 struct DownloadFiltersView: View {
     let subscriptionID: UUID
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
     @State private var previewState: PreviewState = .idle
 
     private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
+        subscriptionStore.subscription(id: subscriptionID)
     }
 
     var body: some View {
@@ -781,13 +786,13 @@ struct DownloadFiltersView: View {
             .onDelete { offsets in
                 var settings = sub.downloadFilterSettings
                 settings.durationRules.remove(atOffsets: offsets)
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             }
             addRuleButton("Add Duration Rule", systemImage: "plus.circle") {
                 var settings = sub.downloadFilterSettings
                 settings.durationEnabled = true
                 settings.durationRules.append(.init())
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             }
         }
         .listRowBackground(sectionBackground)
@@ -804,12 +809,12 @@ struct DownloadFiltersView: View {
                 var settings = sub.downloadFilterSettings
                 settings.titleEnabled = true
                 settings.titleRules.append(.init(behavior: .include))
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             },
             delete: { offsets in
                 var settings = sub.downloadFilterSettings
                 settings.titleRules.remove(atOffsets: offsets)
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             }
         )
     }
@@ -825,12 +830,12 @@ struct DownloadFiltersView: View {
                 var settings = sub.downloadFilterSettings
                 settings.descriptionEnabled = true
                 settings.descriptionRules.append(.init(behavior: .exclude))
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             },
             delete: { offsets in
                 var settings = sub.downloadFilterSettings
                 settings.descriptionRules.remove(atOffsets: offsets)
-                appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
             }
         )
     }
@@ -945,8 +950,8 @@ struct DownloadFiltersView: View {
 
     private func settingsBinding(_ sub: Subscription) -> Binding<DownloadFilterSettings> {
         Binding(
-            get: { appState.subscriptionStore.subscription(id: sub.id)?.downloadFilterSettings ?? sub.downloadFilterSettings },
-            set: { appState.subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: $0) }
+            get: { subscriptionStore.subscription(id: sub.id)?.downloadFilterSettings ?? sub.downloadFilterSettings },
+            set: { subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: $0) }
         )
     }
 
@@ -1025,6 +1030,7 @@ struct EpisodeDetailView: View {
     let subscriptionID: UUID
     let episodeID: UUID
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
@@ -1033,11 +1039,11 @@ struct EpisodeDetailView: View {
     @State private var showExpandedArtwork = false
 
     private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
+        subscriptionStore.subscription(id: subscriptionID)
     }
 
     private var episode: Episode? {
-        appState.subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID)
+        subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID)
     }
 
     var body: some View {
@@ -1150,7 +1156,7 @@ struct EpisodeDetailView: View {
                 ) {
                     Task {
                         if ep.downloadState != .downloaded { await appState.downloadEpisodeForQueue(ep) }
-                        if let updated = appState.subscriptionStore.episode(subscriptionID: sub.id, episodeID: ep.id) {
+                        if let updated = subscriptionStore.episode(subscriptionID: sub.id, episodeID: ep.id) {
                             await appState.playEpisode(updated)
                         }
                     }

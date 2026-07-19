@@ -8,13 +8,13 @@ import SwiftUI
 // configured threshold, and measured age when the rule fired.
 
 struct AutoArchiveActivityView: View {
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var activityStore: AutoArchiveActivityStore
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                if appState.autoArchiveActivityStore.entries.isEmpty {
+                if activityStore.entries.isEmpty {
                     ContentUnavailableView(
                         "No Auto Archive Activity",
                         systemImage: "archivebox",
@@ -22,7 +22,7 @@ struct AutoArchiveActivityView: View {
                     )
                     .padding(.top, 80)
                 } else {
-                    ForEach(appState.autoArchiveActivityStore.entries) { entry in
+                    ForEach(activityStore.entries) { entry in
                         AutoArchiveActivityRow(entry: entry)
                     }
                 }

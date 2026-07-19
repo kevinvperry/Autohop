@@ -32,6 +32,7 @@ import SwiftUI
 // `Behaviour`, NOT `Group`, so it doesn't shadow SwiftUI.Group used in the body.
 struct FeedRefreshScheduleView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var entries: [Entry] = []
@@ -384,7 +385,7 @@ struct FeedRefreshScheduleView: View {
 
     private func rebuildEntries() {
         let now = Date()
-        let active = appState.subscriptionStore.subscriptions
+        let active = subscriptionStore.subscriptions
             .filter { $0.browseDate == nil && !$0.excludeFromAutoFeedRefresh }
         entries = active
             .map { sub -> Entry in
@@ -409,7 +410,7 @@ struct FeedRefreshScheduleView: View {
     /// pattern is learned.
     private func rebuildPrediction(_ entry: Entry) {
         guard !rebuildingIDs.contains(entry.id),
-              let subscription = appState.subscriptionStore.subscription(id: entry.id) else { return }
+              let subscription = subscriptionStore.subscription(id: entry.id) else { return }
         rebuildingIDs.insert(entry.id)
         Task {
             let count = await appState.rebuildReleasePrediction(for: subscription, episodeLimit: 100)

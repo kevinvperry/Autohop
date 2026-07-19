@@ -22,10 +22,10 @@ import SwiftUI
 
 struct SubscriptionRadarDiagnosticsView: View {
     let subscriptionID: UUID
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
 
     private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
+        subscriptionStore.subscription(id: subscriptionID)
     }
 
     private var rowBackground: Color { Color.white.opacity(0.08) }

@@ -6,9 +6,12 @@ import SwiftUI
 // span midnight), and a duration picker — presets 10/15/20/40/60 min plus an
 // End of Episode mode (stored as 0 minutes). All values persist to
 // AppSettings.sleepSchedule*; AppState re-syncs SleepScheduleService whenever
-// settings change. Pure UI — no schedule logic lives here.
+// settings change. SettingsViewModel is the observable/write-through owner;
+// AppState remains only for the onboarding-tip command. Pure UI — no schedule
+// logic lives here.
 struct SleepScheduleView: View {
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     @Environment(\.dismiss) private var dismiss
 
     private static let durationPresets = [10, 15, 20, 40, 60]
@@ -21,7 +24,7 @@ struct SleepScheduleView: View {
                 Text("Every night during the active hours, playback pauses after the chosen duration and asks if you're still listening. Press play anywhere — lock screen, earbuds or in the app — to keep going. No response and Autohop assumes you're asleep, stopping at the spot you last heard.")
             }
 
-            if appState.settingsStore.appSettings.sleepScheduleEnabled {
+            if settingsViewModel.appSettings.sleepScheduleEnabled {
                 Section("Active Hours") {
                     DatePicker("Start", selection: startTimeBinding, displayedComponents: .hourAndMinute)
                     DatePicker("End", selection: endTimeBinding, displayedComponents: .hourAndMinute)
@@ -41,7 +44,7 @@ struct SleepScheduleView: View {
         }
         .listSectionSpacing(28)
         .tint(.purple)
-        .onAppear { appState.requestTip(.sleepSchedule) }
+        .onAppear { onboardingCoordinator.requestTip(.sleepSchedule) }
         .navigationTitle("Sleep Schedule")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -57,13 +60,13 @@ struct SleepScheduleView: View {
 
     private func durationRow(title: String, minutes: Int) -> some View {
         Button {
-            appState.settingsStore.appSettings.sleepScheduleDurationMinutes = minutes
+            settingsViewModel.appSettings.sleepScheduleDurationMinutes = minutes
         } label: {
             HStack {
                 Text(title)
                     .foregroundStyle(.primary)
                 Spacer()
-                if appState.settingsStore.appSettings.sleepScheduleDurationMinutes == minutes {
+                if settingsViewModel.appSettings.sleepScheduleDurationMinutes == minutes {
                     Image(systemName: "checkmark")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.purple)
@@ -76,9 +79,9 @@ struct SleepScheduleView: View {
 
     private var enabledBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.sleepScheduleEnabled },
+            get: { settingsViewModel.appSettings.sleepScheduleEnabled },
             set: { isOn in
-                appState.settingsStore.appSettings.sleepScheduleEnabled = isOn
+                settingsViewModel.appSettings.sleepScheduleEnabled = isOn
                 // Turning the schedule on is a user opt-in to its lock-screen
                 // "still listening?" prompt, so request notification permission
                 // now (no-op if already decided).
@@ -99,14 +102,14 @@ struct SleepScheduleView: View {
     private func minutesBinding(_ keyPath: WritableKeyPath<AppSettings, Int>) -> Binding<Date> {
         Binding(
             get: {
-                let minutes = appState.settingsStore.appSettings[keyPath: keyPath]
+                let minutes = settingsViewModel.appSettings[keyPath: keyPath]
                 return Calendar.current.date(
                     bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()
                 ) ?? Date()
             },
             set: { date in
                 let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
-                appState.settingsStore.appSettings[keyPath: keyPath] = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+                settingsViewModel.appSettings[keyPath: keyPath] = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
             }
         )
     }

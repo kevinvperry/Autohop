@@ -3,11 +3,9 @@ import Foundation
 // AI CONTEXT — Playback/PlaybackCueService.swift
 //
 // PURPOSE:
-// Stateless generator for short playback-transition audio cues. During AppState
-// decomposition Stage 2 it owns only Play Instant's existing two-note PCM/WAV
-// generation. AppState still owns AVAudioPlayer lifetime, volume, cancellation,
-// and the Play Instant state machine; those responsibilities move only in the
-// later PlaybackCoordinator stage.
+// Stateless generator for short playback-transition audio cues. It owns Play
+// Instant's two-note PCM/WAV generation. PlaybackCoordinator owns AVAudioPlayer
+// lifetime and PlayInstantWorkflow owns transition/cancellation policy.
 //
 // CONCURRENCY / PERSISTENCE:
 // Pure synchronous value generation. It reads no mutable state, touches no files,

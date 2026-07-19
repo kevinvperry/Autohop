@@ -15,6 +15,9 @@ import SwiftUI
 // downloads don't re-invalidate this page multiple times per second (scroll jank).
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var downloadCoordinator: DownloadCoordinator
+    @EnvironmentObject private var downloadActivityStore: DownloadActivityStore
+    @EnvironmentObject private var historyStore: ListeningHistoryStore
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -23,13 +26,13 @@ struct DownloadsView: View {
                 section(
                     title: "Downloading",
                     emptyText: "No active downloads",
-                    activities: appState.downloadActivityStore.activeActivities
+                    activities: downloadActivityStore.activeActivities
                 )
 
                 section(
                     title: "Downloaded on Device",
                     emptyText: "No completed downloads",
-                    activities: appState.downloadedActivities
+                    activities: downloadCoordinator.downloadedActivities
                 )
 
                 archivedSection
@@ -53,7 +56,7 @@ struct DownloadsView: View {
     // MARK: - Recently Archived
 
     private var recentlyArchivedEntries: [ListeningHistoryEntry] {
-        appState.listeningHistoryStore.entries
+        historyStore.entries
             .filter { $0.status == .archived }
     }
 
@@ -132,6 +135,7 @@ struct DownloadsView: View {
 
 private struct ArchivedEpisodeRow: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     let entry: ListeningHistoryEntry
 
     @State private var isRedownloading = false
@@ -201,7 +205,7 @@ private struct ArchivedEpisodeRow: View {
     }
 
     private var archivedEpisode: Episode? {
-        appState.subscriptionStore.episode(subscriptionID: entry.subscriptionID, episodeID: entry.episodeID)
+        subscriptionStore.episode(subscriptionID: entry.subscriptionID, episodeID: entry.episodeID)
     }
 
     private var archivedMetadata: String {
@@ -227,7 +231,7 @@ private struct ArchivedEpisodeRow: View {
     }
 
     private func redownload() async {
-        guard let subscription = appState.subscriptionStore.subscription(id: entry.subscriptionID),
+        guard let subscription = subscriptionStore.subscription(id: entry.subscriptionID),
               let episode = subscription.episodes.first(where: { $0.id == entry.episodeID })
         else { return }
         await appState.downloadEpisodeForQueue(episode)
@@ -238,6 +242,7 @@ private struct ArchivedEpisodeRow: View {
 
 private struct DownloadActivityRow: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     let activity: DownloadActivity
 
     var body: some View {
@@ -340,11 +345,11 @@ private struct DownloadActivityRow: View {
 
     private var artworkURL: URL? {
         activity.artworkURL
-            ?? appState.subscriptionStore.subscription(id: activity.subscriptionID)?.artworkURL
+            ?? subscriptionStore.subscription(id: activity.subscriptionID)?.artworkURL
     }
 
     private var episode: Episode? {
-        appState.subscriptionStore.episode(subscriptionID: activity.subscriptionID, episodeID: activity.episodeID)
+        subscriptionStore.episode(subscriptionID: activity.subscriptionID, episodeID: activity.episodeID)
     }
 
     @ViewBuilder

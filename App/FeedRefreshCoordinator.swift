@@ -6,8 +6,8 @@
 //  Stage 7 AppState decomposition state owner for feed refresh and Release Radar.
 //  It owns the active/joinable cycle, cycle attribution, cancellation state,
 //  deferred-feed fairness backlog, feed failure backoff, background-audio cadence,
-//  and fingerprinted Release Radar profile cache. Existing AppState entry points
-//  remain compatibility façades while refresh bodies use this storage owner.
+//  and fingerprinted Release Radar profile cache. AppState retains only platform
+//  compatibility commands; FeedRefreshCycleWorkflow owns cycle behavior.
 //
 //  The extraction intentionally preserves sequential feed merges, conditional
 //  validators, selection caps, resource-pressure reductions, diagnostic labels,
@@ -86,9 +86,8 @@ final class FeedRefreshCoordinator: ObservableObject {
 
 /// Stage 7 owner of persisted auto-download intent orchestration. The intent
 /// store remains the source of truth before an asynchronous transfer is started.
-/// AppState supplies the current eligibility/attempt adapters during the
-/// compatibility period; this workflow serializes drains and never starts the
-/// same drain twice.
+/// AutoDownloadIntentWorkflow supplies eligibility and transfer behavior; this
+/// state owner serializes drains and never starts the same drain twice.
 @MainActor
 final class AutoDownloadWorkflow {
     let intentStore: AutoDownloadIntentStore

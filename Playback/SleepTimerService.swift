@@ -3,9 +3,9 @@ import Foundation
 
 // AI CONTEXT — Playback/SleepTimerService.swift (MIT — original Autohop code;
 // feature set informed by Pocket Casts but independently authored, see NOTICE).
-// Owned by AppState; driven by PlaybackEngine's 0.5 s onTimeUpdate tick via
+// Owned by PlaybackCoordinator; driven by PlaybackEngine's 0.5 s time tick via
 // tick(). Two modes: fixed duration (with +5 min extend) and end-of-N-episodes
-// (AppState calls episodeFinished() on natural completion). Fires onFadeVolume
+// (the playback completion workflow calls episodeFinished()). Fires onFadeVolume
 // with a 0–1 scalar over the last 5 s (linear fade → PlaybackEngine.setVolume),
 // then onPause. If the user resumes within 5 minutes of the timer firing
 // (autoRestartWindow), the previous mode restarts automatically.
@@ -48,7 +48,7 @@ final class SleepTimerService: ObservableObject {
     /// The mode that was active when the timer last fired. Used to auto-restart.
     private(set) var lastMode: Mode?
 
-    // MARK: - Callbacks (wired by AppState)
+    // MARK: - Callbacks (wired by PlaybackCoordinator)
 
     /// Called with a 0-1 volume scalar during the 5-second fade before sleep. Called with 1.0
     /// when the timer is cancelled or a new episode starts (volume reset).
@@ -99,7 +99,7 @@ final class SleepTimerService: ObservableObject {
         onFadeVolume?(1.0)
     }
 
-    // MARK: - Tick (called every 0.5 s by AppState's onTimeUpdate)
+    // MARK: - Tick (called by PlaybackCoordinator's 0.5 s time pipeline)
 
     /// Advances the countdown by 0.5 s. Applies a linear volume fade in the final 5 seconds.
     /// Returns true if the timer just fired (playback should pause via the `onPause` callback).
@@ -125,7 +125,7 @@ final class SleepTimerService: ObservableObject {
         return false
     }
 
-    // MARK: - Episode finished (called by AppState.handleEpisodeFinished)
+    // MARK: - Episode finished (called by EpisodeCompletionWorkflow)
 
     /// Notifies the service that an episode finished naturally.
     /// Returns true if the timer has now expired and playback should **not** advance.
@@ -141,7 +141,7 @@ final class SleepTimerService: ObservableObject {
         return false
     }
 
-    // MARK: - Auto-restart (called by AppState when playback starts or resumes)
+    // MARK: - Auto-restart (called by playback start/transport workflows)
 
     /// If the timer fired recently and the user has resumed playback within the
     /// auto-restart window, restarts the timer with the same mode.

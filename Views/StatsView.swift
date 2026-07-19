@@ -41,6 +41,8 @@ import Charts
 
 struct StatsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var statsStore: ListeningStatsStore
+    @EnvironmentObject private var historyStore: ListeningHistoryStore
     private let initialRecapPeriod: ListeningRecapPeriod?
 
     init(initialRecapPeriod: ListeningRecapPeriod? = nil) {
@@ -49,8 +51,8 @@ struct StatsView: View {
 
     var body: some View {
         StatsContentView(
-            store: appState.listeningStatsStore,
-            historyStore: appState.listeningHistoryStore,
+            store: statsStore,
+            historyStore: historyStore,
             initialRecapPeriod: initialRecapPeriod
         )
     }
@@ -189,6 +191,7 @@ private enum StatsRange: CaseIterable, Identifiable {
 
 private struct StatsContentView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
     private let forcedLastRange: StatsRange?
@@ -284,7 +287,7 @@ private struct StatsContentView: View {
         ) {
             Button("Unsubscribe", role: .destructive) {
                 if let show = driftShowToUnsubscribe {
-                    appState.subscriptionStore.remove(subscriptionID: show.subscriptionID)
+                    subscriptionStore.remove(subscriptionID: show.subscriptionID)
                 }
                 driftShowToUnsubscribe = nil
             }
@@ -577,7 +580,7 @@ private struct StatsContentView: View {
     /// so a manual download/play (which intentionally bypasses filters) remains
     /// valid engagement evidence even when the feed rule itself would reject it.
     private var downloadFilterSkippedEpisodeIDs: Set<UUID> {
-        Set(appState.subscriptionStore.subscriptions.flatMap { subscription in
+        Set(subscriptionStore.subscriptions.flatMap { subscription in
             subscription.episodes.compactMap { episode in
                 guard episode.downloadState == .notDownloaded,
                       !subscription.downloadFilterSettings.evaluation(for: episode).isIncluded
@@ -604,7 +607,7 @@ private struct StatsContentView: View {
                 excluding: hiddenDriftShowIDs,
                 excludingEpisodeIDs: downloadFilterSkippedEpisodeIDs
             ).filter {
-                guard let sub = appState.subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
+                guard let sub = subscriptionStore.subscription(id: $0.subscriptionID) else { return false }
                 return sub.browseDate == nil && !sub.excludeFromAutoFeedRefresh
             }
 
@@ -1264,11 +1267,12 @@ private struct ShowStatsExpandedCard: View {
 
 private struct StatsShowArtwork: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     let subscriptionID: String
 
     var body: some View {
         let subscription = UUID(uuidString: subscriptionID)
-            .flatMap { appState.subscriptionStore.subscription(id: $0) }
+            .flatMap { subscriptionStore.subscription(id: $0) }
 
         CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
             ZStack {

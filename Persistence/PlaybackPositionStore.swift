@@ -6,10 +6,9 @@ import Foundation
 // file (Application Support/Autohop/playback-position.json), the authoritative
 // in-memory cache (P2: loaded once, write-through — loops over the queue never
 // re-read/re-decode the file), the subscription-scoped episode position keys,
-// and the resume-time normalization rules. AppState keeps thin same-named
-// delegating wrappers (savePlaybackPosition / savedPlaybackTime /
-// clearPlaybackPosition / restorePlaybackPosition orchestration) so playback
-// call sites are unchanged; the 10 s tick-throttle also stays in AppState.
+// and the resume-time normalization rules. PlaybackMediaWorkflow owns
+// application-level file validation, current-position save, and cold-launch
+// restoration. PlaybackCoordinator owns the 10-second playback-tick cadence.
 // ON-DISK COMPAT: SavedPlaybackPosition's properties MUST keep the exact names
 // of AppState's old private SavedPosition (episodeID, subscriptionID,
 // episodeKey, timeSeconds, updatedAt) — same synthesized JSON keys. The two

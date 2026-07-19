@@ -73,13 +73,37 @@ final class RelayCoordinator {
     }
 
     func installWorkflows(
-        legacyRefresh: @escaping LegacyRefresh,
-        targetedRefresh: @escaping TargetedRefresh,
-        syncPull: @escaping SyncPull
+        refreshWorkflow: FeedRefreshCycleWorkflow,
+        syncCoordinator: SyncCoordinator,
+        legacyMaxSubscriptions: Int
     ) {
-        self.legacyRefresh = legacyRefresh
-        self.targetedRefresh = targetedRefresh
-        self.syncPull = syncPull
+        legacyRefresh = { [weak refreshWorkflow] in
+            await refreshWorkflow?.refresh(
+                reason: "relay.legacy",
+                trigger: .relayPush,
+                executionContext: .relayPush,
+                maxSubscriptions: legacyMaxSubscriptions,
+                includeBackoffFeeds: false,
+                onlyDueFeeds: true,
+                joinActiveCycle: true
+            ) ?? false
+        }
+        targetedRefresh = { [weak refreshWorkflow] targetIDs in
+            await refreshWorkflow?.refresh(
+                reason: "relay.targeted",
+                trigger: .relayPush,
+                executionContext: .relayPush,
+                maxSubscriptions: targetIDs.count,
+                includeBackoffFeeds: true,
+                onlyDueFeeds: false,
+                joinActiveCycle: true,
+                targetSubscriptionIDs: targetIDs,
+                refreshAfterJoiningActiveCycle: true
+            ) ?? false
+        }
+        syncPull = { [weak syncCoordinator] in
+            await syncCoordinator?.fetchAllNow(reason: "relay.syncNudge")
+        }
     }
 
     func start() {

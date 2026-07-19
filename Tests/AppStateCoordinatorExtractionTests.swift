@@ -1,6 +1,6 @@
 // AI CONTEXT — Tests/AppStateCoordinatorExtractionTests.swift
 //
-// Characterization gates for AppState decomposition Stages 3–11. These tests
+// Characterization gates for AppState decomposition Stages 3–14. These tests
 // verify exclusive history/Stats tick ownership and checkpoint ordering, narrow
 // queue invalidation plus side-effect-free reads and legacy pin persistence,
 // onboarding single-vs-bulk milestone behavior, and typed routing commands.
@@ -100,6 +100,20 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(history.entries[0].status, .played)
         XCTAssertEqual(history.entries[0].completionKind, .finishedNaturally)
         XCTAssertEqual(subject.completedEpisodeCount, 1)
+    }
+
+    func testSettingsViewModelWritesThroughAndAcceptsExternalStoreChanges() {
+        let store = PublishingTestSettingsStore()
+        let subject = SettingsViewModel(settingsStore: store)
+
+        subject.appSettings.downloadOverCellular = true
+        XCTAssertTrue(store.appSettings.downloadOverCellular)
+
+        var external = store.appSettings
+        external.skipForwardSeconds = 45
+        store.appSettings = external
+
+        XCTAssertEqual(subject.appSettings.skipForwardSeconds, 45)
     }
 
     func testQueueCoordinatorUsesNarrowInvalidationAndQueueReadsDoNotWrite() throws {
@@ -357,6 +371,32 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(archivedIDs.count, 1)
     }
 
+    func testLifecycleCoordinatorStartStopAndPollerAreDeterministic() async {
+        let subject = AppLifecycleCoordinator()
+        XCTAssertTrue(subject.beginStart())
+        XCTAssertFalse(subject.beginStart())
+        subject.finishStart()
+        XCTAssertEqual(subject.state, .started)
+
+        var ticks = 0
+        subject.startPoller(interval: .milliseconds(10)) {
+            ticks += 1
+        }
+        subject.startPoller(interval: .milliseconds(10)) {
+            ticks += 100
+        }
+        try? await Task.sleep(for: .milliseconds(35))
+        XCTAssertGreaterThanOrEqual(ticks, 1)
+        XCTAssertLessThan(ticks, 100)
+
+        subject.stop()
+        let stoppedAt = ticks
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(subject.state, .stopped)
+        XCTAssertEqual(ticks, stoppedAt)
+        subject.stop()
+    }
+
     private func makeEpisode(subscriptionID: UUID, guid: String) -> Episode {
         Episode(
             subscriptionID: subscriptionID,
@@ -376,5 +416,18 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
 
 private final class TestSettingsStore: SettingsStoring {
     var appSettings: AppSettings = .default
+}
+
+private final class PublishingTestSettingsStore: SettingsStoring {
+    private let subject = CurrentValueSubject<AppSettings, Never>(.default)
+
+    var appSettings: AppSettings {
+        get { subject.value }
+        set { subject.send(newValue) }
+    }
+
+    var appSettingsPublisher: AnyPublisher<AppSettings, Never> {
+        subject.eraseToAnyPublisher()
+    }
 }
 #endif

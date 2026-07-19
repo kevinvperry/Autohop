@@ -4,8 +4,8 @@ import Combine
 
 // AI CONTEXT — Persistence/CloudSyncEngine.swift
 // CKSyncEngine wrapper for cross-device sync (SYNC_DESIGN.md).
-// OPT-IN: only runs while AppSettings.iCloudSyncEnabled is true (AppState drives
-// start/stop). Syncs episode user-state, subscription settings, listening
+// OPT-IN: only runs while AppSettings.iCloudSyncEnabled is true
+// (SyncCoordinator drives lifecycle). Syncs episode user-state, subscription settings, listening
 // history, additive per-device listening stats, and one atomic SubscriptionOrder
 // record. Downloads and catalog content never sync.
 //
@@ -24,8 +24,8 @@ import Combine
 // in ~2 min of playback, each saving 1–2 stats/history records. Slow rows
 // piggyback on any fast-lane push (a CK request is going out anyway), and
 // flushDeferredPushes(reason:) queues them immediately at lifecycle checkpoints
-// (pause / background / resign-active — AppState.flushDeferredSyncPushes, called
-// AFTER ListeningStatsStore has flushed day buckets into the sync database).
+// (pause / background / resign-active — PlaybackCheckpointWorkflow and the
+// AppState platform façade call SyncCoordinator only AFTER local stores flush).
 // Coalescing only delays WHEN records are queued, never what they contain: rows
 // stay dirty in the local DB until a push succeeds (markSaved), so nothing is
 // lost if the app dies before a deferred push. Records
@@ -53,11 +53,12 @@ import Combine
 // Pull: fetched server records are decoded and merged into the local store via
 // SubscriptionStore.applyRemote*, ListeningHistoryStore, and ListeningStatsStore;
 // a remote subscription for a podcast not present here triggers
-// `onSubscriptionNeedsMaterialization` (AppState fetches the feed).
+// `onSubscriptionNeedsMaterialization` (SyncCoordinator fetches the feed).
 //
 // Autohop Relay hook (added 2026-07-10): `onLocalChangesPushed` fires whenever
 // handleSentChanges sees ≥1 successfully saved record — the send-side of §6.4
-// sync-nudge. AppState debounces it into POST /v1/sync-nudge so this user's
+// sync-nudge. SyncCoordinator connects RelayCoordinator's debounced
+// POST /v1/sync-nudge so this user's
 // OTHER devices (TV) wake and fetch immediately instead of waiting on CloudKit's
 // own lag. This engine has no relay awareness beyond firing that one callback.
 //

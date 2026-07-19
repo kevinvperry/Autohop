@@ -6,6 +6,7 @@ import SwiftUI
 // AppState/SubscriptionStore. Reached from PodcastSearchView and App Settings.
 struct AddFeedView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @StateObject private var viewModel = FeedPreviewViewModel()
     @Environment(\.dismiss) private var dismiss
 
@@ -133,7 +134,7 @@ struct AddFeedView: View {
         }
 
         do {
-            _ = try appState.subscriptionStore.add(parsedFeed: feed, feedURL: feedURL)
+            _ = try subscriptionStore.add(parsedFeed: feed, feedURL: feedURL)
             dismiss()
         } catch {
             viewModel.saveMessage = error.localizedDescription

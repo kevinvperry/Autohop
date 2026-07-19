@@ -61,7 +61,7 @@ final class StarterPacksViewModel: ObservableObject {
 }
 
 struct StarterPacksView: View {
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var importCoordinator: SubscriptionImportCoordinator
     @Environment(\.dismiss) private var dismiss
     @AppStorage("discoverCountryCode") private var storedCountryCode = ""
     @StateObject private var viewModel = StarterPacksViewModel()
@@ -194,7 +194,7 @@ struct StarterPacksView: View {
         addingPackID = pack.id
         Task {
             let urls = await viewModel.feedURLs(for: pack, country: country)
-            _ = await appState.subscribeToFeedURLs(urls)
+            _ = await importCoordinator.subscribeToFeedURLs(urls)
             addedPackIDs.insert(pack.id)
             addingPackID = nil
         }

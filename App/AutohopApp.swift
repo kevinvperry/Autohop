@@ -6,13 +6,16 @@ import SwiftUI
 // CarPlaySceneDelegate.didConnect and set an immediate Loading template before
 // the heavier app model is created. The iPhone WindowGroup uses
 // AutohopRootBootstrapView to reuse or bootstrap AppState only when the phone UI
-// actually appears, then injects it as an EnvironmentObject under RootView —
+// actually appears, then injects it as an EnvironmentObject under RootView.
+// Stage 13 also injects domain coordinators, stores, and independently
+// publishing sleep services so migrated page families
+// observe only their mutable owner while retaining AppState for shared intents —
 // alongside appState.playbackClock (PERF-1: the dedicated 2 Hz playback-time
 // observable that only PlayerView's scrubber and MiniPlayerBar observe) — and
 // wires scene-phase transitions:
 //  - on launch: resume playback position if an episode was mid-play
 //    (startPlaybackOnLaunchIfNeeded)
-//  - on foreground: run the auto-archive pass if 30 min have elapsed
+//  - on foreground: offer AutoArchiveCoordinator its persisted 25-minute gate
 //  - on background/inactive: flush playback position, subscription-order
 //    transactions, and listening stats to disk
 //    (these are write-throttled in memory, so leaving foreground must force-save),
@@ -47,6 +50,26 @@ private struct AutohopRootBootstrapView: View {
                     // episode-row/first-subscribe surfaces that render it, so
                     // progress ticks no longer wake AppState observers.
                     .environmentObject(appState.downloadProgressModel)
+                    .environmentObject(appState.settingsCoordinator)
+                    // Stage 13 narrow observables. Page families can consume
+                    // their domain owner directly without broad AppState wakes.
+                    .environmentObject(appState.playbackCoordinator)
+                    // Sleep countdown/prompt services publish independently of
+                    // PlaybackCoordinator; inject them directly so Player and
+                    // Sleep Schedule avoid AppState invalidation bridges.
+                    .environmentObject(appState.sleepTimerService)
+                    .environmentObject(appState.sleepScheduleService)
+                    .environmentObject(appState.queueCoordinator)
+                    .environmentObject(appState.downloadCoordinator)
+                    .environmentObject(appState.historyStatsCoordinator)
+                    .environmentObject(appState.onboardingCoordinator)
+                    .environmentObject(appState.autoArchiveCoordinator)
+                    .environmentObject(appState.subscriptionImportCoordinator)
+                    .environmentObject(appState.subscriptionStore)
+                    .environmentObject(appState.listeningHistoryStore)
+                    .environmentObject(appState.listeningStatsStore)
+                    .environmentObject(appState.autoArchiveActivityStore)
+                    .environmentObject(appState.downloadActivityStore)
                     .task {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }

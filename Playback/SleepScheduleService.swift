@@ -4,21 +4,21 @@ import Foundation
 
 // AI CONTEXT — Playback/SleepScheduleService.swift (MIT — original Autohop
 // code). "Sleep Schedule": the recurring nightly counterpart to the one-shot
-// SleepTimerService. Owned by AppState; configured from AppSettings
+// SleepTimerService. Owned by PlaybackCoordinator; configured from AppSettings
 // (sleepSchedule* fields) and driven by PlaybackEngine's 0.5 s onTimeUpdate
 // tick via tick(). When playback starts inside the nightly window the service
 // arms a cycle: after the configured duration (or at episode end in
 // end-of-episode mode) it fires onPrompt and plays a soft 60 s chime sequence
 // through SleepScheduleChimePlayer — playback does NOT pause; the chime plays
 // over the continuing audio. Any transport command while prompting counts as
-// "yes" (AppState calls userResponded(); the cycle restarts). If the chime
+// "yes" (PlaybackCoordinator calls userResponded(); the cycle restarts). If the chime
 // finishes with no response, the user is assumed asleep: onAsleep fires and
-// AppState fades playback out, pauses, and rewinds to the position where the
+// PlaybackCoordinator fades playback out, pauses, and rewinds to the position where the
 // chime started — the morning resume point. A manual SleepTimerService activation
 // suspends the schedule for the rest of the session (suspendForSession,
-// called by AppState's tick). onPrompt also drives a lock-screen "Still
-// Listening" notification (AppState → NotificationService); onPromptDismissed
-// fires whenever the prompt tears down so AppState can clear that notification.
+// called by the playback time pipeline). onPrompt also drives a lock-screen
+// "Still Listening" notification through PlaybackCoordinator;
+// onPromptDismissed clears that notification.
 // ACTIVE-WINDOW INVARIANT: every ongoing phase revalidates the configured time
 // window. Crossing the end boundary cancels countdown/chime/notification state
 // and returns to idle without pausing podcast playback. A response received at
@@ -67,21 +67,21 @@ final class SleepScheduleService: ObservableObject {
 
     private(set) var config = Config(enabled: false, startMinutes: 21 * 60, endMinutes: 6 * 60, durationMinutes: 20)
 
-    // MARK: - Callbacks (wired by AppState)
+    // MARK: - Callbacks (wired and owned by PlaybackCoordinator)
 
-    /// Fired when the duration elapses. Playback keeps going — AppState just
+    /// Fired when the duration elapses. Playback keeps going — PlaybackCoordinator
     /// records the prompt-point position (the asleep rewind target). The
     /// chime starts immediately after.
     var onPrompt: (() -> Void)?
 
-    /// Fired when the grace period passes with no response: AppState fades
+    /// Fired when the grace period passes with no response: PlaybackCoordinator fades
     /// out, pauses and rewinds to the prompt point. Parameter is true when
     /// the prompt fired at an episode boundary (rewind target is the start
     /// of the episode that auto-advanced during the grace period).
     var onAsleep: ((_ atEpisodeBoundary: Bool) -> Void)?
 
     /// Fired whenever the prompt is torn down for any reason (confirmed, timed
-    /// out, suspended, or reset). AppState uses it to clear the lock-screen
+    /// out, suspended, or reset). PlaybackCoordinator uses it to clear the lock-screen
     /// "Still Listening" notification. Safe to fire when no prompt was active.
     var onPromptDismissed: (() -> Void)?
 
@@ -121,7 +121,7 @@ final class SleepScheduleService: ObservableObject {
         }
     }
 
-    // MARK: - Session lifecycle (called by AppState)
+    // MARK: - Session lifecycle (called by playback workflows)
 
     /// A fresh playback session started (startPlayback succeeded). Clears any
     /// manual-timer suspension and arms if inside the window.
@@ -160,7 +160,7 @@ final class SleepScheduleService: ObservableObject {
         phase = .idle
     }
 
-    // MARK: - Tick (called every 0.5 s by AppState's onTimeUpdate)
+    // MARK: - Tick (called by PlaybackCoordinator's 0.5 s time pipeline)
 
     func tick(isPlaying: Bool) {
         // The active-hours window is a hard boundary, not merely an arming
@@ -176,7 +176,7 @@ final class SleepScheduleService: ObservableObject {
         }
     }
 
-    // MARK: - Episode boundary (called by AppState.handleEpisodeFinished)
+    // MARK: - Episode boundary (called by EpisodeCompletionWorkflow)
 
     /// Returns true when the schedule wants to prompt instead of auto-advancing
     /// to the next episode (end-of-episode mode only).
@@ -188,7 +188,7 @@ final class SleepScheduleService: ObservableObject {
         return true
     }
 
-    // MARK: - "Yes" response (called by AppState's resume paths)
+    // MARK: - "Yes" response (called by playback transport/seek paths)
 
     /// The user issued a transport command (play/pause, skip, seek) while
     /// prompting. Stops the chime and re-arms a fresh cycle. Returns true if

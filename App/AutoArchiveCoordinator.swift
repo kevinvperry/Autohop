@@ -9,10 +9,10 @@
 //  pre-subscription-backlog protection, eligibility diagnostics, per-pass
 //  deduplication, and AutoArchiveActivity persistence.
 //
-//  Archive side effects are intentionally delegated through `archiveEpisode`.
-//  AppState installs that narrow EpisodeArchiveWorkflow adapter after all
-//  dependencies are initialized. The coordinator never reaches back into
-//  AppState and never relabels listening history itself.
+//  Archive effects, current-playback protection, queue recomputation, and
+//  diagnostic context use weak typed collaborators installed after composition.
+//  The coordinator never reaches back into AppState and never relabels
+//  listening history itself.
 //
 
 import Combine
@@ -20,8 +20,6 @@ import Foundation
 
 @MainActor
 final class AutoArchiveCoordinator: ObservableObject {
-    typealias ArchiveEpisode = @MainActor (Episode, CompletionKind) async -> Void
-
     let activityStore: AutoArchiveActivityStore
 
     private let subscriptionStore: SubscriptionStore
@@ -29,11 +27,21 @@ final class AutoArchiveCoordinator: ObservableObject {
     private let logger: AppLogger
     private let resourceMonitor: ResourceMonitor
     private let interval: TimeInterval
-    private var currentEpisodeID: () -> UUID? = { nil }
-    private var refreshQueue: (String) -> Void = { _ in }
-    private var resourceContext: () -> [String: String] = { [:] }
-
-    private var archiveEpisode: ArchiveEpisode?
+    private let now: () -> Date
+    private weak var dispositionWorkflow: EpisodeDispositionWorkflow?
+    private weak var playbackCoordinator: PlaybackCoordinator?
+    private weak var queueCoordinator: QueueCoordinator?
+    private weak var runtimeWorkflow: AppRuntimeWorkflow?
+#if DEBUG
+    // Characterization-only seam. Production composition uses installRuntime
+    // with typed collaborators; tests can isolate rule evaluation without
+    // constructing the complete playback/download graph.
+    private var testArchiveEpisode:
+        (@MainActor (Episode, CompletionKind) async -> Void)?
+    private var testCurrentEpisodeID: (() -> UUID?)?
+    private var testRefreshQueue: ((String) -> Void)?
+    private var testResourceContext: (() -> [String: String])?
+#endif
     private var lastSkipLogAt: Date?
     private var cancellables = Set<AnyCancellable>()
 
@@ -43,7 +51,8 @@ final class AutoArchiveCoordinator: ObservableObject {
         activityStore: AutoArchiveActivityStore? = nil,
         interval: TimeInterval = 25 * 60,
         logger: AppLogger? = nil,
-        resourceMonitor: ResourceMonitor? = nil
+        resourceMonitor: ResourceMonitor? = nil,
+        now: @escaping () -> Date = Date.init
     ) {
         self.subscriptionStore = subscriptionStore
         self.settingsStore = settingsStore
@@ -51,25 +60,40 @@ final class AutoArchiveCoordinator: ObservableObject {
         self.interval = interval
         self.logger = logger ?? .shared
         self.resourceMonitor = resourceMonitor ?? .shared
+        self.now = now
         self.activityStore.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
 
+    func installRuntime(
+        dispositionWorkflow: EpisodeDispositionWorkflow,
+        playbackCoordinator: PlaybackCoordinator,
+        queueCoordinator: QueueCoordinator,
+        runtimeWorkflow: AppRuntimeWorkflow
+    ) {
+        self.dispositionWorkflow = dispositionWorkflow
+        self.playbackCoordinator = playbackCoordinator
+        self.queueCoordinator = queueCoordinator
+        self.runtimeWorkflow = runtimeWorkflow
+    }
+
+#if DEBUG
     func installRuntimeAdapters(
-        archive workflow: @escaping ArchiveEpisode,
+        archive: @escaping @MainActor (Episode, CompletionKind) async -> Void,
         currentEpisodeID: @escaping () -> UUID?,
         refreshQueue: @escaping (String) -> Void,
         resourceContext: @escaping () -> [String: String]
     ) {
-        archiveEpisode = workflow
-        self.currentEpisodeID = currentEpisodeID
-        self.refreshQueue = refreshQueue
-        self.resourceContext = resourceContext
+        testArchiveEpisode = archive
+        testCurrentEpisodeID = currentEpisodeID
+        testRefreshQueue = refreshQueue
+        testResourceContext = resourceContext
     }
+#endif
 
     func runIfNeeded(reason: String, force: Bool = false) async {
-        let now = Date()
+        let now = self.now()
         if !force,
            let lastRun = settingsStore.appSettings.lastAutoArchiveRunAt,
            now.timeIntervalSince(lastRun) < interval {
@@ -105,7 +129,8 @@ final class AutoArchiveCoordinator: ObservableObject {
             .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
         guard active.count > limit else { return }
 
-        for episode in active.dropFirst(limit) where episode.id != currentEpisodeID() {
+        for episode in active.dropFirst(limit)
+        where episode.id != activeEpisodeID {
             logger.info("autoArchive.inlineLimit", "Archiving excess episode before new download", metadata: [
                 "podcast": subscription.title,
                 "episode": episode.title,
@@ -116,21 +141,32 @@ final class AutoArchiveCoordinator: ObservableObject {
                 subscription: subscription,
                 rule: .episodeLimit,
                 threshold: "Keep \(limit)",
-                measuredAge: max(0, Date().timeIntervalSince(episode.publishedAt ?? episode.downloadedAt ?? Date()))
+                measuredAge: max(
+                    0,
+                    now().timeIntervalSince(
+                        episode.publishedAt
+                            ?? episode.downloadedAt
+                            ?? now()
+                    )
+                )
             )
         }
     }
 
     private func run(reason: String, now: Date) async {
-        guard archiveEpisode != nil else {
+        guard hasArchiveExecutor else {
             logger.error("autoArchive.workflowMissing", "Auto Archive workflow was not installed")
             return
         }
         logger.info("autoArchive.start", "Auto archive started", metadata: ["reason": reason])
-        resourceMonitor.logSnapshot(reason: "autoArchive.before", context: resourceContext(), force: true)
+        resourceMonitor.logSnapshot(
+            reason: "autoArchive.before",
+            context: currentResourceContext,
+            force: true
+        )
 
         var archivedCount = 0
-        let playingID = currentEpisodeID()
+        let playingID = activeEpisodeID
         var playedEvaluated = 0
         var playedWaiting = 0
         var inactiveEvaluated = 0
@@ -249,7 +285,7 @@ final class AutoArchiveCoordinator: ObservableObject {
             }
         }
 
-        refreshQueue("autoArchive.finished")
+        refreshQueue(reason: "autoArchive.finished")
         logger.info("autoArchive.eligibility", "Auto Archive eligibility summary", metadata: [
             "reason": reason,
             "subscriptions": "\(subscriptions.count)",
@@ -269,7 +305,7 @@ final class AutoArchiveCoordinator: ObservableObject {
             "reason": reason,
             "archivedCount": "\(archivedCount)"
         ])
-        var context = resourceContext()
+        var context = currentResourceContext
         context["archivedCount"] = "\(archivedCount)"
         resourceMonitor.logSnapshot(reason: "autoArchive.after", context: context, force: true)
     }
@@ -281,16 +317,68 @@ final class AutoArchiveCoordinator: ObservableObject {
         threshold: String,
         measuredAge: TimeInterval
     ) async {
-        await archiveEpisode?(episode, .autoArchived)
+        await executeArchive(episode)
         activityStore.record(AutoArchiveActivity(
             episodeID: episode.id,
             subscriptionID: subscription.id,
             episodeTitle: episode.title,
             podcastTitle: subscription.title,
-            archivedAt: Date(),
+            archivedAt: now(),
             rule: rule,
             configuredThreshold: threshold,
             measuredAgeSeconds: measuredAge
         ))
+    }
+
+    private var activeEpisodeID: UUID? {
+#if DEBUG
+        if let testCurrentEpisodeID {
+            return testCurrentEpisodeID()
+        }
+#endif
+        return playbackCoordinator?.currentEpisode?.id
+    }
+
+    private var currentResourceContext: [String: String] {
+#if DEBUG
+        if let testResourceContext {
+            return testResourceContext()
+        }
+#endif
+        return runtimeWorkflow?.resourceContext() ?? [:]
+    }
+
+    private var hasArchiveExecutor: Bool {
+        if dispositionWorkflow != nil {
+            return true
+        }
+#if DEBUG
+        return testArchiveEpisode != nil
+#else
+        return false
+#endif
+    }
+
+    private func refreshQueue(reason: String) {
+#if DEBUG
+        if let testRefreshQueue {
+            testRefreshQueue(reason)
+            return
+        }
+#endif
+        queueCoordinator?.recompute(reason: reason)
+    }
+
+    private func executeArchive(_ episode: Episode) async {
+#if DEBUG
+        if let testArchiveEpisode {
+            await testArchiveEpisode(episode, .autoArchived)
+            return
+        }
+#endif
+        await dispositionWorkflow?.archive(
+            episode,
+            completionKind: .autoArchived
+        )
     }
 }

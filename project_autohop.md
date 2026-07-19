@@ -14,11 +14,15 @@ not a set of independently authoritative `priorityRank` fields. Reorder UI draft
 active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
-AppState decomposition Stages 0–11 completed on 2026-07-18. History/Stats, queue,
-onboarding, typed routing, downloads, feed refresh/Release Radar, durable
-auto-download intents, Auto Archive, subscription import, CloudKit/Relay, and
-playback have coordinators. AppState remains their compatibility façade;
-Stage 12+ lifecycle and view-observation migration remain.
+AppState decomposition Stages 0–14 are implementation-complete as of
+2026-07-19. Domain coordinators and named workflows exclusively own
+history/Stats, queue, onboarding, typed routing, downloads, feed refresh/Release
+Radar, durable auto-download intents, Auto Archive, subscription import,
+CloudKit/Relay, playback, chapters, media, runtime policy, and startup.
+AppState is only the process singleton, composition root, and stable high-level
+platform/UI façade. AppLifecycleCoordinator owns startup state and every
+retained lifecycle/maintenance task; AppStartupWorkflow owns ordered graph
+connection, migrations, restoration, and service startup.
 -->
 
 ## Identity
@@ -41,9 +45,11 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Composition: `App/AppCompositionRoot.swift` constructs the protocol-backed
   production graph. `AppState.bootstrap()` publishes one process singleton and
   invokes an explicit idempotent `start()`; constructed/starting/started/stopped
-  are visible lifecycle states. Dedicated coordinators own playback session
-  state, CloudKit/Relay, and subscription import; AppState retains compatibility
-  commands and lifecycle/bootstrap callback wiring until Stage 12.
+  are visible lifecycle states. `App/AppStartupWorkflow.swift` connects the
+  already-constructed graph and performs ordered migrations, restoration,
+  service startup, Radar warm-up, and launch maintenance. Dedicated coordinators
+  and workflows own all domain behavior; AppState retains only side-effect-free
+  compatibility projections and high-level platform/UI commands.
 - Extracted application owners:
   `App/HistoryStatsCoordinator.swift` owns tick/history/Stats/checkpoint work;
   `App/QueueCoordinator.swift` owns the downloaded queue, pins, Up Next, badge,

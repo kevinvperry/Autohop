@@ -17,6 +17,11 @@ import UIKit
 // PlaybackClock (playbackClock.time), NOT appState.currentPlayerTime — reading
 // the AppState proxy in body would not re-render on ticks (AppState no longer
 // publishes them). Event handlers (skip buttons) may read the AppState proxy.
+// STAGE 13 OBSERVATION: episode/playing state, queue projection, and
+// subscription metadata are observed from PlaybackCoordinator,
+// QueueCoordinator, and SubscriptionStore. AppState remains only for
+// cross-domain player commands and compatibility state not yet assigned to a
+// dedicated observable owner.
 // RESTORED-SCRUBBER FIX (2026-07-12): sliderValue is drag-local @State and
 // therefore starts at zero even when AppState restores PlaybackClock before this
 // permanently-mounted view appears. onAppear and current-episode changes call
@@ -81,6 +86,13 @@ private struct PodcastDetailRoute: Identifiable {
 
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var queueCoordinator: QueueCoordinator
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var sleepTimerService: SleepTimerService
+    @EnvironmentObject private var sleepScheduleService: SleepScheduleService
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     /// 2 Hz playback tick (PERF-1): the scrubber observes this dedicated clock so
     /// AppState no longer publishes on every 0.5 s time update.
     @EnvironmentObject private var playbackClock: PlaybackClock
@@ -108,25 +120,25 @@ struct PlayerView: View {
     @State private var queueFlashArtworkURL: URL?
     @State private var queueFlashTask: Task<Void, Never>?
 
-    private var episode: Episode? { appState.currentPlayerEpisode }
-    private var isVideoEpisode: Bool { episode?.mediaKind == .video && appState.currentVideoPlayer != nil }
+    private var episode: Episode? { playbackCoordinator.currentEpisode }
+    private var isVideoEpisode: Bool { episode?.mediaKind == .video && playbackCoordinator.videoPlayer != nil }
     private var shouldAttachVideoSurfaces: Bool { scenePhase != .background }
 
     /// True when there is genuinely nothing to play — no loaded episode and an
     /// empty downloaded queue. Matches the transport controls' own disabled
     /// condition so the first-run empty state and the controls agree.
     private var isPlayerEmpty: Bool {
-        appState.currentPlayerEpisode == nil && appState.nextPlayableEpisode == nil
+        playbackCoordinator.currentEpisode == nil && queueCoordinator.nextPlayableEpisode == nil
     }
     private var visiblePanels: [PlayerPanel] {
-        appState.currentEpisodeSupportsChapters ? PlayerPanel.allCases : [.nowPlaying, .details]
+        playbackCoordinator.supportsChapters ? PlayerPanel.allCases : [.nowPlaying, .details]
     }
 
     // Show queue[1] when queue[0] is already playing (avoids duplication), otherwise show queue[0].
     private var playerPageUpNext: Episode? {
-        let queue = appState.downloadedQueue
+        let queue = queueCoordinator.episodes
         guard !queue.isEmpty else { return nil }
-        if let current = appState.currentPlayerEpisode, queue.first?.id == current.id {
+        if let current = playbackCoordinator.currentEpisode, queue.first?.id == current.id {
             return queue.count > 1 ? queue[1] : nil
         }
         return queue.first
@@ -148,7 +160,7 @@ struct PlayerView: View {
                     TabView(selection: $selectedPanel) {
                         nowPlayingPanel.tag(PlayerPanel.nowPlaying.rawValue)
                         detailsPanel.tag(PlayerPanel.details.rawValue)
-                        if appState.currentEpisodeSupportsChapters {
+                        if playbackCoordinator.supportsChapters {
                             chaptersPanel.tag(PlayerPanel.chapters.rawValue)
                         }
                     }
@@ -158,7 +170,7 @@ struct PlayerView: View {
 
             // Sleep Schedule "still listening?" prompt — mostly answered from
             // the lock screen, but shown here for the screen-on (video) case.
-            if appState.sleepScheduleService.isPrompting {
+            if sleepScheduleService.isPrompting {
                 sleepSchedulePromptOverlay
             }
         }
@@ -184,9 +196,9 @@ struct PlayerView: View {
             appState.updateIdleTimer(playerVisible: true)
             // Coach marks: introduce the player's panels, then (later session)
             // the speed controls. Only when there's actually an episode loaded.
-            if appState.currentPlayerEpisode != nil {
-                appState.requestTip(.playerPanels)
-                appState.requestTip(.speed)
+            if playbackCoordinator.currentEpisode != nil {
+                onboardingCoordinator.requestTip(.playerPanels)
+                onboardingCoordinator.requestTip(.speed)
             }
         }
         .onDisappear {
@@ -194,10 +206,10 @@ struct PlayerView: View {
             isPlayerVisible = false
             appState.updateIdleTimer(playerVisible: false)
         }
-        .onChange(of: appState.isPlaying) { _, _ in
+        .onChange(of: playbackCoordinator.isPlaying) { _, _ in
             appState.updateIdleTimer(playerVisible: isPlayerVisible)
         }
-        .onChange(of: appState.settingsStore.appSettings.keepScreenAwakeDuringPlayback) { _, _ in
+        .onChange(of: settingsViewModel.appSettings.keepScreenAwakeDuringPlayback) { _, _ in
             appState.updateIdleTimer(playerVisible: isPlayerVisible)
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
@@ -212,7 +224,7 @@ struct PlayerView: View {
                 pictureInPictureStartToken += 1
             }
         }
-        .onChange(of: appState.currentEpisodeSupportsChapters) { _, supportsChapters in
+        .onChange(of: playbackCoordinator.supportsChapters) { _, supportsChapters in
             if !supportsChapters && selectedPanel == PlayerPanel.chapters.rawValue {
                 selectedPanel = PlayerPanel.nowPlaying.rawValue
             }
@@ -253,7 +265,7 @@ struct PlayerView: View {
             .environmentObject(appState)
         }
         .background {
-            if isVideoEpisode, let videoPlayer = appState.currentVideoPlayer {
+            if isVideoEpisode, let videoPlayer = playbackCoordinator.videoPlayer {
                 VideoPictureInPictureHost(
                     player: videoPlayer,
                     startToken: pictureInPictureStartToken,
@@ -264,7 +276,7 @@ struct PlayerView: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreenVideo) {
-            if let videoPlayer = appState.currentVideoPlayer {
+            if let videoPlayer = playbackCoordinator.videoPlayer {
                 ZStack(alignment: .topLeading) {
                     NativeVideoPlayerView(player: videoPlayer, attached: shouldAttachVideoSurfaces)
                         .ignoresSafeArea()
@@ -297,7 +309,7 @@ struct PlayerView: View {
                 .environmentObject(appState)
         }
         .sheet(isPresented: $showSleepTimer) {
-            SleepTimerSheetView(sleepTimer: appState.sleepTimerService)
+            SleepTimerSheetView(sleepTimer: sleepTimerService)
         }
         .sheet(isPresented: $showArchiveConfirmation) {
             ArchiveConfirmationSheet {
@@ -308,7 +320,7 @@ struct PlayerView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             if let ep = episode {
-                let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID)
+                let sub = subscriptionStore.subscription(id: ep.subscriptionID)
                 EpisodeShareSheet(episode: ep, subscription: sub)
             }
         }
@@ -338,7 +350,7 @@ struct PlayerView: View {
                 // bottom edge.
                 Button {
                     // Confirm without toggling — playback is still going.
-                    appState.sleepScheduleService.userResponded()
+                    sleepScheduleService.userResponded()
                 } label: {
                     Text("Still Listening")
                         .font(.system(size: 26, weight: .bold))
@@ -438,7 +450,7 @@ struct PlayerView: View {
                         Image(systemName: "square.stack")
                             .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(Color.purple.opacity(0.85))
-                        Text("\(appState.downloadedQueue.count)")
+                        Text("\(queueCoordinator.episodes.count)")
                             .font(.system(size: 12, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(Color.purple.opacity(0.85))
@@ -458,9 +470,9 @@ struct PlayerView: View {
                 .frame(height: 32)
                 .playerGlassPill()
             }
-            .accessibilityLabel("Up Next, \(appState.downloadedQueue.count) episodes")
+            .accessibilityLabel("Up Next, \(queueCoordinator.episodes.count) episodes")
         }
-        .onChange(of: appState.downloadedQueue.map(\.id)) { oldIDs, newIDs in
+        .onChange(of: queueCoordinator.episodes.map(\.id)) { oldIDs, newIDs in
             // Flash the artwork of an episode newly added to the queue.
             // oldIDs is the pre-change list, so cold-start population (old
             // empty before the queue first loads) still flashes only on
@@ -468,8 +480,8 @@ struct PlayerView: View {
             guard isPlayerVisible else { return }
             let added = Set(newIDs).subtracting(oldIDs)
             guard let newID = added.first,
-                  let episode = appState.downloadedQueue.first(where: { $0.id == newID }),
-                  let artworkURL = appState.subscriptionStore.subscription(id: episode.subscriptionID)?.artworkURL
+                  let episode = queueCoordinator.episodes.first(where: { $0.id == newID }),
+                  let artworkURL = subscriptionStore.subscription(id: episode.subscriptionID)?.artworkURL
             else { return }
 
             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
@@ -497,8 +509,8 @@ struct PlayerView: View {
     @ViewBuilder
     private var sleepScheduleIndicator: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            if appState.sleepScheduleService.isActive(context.date) {
-                let minutes = appState.sleepScheduleService.minutesUntilPrompt
+            if sleepScheduleService.isActive(context.date) {
+                let minutes = sleepScheduleService.minutesUntilPrompt
                 NavigationLink(value: AppRoute.sleepSchedule) {
                     HStack(spacing: 5) {
                         Image(systemName: "bed.double.fill")
@@ -542,7 +554,7 @@ struct PlayerView: View {
     /// has subscribed but whose first episode hasn't downloaded yet sees a
     /// reassuring "downloading" state. See ONBOARDING_PLAN.md Phase 1a.
     private var emptyPlayerView: some View {
-        let hasSubscriptions = appState.realSubscriptionCount > 0
+        let hasSubscriptions = onboardingCoordinator.realSubscriptionCount > 0
 
         return VStack(spacing: 0) {
             // Keep a quiet exit so the player is never a dead end.
@@ -629,7 +641,7 @@ struct PlayerView: View {
 
     private var nowPlayingPanel: some View {
         GeometryReader { geo in
-            let hasChapters = !appState.activeChapters.isEmpty
+            let hasChapters = !playbackCoordinator.activeChapters.isEmpty
             let upNext = playerPageUpNext
 
             let reserved      = nowPlayingReservedHeight(hasChapters: hasChapters, hasUpNext: upNext != nil)
@@ -637,7 +649,7 @@ struct PlayerView: View {
             let maxFromHeight = geo.size.height - reserved
             let artworkSize   = max(80, min(maxFromWidth, maxFromHeight))
             let cornerRadius: CGFloat = hasChapters ? 18 : 20
-            let isVideo = episode?.mediaKind == .video && appState.currentVideoPlayer != nil
+            let isVideo = episode?.mediaKind == .video && playbackCoordinator.videoPlayer != nil
             let videoWidth = geo.size.width - 44
             let videoHeight = videoWidth * (9.0 / 16.0)
 
@@ -692,7 +704,7 @@ struct PlayerView: View {
 
     private var artworkURL: URL? {
         episode?.artworkURL
-            ?? episode.flatMap { appState.subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
+            ?? episode.flatMap { subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
     }
 
     private func artworkZStack(size: CGFloat, height: CGFloat? = nil, cornerRadius: CGFloat) -> some View {
@@ -707,7 +719,7 @@ struct PlayerView: View {
 
             Group {
                 if episode?.mediaKind == .video,
-                   let videoPlayer = appState.currentVideoPlayer,
+                   let videoPlayer = playbackCoordinator.videoPlayer,
                    shouldAttachVideoSurfaces {
                     ZStack(alignment: .bottomTrailing) {
                         VideoPlayer(player: videoPlayer)
@@ -765,11 +777,11 @@ struct PlayerView: View {
     // MARK: - Chapter strip
 
     private var chapterStripView: some View {
-        let active = appState.activeChapters
-        let current = appState.currentChapter
+        let active = playbackCoordinator.activeChapters
+        let current = playbackCoordinator.currentChapter
         let activeIdx = active.firstIndex(where: { $0.position == current?.position })
-        let previousTarget = appState.previousChapterNavigationTarget
-        let nextTarget = appState.nextChapterNavigationTarget
+        let previousTarget = playbackCoordinator.previousChapterTarget
+        let nextTarget = playbackCoordinator.nextChapterTarget
 
         return HStack(spacing: 8) {
             Button { appState.navigateToPreviousChapter() } label: {
@@ -828,7 +840,7 @@ struct PlayerView: View {
                     .lineLimit(2)
                     .frame(maxWidth: .infinity)
 
-                if let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID) {
+                if let sub = subscriptionStore.subscription(id: ep.subscriptionID) {
                     NavigationLink {
                         PodcastDetailView(subscriptionID: sub.id)
                     } label: {
@@ -847,7 +859,7 @@ struct PlayerView: View {
                     .foregroundStyle(Color(white: 0.3))
                     .frame(maxWidth: .infinity)
 
-                Text(appState.nextPlayableEpisode != nil ? "Tap play to start" : "Add a feed and download an episode")
+                Text(queueCoordinator.nextPlayableEpisode != nil ? "Tap play to start" : "Add a feed and download an episode")
                     .font(.system(size: 12))
                     .foregroundStyle(Color(white: 0.33))
                     .multilineTextAlignment(.center)
@@ -931,19 +943,19 @@ struct PlayerView: View {
     private var controlsView: some View {
         HStack(alignment: .center) {
             Button {
-                let skip = appState.settingsStore.appSettings.skipBackSeconds
+                let skip = settingsViewModel.appSettings.skipBackSeconds
                 let target = max(0, appState.currentPlayerTime - skip)
                 sliderValue = target
                 appState.seek(to: target)
             } label: {
-                SkipIntervalIcon(direction: .backward, seconds: appState.settingsStore.appSettings.skipBackSeconds)
+                SkipIntervalIcon(direction: .backward, seconds: settingsViewModel.appSettings.skipBackSeconds)
             }
             .frame(maxWidth: .infinity)
 
             Button {
                 Task { await appState.togglePlayPause() }
             } label: {
-                let playIcon = Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
+                let playIcon = Image(systemName: playbackCoordinator.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(.white)
                     .frame(width: 76, height: 76)
@@ -959,16 +971,16 @@ struct PlayerView: View {
                         .shadow(color: Color.purple.opacity(0.35), radius: 14)
                 }
             }
-            .disabled(appState.currentPlayerEpisode == nil && appState.nextPlayableEpisode == nil)
-            .accessibilityLabel(appState.isPlaying ? "Pause" : "Play")
+            .disabled(playbackCoordinator.currentEpisode == nil && queueCoordinator.nextPlayableEpisode == nil)
+            .accessibilityLabel(playbackCoordinator.isPlaying ? "Pause" : "Play")
 
             Button {
-                guard let dur = appState.currentPlayerEpisode?.durationSeconds else { return }
-                let skip = appState.settingsStore.appSettings.skipForwardSeconds
+                guard let dur = playbackCoordinator.currentEpisode?.durationSeconds else { return }
+                let skip = settingsViewModel.appSettings.skipForwardSeconds
                 if appState.currentPlayerTime + skip >= dur {
                     // Overshoot — advance to next episode rather than clamping to the end.
                     // Exclude the current episode so playNextEpisode doesn't restore it.
-                    let currentID = appState.currentPlayerEpisode?.id
+                    let currentID = playbackCoordinator.currentEpisode?.id
                     Task { await appState.playNextEpisode(excluding: currentID.map { [$0] } ?? []) }
                 } else {
                     sliderValue = appState.currentPlayerTime + skip
@@ -977,7 +989,7 @@ struct PlayerView: View {
                     appState.skipForward(seconds: skip)
                 }
             } label: {
-                SkipIntervalIcon(direction: .forward, seconds: appState.settingsStore.appSettings.skipForwardSeconds)
+                SkipIntervalIcon(direction: .forward, seconds: settingsViewModel.appSettings.skipForwardSeconds)
             }
             .frame(maxWidth: .infinity)
         }
@@ -1049,7 +1061,7 @@ struct PlayerView: View {
 
     @ViewBuilder
     private var sleepTimerButtonLabel: some View {
-        let timer = appState.sleepTimerService
+        let timer = sleepTimerService
         ZStack(alignment: .topTrailing) {
             Image(systemName: timer.isActive ? "moon.zzz.fill" : "moon.zzz")
                 .font(.system(size: 18, weight: .bold))
@@ -1082,7 +1094,7 @@ struct PlayerView: View {
     }
 
     private var sleepTimerBadge: String? {
-        let remaining = appState.sleepTimerService.timeRemaining
+        let remaining = sleepTimerService.timeRemaining
         guard remaining.isFinite, remaining >= 0 else { return nil }
         let total = Int(remaining)
         let m = total / 60
@@ -1216,7 +1228,7 @@ struct PlayerView: View {
                         .padding(.bottom, 16)
                     }
 
-                    let sub = appState.subscriptionStore.subscription(id: ep.subscriptionID)
+                    let sub = subscriptionStore.subscription(id: ep.subscriptionID)
                     // Glass cards inside a GlassEffectContainer so the tiles read
                     // as one cohesive glass surface (matches the Episode Detail grid).
                     Group {
@@ -1291,7 +1303,7 @@ struct PlayerView: View {
     }
 
     private func detailsArtworkURL(for episode: Episode) -> URL? {
-        appState.subscriptionStore.subscription(id: episode.subscriptionID)?.artworkURL
+        subscriptionStore.subscription(id: episode.subscriptionID)?.artworkURL
             ?? episode.artworkURL
     }
 
@@ -1313,8 +1325,8 @@ struct PlayerView: View {
     // MARK: - Chapters panel
 
     private var chaptersPanel: some View {
-        let ep = appState.episodeForChapters
-        let sub = ep.flatMap { appState.subscriptionStore.subscription(id: $0.subscriptionID) }
+        let ep = playbackCoordinator.chapterEpisode
+        let sub = ep.flatMap { subscriptionStore.subscription(id: $0.subscriptionID) }
         let chapters = (ep?.chapters ?? []).sorted { $0.position < $1.position }
         let skippedCount = sub?.chapterFilter.skippedPositions.count ?? 0
 
@@ -1335,7 +1347,7 @@ struct PlayerView: View {
                             appState.applyChapterFilter(ChapterFilter(), subscriptionID: sub.id)
                         }
                         Button("None") {
-                            let currentPos = appState.currentChapter?.position
+                            let currentPos = playbackCoordinator.currentChapter?.position
                             let skipped = Set(chapters.lazy.filter { $0.position != currentPos }.map(\.position))
                             appState.applyChapterFilter(ChapterFilter(skippedPositions: skipped), subscriptionID: sub.id)
                         }
@@ -1367,7 +1379,7 @@ struct PlayerView: View {
 
     private func chapterRow(chapter: Chapter, subscription: Subscription?) -> some View {
         let isSkipped = subscription?.chapterFilter.skippedPositions.contains(chapter.position) ?? false
-        let isCurrentlyPlaying = appState.currentChapter?.position == chapter.position && appState.currentPlayerEpisode != nil
+        let isCurrentlyPlaying = playbackCoordinator.currentChapter?.position == chapter.position && playbackCoordinator.currentEpisode != nil
 
         return Button {
             appState.seek(to: chapter.startSeconds)
@@ -1822,6 +1834,7 @@ struct HTMLDescriptionText: View {
 
 private struct UpNextRow: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     let episode: Episode
 
     @State private var offset: CGFloat = 0
@@ -1834,7 +1847,7 @@ private struct UpNextRow: View {
     private var spring: Animation { .spring(response: 0.3, dampingFraction: 0.75) }
 
     var body: some View {
-        let sub = appState.subscriptionStore.subscription(id: episode.subscriptionID)
+        let sub = subscriptionStore.subscription(id: episode.subscriptionID)
 
         ZStack(alignment: .center) {
             // Action buttons behind the card
@@ -2137,11 +2150,13 @@ private struct ArchiveConfirmationSheet: View {
 // player's sound-controls button renders white.
 struct AudioControlsSheetView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
 
-    private var episode: Episode? { appState.currentPlayerEpisode }
+    private var episode: Episode? { playbackCoordinator.currentEpisode }
     private var subscription: Subscription? {
-        episode.flatMap { appState.subscriptionStore.subscription(id: $0.subscriptionID) }
+        episode.flatMap { subscriptionStore.subscription(id: $0.subscriptionID) }
     }
 
     var body: some View {

@@ -7,14 +7,17 @@
 //  It owns the NWPathMonitor, current network path, three-slot FIFO accounting,
 //  progress/activity projections, automatic-failure cooldowns, bounded watchdog
 //  attempts, superseded rolling-feed cancellation identity, and orphan-facing
-//  activity state. AppState retains compatibility commands while their bodies
-//  execute against this single state owner.
+//  activity state. It also idempotently owns DownloadManager progress callback
+//  installation and coalesces progress publications before updating its two
+//  observable download projections. AppState retains only platform/view command
+//  names; DownloadTransferWorkflow and DownloadActionsWorkflow own behavior.
 //
 //  Automatic provenance remains durable in AutoDownloadIntentStore. This type
 //  does not decide feed eligibility, queue order, Play Instant policy, or
 //  listening-history outcomes.
 //
 
+import AVFoundation
 import Combine
 import Foundation
 import Network
@@ -38,17 +41,21 @@ final class DownloadCoordinator: ObservableObject {
 
     private let networkMonitor: NWPathMonitor
     private var monitorStarted = false
+    private var progressCallbackInstalled = false
+    private var watchdogCallbackInstalled = false
+    private var backgroundCompletionCallbackInstalled = false
+    private var remoteFileDeletionCallbackInstalled = false
     private(set) var latestNetworkPath: NWPath?
     private var cancellables = Set<AnyCancellable>()
+    private var watchdogRetryTasks: [UUID: Task<Void, Never>] = [:]
 
-    // Internal access is limited to the AppState compatibility façade during
-    // Stages 6–8. These values have one storage owner and are not published.
+    // Internal access is limited to typed download/runtime workflows. These
+    // values have one storage owner and are not published.
     var pendingQueue: [PendingDownload] = []
     var activeCount = 0
     var failureBackoff: [String: (failures: Int, retryAfter: Date)] = [:]
     var watchdogRetryCounts: [UUID: Int] = [:]
     var supersededCancellationIDs = Set<UUID>()
-    var isDrainingAutomaticIntents = false
 
     init(
         progressModel: DownloadProgressModel? = nil,
@@ -76,6 +83,258 @@ final class DownloadCoordinator: ObservableObject {
         networkMonitor.start(
             queue: DispatchQueue(label: "au.com.autohop.networkmonitor", qos: .utility)
         )
+    }
+
+    /// Installs the UI progress callback exactly once.
+    ///
+    /// AI CONTEXT — DownloadManager already limits each task to approximately
+    /// one callback per second. Multiple concurrent downloads can still produce
+    /// excessive SwiftUI invalidations, so this owner retains the established
+    /// one-percentage-point coalescing rule. Completion always publishes.
+    /// Callback delivery enters MainActor before touching observable state.
+    func installProgressCallback(on downloadManager: any DownloadManaging) {
+        guard !progressCallbackInstalled else { return }
+        progressCallbackInstalled = true
+
+        downloadManager.onProgressUpdate = {
+            [weak self] episodeID, fraction, writtenBytes, expectedBytes in
+            Task { @MainActor in
+                guard let self else { return }
+                let lastFraction = self.progressModel.progress[episodeID] ?? -1
+                guard fraction >= 1 || abs(fraction - lastFraction) >= 0.01 else {
+                    return
+                }
+                self.progressModel.progress[episodeID] = fraction
+                self.activityStore.progress(
+                    episodeID: episodeID,
+                    fraction: fraction,
+                    writtenBytes: writtenBytes,
+                    expectedBytes: expectedBytes
+                )
+            }
+        }
+    }
+
+    /// Owns the cross-device archive cleanup adapter.
+    ///
+    /// AI CONTEXT — SubscriptionStore intentionally does not know how media is
+    /// stored. A remote played/archived merge supplies the still-populated
+    /// Episode before clearing its download fields; this adapter deletes the
+    /// corresponding local file asynchronously. Installation is idempotent and
+    /// AppState never receives or installs the domain callback.
+    func installRemoteFileDeletionCallback(
+        on subscriptionStore: SubscriptionStore,
+        downloadManager: any DownloadManaging
+    ) {
+        guard !remoteFileDeletionCallbackInstalled else { return }
+        remoteFileDeletionCallbackInstalled = true
+        subscriptionStore.onEpisodeFileShouldDelete = {
+            [weak downloadManager] episode in
+            Task {
+                try? await downloadManager?.deleteLocalFile(for: episode)
+            }
+        }
+    }
+
+    /// Installs bounded watchdog recovery and owns every delayed retry task.
+    ///
+    /// AI CONTEXT — A confirmed transfer stall may retry at 30, 60, and
+    /// 120 seconds. A fourth cancellation is terminal: URLSession identity and
+    /// resume data are retired, the episode returns to failed state, and the
+    /// activity becomes user-retryable. Repeated callbacks replace/cancel the
+    /// prior delayed task, preventing exhausted or superseded work from firing.
+    /// DownloadActionsWorkflow is the typed re-entry point after the
+    /// coordinator-owned delay.
+    func installWatchdogCallback(
+        on downloadManager: any DownloadManaging,
+        subscriptionStore: SubscriptionStore,
+        logger: AppLogger,
+        actions: DownloadActionsWorkflow
+    ) {
+        guard !watchdogCallbackInstalled else { return }
+        watchdogCallbackInstalled = true
+
+        downloadManager.onWatchdogCancelled = {
+            [weak self, weak downloadManager, weak subscriptionStore] episodeID in
+            Task { @MainActor in
+                guard let self, let downloadManager, let subscriptionStore else {
+                    return
+                }
+                self.watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+                let attempt = (self.watchdogRetryCounts[episodeID] ?? 0) + 1
+                self.watchdogRetryCounts[episodeID] = attempt
+
+                guard attempt <= 3 else {
+                    downloadManager.cancelDownload(episodeID: episodeID)
+                    downloadManager.clearResumeData(episodeID: episodeID)
+                    if let activity = self.activityStore.activeActivities.first(
+                        where: { $0.episodeID == episodeID }
+                    ),
+                       let episode = subscriptionStore.episode(
+                        subscriptionID: activity.subscriptionID,
+                        episodeID: episodeID
+                       ),
+                       let subscription = subscriptionStore.subscription(
+                        id: activity.subscriptionID
+                       ) {
+                        subscriptionStore.markEpisodeDownloadFailed(
+                            subscriptionID: activity.subscriptionID,
+                            episodeID: episodeID
+                        )
+                        self.activityStore.fail(
+                            episode: episode,
+                            podcastTitle: subscription.title,
+                            error: "Download stalled repeatedly. Tap to retry."
+                        )
+                    }
+                    logger.warning(
+                        "download.watchdogRetryExhausted",
+                        "Automatic retries stopped after repeated confirmed stalls",
+                        metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "attempts": "\(attempt - 1)"
+                        ]
+                    )
+                    return
+                }
+
+                let delay = TimeInterval(30 * (1 << (attempt - 1)))
+                logger.info(
+                    "download.watchdogRetryScheduled",
+                    "Scheduled bounded watchdog retry",
+                    metadata: [
+                        "episodeID": episodeID.uuidString,
+                        "attempt": "\(attempt)",
+                        "delaySeconds": "\(Int(delay))"
+                    ]
+                )
+                self.watchdogRetryTasks[episodeID] = Task {
+                    @MainActor [weak self, weak actions] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled else { return }
+                    await actions?.retryWatchdogCancelledDownload(
+                        episodeID: episodeID
+                    )
+                    self?.watchdogRetryTasks.removeValue(forKey: episodeID)
+                }
+            }
+        }
+    }
+
+    func clearWatchdogRetryState(for episodeID: UUID) {
+        watchdogRetryCounts.removeValue(forKey: episodeID)
+        watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+    }
+
+    /// Owns the out-of-process completion callback delivered after iOS
+    /// relaunches the app for a finished background URLSession transfer.
+    ///
+    /// AI CONTEXT — Durable automatic intent is sampled before store settlement,
+    /// because only automatic transfers may trigger Play Instant. This method
+    /// owns download-state, duration, byte-stat, activity, progress, and
+    /// downloaded-projection settlement. Notification, Play Instant, and durable
+    /// intent policy enter through their typed workflow owners.
+    func installBackgroundCompletionCallback(
+        on downloadManager: any DownloadManaging,
+        subscriptionStore: SubscriptionStore,
+        autoDownloadIntentStore: AutoDownloadIntentStore,
+        historyStatsCoordinator: HistoryStatsCoordinator,
+        notificationWorkflow: NewEpisodeNotificationWorkflow,
+        playInstantWorkflow: PlayInstantWorkflow,
+        autoDownloadIntentWorkflow: AutoDownloadIntentWorkflow
+    ) {
+        guard !backgroundCompletionCallbackInstalled else { return }
+        backgroundCompletionCallbackInstalled = true
+
+        downloadManager.onBackgroundDownloadCompleted = {
+            [
+                weak self,
+                weak subscriptionStore,
+                weak autoDownloadIntentStore,
+                weak historyStatsCoordinator,
+                weak notificationWorkflow,
+                weak playInstantWorkflow,
+                weak autoDownloadIntentWorkflow
+            ]
+            episodeID, subscriptionID, localFileURL in
+            Task { @MainActor in
+                guard let self,
+                      let subscriptionStore,
+                      let autoDownloadIntentStore,
+                      let historyStatsCoordinator,
+                      let notificationWorkflow,
+                      let playInstantWorkflow,
+                      let autoDownloadIntentWorkflow else {
+                    return
+                }
+
+                let wasAutomatic = autoDownloadIntentStore.contains(
+                    episodeID: episodeID
+                )
+                subscriptionStore.markEpisodeDownloaded(
+                    subscriptionID: subscriptionID,
+                    episodeID: episodeID,
+                    localFileURL: localFileURL
+                )
+                if let duration = await Self.localMediaDuration(from: localFileURL) {
+                    subscriptionStore.updateEpisodeDuration(
+                        subscriptionID: subscriptionID,
+                        episodeID: episodeID,
+                        durationSeconds: duration
+                    )
+                }
+                self.progressModel.progress.removeValue(forKey: episodeID)
+
+                let downloadedBytes = (
+                    (try? FileManager.default.attributesOfItem(
+                        atPath: localFileURL.path
+                    ))?[.size] as? NSNumber
+                )?.int64Value ?? 0
+                historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
+
+                if let subscription = subscriptionStore.subscription(
+                    id: subscriptionID
+                ),
+                   let episode = subscriptionStore.episode(
+                    subscriptionID: subscriptionID,
+                    episodeID: episodeID
+                   ) {
+                    self.activityStore.complete(
+                        episode: episode,
+                        podcastTitle: subscription.title,
+                        localFileName: localFileURL.lastPathComponent
+                    )
+                    notificationWorkflow.notifyIfAllowed(
+                        episode: episode,
+                        subscription: subscription
+                    )
+                    if wasAutomatic {
+                        playInstantWorkflow.enqueueIfEligible(
+                            episodeID: episodeID,
+                            subscriptionID: subscriptionID
+                        )
+                    }
+                }
+
+                autoDownloadIntentWorkflow.resolveIfSettled(
+                    episodeID: episodeID,
+                    subscriptionID: subscriptionID
+                )
+                self.rebuildDownloadedActivities(
+                    from: subscriptionStore.subscriptions
+                )
+            }
+        }
+    }
+
+    private static func localMediaDuration(from url: URL) async -> TimeInterval? {
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration).seconds,
+              duration.isFinite,
+              duration > 0 else {
+            return nil
+        }
+        return duration
     }
 
     func isAllowed(settings: AppSettings) -> Bool {

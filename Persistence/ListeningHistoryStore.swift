@@ -25,7 +25,8 @@ import Foundation
 // per 30-second batch. Routine diagnostics are summarized at most every five
 // minutes. `save()` and terminal `mark()` flush the buffer first, preserving
 // pause/background/completion durability. `syncDatabase` is the existing
-// CloudKit projection adapter supplied by AppState.
+// CloudKit projection adapter connected by AppStartupWorkflow through
+// HistoryStatsCoordinator.
 //
 // INVARIANTS / PROHIBITED RESPONSIBILITIES:
 // - A later Auto Archive storage cleanup cannot replace an existing Played,
@@ -58,7 +59,8 @@ final class ListeningHistoryStore: ObservableObject {
         var lastListenedAt: Date
     }
     private var pendingProgress: [String: PendingProgress] = [:]
-    /// Record store for cross-device history sync; set by AppState. nil = no sync.
+    /// Record store for cross-device history sync; connected by
+    /// HistoryStatsCoordinator. nil = no sync.
     var syncDatabase: AutohopDatabase?
 
     private let fileURL: URL?

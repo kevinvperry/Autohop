@@ -16,15 +16,19 @@ import SwiftUI
 // @EnvironmentObject PlaybackClock (playbackClock.time), NOT
 // appState.currentPlayerTime — AppState no longer publishes the 2 Hz tick, so
 // reading the proxy in body would render stale time.
+// Stage 13 observation is narrow: MiniPlayerBar reads PlaybackCoordinator and
+// SubscriptionStore directly, while onboarding chrome reads
+// OnboardingCoordinator. RootView retains AppState only for high-level routing,
+// settings-backed launch decisions, and cross-domain user commands.
 //
 // ONBOARDING / LAUNCH ROUTING (ONBOARDING_PLAN.md; FEATURES.md §18): on cold
 // start the .task decides the initial navigationPath while the splash is up —
-// a brand-new user (appState.isFirstRunNoSubscriptions) gets WelcomeView as a
+// a brand-new user (onboardingCoordinator.isFirstRunNoSubscriptions) gets WelcomeView as a
 // fullScreenCover; otherwise the user's Open-at-launch preference
 // (AppSettings.launchScreen) routes to Player (root) / Subscriptions / Discover.
 // RootView also hosts the onboarding chrome layered into its ZStack (above pages,
-// BELOW sheets + splash): CoachMarkOverlay (appState.activeTip), the
-// onboardingToast overlay, plus the FirstSubscribeCard .sheet (keyed by
+// BELOW sheets + splash): CoachMarkOverlay (onboardingCoordinator.activeTip),
+// the onboarding toast overlay, plus the FirstSubscribeCard .sheet (keyed by
 // FirstSubscribeContext from AppRoutingCoordinator's typed onboarding output).
 // RootView retains its local NavigationPath; AppRoutingCoordinator selects typed
 // launch/menu/notification commands and translates legacy notifications.
@@ -76,13 +80,15 @@ struct SheetCloseButton: View {
 /// nothing when no episode is loaded.
 struct MiniPlayerBar: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     /// 2 Hz playback tick (PERF-1): the progress bar / remaining-time readout observe
     /// this dedicated clock so AppState no longer publishes on every 0.5 s update.
     @EnvironmentObject private var playbackClock: PlaybackClock
 
     var body: some View {
-        if let episode = appState.currentPlayerEpisode {
-            let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID)
+        if let episode = playbackCoordinator.currentEpisode {
+            let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
             let duration = episode.durationSeconds ?? 0
             let progress = duration > 0 ? min(1, max(0, playbackClock.time / duration)) : 0
 
@@ -137,7 +143,7 @@ struct MiniPlayerBar: View {
                     Button {
                         Task { await appState.togglePlayPause() }
                     } label: {
-                        let playIcon = Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
+                        let playIcon = Image(systemName: playbackCoordinator.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
@@ -151,7 +157,7 @@ struct MiniPlayerBar: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(appState.isPlaying ? "Pause" : "Play")
+                    .accessibilityLabel(playbackCoordinator.isPlaying ? "Pause" : "Play")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -192,6 +198,8 @@ private struct FirstSubscribeContext: Identifiable { let id: UUID }
 
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @State private var showLaunchView = true
     @State private var showWelcome = false
     @State private var firstSubscribeContext: FirstSubscribeContext?
@@ -220,11 +228,11 @@ struct RootView: View {
 
             // Onboarding coach marks float above pages but below sheets and the
             // launch splash (so they never clash with Welcome / the first-subscribe
-            // card). Triggered by views via appState.requestTip(_:).
+            // card). Triggered by views via OnboardingCoordinator.requestTip(_:).
             CoachMarkOverlay()
-                .allowsHitTesting(appState.activeTip != nil)
+                .allowsHitTesting(onboardingCoordinator.activeTip != nil)
 
-            if let toast = appState.onboardingToast {
+            if let toast = onboardingCoordinator.toast {
                 VStack {
                     Spacer()
                     Text(toast)
@@ -241,7 +249,7 @@ struct RootView: View {
                 .allowsHitTesting(false)
                 .task(id: toast) {
                     try? await Task.sleep(for: .seconds(2.8))
-                    withAnimation { appState.onboardingToast = nil }
+                    withAnimation { onboardingCoordinator.toast = nil }
                 }
             }
 
@@ -266,7 +274,7 @@ struct RootView: View {
             // Re-arm Listening Recap notifications from saved settings at launch
             // (idempotent), so an opted-in user's recaps survive relaunch/reinstall
             // even if they never reopen the Recaps screen.
-            let s = appState.settingsStore.appSettings
+            let s = settingsViewModel.appSettings
             NotificationService.shared.scheduleRecaps(
                 weekly: s.recapWeeklyEnabled,
                 monthly: s.recapMonthlyEnabled,
@@ -278,8 +286,8 @@ struct RootView: View {
             // ownership of its local NavigationPath.
             if !handledExplicitLaunchRoute,
                let command = appState.routingCoordinator.launchCommand(
-                    isFirstRun: appState.isFirstRunNoSubscriptions,
-                    launchScreen: appState.settingsStore.appSettings.launchScreen
+                    isFirstRun: onboardingCoordinator.isFirstRunNoSubscriptions,
+                    launchScreen: settingsViewModel.appSettings.launchScreen
                ) {
                 handleRouteCommand(command)
             }
@@ -330,7 +338,7 @@ struct RootView: View {
     /// never reappears. Find shows lands on Discover (with Subscriptions behind
     /// it); Import and Skip land on the Subscriptions page.
     private func handleWelcome(_ outcome: WelcomeOutcome) {
-        appState.settingsStore.appSettings.hasCompletedWelcome = true
+        settingsViewModel.appSettings.hasCompletedWelcome = true
         showWelcome = false
         handleRouteCommand(appState.routingCoordinator.welcomeCompleted(outcome))
     }

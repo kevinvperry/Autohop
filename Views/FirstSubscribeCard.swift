@@ -11,6 +11,8 @@ import SwiftUI
 // progress and the downloaded transition drive the UI reactively.
 struct FirstSubscribeCard: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
@@ -27,7 +29,7 @@ struct FirstSubscribeCard: View {
     }
 
     private var subscription: Subscription? {
-        appState.subscriptionStore.subscription(id: subscriptionID)
+        subscriptionStore.subscription(id: subscriptionID)
     }
     private var latestEpisode: Episode? { subscription?.newestEpisode }
     private var isDownloaded: Bool { latestEpisode?.downloadState == .downloaded }
@@ -166,9 +168,9 @@ struct FirstSubscribeCard: View {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         // One-time download-first education note (Phase 4a). Capture-then-flip so
         // it shows on this first download only.
-        if !appState.settingsStore.appSettings.hasSeenDownloadFirstNote {
+        if !settingsViewModel.appSettings.hasSeenDownloadFirstNote {
             showDownloadNote = true
-            appState.settingsStore.appSettings.hasSeenDownloadFirstNote = true
+            settingsViewModel.appSettings.hasSeenDownloadFirstNote = true
         }
         // Ensure the latest episode is actually downloading (idempotent — the
         // download path guards against re-downloading an in-flight/finished file).

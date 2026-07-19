@@ -14,13 +14,14 @@ its move-index space.
 Version 1.3 is an iPhone-only production release. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
 features and are not offered, advertised, or contacted by the 1.3 build.
-AppState decomposition Stages 0–11 are complete: production construction and
-idempotent start are explicit; independent leaves live in domain folders; and
-history/Stats, queue, onboarding, routing, downloads, feed refresh/Release
-Radar, durable automatic-download intents, and Auto Archive have explicit
-owners. AppState remains the compatibility façade for existing views and
-platform entry points. Import, CloudKit/Relay, and playback now also have
-dedicated owners. Stage 12 and later ownership transfers are not implemented.
+AppState decomposition Stages 0–14 are implementation-complete. Domain
+coordinators and named workflows exclusively own playback, queue, downloads,
+feed refresh/Release Radar, Auto Archive, history/Stats, onboarding, import,
+CloudKit/Relay, chapters, media, Play Instant, runtime policy, and startup.
+SwiftUI observes narrow owners directly. AppState is now only the process
+singleton, composition root, and stable high-level façade retained for SwiftUI,
+CarPlay, AppDelegate, BGTask, APNs, and file-open entry points. The remaining
+release-candidate device matrix is validation, not an ownership extraction.
 -->
 
 **The podcast player for people who are serious about listening.**

@@ -10,9 +10,10 @@ import Foundation
 //
 // DEPENDENCIES / OUTPUT:
 // Reads SubscriptionStore membership and mutates the existing persisted
-// AppSettings flags through SettingsStoring. Emits typed OnboardingOutput;
-// AppState bridges the first-subscription output to AppRoutingCoordinator and
-// temporarily posts the legacy notification for un-migrated observers.
+// AppSettings flags through SettingsStoring. `installRoutingOutput(to:)` owns
+// the typed first-subscription route and temporarily posts the legacy
+// notification for un-migrated observers; AppState does not install the
+// callback body.
 //
 // INVARIANTS:
 // - Browse previews never count as subscriptions.
@@ -40,6 +41,7 @@ final class OnboardingCoordinator: ObservableObject {
     private let maxTipsPerSession = 3
     private var cancellables = Set<AnyCancellable>()
     private var milestoneTask: Task<Void, Never>?
+    private weak var routingCoordinator: AppRoutingCoordinator?
 
     init(
         subscriptionStore: SubscriptionStore,
@@ -63,6 +65,12 @@ final class OnboardingCoordinator: ObservableObject {
         !settingsStore.appSettings.hasCompletedWelcome && realSubscriptionCount == 0
     }
 
+    /// Installs the production routing destination while retaining `onOutput`
+    /// as a focused test-observation seam.
+    func installRoutingOutput(to routingCoordinator: AppRoutingCoordinator) {
+        self.routingCoordinator = routingCoordinator
+    }
+
     func reconcileExistingUser() {
         guard realSubscriptionCount > 0,
               !settingsStore.appSettings.hasCompletedWelcome
@@ -79,7 +87,20 @@ final class OnboardingCoordinator: ObservableObject {
         guard !realSubscriptions.isEmpty else { return }
         settingsStore.appSettings.hasSubscribedFirstShow = true
         if realSubscriptions.count == 1 {
-            onOutput?(.firstSubscription(realSubscriptions[0].id))
+            let output = OnboardingOutput.firstSubscription(realSubscriptions[0].id)
+            route(output)
+            onOutput?(output)
+        }
+    }
+
+    private func route(_ output: OnboardingOutput) {
+        switch output {
+        case .firstSubscription(let subscriptionID):
+            routingCoordinator?.send(.presentFirstSubscription(subscriptionID))
+            NotificationCenter.default.post(
+                name: .autohopFirstSubscription,
+                object: subscriptionID
+            )
         }
     }
 

@@ -20,8 +20,9 @@ import Foundation
 // ============================================================================
 // AI CONTEXT — Playback/PlaybackEngine.swift  (LICENSE: MPL-2.0, see header)
 //
-// PURPOSE: The audio/video playback core. AppState is the only caller and
-// wires every closure callback (time ticks, finish, skip/trim accounting).
+// PURPOSE: The audio/video playback core. PlaybackCoordinator owns callback
+// installation and authoritative session state; named playback workflows invoke
+// transport/preference operations through PlaybackControlling.
 //
 // TWO PLAYBACK PATHS — the central design decision of this file:
 //  1. AVPlayer path ("standard"): all VIDEO episodes, and audio when Vocal
@@ -60,8 +61,9 @@ import Foundation
 // if a replacement route appears inside that window, the restart is rescheduled
 // after the replacement route settles.
 // Do not make headphone removal auto-resume while improving route recovery.
-// SEEK-TO-END INVARIANT: AppState classifies a seek within 0.25 s of duration as
-// completion and stops this engine before calling its completion pipeline. Never
+// SEEK-TO-END INVARIANT: PlaybackSeekWorkflow classifies a seek within 0.25 s
+// of duration as completion and stops this engine before calling
+// EpisodeCompletionWorkflow. Never
 // start an AVAudioFile buffer loop at EOF: frame-position fallback would otherwise
 // reset to zero and make the UI clock/end state diverge from audible playback.
 // Chapters present at play() time drive skip filtering immediately; chapters
@@ -72,8 +74,9 @@ import Foundation
 //
 // INVARIANTS:
 //  - Plays local files only (download-first); never streams.
-//  - onTimeUpdate ticks ~0.5 s on both paths — AppState derives stats,
-//    history, sleep timer, and position persistence from this single tick.
+//  - onTimeUpdate ticks ~0.5 s on both paths — PlaybackCoordinator derives
+//    history/Stats, sleep services, Now Playing, and position persistence from
+//    this single tick.
 //  - Video Vocal Boost stays on AVPlayer via an audioMix; track lookup uses
 //    async `loadTracks(withMediaType:)`, and live setting changes apply only if
 //    the same player item + preference level are still current when loading
@@ -186,7 +189,8 @@ final class PlaybackEngine: PlaybackControlling {
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
     /// Fired after a removed output device returns (e.g. AirPods reinserted).
-    /// AppState refreshes the Now Playing card so this app re-claims the
+    /// PlaybackCoordinator asks PlaybackPreferenceWorkflow to refresh the full
+    /// Now Playing card so this app re-claims the
     /// system's now-playing slot BEFORE the user presses the AirPods stem —
     /// the 2026-07-12 "audio hijack" fix (a stem-press after reinsertion was
     /// sometimes falling through to Apple Music). See
@@ -387,8 +391,9 @@ final class PlaybackEngine: PlaybackControlling {
 
     /// Drops paused AVPlayer OR AVAudioEngine resources before suspension. The
     /// engine path retains an AVAudioFile, graph, units, and scheduled buffers;
-    /// long background pauses previously kept those mappings resident. AppState
-    /// retains the episode/position and reconstructs the backend on next resume.
+    /// long background pauses previously kept those mappings resident.
+    /// PlaybackCoordinator/PlaybackMediaWorkflow retain episode/position and
+    /// reconstruct the backend on next resume.
     @discardableResult
     func releasePausedPlayerResourcesForBackground(reason: String) -> TimeInterval? {
         guard !isPlaying else { return nil }
@@ -1688,8 +1693,8 @@ final class PlaybackEngine: PlaybackControlling {
     /// but ONLY when our pause was route-loss-caused AND no other app is
     /// audibly playing; grabbing the session while Apple Music is deliberately
     /// playing would interrupt it, the exact hostility this fix removes —
-    /// and (b) fire onRouteRestored so AppState re-pushes the full Now
-    /// Playing card. The other half of this incident is background
+    /// and (b) fire onRouteRestored so PlaybackCoordinator re-pushes the full
+    /// Now Playing card. The other half of this incident is background
     /// TERMINATION while paused (MetricKit showed memory-pressure exits; a
     /// dead process can never receive the stem-press) — addressed separately
     /// by the relay memory-footprint work; this handles every still-alive case.

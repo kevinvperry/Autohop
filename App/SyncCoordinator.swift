@@ -10,8 +10,8 @@
 //
 //  This extraction does not change CloudKit containers, record types, keys,
 //  identity, merge policy, pending-row durability, or platform authorship.
-//  Download/media state never enters CloudKit. AppState retains thin lifecycle
-//  and AppDelegate-compatible façades.
+//  Download/media state never enters CloudKit. AppState retains only thin
+//  lifecycle/AppDelegate-compatible commands.
 //
 
 import Foundation
@@ -20,14 +20,13 @@ import Foundation
 final class SyncCoordinator {
     static let cloudKitContainerID = "iCloud.com.kevinperry.autohop"
 
-    var onLocalChangesPushed: (() async -> Void)?
-
     private let engine: CloudSyncEngine
     private let feedService: FeedServicing
     private let subscriptionStore: SubscriptionStore
     private let historyStatsCoordinator: HistoryStatsCoordinator
     private let logger: AppLogger
     private var currentEpisodeProvider: () -> Episode? = { nil }
+    private weak var relayCoordinator: RelayCoordinator?
     private var callbacksInstalled = false
 
     init(
@@ -47,8 +46,10 @@ final class SyncCoordinator {
         )
     }
 
-    func installCurrentEpisodeProvider(_ provider: @escaping () -> Episode?) {
-        currentEpisodeProvider = provider
+    func observePlayback(_ playbackCoordinator: PlaybackCoordinator) {
+        currentEpisodeProvider = { [weak playbackCoordinator] in
+            playbackCoordinator?.engine.currentEpisode
+        }
         subscriptionStore.nowPlayingEpisodeSyncKeyProvider = { [weak self] in
             guard let episode = self?.currentEpisodeProvider() else { return nil }
             return EpisodeSyncState.syncKey(
@@ -56,6 +57,12 @@ final class SyncCoordinator {
                 guid: episode.guid
             )
         }
+    }
+
+    /// Connects successful CloudKit pushes to the optional Relay nudge policy.
+    /// The CloudSyncEngine callback remains private to this domain owner.
+    func installRelayNudge(_ relayCoordinator: RelayCoordinator) {
+        self.relayCoordinator = relayCoordinator
     }
 
     func startIfEnabled(_ enabled: Bool) {
@@ -90,7 +97,9 @@ final class SyncCoordinator {
             self?.historyStatsCoordinator.reloadRemoteStats()
         }
         engine.onLocalChangesPushed = { [weak self] in
-            await self?.onLocalChangesPushed?()
+            await MainActor.run {
+                self?.relayCoordinator?.localChangesPushed()
+            }
         }
     }
 

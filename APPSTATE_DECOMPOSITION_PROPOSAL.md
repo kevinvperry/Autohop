@@ -7,8 +7,7 @@ PURPOSE:
 This document is the authoritative architecture review and staged implementation
 proposal and execution ledger for decomposing the iOS App/AppState.swift file.
 It does not authorize a future AI model to change runtime behavior or combine
-unapproved migration stages into one edit. Completed stages are recorded below;
-Stages 12 and later remain proposals.
+unapproved migration stages into one edit. Completed stages are recorded below.
 
 REVIEW SNAPSHOT:
 - Review date: 2026-07-17, Australia/Melbourne.
@@ -22,7 +21,9 @@ REVIEW SNAPSHOT:
   names outside App/AppState.swift.
 
 IMPLEMENTATION SNAPSHOT:
-- Stages 0–11 implemented: 2026-07-18, Australia/Melbourne.
+- Stages 0–14 implementation-complete: 2026-07-19,
+  Australia/Melbourne. Release-candidate device validation remains a separate
+  recorded QA activity.
 - Implementation task-entry commit: d95f29ab4b81b9609ac4f565260d253c4c08e3a0.
 - Stage 0 evidence: APPSTATE_DECOMPOSITION_BASELINE.md.
 - AppCompositionRoot now constructs the production dependency graph.
@@ -34,7 +35,12 @@ IMPLEMENTATION SNAPSHOT:
   AutoDownloadWorkflow, and AutoArchiveCoordinator own their approved domains.
 - SubscriptionImportCoordinator, SyncCoordinator, RelayCoordinator, and
   PlaybackCoordinator own their approved domains.
-- Stage 12 remains not started.
+- Stage 13 view migration and compatibility-forwarding audit are complete.
+- Stage 14 extracted the remaining callback, transaction, runtime, and startup
+  implementations into typed owners. AppState now owns singleton identity and
+  compatibility API shape only. At the user's direction, the original
+  Definition of Done is tracked as Stage 14 final cleanup; numbered document
+  sections such as the rollback strategy retain their original meaning.
 
 AUTHORITATIVE EXECUTION RULES FOR FUTURE AI MODELS:
 1. Re-read the current code before implementing any stage. Symbol names, line
@@ -110,7 +116,7 @@ The recommended implementation order is deliberately risk-weighted:
 
 ### 1.1 Implementation status
 
-| Item | Status at 2026-07-18 |
+| Item | Status at 2026-07-19 |
 |---|---|
 | Current-code inventory | Complete |
 | Durability and reliability review | Complete |
@@ -128,15 +134,18 @@ The recommended implementation order is deliberately risk-weighted:
 | Stage 9 SubscriptionImportCoordinator | Complete |
 | Stage 10 SyncCoordinator and RelayCoordinator | Complete |
 | Stage 11 PlaybackCoordinator | Complete |
-| Stage 12 and later | Not started |
+| Stage 12 AppLifecycleCoordinator | Complete |
+| Stage 13 façade/view migration | Complete — narrow page observation and compatibility-forwarding audit finished |
+| Stage 14 final cleanup / Definition of Done | Implementation complete — final local build/test validation recorded below; release-candidate device scenarios remain QA |
 
-Stages 0–11 are complete. Existing policy extractions such as
+Stages 0–14 are implementation-complete. Existing policy extractions such as
 PlaybackPositionStore, PlaybackSessionPolicy, and QueueModel remain current-state
-inputs. AppState retains compatibility entry points while download runtime state,
-refresh/Radar state, durable intent draining, and Auto Archive policy have
-exclusive owners. Import, CloudKit, Relay, and playback session state now also
-have exclusive owners. Lifecycle/bootstrap callback ownership and narrow view
-observation remain pending later stages.
+inputs. Domain coordinators and named workflows exclusively own download
+runtime, refresh/Radar state, durable intent draining, Auto Archive, import,
+CloudKit, Relay, playback, queue, chapters, media, history/Stats, onboarding,
+runtime policy, and ordered startup. AppState retains stable high-level
+compatibility entry points but owns no domain callback, retained task,
+persistence transaction, or state-machine body.
 
 ## 2. Scope and non-goals
 
@@ -2142,6 +2151,11 @@ sync, auto-archive, and lifecycle interfaces.
 
 Risk: high.
 
+**Status: complete 2026-07-18.** `App/AppLifecycleCoordinator.swift` owns the
+startup state machine, foreground/background-audio poller task, startup
+maintenance tasks, and deterministic cancellation. AppState bootstrap retains
+only singleton construction/start guarding and compatibility callback wiring.
+
 ### Actions
 
 - Move startup migrations and launch task sequencing to AppLifecycleCoordinator.
@@ -2164,16 +2178,53 @@ Risk: high.
 
 Risk: medium but broad.
 
+**Status: complete 2026-07-19.** All dedicated observable coordinators are
+injected at the SwiftUI root. Page families observe their narrow domain owners;
+AppState remains only where a high-level command or platform entry point is
+intentional. No AppState `objectWillChange` forwarding remains.
+
+**Pass 1 complete 2026-07-18.** Settings subsections, Release Radar diagnostics,
+Auto Archive Activity, onboarding/import surfaces, Listening History, Stats, and
+Downloads now directly observe their SubscriptionStore, history/Stats stores,
+activity stores, or domain coordinator. AppState remains on those pages only
+where a command coordinates multiple domains. Podcast lists, Up Next, Player,
+RootView, CarPlay, and AppDelegate remain for the next pass.
+
+**Pass 2 complete 2026-07-18.** Discover/search/top-list pages, Subscriptions,
+Podcast Detail, Podcast Settings and filters, Up Next, Player, Mini Player,
+RootView onboarding chrome, and Notification Settings now observe their narrow
+domain owners. CarPlay refresh invalidation now merges PlaybackCoordinator,
+QueueCoordinator, SubscriptionStore, DownloadCoordinator, and concrete
+SettingsStore publishers rather than subscribing to AppState.objectWillChange.
+CarPlay presentation and AppDelegate intentionally continue to call AppState as
+the high-level command/entry-point façade.
+
+**Compatibility-forwarding audit complete 2026-07-18.** Repository-wide view,
+CarPlay, test, and lifecycle call-site searches proved that AppState no longer
+needs to relay object changes from SubscriptionStore, QueueCoordinator,
+HistoryStatsCoordinator, OnboardingCoordinator, DownloadCoordinator,
+AutoArchiveCoordinator, SubscriptionImportCoordinator, or PlaybackCoordinator.
+Those eight broad relays were removed. Player now observes SleepTimerService and
+SleepScheduleService directly, so both sleep relays were removed as well.
+
+The final settings bridge was removed when Stage 14 commenced:
+SettingsViewModel is now the test-substitutable observable/write-through owner,
+SettingsStoring exposes a typed settings publisher, and settings-driven SwiftUI
+and CarPlay consumers observe SettingsViewModel directly. AppState retains a
+settings-stream subscription only for operational reactions (diagnostic mode,
+Sleep Schedule configuration, and sync enablement); that subscription does not
+send AppState.objectWillChange.
+
 ### Actions
 
-- Inventory the still-used AppState compatibility surface.
-- Migrate one page family at a time to the smallest relevant observable.
-- Keep high-level user intents available through AppState where this improves
+- [x] Inventory the still-used AppState compatibility surface.
+- [x] Migrate one page family at a time to the smallest relevant observable.
+- [x] Keep high-level user intents available through AppState where this improves
   consistency across phone and CarPlay.
-- Remove manual `objectWillChange` forwarding.
-- Make exposed stores read-only or replace them with query protocols/snapshots.
-- Delete compatibility methods only after repository-wide call-site search.
-- Rewrite the top-level AppState AI header to describe only final responsibilities.
+- [x] Remove manual `objectWillChange` forwarding.
+- [x] Make observable consumers read domain coordinators/stores directly.
+- [x] Delete compatibility methods only after repository-wide call-site search.
+- [x] Rewrite the top-level AppState AI header to describe only final responsibilities.
 
 ### Recommended page order
 
@@ -2198,6 +2249,353 @@ Risk: medium but broad.
 - AppState does not contain feed, download, archive, sync, Relay, history, or
   playback state-machine internals.
 - All targets and required real-device scenarios pass.
+
+## Stage 14 — Final cleanup and Definition of Done
+
+Risk: medium; destructive compatibility removal must follow repository-wide
+consumer proof.
+
+**Status: implementation complete 2026-07-19 — commenced 2026-07-18.** This stage was created at the
+user's direction by promoting the proposal's Definition of Done into an explicit
+implementation stage. The observable-settings migration, compatibility audit,
+typed callback/workflow graph, environment injection, startup extraction, and
+final ownership/header audit are complete. Local iOS/tvOS validation is recorded
+below; physical-device scenarios remain part of release-candidate QA rather than
+an additional ownership extraction.
+
+**Cleanup pass 2 complete 2026-07-18.** Removed unused AppState façade
+projections for onboarding toast, grouped history, import progress, downloaded
+activities, completed count, first-run/subscription count, next/up-next episode,
+and video-player access. SwiftUI now reaches OnboardingCoordinator and
+PlaybackCoordinator directly for first-run, coach-mark, subscription-count, and
+video rendering state. Internal queue startup/diagnostic reads now use
+QueueCoordinator directly. The retained-task audit confirmed that AppState's
+named Play Instant and refresh-cycle Task properties are computed aliases onto
+PlaybackCoordinator and FeedRefreshCoordinator rather than owned storage.
+Compile-gated legacy Relay method bodies still reference obsolete debounce
+symbols and require a dedicated deletion pass before the “no retained task or
+domain callback” exit gate can be marked complete.
+
+**Cleanup pass 3 complete 2026-07-18.** Deleted the entire non-compiling
+`#if false` Relay source-preservation block from AppState, including duplicate
+registration, feed reconciliation, debounce tasks, sync-nudge, heartbeat, and
+push-routing implementations. AppState retains only three platform-entry
+façades—APNs token, foreground heartbeat, and silent-push dispatch—and each
+immediately delegates to RelayCoordinator. Relay schemas, release gates,
+entitlement policy, retry persistence, and runtime behavior remain owned by
+RelayCoordinator and were not changed.
+
+**Cleanup pass 4 complete 2026-07-18.** Moved read-only chapter and video
+presentation projections behind PlaybackCoordinator: current/active chapters,
+chapter availability, the episode supplying chapters, previous/next navigation
+targets, and AVPlayer presentation access. AppState installs read-only providers
+over the existing ChapterService, SubscriptionStore, and QueueCoordinator and
+retains only the cross-domain navigation commands that execute a seek. Player
+and Podcast Settings no longer read chapter presentation state through AppState.
+
+**Cleanup pass 5 complete 2026-07-18.** Removed AppState's final Task-typed
+aliases. Play Instant transition task access now names PlaybackCoordinator
+directly; refresh-cycle task and diagnostics access names FeedRefreshCoordinator
+directly. Repository search reports no Task-typed stored or computed property in
+AppState. The callback audit remains open: AppState still installs playback
+engine, download manager, Sleep Timer, and Sleep Schedule callbacks whose bodies
+coordinate several domains. Those callbacks are real remaining Stage 14 work
+and must not be described as complete merely because their retained Task storage
+already lives in coordinators.
+
+**Cleanup pass 6 in progress 2026-07-18.** Began the domain-callback transfer
+with the self-contained playback-statistics group. PlaybackCoordinator now
+idempotently installs the manual-skip, automatic-skip, and Trim Silence credit
+callbacks and routes their MainActor-safe effects directly to
+HistoryStatsCoordinator. AppState no longer installs those three engine
+callbacks. Episode completion, time updates, interruption/resume, route restore,
+downloads, and sleep callbacks remain under audit because their bodies cross
+multiple domain boundaries and require explicit coordinator interfaces rather
+than a mechanical relocation.
+
+**Cleanup pass 7 in progress 2026-07-18.** PlaybackCoordinator now also owns
+audio interruption, playback-resumption, and output-route-restoration callback
+installation. Interruption and resume mutate the coordinator's authoritative
+playing state and update Now Playing using narrow subscription/speed policy
+adapters. Route restoration invokes a narrow full-card reconstruction effect
+because that presentation also depends on queue and chapter domains. AppState
+no longer assigns these three engine callbacks. Completion and the 2 Hz time
+pipeline remain the principal playback callbacks still installed there.
+
+**Cleanup pass 8 in progress 2026-07-18.** DownloadCoordinator now
+idempotently installs DownloadManager's progress callback. The established
+one-percentage-point publication coalescing rule and unconditional completion
+publication remain intact, but observable progress and activity mutations now
+occur entirely inside their owning coordinator. AppState no longer installs or
+implements download-progress delivery. Background completion and watchdog
+recovery remain because they coordinate durable intents, subscription records,
+history, notifications, Play Instant, and retry policy.
+
+**Cleanup pass 9 in progress 2026-07-18.** DownloadCoordinator now owns the
+watchdog-cancellation callback, bounded attempt accounting, exponential retry
+delays, terminal URLSession/resume-data retirement, and delayed retry Task
+lifetime. Each episode has at most one coordinator-owned retry task; replacement
+and successful completion cancel or remove it, so exhausted work cannot later
+re-enter the download workflow. AppState supplies only a weak high-level retry
+command. Background download completion is now the sole DownloadManager
+callback still installed by AppState.
+
+**Cleanup pass 10 in progress 2026-07-18.** DownloadCoordinator now installs
+and owns the background URLSession completion callback, including authoritative
+automatic-provenance sampling, downloaded-state settlement, local media
+duration, byte statistics, activity completion, progress cleanup, and
+downloaded-list rebuilding. Notification, Play Instant, and durable-intent
+resolution enter through narrow weak effects because their policies remain
+outside the download domain. Repository search now reports no DownloadManager
+callback assignment in AppState.
+
+**Cleanup pass 11 in progress 2026-07-18.** PlaybackCoordinator now installs
+and owns every Sleep Timer and Sleep Schedule callback, including the
+lock-screen Still Listening action and the cancellable no-response fade task.
+AppState supplies only narrow seek and persistence-checkpoint effects plus
+read-only subscription speed policy. AppState no longer stores the schedule
+prompt anchor or assigns either sleep service's callbacks.
+
+**Cleanup pass 12 in progress 2026-07-19.** PlaybackCoordinator now installs
+and owns the engine's 2 Hz time-update callback and its complete routine
+pipeline: PlaybackClock publishing, Sleep Timer/Schedule ticking, Now Playing
+time, history progress, 10-second position-save cadence, listening-time Stats,
+and slow-tick diagnostics. AppState supplies only read-only subscription/speed
+policy and the playback-position persistence effect. AppState no longer owns
+the tick counter, diagnostic accumulator, or time-update callback.
+
+**Cleanup pass 13 in progress 2026-07-19.** PlaybackCoordinator now installs
+the final playback-engine callback: natural episode completion. It captures the
+authoritative episode generation at delivery and invokes a weak high-level
+completion command, preserving stale-callback rejection. Repository search now
+reports no playback-engine callback assignment in AppState. The completion
+workflow body intentionally remains outside PlaybackCoordinator because it
+coordinates history, file deletion, subscription state, queue advancement,
+Sleep Timer/Schedule, and Play Instant; a dedicated workflow extraction remains
+before the “no playback state-machine internals” exit gate is complete.
+
+**Cleanup pass 14 complete 2026-07-19.** Extracted
+EpisodeCompletionWorkflow as the ordered cross-domain transaction for natural
+EOF, seek/skip completion, and remote next. It owns generation rejection,
+Sleep Timer/Schedule boundary decisions, history/Stats completion, resume-state
+clearing, downloaded-file deletion, subscription played state, Play Instant
+return/advance decisions, and delayed queue advancement. AppState's
+handleEpisodeFinished API is now a compatibility command with no completion
+state-machine body.
+
+**Cleanup pass 15 complete 2026-07-19.** Extracted PlayInstantWorkflow as the
+exclusive implementation of automatic-download eligibility, warning-delay
+validation, interrupted-session capture, candidate sequencing, restoration, and
+deliberate cancellation. PlaybackCoordinator remains the single storage/Task
+owner. AppState retains three narrow compatibility commands used at download,
+completion, and deliberate-navigation boundaries; it no longer implements the
+Play Instant state machine or forwards its stored properties.
+
+**Cleanup pass 16 complete 2026-07-19.** PlaybackCoordinator now installs the
+NowPlayingService remote-command graph for lock screen, headsets, AirPods, and
+CarPlay, including initial skip intervals and scrubbing availability. AppState
+supplies narrow play/pause, seek, skip, deliberate-next, and rate commands; it
+no longer installs platform playback callbacks.
+
+**Cleanup pass 17 complete 2026-07-19.** Extracted PlaybackSeekWorkflow as the
+single scrub/skip implementation. It owns manual-skip Stats credit, Sleep
+Schedule confirmation, target clamping, synchronous engine stop at the EOF
+boundary, completion delegation, PlaybackClock mutation, and Now Playing time.
+AppState's seek and skip-forward APIs are now compatibility commands.
+
+**Cleanup pass 18 complete 2026-07-19.** Extracted PlaybackStartWorkflow as the
+ordered session-start transaction. It owns local-media repair/duration,
+download-before-play, resume/start-skip resolution, engine start, authoritative
+playback state, first-play onboarding, history/Stats seeding, immediate sync
+freshness, external-chapter scheduling, sleep-session start, Now Playing, and
+failure state. AppState's startPlayback helper is now a narrow compatibility
+delegation used by queue and Play Instant workflows.
+
+**Cleanup pass 19 complete 2026-07-19.** Extracted PlaybackTransportWorkflow
+for play/pause/resume, transactional play-next selection, explicit episode
+selection, skip-to-episode, pause durability, Play Instant cancellation
+boundaries, and empty-queue termination. AppState retains the public intent
+surface but no longer implements those transport state transitions.
+
+**Cleanup pass 20 complete 2026-07-19.** Extracted PlaybackLaunchWorkflow and
+moved the one-shot launch-handled flag into PlaybackCoordinator. Phone launch
+now delegates paused queue loading, while CarPlay launch delegates active-engine
+reassertion or restored-session resume. AppState retains only platform entry
+commands.
+
+**Cleanup pass 21 complete 2026-07-19.** Removed the remaining small
+domain-callback bodies authored by AppState. QueueCoordinator now observes
+PlaybackCoordinator directly and publishes its own badge projection;
+DownloadCoordinator installs remote-archive media deletion; OnboardingCoordinator
+owns first-subscription routing and the temporary legacy notification;
+SyncCoordinator privately bridges completed CloudKit pushes to RelayCoordinator;
+and SettingsViewModel installs new-subscription default providers. AppState now
+requests these typed connections during composition/startup but does not assign
+or implement their event-handler closures.
+
+**Cleanup pass 22 complete 2026-07-19.** Extracted
+PlaybackPreferenceWorkflow as the sole implementation of per-subscription
+playback preferences, global new/browse-feed defaults, Shared Listening
+overrides, lock-screen scrubbing configuration, effective-preference
+resolution, live engine reconfiguration, and Now Playing rate refresh.
+AppState retains its existing view/CarPlay command names but no longer contains
+playback-preference mutation or override policy.
+
+**Cleanup pass 23 complete 2026-07-19.** Extracted
+EpisodeDispositionWorkflow as the ordered transaction for Mark Played, Archive,
+Archive and Play Next, Archive Current and Play Next, and Unarchive. Playback
+teardown, saved-position capture/clear, terminal history metadata, media
+cancellation/deletion, subscription state, queue pins, download projections,
+messages, and Play Instant boundaries now execute outside AppState.
+
+**Cleanup pass 24 complete 2026-07-19.** Extracted
+DownloadTransferWorkflow as the exclusive episode transfer loop. Network-policy
+gating, duplicate suppression, three-slot FIFO admission/draining, verified-file
+reuse, DownloadManager execution, duration and byte settlement, progress and
+activity transitions, watchdog/backoff cleanup, error classification,
+notifications, Play Instant delivery, and resource diagnostics now execute
+outside AppState. DownloadCoordinator remains the single storage owner for
+queue, slot, progress, activity, retry, and cancellation state.
+
+**Cleanup pass 25 complete 2026-07-19.** Extracted
+DownloadActionsWorkflow for latest/queue/CarPlay requests, CarPlay
+download-and-wait state, deletion, pause, resume-with-clean-restart fallback,
+watchdog retry, cancellation, archive-from-Downloads, and startup orphan
+reconciliation. AppState retains the public view/platform commands but no
+longer implements those download transitions.
+
+**Cleanup pass 26 complete 2026-07-19.** Extracted
+AutoDownloadIntentWorkflow for persist-before-Task scheduling, serialized
+launch/foreground/background drains, current eligibility and filter
+revalidation, failure backoff, episode-limit enforcement, shared transfer
+invocation, Up Next refresh, and terminal intent settlement. Temporarily blocked
+or failed transfers continue retaining durable intent; downloaded, played,
+archived, removed, browse, excluded, or superseded entries settle exactly once.
+
+**Cleanup pass 27 complete 2026-07-19.** Moved rolling one-item feed download
+replacement into DownloadActionsWorkflow. It now records superseded identity
+before cancelling the obsolete URLSession transfer, removes pending/progress/
+activity/store state, rebuilds the downloaded projection, and emits the existing
+feed diagnostic. AppState no longer mutates download cancellation internals from
+the feed-refresh path.
+
+**Cleanup pass 28 complete 2026-07-19.** Extracted ReleaseRadarWorkflow as the
+owner of learned profiles, effective predictions, next-due calculation,
+learning-only rebuilds, fingerprinted cache warming, off-main candidate
+planning, feed diagnostic identity, and backoff-aware background wake
+scheduling. AppState retains only the public diagnostics-page façade.
+
+**Cleanup pass 29 complete 2026-07-19.** Extracted FeedRefreshItemWorkflow as
+the single-feed conditional HTTP and merge transaction. Validator settlement,
+release-observation learning, current-player-protected old-media cleanup,
+rolling-feed replacement, autorelease-scoped merge, browse-preview isolation,
+queue invalidation, automatic-intent scheduling, inactive transport handling,
+failure backoff, and resource diagnostics now execute outside AppState.
+
+**Cleanup pass 30 complete 2026-07-19.** Extracted
+FeedRefreshCycleWorkflow as the exclusive multi-feed state machine for manual,
+timed, background-audio, BGAppRefresh, BGProcessing, and Relay-targeted work.
+Active-cycle joining/follow-up, expiration detachment, device-pressure budgets,
+protected Release Radar slots, urgent cap bypass, deferred-feed fairness,
+sequential item execution, 16-feed memory checkpoints, manual parser-drain
+pauses, cancellation checkpointing, background rescheduling, queue refresh, Auto
+Archive follow-up, and cycle diagnostics now execute outside AppState.
+
+**Cleanup pass 31 complete 2026-07-19.** Extracted
+PlaybackChapterWorkflow as the owner of current/active/displayable chapter
+presentation, previous/next target calculation, persist-then-apply subscription
+filters, chapter navigation, and generation-safe external `podcast:chapters`
+loading. The bounded ephemeral fetch session and JSON parser now have one owner;
+AppState retains only compatibility commands used by existing chapter settings
+and player surfaces.
+
+**Cleanup pass 32 complete 2026-07-19.** Extracted PlaybackMediaWorkflow as the
+application owner of canonical local-file resolution, stale path repair,
+asynchronous media-duration measurement, current-position persistence, saved
+position lookup/clear, and cold-launch restore validation. Playback start,
+downloads, and Play Instant now depend on that typed owner directly; AppState no
+longer contains filesystem/AVAsset helpers or restore orchestration.
+
+**Cleanup pass 33 complete 2026-07-19.** Extracted
+NewEpisodeNotificationWorkflow as the single global-plus-subscription
+eligibility gate and asynchronous local-notification dispatcher. Foreground and
+background download settlement share that typed policy; AppState now connects
+the owner without implementing notification gating or delivery.
+
+**Cleanup pass 34 complete 2026-07-19.** Extracted AppRuntimeWorkflow as the
+owner of cached scene state, real-foreground checks, foreground/background-audio
+due-feed polling, independent Auto Archive poll opportunities, settings
+operational reactions, Sleep Schedule configuration, idle-timer policy,
+background playback health/resource release, and shared resource context.
+AppLifecycleCoordinator now retains and cancels delayed diagnostics and removes
+completed maintenance tasks from its registry. AppState retains only platform
+compatibility entry points used by AppDelegate and SwiftUI scene/player code.
+
+**Cleanup pass 35 complete 2026-07-19.** Moved full Now Playing card
+reassertion into PlaybackPreferenceWorkflow beside effective-speed resolution
+and existing Now Playing rate updates. Foreground and restored-route entry
+points remain stable AppState compatibility commands, but AppState no longer
+constructs or logs Now Playing metadata.
+
+**Cleanup pass 36 complete 2026-07-19.** Extracted
+PlaybackCheckpointWorkflow as the ordered durability boundary for current
+position, Listening History, Stats, and deferred CloudKit pushes. Pause, sleep,
+and lifecycle callers now share explicit local-save-before-sync ordering.
+Removed the obsolete AppState orphan-download and bulk-subscribe wrappers after
+repository-wide call-site searches proved them unused.
+
+**Cleanup pass 37 complete 2026-07-19.** Replaced AppState-authored
+cross-workflow closure bodies with typed, weakly connected collaborators.
+Download transfer observes Play Instant directly; feed refresh, playback start,
+transport, completion, disposition, and notification workflows call their named
+runtime/domain owners. Late connections break construction cycles without
+introducing a service locator or a coordinator dependency on AppState.
+Debug-only closure seams remain narrowly scoped to isolated characterization
+tests.
+
+**Cleanup pass 38 complete 2026-07-19.** Added injectable
+AppRuntimeEnvironment and lifecycle sleep scheduling. Application state,
+background time, idle-timer access, wall-clock policy, and delayed maintenance
+can now be substituted in deterministic tests. Feed refresh, Release Radar, and
+Auto Archive consume injected clocks/environment rather than reading
+UIApplication or Date directly at policy boundaries.
+
+**Cleanup pass 39 complete 2026-07-19.** Added typed chapter-presentation and
+Auto Archive collaborator contracts. PlaybackCoordinator observes
+PlaybackChapterWorkflow without provider bundles; AutoArchiveCoordinator uses
+weak typed episode-disposition, playback, queue, and runtime owners in the
+production graph. This removes the final AppState-authored callback adapters
+from those domains while preserving isolated debug test seams.
+
+**Cleanup pass 40 complete 2026-07-19.** Extracted AppStartupWorkflow as the
+exclusive owner of typed graph connection, callback installation, service start
+order, migrations, playback restoration, Release Radar warm-up, launch
+maintenance, and bootstrap diagnostics. AppState `start()` now only guards the
+singleton lifecycle, delegates ordered startup, and publishes the resulting
+state. The final repository audit reports no Task, Combine sink,
+`objectWillChange` relay, domain callback assignment, or state-machine body in
+AppState.
+
+### Actions
+
+- [x] Remove AppState manual object-change forwarding only after every observable
+  consumer has a direct domain publisher.
+- [x] Introduce a test-substitutable observable settings owner, migrate the
+  settings bindings to it, then remove the SettingsStore → AppState invalidation
+  bridge.
+- [x] Remove unused compatibility getters and command wrappers after call-site and
+  test searches prove they are unreferenced.
+- [x] Rewrite AppState's AI CONTEXT header and responsibility map to match its final
+  composition-root/high-level-façade role.
+- [x] Verify AppState owns no domain callback, retained background task, persistence
+  transaction, or state-machine implementation.
+- [ ] Run the complete iOS and tvOS build/test matrix and perform the documented
+  device-only validation checklist.
+
+### Exit gate
+
+The requirements in Section 16, “Definition of done,” are the authoritative
+acceptance criteria for this stage.
 
 ## 13. Validation strategy
 

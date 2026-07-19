@@ -55,7 +55,7 @@ type**), and `Models/{Subscription,SubscriptionOrder,AppSettings}.swift`.
 
 | Domain | Roams via CloudKit? | Record / projection | Notes |
 |---|---|---|---|
-| **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`AppState.materializeRemoteSubscription`); unsubscribe leaves a `subscribed=false` tombstone. |
+| **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`SyncCoordinator.materializeRemoteSubscription` on iOS; the tvOS sync owner mirrors that transaction); unsubscribe leaves a `subscribed=false` tombstone. |
 | **Priority Stack order** | ✅ Yes | `SubscriptionOrder` singleton | One whole-list generation contains every real-subscription UUID, active first and Inactive last. It is authoritative over independently delivered legacy rank fields and prevents mixed reorder generations. |
 | **Per-episode user state** (playedState, wasCompleted, lastPlayedAt) | ✅ Yes | `EpisodeState` | Field-level LWW + active-player-wins + self-heal. |
 | **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Whole-entry record-level LWW by `lastListenedAt`. This is also how **playback position** roams. |
@@ -92,13 +92,17 @@ not part of the CloudKit sync projection; refresh-stat-only saves publish no
 engine. DownloadFilterSettings is persisted on the local Subscription payload
 and, since July 2026, is also part of the sync projection.
 
-AppState decomposition Stages 6–8 do not change CloudKit schemas or merge
-policy. DownloadCoordinator owns device-local transfer runtime,
-FeedRefreshCoordinator owns device-local Release Radar runtime,
-AutoDownloadWorkflow owns device-local durable transfer intents, and
-AutoArchiveCoordinator owns device-local archive activity. Existing
-SubscriptionState, episode, history, Stats, queue, and order sync boundaries
-remain unchanged.
+AppState decomposition Stages 0–14 did not change CloudKit schemas or merge
+policy. `SyncCoordinator` owns the iOS CloudKit lifecycle, callback graph,
+remote materialization, active-player identity provider, history/Stats routing,
+deferred pushes, and Relay nudge connection. `PlaybackCheckpointWorkflow`
+enforces playback-position → local history/Stats → deferred-push ordering.
+DownloadCoordinator owns device-local transfer runtime, FeedRefreshCoordinator
+owns device-local Release Radar runtime, AutoDownloadIntentWorkflow owns
+device-local durable transfer intents, and AutoArchiveCoordinator owns
+device-local archive activity. AppState retains only high-level lifecycle and
+platform compatibility commands over these owners. Existing SubscriptionState,
+episode, history, Stats, queue, and order sync boundaries remain unchanged.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
@@ -335,9 +339,9 @@ shows correct settings immediately. Guarded by
     writes a position on the SLOW lane, which the engine holds ~60 s before
     pushing. To make a pause/exit reach the other device in seconds, both
     platforms now force-flush on pause + player-exit + app-background:
-    iPhone already did (`AppState.togglePlayPause`/scene-background →
-    `flushDeferredSyncPushes`; pause now also `persistCurrentPlaybackPosition`
-    first so the exact pause point is pushed); TV now mirrors it
+    iPhone already did (`PlaybackTransportWorkflow` pause or the scene adapter →
+    `PlaybackCheckpointWorkflow`; the exact position is persisted before local
+    history/Stats and the deferred push); TV now mirrors it
     (`TVPlaybackModel.checkpoint` → `onPlaybackCheckpoint` →
     `CloudSyncEngine.flushDeferredPushes`, wired on pause, `dismissedCover`, and
     the scene leaving `.active`). Playback FINISH already went out on the fast
@@ -403,8 +407,9 @@ push is requested.
   ~60 s deferred push (`CloudSyncEngine.slowLaneDebounceSeconds`) instead of
   queueing. If fast-lane dirt is present, slow rows **piggyback** on that push
   (a CloudKit request is going out anyway).
-- **Lifecycle flush** — `HistoryStatsCoordinator.checkpoint` saves history and
-  Stats/sync rows before its AppState compatibility adapter requests
+- **Lifecycle flush** — `PlaybackCheckpointWorkflow` first saves playback
+  position, then asks `HistoryStatsCoordinator.checkpoint` to save history and
+  Stats/sync rows before `SyncCoordinator` requests
   `CloudSyncEngine.flushDeferredPushes(reason:)`. Pause, sleep-timer,
   sleep-schedule, and scene background/resign-active use this ordered boundary.
   Engine activation and account sign-in also flush unconditionally.
@@ -447,7 +452,7 @@ adopted clean. Settings sub-structs
    record types; DownloadFilterSettings joined the record in July 2026;
    `applyRemoteSubscriptionState` updates settings /
    processes unsubscribe / signals `.needsMaterialization`;
-   `AppState.materializeRemoteSubscription` fetches the feed via FeedService and
+   `SyncCoordinator.materializeRemoteSubscription` fetches the feed via FeedService and
    creates the podcast, then applies settings. Migration v4 caches subscription
    system fields. Migration v9 and the `SubscriptionOrder` singleton
    (`subscription-order:current`) synchronize Priority Stack order atomically;
@@ -483,7 +488,8 @@ adopted clean. Settings sub-structs
 
 6. ✅ **Active-player-wins + self-heal guards**
    - Active-player-wins: `SubscriptionStore.nowPlayingEpisodeSyncKeyProvider`
-     (set by AppState from `PlaybackEngine.currentEpisode`) — in
+     (set by `SyncCoordinator.observePlayback(_:)` from the authoritative
+     `PlaybackCoordinator` engine episode) — in
      `applyRemoteEpisodeState`, if the remote record is for the exact
      subscription-scoped episode loaded in the player, the local playedState is
      kept and re-stamped so it pushes back, instead of a remote played/archived
@@ -614,6 +620,7 @@ Related diagnostic keys outside CloudKit:
   `nowPlaying.reasserted` trace the 2026-07-12 "audio hijack" fix: when a
   removed output returns (AirPods reinserted), the engine re-claims the audio
   session (only if our pause was route-loss-caused AND no other app is
-  audibly playing) and AppState re-pushes the full Now Playing card, so an
+  audibly playing) and `PlaybackPreferenceWorkflow` re-pushes the full Now
+  Playing card, so an
   AirPods stem-press resumes Autohop instead of falling through to Apple
   Music. `nowPlaying.reasserted` also fires on scene foreground.

@@ -11,8 +11,9 @@ import Foundation
 //
 // DEPENDENCIES / EVENTS:
 // Reads SubscriptionStore and subscribes only to its queueDidChange event, not
-// broad objectWillChange. The current-player identity is an injected read-only
-// closure. `onBadgeCountChanged` is a platform adapter installed by AppState.
+// broad objectWillChange. `observePlayback(_:)` owns the narrow current-episode
+// subscription and provider. Badge publication is also performed here because
+// it is a direct projection of the queue count and queue-badge setting.
 //
 // PERSISTENCE / SYNC:
 // Pins retain Application Support/Autohop/queue-pins.json and the existing
@@ -42,14 +43,13 @@ final class QueueCoordinator: ObservableObject {
     private var lastPublishedIDs: [UUID] = []
     private var recomputeTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+    private var playbackObservationInstalled = false
 
     /// Preserve the exact pre-Stage-4 JSON keys.
     private struct SavedQueuePins: Codable {
         var overrideIDs: [UUID]
         var demotedIDs: [UUID]
     }
-
-    var onBadgeCountChanged: ((Int) -> Void)?
 
     init(
         subscriptionStore: SubscriptionStore,
@@ -96,10 +96,27 @@ final class QueueCoordinator: ObservableObject {
 
     func start() {
         recompute(reason: "queue.start")
+        publishBadge()
     }
 
-    func installCurrentEpisodeProvider(_ provider: @escaping () -> Episode?) {
-        currentEpisode = provider
+    /// Connects the queue to playback without exposing a callback slot for
+    /// AppState to populate. The weak provider prevents a queue/player retain
+    /// cycle, while the typed publisher invalidates only current-dependent
+    /// Up Next resolution.
+    func observePlayback(_ playbackCoordinator: PlaybackCoordinator) {
+        guard !playbackObservationInstalled else { return }
+        playbackObservationInstalled = true
+        currentEpisode = { [weak playbackCoordinator] in
+            playbackCoordinator?.currentEpisode
+        }
+        playbackCoordinator.$currentEpisode
+            .map { $0?.id }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.scheduleRecompute(reason: "player.currentChanged")
+            }
+            .store(in: &cancellables)
     }
 
     func loadPins() {
@@ -119,10 +136,6 @@ final class QueueCoordinator: ObservableObject {
         recompute(reason: "queue.pinsLoaded")
     }
 
-    func currentEpisodeDidChange() {
-        scheduleRecompute(reason: "player.currentChanged")
-    }
-
     func isPinnedNext(_ episode: Episode) -> Bool {
         pins.playNextIDs.contains(episode.id)
     }
@@ -132,21 +145,39 @@ final class QueueCoordinator: ObservableObject {
     }
 
     func playNext(_ episode: Episode) {
-        guard currentEpisode()?.id != episode.id else { return }
+        let current = currentEpisode()
+        guard current?.id != episode.id else { return }
         pins.playLastIDs.removeAll { $0 == episode.id }
         pins.playNextIDs.removeAll { $0 == episode.id }
         pins.playNextIDs.insert(episode.id, at: 0)
         persistPins()
         recompute(reason: "queue.playNextOverride")
+        logger.info(
+            "queue.playNextOverride",
+            "Episode moved to play next",
+            metadata: [
+                "episode": episode.title,
+                "current": current?.title ?? "none"
+            ]
+        )
     }
 
     func playLast(_ episode: Episode) {
-        guard currentEpisode()?.id != episode.id else { return }
+        let current = currentEpisode()
+        guard current?.id != episode.id else { return }
         pins.playNextIDs.removeAll { $0 == episode.id }
         pins.playLastIDs.removeAll { $0 == episode.id }
         pins.playLastIDs.append(episode.id)
         persistPins()
         recompute(reason: "queue.playLastDemotion")
+        logger.info(
+            "queue.playLastDemotion",
+            "Episode moved to play last",
+            metadata: [
+                "episode": episode.title,
+                "current": current?.title ?? "none"
+            ]
+        )
     }
 
     @discardableResult
@@ -160,6 +191,14 @@ final class QueueCoordinator: ObservableObject {
         pins.playLastIDs.removeAll { $0 == episode.id }
         persistPins()
         recompute(reason: "queue.unpin")
+        logger.info(
+            "queue.unpin",
+            "Episode unpinned",
+            metadata: [
+                "episode": episode.title,
+                "wasOverride": "\(result.wasNext)"
+            ]
+        )
         return result
     }
 
@@ -202,7 +241,7 @@ final class QueueCoordinator: ObservableObject {
                     episodeTitle: $0.title
                 )
             })
-            onBadgeCountChanged?(showBadge() ? computed.count : 0)
+            publishBadge()
         }
         if upNextChanged {
             upNextEpisode = resolvedUpNext
@@ -227,6 +266,10 @@ final class QueueCoordinator: ObservableObject {
               ))
         else { return }
         try? LockedDeviceFileAccess.writeDataAtomically(data, to: pinsFileURL)
+    }
+
+    private func publishBadge() {
+        NotificationService.shared.updateBadge(count: showBadge() ? episodes.count : 0)
     }
 
     private static func defaultPinsFileURL() -> URL? {

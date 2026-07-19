@@ -24,6 +24,7 @@ struct TopEpisodesView: View {
     @AppStorage("discoverCountryCode") private var storedCountryCode = ""
 
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var pendingRoute: DetailRoute?
@@ -286,7 +287,7 @@ struct TopEpisodesView: View {
             }
             // Same routing rule as Discover: real subscriptions open their
             // episode page, everything else the browse preview.
-            if let activeSub = appState.subscriptionStore.subscriptions.first(where: {
+            if let activeSub = subscriptionStore.subscriptions.first(where: {
                 $0.feedURL == result.feedURL && $0.browseDate == nil
             }) {
                 pendingRoute = .episodes(activeSub.id)

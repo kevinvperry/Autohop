@@ -20,6 +20,8 @@ enum WelcomeOutcome {
 
 struct WelcomeView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var importCoordinator: SubscriptionImportCoordinator
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     let onComplete: (WelcomeOutcome) -> Void
 
     @State private var showImporter = false
@@ -91,9 +93,9 @@ struct WelcomeView: View {
             guard case let .success(urls) = result, let url = urls.first else { return }
             isImporting = true
             Task {
-                let summary = await appState.importOPML(from: url)
+                let summary = await importCoordinator.importOPML(from: url)
                 if summary.imported > 0 {
-                    appState.onboardingToast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
+                    onboardingCoordinator.toast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
                 }
                 isImporting = false
                 onComplete(.importedSubscriptions)

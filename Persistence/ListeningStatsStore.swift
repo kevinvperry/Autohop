@@ -8,7 +8,7 @@ import Foundation
 // started/completed, manual skip count, and bytes/episodes downloaded
 // (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause / sleep-timer or sleep-schedule
-// pause / background (AutohopApp + AppState). Day-bucket writes into the sync
+// pause / background by PlaybackCheckpointWorkflow. Day-bucket writes into the sync
 // database are separately coalesced on a 30 s throttle (recordDayPending /
 // flushPendingStatsDays below); SwiftUI revision publication from continuous
 // playback is separately coalesced to 10 seconds so a 0.5-second audio clock does
@@ -17,8 +17,8 @@ import Foundation
 // Discrete events still publish immediately.
 // DOWNSTREAM, CloudSyncEngine holds stats/history-
 // only CloudKit pushes on a further ~60 s slow-lane debounce, flushed at the
-// same lifecycle checkpoints via AppState.flushDeferredSyncPushes — which must
-// run AFTER this store's save()/flush so the scan sees current rows.
+// same lifecycle checkpoints through SyncCoordinator — always AFTER this
+// store's save()/flush so the scan sees current rows.
 // Diagnostics are rate-limited summaries: routine playback batching is emitted
 // at most every five minutes, while lifecycle checkpoints, failures, and slow
 // writes remain immediately visible. This keeps diagnostic I/O out of playback.
@@ -35,8 +35,8 @@ import Foundation
 // QUERY API (used by StatsView): summary(for: .last(days:)/.lifetime),
 // lifetime (legacy PlaybackStats shape), currentStreakDays/longestStreakDays
 // (a day counts at ≥ 60 s), previousPeriodShowSeconds (rank-movement badges).
-// FED BY AppState hooks: 0.5 s playback tick, SilenceDetector trim callbacks,
-// startPlayback (episode started), handleEpisodeFinished (completed).
+// FED BY PlaybackCoordinator/HistoryStatsCoordinator: 0.5 s playback tick,
+// skip/trim callbacks, PlaybackStartWorkflow, and EpisodeCompletionWorkflow.
 
 // MARK: - PlaybackStats (lifetime summary)
 
@@ -316,7 +316,8 @@ public final class ListeningStatsStore: ObservableObject {
     private let fileURL: URL?
     private let legacyFileURL: URL?
 
-    /// Record store for cross-device stats sync; set by AppState. nil = no sync.
+    /// Record store for cross-device stats sync; connected by
+    /// HistoryStatsCoordinator. nil = no sync.
     var syncDatabase: AutohopDatabase? {
         didSet { reloadRemoteStats() }
     }
@@ -533,7 +534,7 @@ public final class ListeningStatsStore: ObservableObject {
     }
 
     /// Records one completed episode download of `bytes` against today's bucket.
-    /// Called from AppState's download-success path. Forward-only — there is no
+    /// Called from DownloadTransferWorkflow's success path. Forward-only — there is no
     /// historical byte data to backfill, so totals accrue from this build onward.
     public func recordDownload(bytes: Int64) {
         guard bytes > 0 else { return }

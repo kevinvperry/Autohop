@@ -34,6 +34,9 @@ import UniformTypeIdentifiers
 // (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
 struct PodcastsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     @Environment(\.scenePhase) private var scenePhase
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
@@ -51,7 +54,7 @@ struct PodcastsView: View {
     /// Browse-only subscriptions (browseDate != nil) are invisible here —
     /// they only become visible once the user explicitly presses Subscribe.
     private var visibleSubscriptions: [Subscription] {
-        appState.subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+        subscriptionStore.subscriptions.filter { $0.browseDate == nil }
     }
 
     private var activeSubscriptions: [Subscription] {
@@ -94,7 +97,7 @@ struct PodcastsView: View {
                                 if editMode == .active {
                                     finishReorderSession(reason: "done")
                                 } else {
-                                    reorderDraftIDs = appState.subscriptionStore.beginPriorityReorderSession()
+                                    reorderDraftIDs = subscriptionStore.beginPriorityReorderSession()
                                     editMode = .active
                                 }
                             }
@@ -198,7 +201,7 @@ struct PodcastsView: View {
             }
         }
         .onAppear {
-            if !visibleSubscriptions.isEmpty { appState.requestTip(.priorityStack) }
+            if !visibleSubscriptions.isEmpty { onboardingCoordinator.requestTip(.priorityStack) }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active, editMode == .active else { return }
@@ -227,7 +230,7 @@ struct PodcastsView: View {
             Task {
                 let summary = await appState.importOPML(from: url)
                 if summary.imported > 0 {
-                    appState.onboardingToast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
+                    onboardingCoordinator.toast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
                 }
             }
         }
@@ -312,7 +315,7 @@ struct PodcastsView: View {
 
     private func finishReorderSession(reason: String) {
         let finalIDs = reorderableSubscriptions.map(\.id)
-        let accepted = appState.subscriptionStore.commitPriorityReorderSession(
+        let accepted = subscriptionStore.commitPriorityReorderSession(
             orderedActiveSubscriptionIDs: finalIDs,
             reason: reason
         )
@@ -323,9 +326,9 @@ struct PodcastsView: View {
             return
         }
         Task { @MainActor in
-            let saved = await appState.subscriptionStore.flushPendingSaves()
+            let saved = await subscriptionStore.flushPendingSaves()
             if !saved {
-                persistenceErrorMessage = appState.subscriptionStore.lastPersistenceErrorDescription
+                persistenceErrorMessage = subscriptionStore.lastPersistenceErrorDescription
                     ?? "Autohop could not write the new order to local storage."
             }
         }
@@ -337,7 +340,7 @@ struct PodcastsView: View {
     private var priorityListCard: some View {
         let list = List {
             ForEach(Array(reorderableSubscriptions.enumerated()), id: \.element.id) { index, subscription in
-                let isPlaying = subscription.newestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
+                let isPlaying = subscription.newestEpisode.map { playbackCoordinator.currentEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)
                 } label: {
@@ -363,7 +366,7 @@ struct PodcastsView: View {
             // Inactive subscriptions remain visible for access/settings but are
             // not part of active playback priority and cannot be dragged.
             ForEach(inactiveSubscriptions) { subscription in
-                let isPlaying = subscription.newestEpisode.map { appState.currentPlayerEpisode?.id == $0.id } ?? false
+                let isPlaying = subscription.newestEpisode.map { playbackCoordinator.currentEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)
                 } label: {
@@ -500,7 +503,7 @@ struct PodcastsView: View {
         case .playing:
             // Only the episode actively loaded in the player is "Now Playing".
             // Any other episode with .playing state was started but not finished.
-            return appState.currentPlayerEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
+            return playbackCoordinator.currentEpisode?.id == episode.id ? .nowPlaying : .partiallyPlayed
         case .played:   return .played
         case .archived: return episode.wasCompleted ? .played : .archived
         case .unplayed:

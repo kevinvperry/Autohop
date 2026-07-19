@@ -11,15 +11,15 @@ import Foundation
 // formats remain owned by ListeningHistoryStore and ListeningStatsStore.
 //
 // DEPENDENCIES:
-// Injected history/stats stores and SubscriptionStore metadata lookup. A sync
-// flush is supplied as a closure at checkpoint time so this coordinator never
-// owns CloudSyncEngine or creates a dependency cycle.
+// Injected history/stats stores and SubscriptionStore metadata lookup.
+// PlaybackCheckpointWorkflow orders local durability before SyncCoordinator
+// flushes; this owner never controls CloudSyncEngine lifecycle.
 //
 // CONCURRENCY / EVENTS:
 // MainActor-only. `objectWillChange` publishes only projection changes from
-// `refreshHistoryProjection`; AppState forwards it during the compatibility
-// phase. Tick state is episode-scoped and reset whenever playback is not active
-// or the loaded episode changes.
+// `refreshHistoryProjection`; SwiftUI observes this owner directly. Tick state
+// is episode-scoped and reset whenever playback is not active or the loaded
+// episode changes.
 //
 // PERSISTENCE / SYNC INVARIANTS:
 // - Valid listening deltas are >0 and <=3 seconds, matching legacy AppState.
@@ -146,8 +146,7 @@ final class HistoryStatsCoordinator: ObservableObject {
     func recordPlaybackStart(
         episode: Episode,
         subscription: Subscription,
-        position: TimeInterval,
-        requestSyncFlush: (String) -> Void
+        position: TimeInterval
     ) {
         historyStore.recordProgress(
             episode: episode,
@@ -157,7 +156,6 @@ final class HistoryStatsCoordinator: ObservableObject {
             positionSeconds: max(position, 1),
             durationSeconds: episode.durationSeconds
         )
-        requestSyncFlush("playback.start")
     }
 
     func recordEpisodeCompleted(subscriptionID: UUID) {

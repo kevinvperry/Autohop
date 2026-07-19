@@ -54,8 +54,16 @@ import UniformTypeIdentifiers
 // Listening History rows in this file use 54 pt CachedArtworkImage thumbnails,
 // sharing source bytes with the rest of the app while keeping a distinct
 // memory variant sized for history cards.
+// Stage 14: all rendered global settings and bindings observe/write through
+// SettingsViewModel. AppState remains only for high-level commands whose effects
+// span playback, sync, notifications, diagnostics, or persistence domains.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var importCoordinator: SubscriptionImportCoordinator
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
+    @EnvironmentObject private var queueCoordinator: QueueCoordinator
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -124,9 +132,9 @@ struct SettingsView: View {
             guard let url = (try? result.get())?.first else { return }
             isImporting = true
             Task {
-                let summary = await appState.importOPML(from: url)
+                let summary = await importCoordinator.importOPML(from: url)
                 if summary.imported > 0 {
-                    appState.onboardingToast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
+                    onboardingCoordinator.toast = "Imported \(summary.imported) show\(summary.imported == 1 ? "" : "s") — welcome aboard."
                 }
                 isImporting = false
             }
@@ -366,7 +374,7 @@ struct SettingsView: View {
                 openSkipEditor(.back)
             } label: {
                 LabeledContent {
-                    Text("\(Int(appState.settingsStore.appSettings.skipBackSeconds))s")
+                    Text("\(Int(settingsViewModel.appSettings.skipBackSeconds))s")
                         .foregroundStyle(.secondary)
                 } label: {
                     rowLabel("Skip back", systemImage: "gobackward")
@@ -378,7 +386,7 @@ struct SettingsView: View {
                 openSkipEditor(.forward)
             } label: {
                 LabeledContent {
-                    Text("\(Int(appState.settingsStore.appSettings.skipForwardSeconds))s")
+                    Text("\(Int(settingsViewModel.appSettings.skipForwardSeconds))s")
                         .foregroundStyle(.secondary)
                 } label: {
                     rowLabel("Skip forward", systemImage: "goforward")
@@ -398,7 +406,7 @@ struct SettingsView: View {
     // SubscriptionSettingsView; editing here never changes existing subscriptions.
     @ViewBuilder
     private var defaultPlaybackSection: some View {
-        let preference = appState.settingsStore.appSettings.defaultPlaybackPreference
+        let preference = settingsViewModel.appSettings.defaultPlaybackPreference
 
         Section {
             PlaybackControlsCard(
@@ -463,7 +471,7 @@ struct SettingsView: View {
             Toggle(isOn: diagnosticLoggingBinding) {
                 rowLabel("Enable Diagnostic Log", systemImage: "waveform.path.ecg")
             }
-            if appState.settingsStore.appSettings.diagnosticLoggingEnabled {
+            if settingsViewModel.appSettings.diagnosticLoggingEnabled {
                 NavigationLink {
                     DiagnosticLogView()
                 } label: {
@@ -508,7 +516,7 @@ struct SettingsView: View {
             } label: {
                 if isImporting {
                     HStack {
-                        if let progress = appState.opmlImportProgress {
+                        if let progress = importCoordinator.progress {
                             Text("Importing \(progress.current) of \(progress.total)…")
                         } else {
                             Text("Importing…")
@@ -523,14 +531,14 @@ struct SettingsView: View {
             .disabled(isImporting)
 
             Button {
-                if let data = appState.exportOPML() {
+                if let data = importCoordinator.exportOPML() {
                     opmlDocument = OPMLDocument(data)
                     showOPMLExporter = true
                 }
             } label: {
                 Label("Export OPML", systemImage: "square.and.arrow.up")
             }
-            .disabled(appState.subscriptionStore.subscriptions.isEmpty)
+            .disabled(subscriptionStore.subscriptions.isEmpty)
         }
         .listRowBackground(cardBackground)
     }
@@ -596,7 +604,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var storageSection: some View {
         Section {
-            let downloadedEpisodes = appState.subscriptionStore.subscriptions
+            let downloadedEpisodes = subscriptionStore.subscriptions
                 .flatMap(\.episodes)
                 .filter { $0.downloadState == .downloaded }
             LabeledContent {
@@ -638,52 +646,52 @@ struct SettingsView: View {
 
     private var cellularBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.downloadOverCellular },
-            set: { appState.settingsStore.appSettings.downloadOverCellular = $0 }
+            get: { settingsViewModel.appSettings.downloadOverCellular },
+            set: { settingsViewModel.appSettings.downloadOverCellular = $0 }
         )
     }
 
     private var wifiBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.downloadOverWifi },
-            set: { appState.settingsStore.appSettings.downloadOverWifi = $0 }
+            get: { settingsViewModel.appSettings.downloadOverWifi },
+            set: { settingsViewModel.appSettings.downloadOverWifi = $0 }
         )
     }
 
     private var iCloudSyncBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.iCloudSyncEnabled },
-            set: { appState.settingsStore.appSettings.iCloudSyncEnabled = $0 }
+            get: { settingsViewModel.appSettings.iCloudSyncEnabled },
+            set: { settingsViewModel.appSettings.iCloudSyncEnabled = $0 }
         )
     }
 
     private var launchScreenBinding: Binding<LaunchScreen> {
         Binding(
-            get: { appState.settingsStore.appSettings.launchScreen },
-            set: { appState.settingsStore.appSettings.launchScreen = $0 }
+            get: { settingsViewModel.appSettings.launchScreen },
+            set: { settingsViewModel.appSettings.launchScreen = $0 }
         )
     }
 
     private var keepScreenAwakeBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.keepScreenAwakeDuringPlayback },
-            set: { appState.settingsStore.appSettings.keepScreenAwakeDuringPlayback = $0 }
+            get: { settingsViewModel.appSettings.keepScreenAwakeDuringPlayback },
+            set: { settingsViewModel.appSettings.keepScreenAwakeDuringPlayback = $0 }
         )
     }
 
     private var lockScreenScrubbingBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.lockScreenScrubbingEnabled },
+            get: { settingsViewModel.appSettings.lockScreenScrubbingEnabled },
             set: { appState.updateLockScreenScrubbing(enabled: $0) }
         )
     }
 
     private var queueBadgeBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.showQueueBadge },
+            get: { settingsViewModel.appSettings.showQueueBadge },
             set: {
-                appState.settingsStore.appSettings.showQueueBadge = $0
-                let count = $0 ? appState.downloadedQueue.count : 0
+                settingsViewModel.appSettings.showQueueBadge = $0
+                let count = $0 ? queueCoordinator.episodes.count : 0
                 NotificationService.shared.updateBadge(count: count)
             }
         )
@@ -691,38 +699,38 @@ struct SettingsView: View {
 
     private var diagnosticLoggingBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.diagnosticLoggingEnabled },
-            set: { appState.settingsStore.appSettings.diagnosticLoggingEnabled = $0 }
+            get: { settingsViewModel.appSettings.diagnosticLoggingEnabled },
+            set: { settingsViewModel.appSettings.diagnosticLoggingEnabled = $0 }
         )
     }
 
     private var defaultAfterPlayedBinding: Binding<AutoArchiveSettings.AfterPlayed> {
         Binding(
-            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterPlayed },
-            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterPlayed = $0 }
+            get: { settingsViewModel.appSettings.defaultAutoArchiveSettings.afterPlayed },
+            set: { settingsViewModel.appSettings.defaultAutoArchiveSettings.afterPlayed = $0 }
         )
     }
 
     private var defaultAfterInactiveBinding: Binding<AutoArchiveSettings.AfterInactive> {
         Binding(
-            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterInactive },
-            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.afterInactive = $0 }
+            get: { settingsViewModel.appSettings.defaultAutoArchiveSettings.afterInactive },
+            set: { settingsViewModel.appSettings.defaultAutoArchiveSettings.afterInactive = $0 }
         )
     }
 
     private var defaultEpisodeLimitBinding: Binding<AutoArchiveSettings.EpisodeLimit> {
         Binding(
-            get: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.episodeLimit },
-            set: { appState.settingsStore.appSettings.defaultAutoArchiveSettings.episodeLimit = $0 }
+            get: { settingsViewModel.appSettings.defaultAutoArchiveSettings.episodeLimit },
+            set: { settingsViewModel.appSettings.defaultAutoArchiveSettings.episodeLimit = $0 }
         )
     }
 
     private func openSkipEditor(_ control: SkipControl) {
         draftSkipSeconds = switch control {
         case .back:
-            appState.settingsStore.appSettings.skipBackSeconds
+            settingsViewModel.appSettings.skipBackSeconds
         case .forward:
-            appState.settingsStore.appSettings.skipForwardSeconds
+            settingsViewModel.appSettings.skipForwardSeconds
         }
         editingSkipControl = control
     }
@@ -731,13 +739,13 @@ struct SettingsView: View {
         let roundedSeconds = max(5, min(120, (draftSkipSeconds / 5).rounded() * 5))
         switch control {
         case .back:
-            appState.settingsStore.appSettings.skipBackSeconds = roundedSeconds
+            settingsViewModel.appSettings.skipBackSeconds = roundedSeconds
         case .forward:
-            appState.settingsStore.appSettings.skipForwardSeconds = roundedSeconds
+            settingsViewModel.appSettings.skipForwardSeconds = roundedSeconds
         }
         NowPlayingService.shared.updateSkipIntervals(
-            forward: appState.settingsStore.appSettings.skipForwardSeconds,
-            backward: appState.settingsStore.appSettings.skipBackSeconds
+            forward: settingsViewModel.appSettings.skipForwardSeconds,
+            backward: settingsViewModel.appSettings.skipBackSeconds
         )
         editingSkipControl = nil
     }
@@ -840,6 +848,10 @@ private struct SkipDurationEditSheet: View {
 // caption podcast/metadata text, and the shared historical EpisodeStatusPill.
 struct ListeningHistoryView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject private var historyStatsCoordinator: HistoryStatsCoordinator
+    @EnvironmentObject private var historyStore: ListeningHistoryStore
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     /// Dedicated progress publisher keeps download ticks separate from AppState's
     /// broad UI state, matching PodcastDetailView and the other episode lists.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
@@ -850,8 +862,8 @@ struct ListeningHistoryView: View {
     // user is actively typing in the search bar.
     private var groupedEntries: [(String, [ListeningHistoryEntry])] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return appState.listeningHistoryGroups }
-        let filtered = appState.listeningHistoryStore.entries.filter {
+        guard !query.isEmpty else { return historyStatsCoordinator.historyGroups }
+        let filtered = historyStore.entries.filter {
             ($0.listenedSeconds >= 60 || $0.lastPositionSeconds >= 60)
                 && ($0.episodeTitle.lowercased().contains(query)
                     || $0.podcastTitle.lowercased().contains(query))
@@ -878,11 +890,11 @@ struct ListeningHistoryView: View {
             HStack(spacing: 12) {
                 HistoryStatView(
                     title: "Listening Time",
-                    value: formattedDuration(appState.listeningHistoryStore.totalListeningSeconds)
+                    value: formattedDuration(historyStore.totalListeningSeconds)
                 )
                 HistoryStatView(
                     title: "Episodes",
-                    value: "\(appState.completedEpisodeCount)"
+                    value: "\(historyStatsCoordinator.completedEpisodeCount)"
                 )
             }
 
@@ -918,10 +930,10 @@ struct ListeningHistoryView: View {
             ForEach(groupedEntries, id: \.0) { title, entries in
                 Section {
                     ForEach(entries) { entry in
-                        let episode = appState.subscriptionStore.episode(
+                        let episode = subscriptionStore.episode(
                             subscriptionID: entry.subscriptionID, episodeID: entry.episodeID
                         )
-                        let isCurrent = appState.currentPlayerEpisode?.id == entry.episodeID
+                        let isCurrent = playbackCoordinator.currentEpisode?.id == entry.episodeID
 
                         ListeningHistoryRow(
                             entry: entry,
@@ -936,7 +948,7 @@ struct ListeningHistoryView: View {
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if let episode,
-                                   let subscription = appState.subscriptionStore.subscription(id: episode.subscriptionID),
+                                   let subscription = subscriptionStore.subscription(id: episode.subscriptionID),
                                    !isCurrent {
                                     historyTrailingSwipe(episode: episode, subscription: subscription)
                                 }
@@ -965,7 +977,7 @@ struct ListeningHistoryView: View {
                 if episode.downloadState != .downloaded {
                     await appState.downloadEpisodeForQueue(episode)
                 }
-                if let updated = appState.subscriptionStore.episode(
+                if let updated = subscriptionStore.episode(
                     subscriptionID: episode.subscriptionID,
                     episodeID: episode.id
                 ) {

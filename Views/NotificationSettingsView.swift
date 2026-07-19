@@ -8,13 +8,18 @@ import UserNotifications
 // title · toggle) bound to Subscription.notificationsEnabled. If iOS
 // notification permission is denied, a banner with a deep link to the app's
 // system settings page is shown. Notifications fire only when BOTH the master
-// toggle and a podcast's toggle are on (gated in AppState.notifyNewEpisodeIfAllowed).
+// toggle and a podcast's toggle are on (gated in
+// NewEpisodeNotificationWorkflow).
+// Subscription rows observe SubscriptionStore directly; AppState remains only
+// for settings and notification commands that cross domain boundaries.
 // A "Listening Recaps" row presents RecapSettingsView (also at the bottom of this
 // file) as a sheet — the opt-in weekly/monthly/yearly stats-summary notifications.
 // Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
 // downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var permissionDenied = false
@@ -36,7 +41,7 @@ struct NotificationSettingsView: View {
     }
 
     private var subscriptions: [Subscription] {
-        appState.subscriptionStore.subscriptions
+        subscriptionStore.subscriptions
             .filter { $0.browseDate == nil }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
@@ -156,9 +161,9 @@ struct NotificationSettingsView: View {
 
     private var masterBinding: Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings.notifyNewEpisodes },
+            get: { settingsViewModel.appSettings.notifyNewEpisodes },
             set: { enabled in
-                appState.settingsStore.appSettings.notifyNewEpisodes = enabled
+                settingsViewModel.appSettings.notifyNewEpisodes = enabled
                 if enabled {
                     NotificationService.shared.requestPermission()
                     Task { await refreshPermissionStatus() }
@@ -171,7 +176,7 @@ struct NotificationSettingsView: View {
         Binding(
             get: { subscription.notificationsEnabled },
             set: { enabled in
-                appState.subscriptionStore.updateNotificationsEnabled(
+                subscriptionStore.updateNotificationsEnabled(
                     subscriptionID: subscription.id,
                     enabled: enabled
                 )
@@ -184,7 +189,7 @@ struct NotificationSettingsView: View {
 
     private func setAll(_ enabled: Bool) {
         for subscription in subscriptions where subscription.notificationsEnabled != enabled {
-            appState.subscriptionStore.updateNotificationsEnabled(
+            subscriptionStore.updateNotificationsEnabled(
                 subscriptionID: subscription.id,
                 enabled: enabled
             )
@@ -237,7 +242,7 @@ private struct NotificationPodcastRow: View {
 // reschedules to self-heal after a reinstall. Mechanism B: the notifications are
 // evergreen teasers; tapping one deep-links into the matching Stats "Last" view.
 struct RecapSettingsView: View {
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var permissionDenied = false
@@ -320,9 +325,9 @@ struct RecapSettingsView: View {
 
     private func recapBinding(_ keyPath: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
         Binding(
-            get: { appState.settingsStore.appSettings[keyPath: keyPath] },
+            get: { settingsViewModel.appSettings[keyPath: keyPath] },
             set: { newValue in
-                appState.settingsStore.appSettings[keyPath: keyPath] = newValue
+                settingsViewModel.appSettings[keyPath: keyPath] = newValue
                 if newValue {
                     NotificationService.shared.requestPermission()
                     Task { await refreshPermissionStatus() }
@@ -333,7 +338,7 @@ struct RecapSettingsView: View {
     }
 
     private func reschedule() {
-        let s = appState.settingsStore.appSettings
+        let s = settingsViewModel.appSettings
         NotificationService.shared.scheduleRecaps(
             weekly: s.recapWeeklyEnabled,
             monthly: s.recapMonthlyEnabled,

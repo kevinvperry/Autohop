@@ -6,7 +6,7 @@ import SwiftUI
 // (UserDefaults `tip.<case>.seen`). OnboardingCoordinator owns the policy — one
 // visible at a time, never re-shown after "Got it", capped per session. AppState
 // retains requestTip/dismissActiveTip compatibility façades. Views call
-// `appState.requestTip(_:)` on first arrival at
+// `onboardingCoordinator.requestTip(_:)` on first arrival at
 // their surface; `CoachMarkOverlay` (mounted once in RootView, behind sheets)
 // renders the active tip as a bottom card. Everything a tip teaches also lives
 // permanently in Menu → Support, so dismissing loses nothing.
@@ -62,9 +62,10 @@ enum OnboardingTip: String, CaseIterable {
 /// a dismissible bottom card; renders nothing when there is no active tip.
 struct CoachMarkOverlay: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
 
     var body: some View {
-        if let tip = appState.activeTip {
+        if let tip = onboardingCoordinator.activeTip {
             VStack {
                 Spacer()
                 card(tip)
@@ -72,7 +73,7 @@ struct CoachMarkOverlay: View {
                     .padding(.bottom, 28)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .animation(.spring(response: 0.4, dampingFraction: 0.82), value: appState.activeTip)
+            .animation(.spring(response: 0.4, dampingFraction: 0.82), value: onboardingCoordinator.activeTip)
         }
     }
 
@@ -93,7 +94,7 @@ struct CoachMarkOverlay: View {
                     .foregroundStyle(Color(white: 0.7))
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button { appState.dismissActiveTip() } label: {
+                Button { onboardingCoordinator.dismissActiveTip() } label: {
                     Text("Got it")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.purple)

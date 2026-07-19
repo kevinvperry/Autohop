@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 // AI CONTEXT — Persistence/SettingsStore.swift
@@ -9,11 +10,24 @@ import Foundation
 // — they're on Subscription in SubscriptionStore.
 protocol SettingsStoring: AnyObject {
     var appSettings: AppSettings { get set }
+    var appSettingsPublisher: AnyPublisher<AppSettings, Never> { get }
+}
+
+extension SettingsStoring {
+    /// Test doubles and non-observable stores receive a stable initial snapshot.
+    /// Production SettingsStore overrides this with its live @Published stream.
+    var appSettingsPublisher: AnyPublisher<AppSettings, Never> {
+        Just(appSettings).eraseToAnyPublisher()
+    }
 }
 
 final class SettingsStore: ObservableObject, SettingsStoring {
     @Published var appSettings: AppSettings = .default {
         didSet { save() }
+    }
+
+    var appSettingsPublisher: AnyPublisher<AppSettings, Never> {
+        $appSettings.eraseToAnyPublisher()
     }
 
     init() {

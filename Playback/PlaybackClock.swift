@@ -5,10 +5,10 @@ import Foundation
 //
 // PURPOSE:
 // Narrow MainActor observable for Autohop's high-frequency playback position.
-// AppState owns this leaf through decomposition Stage 5 and exposes
-// `currentPlayerTime` as a compatibility proxy. PlayerView and MiniPlayerBar
-// observe this object directly so the engine's 2 Hz time callback does not
-// invalidate every AppState observer.
+// PlaybackCoordinator owns this leaf; AppState exposes `currentPlayerTime` only
+// for platform/test compatibility. PlayerView and MiniPlayerBar observe this
+// object directly so the engine's 2 Hz callback does not invalidate unrelated
+// domain observers.
 //
 // CONCURRENCY:
 // MainActor-only. Playback callbacks must hop to MainActor before assigning time.
@@ -19,9 +19,9 @@ import Foundation
 // network, queue, history, Stats, or sync work.
 //
 // INVARIANTS:
-// - Keep this observable separate from AppState's broad objectWillChange stream.
+// - Keep this observable separate from broad application/domain observations.
 // - Do not add playback policy or engine ownership here.
-// - Preserve the existing `time` API until PlaybackCoordinator migration.
+// - PlaybackCoordinator is the routine writer.
 @MainActor
 final class PlaybackClock: ObservableObject {
     @Published var time: TimeInterval = 0
