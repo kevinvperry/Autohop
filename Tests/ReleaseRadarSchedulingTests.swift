@@ -984,7 +984,8 @@ final class BackgroundProcessingScheduleTests: XCTestCase {
     func testNormalOutcomesUseLongCadence() {
         XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .initial, consecutiveFailures: 0, jitterUnit: 0), 12 * hour)
         XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: true), consecutiveFailures: 0, jitterUnit: 0), 18 * hour)
-        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: false), consecutiveFailures: 0, jitterUnit: 0), 24 * hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: false), consecutiveFailures: 0, jitterUnit: 0), 8 * hour)
+        XCTAssertEqual(BackgroundTaskCoordinator.processingDelay(after: .completed(didRun: false), consecutiveFailures: 0, jitterUnit: 1), 10 * hour)
     }
 
     func testExpirationRetriesBackOffAndCapAtOneDay() {

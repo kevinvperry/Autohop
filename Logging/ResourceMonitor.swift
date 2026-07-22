@@ -91,6 +91,11 @@ struct ResourceSnapshot {
     }
 }
 
+struct MemoryFootprintSample: Sendable {
+    let footprintMB: Int
+    let residentMemoryMB: Int
+}
+
 private final class MainThreadWatchdog: @unchecked Sendable {
     private let logger: AppLogger
     private var contextProvider: (@MainActor () -> [String: String])?
@@ -355,6 +360,60 @@ final class ResourceMonitor {
         context.forEach { metadata[$0.key] = $0.value }
         logger.warning(event, message, metadata: metadata)
         requestHighMemoryTrimIfNeeded(snapshot: resourceSnapshot, reason: reason)
+    }
+
+    /// Cheap stage boundary used by refresh/download/widget diagnostics. It does
+    /// not enumerate threads or sample CPU and is therefore suitable for the
+    /// finite background execution paths whose memory peaks we are isolating.
+    func memoryFootprintSample() -> MemoryFootprintSample {
+        let memory = taskMemoryMB()
+        return MemoryFootprintSample(
+            footprintMB: memory.footprintMB,
+            residentMemoryMB: memory.residentMB
+        )
+    }
+
+    func logMemoryStageDelta(
+        stage: String,
+        from before: MemoryFootprintSample,
+        context: [String: String] = [:]
+    ) -> MemoryFootprintSample {
+        let after = memoryFootprintSample()
+        let footprintDelta = after.footprintMB - before.footprintMB
+        let residentDelta = after.residentMemoryMB - before.residentMemoryMB
+        var metadata = context
+        metadata.merge([
+            "stage": stage,
+            "footprintBeforeMB": "\(before.footprintMB)",
+            "footprintAfterMB": "\(after.footprintMB)",
+            "footprintDeltaMB": "\(footprintDelta)",
+            "residentBeforeMB": "\(before.residentMemoryMB)",
+            "residentAfterMB": "\(after.residentMemoryMB)",
+            "residentDeltaMB": "\(residentDelta)"
+        ]) { _, new in new }
+        if abs(footprintDelta) >= 25 || after.footprintMB >= 300 {
+            logger.info(
+                "resources.stageDelta",
+                "Process memory changed across a bounded work stage",
+                metadata: metadata
+            )
+        } else {
+            logger.verbose(
+                "resources.stageDelta",
+                "Process memory remained bounded across work stage",
+                metadata: metadata
+            )
+        }
+        requestHighMemoryTrimIfNeeded(
+            footprintMB: after.footprintMB,
+            residentMemoryMB: after.residentMemoryMB,
+            reason: stage
+        )
+        return after
+    }
+
+    var externalPowerStateLabel: String {
+        batteryStateLabel(UIDevice.current.batteryState)
     }
 
     /// Proactive decoded-image eviction keeps a transient artwork/list load from

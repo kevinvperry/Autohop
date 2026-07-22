@@ -57,7 +57,8 @@ import UIKit
 // engine ticks don't fight the user's drag. Also manages the
 // keep-screen-awake idle timer via appState.updateIdleTimer(playerVisible:).
 // Artwork priority in the Now Playing panel: episode-specific artworkURL first
-// (RSS <itunes:image> on the item), falling back to the subscription's artwork.
+// (RSS <itunes:image> on the item), falling back to the subscription's artwork
+// when the episode URL is absent OR the episode image fails validation/loading.
 // Do NOT revert this order — episode art takes precedence by design.
 // Queue flashes and queue rows use subscription artwork only (no episode art).
 // BACKGROUND VIDEO: a scenePhase observer increments pictureInPictureStartToken
@@ -706,8 +707,11 @@ struct PlayerView: View {
     // MARK: - Artwork
 
     private var artworkURL: URL? {
-        episode?.artworkURL
-            ?? episode.flatMap { subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
+        episode?.artworkURL ?? channelArtworkURL
+    }
+
+    private var channelArtworkURL: URL? {
+        episode.flatMap { subscriptionStore.subscription(id: $0.subscriptionID)?.artworkURL }
     }
 
     private func artworkZStack(size: CGFloat, height: CGFloat? = nil, cornerRadius: CGFloat) -> some View {
@@ -731,7 +735,11 @@ struct PlayerView: View {
                             .padding(12)
                     }
                 } else {
-                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: size, height: h)) {
+                    CachedArtworkImage(
+                        url: artworkURL,
+                        fallbackURL: channelArtworkURL,
+                        targetSize: CGSize(width: size, height: h)
+                    ) {
                         Rectangle()
                             .fill(Color(white: 0.07))
                             .overlay(

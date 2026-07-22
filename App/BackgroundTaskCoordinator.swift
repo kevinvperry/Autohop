@@ -279,7 +279,9 @@ struct BackgroundTaskCoordinator {
 
     /// Pure delay policy exposed internally for deterministic unit tests. Jitter is
     /// positive rather than ± so an outcome can never retry earlier than its base
-    /// safety interval. Expiry backoff is 2, 4, 8, 16, then 24 hours.
+    /// safety interval. A no-work charging launch re-arms in 8–10 hours so an
+    /// eligible fallback can exist later the same day; expiry backoff is 2, 4,
+    /// 8, 16, then 24 hours.
     static func processingDelay(
         after outcome: ProcessingScheduleOutcome,
         consecutiveFailures: Int,
@@ -296,8 +298,8 @@ struct BackgroundTaskCoordinator {
             base = 18 * hour
             jitterWindow = 60 * 60
         case .completed(false):
-            base = 24 * hour
-            jitterWindow = 60 * 60
+            base = 8 * hour
+            jitterWindow = 2 * 60 * 60
         case .expired:
             let exponent = min(max(consecutiveFailures - 1, 0), 4)
             base = min(2 * hour * pow(2, Double(exponent)), 24 * hour)

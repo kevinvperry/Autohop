@@ -30,8 +30,9 @@ import Network
 //   counters are reported to BackgroundWakeMonitor; the monitor is observational
 //   only and cannot alter selection, cancellation, or rescheduling behavior.
 // - BGAppRefresh may request one adaptive second batch after its eight-feed base
-//   batch. The follow-up is limited to 2–4 feeds and is rejected under low power,
-//   thermal/network pressure, large active downloads, or insufficient deadline.
+//   batch. The follow-up is limited to two feeds while unplugged and up to four
+//   on external power, and is rejected under low power, thermal/network pressure,
+//   large active downloads, or insufficient deadline.
 // - OS BGTask feed mutations are one SubscriptionStore notification transaction.
 //   Nested per-feed transactions are depth-counted by the store; queue, widget,
 //   sync, and view observers receive the settled batch rather than every setter.
@@ -118,6 +119,23 @@ final class FeedRefreshCycleWorkflow {
                 return false
             }
             coordinator.lastBackgroundAudioRefreshAt = now
+            if let lastSuccess = coordinator.lastSuccessfulDueRefreshAt,
+               now.timeIntervalSince(lastSuccess) < 90 {
+                logger.info(
+                    "feed.backgroundAudioSuppressed",
+                    "Skipped background-audio network cycle after a recent successful refresh",
+                    metadata: [
+                        "secondsSinceSuccessfulRefresh": String(
+                            format: "%.1f",
+                            now.timeIntervalSince(lastSuccess)
+                        ),
+                        "minimumSeparationSeconds": "90",
+                        "executionContext": FeedRefreshExecutionContext
+                            .backgroundAudioAlive.rawValue
+                    ]
+                )
+                return false
+            }
         }
         return await refresh(
             reason: "timed-due",
@@ -422,6 +440,7 @@ final class FeedRefreshCycleWorkflow {
         targetSubscriptionIDs: Set<UUID>?
     ) async -> Bool {
         let cycleStartedAt = CFAbsoluteTimeGetCurrent()
+        coordinator.activeCycleMaterialChangeCount = 0
         let refreshContext = diagnostics.metadata(
             currentSceneActive: sceneActive()
         )
@@ -500,6 +519,7 @@ final class FeedRefreshCycleWorkflow {
             )
         }
         if onlyDueFeeds, selected.isEmpty {
+            coordinator.lastSuccessfulDueRefreshAt = runtimeWorkflow.now
             releaseRadar.scheduleNextBackgroundRefresh()
             logCycleSummary(
                 outcome: "noDue",
@@ -698,6 +718,9 @@ final class FeedRefreshCycleWorkflow {
             startedAt: cycleStartedAt,
             context: refreshContext
         )
+        if onlyDueFeeds {
+            coordinator.lastSuccessfulDueRefreshAt = runtimeWorkflow.now
+        }
         return true
     }
 
@@ -721,6 +744,8 @@ final class FeedRefreshCycleWorkflow {
         startedAt: CFAbsoluteTime,
         context: [String: String]
     ) {
+        let durationMs =
+            (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
         logger.info(
             "feed.cycleSummary",
             "Feed refresh cycle summary",
@@ -735,6 +760,10 @@ final class FeedRefreshCycleWorkflow {
                 "skippedBackoff": "\(skippedBackoff)",
                 "skippedInactive": "\(skippedInactive)",
                 "deferredBacklog": "\(coordinator.deferredBacklog.count)",
+                "materialChanges":
+                    "\(coordinator.activeCycleMaterialChangeCount)",
+                "batteryState": ResourceMonitor.shared
+                    .externalPowerStateLabel,
                 "selectedFeedHashes": selectedSubscriptions.prefix(10).map {
                     releaseRadar.feedHash(for: $0.feedURL)
                 }.joined(separator: ","),
@@ -750,10 +779,70 @@ final class FeedRefreshCycleWorkflow {
                 }.joined(separator: ","),
                 "durationMs": String(
                     format: "%.0f",
-                    (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+                    durationMs
                 )
             ].merging(context) { _, new in new }
         )
+        recordEfficiencyWindow(
+            context: context,
+            attempted: attempted,
+            completed: completed,
+            materialChanges: coordinator.activeCycleMaterialChangeCount,
+            networkHosts: Set(
+                selectedSubscriptions.compactMap { $0.feedURL.host }
+            ),
+            durationMs: durationMs
+        )
+    }
+
+    private func recordEfficiencyWindow(
+        context: [String: String],
+        attempted: Int,
+        completed: Int,
+        materialChanges: Int,
+        networkHosts: Set<String>,
+        durationMs: Double
+    ) {
+        guard let rawContext = context["executionContext"],
+              let executionContext = FeedRefreshExecutionContext(
+                rawValue: rawContext
+              ),
+              executionContext == .backgroundAudioAlive
+                || executionContext == .backgroundRefreshTask else {
+            return
+        }
+        let now = runtimeWorkflow.now
+        var window = coordinator.efficiencyWindows[executionContext]
+            ?? .init(startedAt: now)
+        window.cycles += 1
+        window.attempted += attempted
+        window.completed += completed
+        window.materialChanges += materialChanges
+        window.zeroResultCycles += materialChanges == 0 ? 1 : 0
+        window.networkHosts.formUnion(networkHosts)
+        window.durationMs += durationMs
+        guard now.timeIntervalSince(window.startedAt) >= 60 * 60 else {
+            coordinator.efficiencyWindows[executionContext] = window
+            return
+        }
+        logger.info(
+            "feed.backgroundEfficiencySummary",
+            "Rolling background refresh efficiency summary",
+            metadata: [
+                "executionContext": executionContext.rawValue,
+                "windowSeconds": "\(Int(now.timeIntervalSince(window.startedAt)))",
+                "cycles": "\(window.cycles)",
+                "attempted": "\(window.attempted)",
+                "completed": "\(window.completed)",
+                "materialChanges": "\(window.materialChanges)",
+                "zeroResultCycles": "\(window.zeroResultCycles)",
+                "distinctFeedHosts": "\(window.networkHosts.count)",
+                "refreshWallMs": String(format: "%.0f", window.durationMs),
+                "batteryState": ResourceMonitor.shared
+                    .externalPowerStateLabel
+            ]
+        )
+        coordinator.efficiencyWindows[executionContext] = .init(startedAt: now)
     }
 
     private func backgroundAudioBudget()
@@ -839,7 +928,24 @@ final class FeedRefreshCycleWorkflow {
                         >= 100 * 1_024 * 1_024
             }
         guard !hasLargeDownload else { return reject("largeDownload") }
-        return cooperativeSecondsRemaining >= 11 ? 4 : 2
+        let powerState = ResourceMonitor.shared.externalPowerStateLabel
+        let onExternalPower = powerState == "charging" || powerState == "full"
+        let capacity = cooperativeSecondsRemaining >= 11 && onExternalPower
+            ? 4 : 2
+        logger.info(
+            "background.additionalBatchBudget",
+            "Selected power-aware BGAppRefresh follow-up capacity",
+            metadata: [
+                "capacity": "\(capacity)",
+                "batteryState": powerState,
+                "onExternalPower": "\(onExternalPower)",
+                "cooperativeSecondsRemaining": String(
+                    format: "%.1f",
+                    cooperativeSecondsRemaining
+                )
+            ]
+        )
+        return capacity
     }
 
     private func logPlan(

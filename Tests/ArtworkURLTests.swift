@@ -11,6 +11,31 @@ import XCTest
 
 final class ArtworkURLTests: XCTestCase {
 
+    #if !AUTOHOP_SPM
+    func testArtworkRequestTriesEpisodeBeforeChannelFallback() {
+        let episodeURL = URL(string: "https://example.com/episode.png")!
+        let channelURL = URL(string: "https://example.com/channel.jpg")!
+
+        XCTAssertEqual(
+            ArtworkImageRequest(primaryURL: episodeURL, fallbackURL: channelURL).candidateURLs,
+            [episodeURL, channelURL]
+        )
+    }
+
+    func testArtworkRequestUsesChannelWhenEpisodeURLIsMissingAndDeduplicatesMatches() {
+        let channelURL = URL(string: "https://example.com/channel.jpg")!
+
+        XCTAssertEqual(
+            ArtworkImageRequest(primaryURL: nil, fallbackURL: channelURL).candidateURLs,
+            [channelURL]
+        )
+        XCTAssertEqual(
+            ArtworkImageRequest(primaryURL: channelURL, fallbackURL: channelURL).candidateURLs,
+            [channelURL]
+        )
+    }
+    #endif
+
     func testUpscalesSmallMzstaticURL() {
         let url = URL(string: "https://is1-ssl.mzstatic.com/image/thumb/abc/def/300x300bb.jpg")
         let out = ArtworkURL.upscaled(url, toMinimumPixels: 1000)

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
 // gear icon from a podcast's episode list). Per-podcast configuration, all
@@ -26,8 +27,8 @@ import SwiftUI
 // refresh, and automatic-download-only Play Instant with explicit sparse-use
 // guidance), Auto Archive (three rules), Chapter Filter (uses the actively playing
 // episode when it belongs to this podcast, otherwise newest; position-based and
-// live-applied through AppState), Feed (read-only URL), Danger (unsubscribe with
-// confirmation). This file also hosts DownloadFiltersView, a pushed
+// live-applied through AppState), Feed (URL with clipboard copy action), Danger
+// (unsubscribe with confirmation). This file also hosts DownloadFiltersView, a pushed
 // per-subscription page for auto-download eligibility rules
 // (duration/title/description, include/exclude, All/Any, live read-only
 // 50-episode feed preview with greyed skipped rows);
@@ -132,6 +133,7 @@ struct SubscriptionSettingsView: View {
     @State private var draftTitle = ""
     @State private var draftPriorityRank = 1
     @State private var episodeToShare: Episode?
+    @State private var copiedFeedURL: URL?
     @Environment(\.dismiss) private var dismiss
 
     private var subscription: Subscription? {
@@ -528,6 +530,24 @@ struct SubscriptionSettingsView: View {
             } label: {
                 SettingsRowLabel(title: "URL", systemImage: "link")
             }
+
+            Button {
+                UIPasteboard.general.string = sub.feedURL.absoluteString
+                copiedFeedURL = sub.feedURL
+
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    guard copiedFeedURL == sub.feedURL else { return }
+                    copiedFeedURL = nil
+                }
+            } label: {
+                SettingsRowLabel(
+                    title: copiedFeedURL == sub.feedURL ? "Copied" : "Copy Link",
+                    systemImage: copiedFeedURL == sub.feedURL ? "checkmark" : "doc.on.doc"
+                )
+            }
+            .accessibilityLabel(copiedFeedURL == sub.feedURL ? "Feed link copied" : "Copy feed link")
+            .accessibilityHint("Copies the RSS feed URL to the clipboard")
         }
         .listRowBackground(sectionRowBackground)
     }

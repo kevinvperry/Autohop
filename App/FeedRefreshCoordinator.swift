@@ -24,7 +24,7 @@ enum FeedRefreshTrigger: String, Sendable {
     case relayPush = "AutohopRelay"
 }
 
-enum FeedRefreshExecutionContext: String, Sendable {
+enum FeedRefreshExecutionContext: String, Sendable, Hashable {
     case manual
     case foregroundVisible
     case backgroundRefreshTask
@@ -68,12 +68,29 @@ struct DeferredRefreshBacklogEntry {
 
 @MainActor
 final class FeedRefreshCoordinator: ObservableObject {
+    struct EfficiencyWindow {
+        var startedAt: Date
+        var cycles = 0
+        var attempted = 0
+        var completed = 0
+        var materialChanges = 0
+        var zeroResultCycles = 0
+        var networkHosts = Set<String>()
+        var durationMs: Double = 0
+    }
+
     var activeCycle: Task<Bool, Never>?
     var activeCycleDiagnostics: RefreshCycleDiagnostics?
     var deferredBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
     var failureBackoffUntil: [UUID: Date] = [:]
     var profileCache: [UUID: ReleaseRadarProfileCacheEntry] = [:]
     var lastBackgroundAudioRefreshAt: Date?
+    /// Last completed due-feed cycle across foreground, BGAppRefresh and active
+    /// audio. A background-audio timer may use this to avoid reopening the radio
+    /// immediately after another execution context already refreshed due work.
+    var lastSuccessfulDueRefreshAt: Date?
+    var activeCycleMaterialChangeCount = 0
+    var efficiencyWindows: [FeedRefreshExecutionContext: EfficiencyWindow] = [:]
 
     static let profileCacheTTL: TimeInterval = 15 * 60
 

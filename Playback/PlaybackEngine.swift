@@ -1653,6 +1653,7 @@ final class PlaybackEngine: PlaybackControlling {
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
         else { return }
 
+        let routeReadStartedAt = CFAbsoluteTimeGetCurrent()
         let session = AVAudioSession.sharedInstance()
         let output = session.currentRoute.outputs.first
         let previousRoute = info[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
@@ -1664,6 +1665,8 @@ final class PlaybackEngine: PlaybackControlling {
         let reasonLabel = routeChangeReasonLabel(reason)
         let outputChanged = routeOutputIdentifier(output) != routeOutputIdentifier(previousOutput)
         let outputIdentifier = routeOutputIdentifier(output)
+        let routeReadMs =
+            (CFAbsoluteTimeGetCurrent() - routeReadStartedAt) * 1_000
         let routeFingerprint = "\(reason.rawValue)|\(outputIdentifier)|\(routeOutputIdentifier(previousOutput))"
         let routeEventNow = CFAbsoluteTimeGetCurrent()
         let isCoalescibleReason = reason == .unknown
@@ -1692,7 +1695,8 @@ final class PlaybackEngine: PlaybackControlling {
         lastRouteEventOutputIdentifier = outputIdentifier
         lastRouteEventAt = routeEventNow
 
-        var metadata = [
+        let loggingStartedAt = CFAbsoluteTimeGetCurrent()
+        let metadata = [
             "reason": reasonLabel,
             "newOutput": newPort,
             "newOutputType": newPortType,
@@ -1703,11 +1707,18 @@ final class PlaybackEngine: PlaybackControlling {
             "enginePlaying": "\(engineIsPlaying)",
             "pendingRouteLoss": "\(hasPendingRouteLossPause)",
             "episode": currentEpisode?.title ?? "none",
-            "positionSecs": String(format: "%.1f", currentPlaybackTime())
+            "positionSecs": String(format: "%.1f", currentPlaybackTime()),
+            "routeReadMs": String(format: "%.1f", routeReadMs)
         ]
-        metadata.merge(playbackDiagnosticMetadata(reason: "routeChange")) { existing, _ in existing }
+        // Do not call playbackDiagnosticMetadata here. Its broad AVAudioSession
+        // inspection previously sat directly in the route callback and could
+        // block the main thread for hundreds of milliseconds. Focused route
+        // fields above retain the evidence needed for this state transition.
         logger.warning("audio.routeChange", "Audio route changed", metadata: metadata)
+        let loggingMs =
+            (CFAbsoluteTimeGetCurrent() - loggingStartedAt) * 1_000
 
+        let policyStartedAt = CFAbsoluteTimeGetCurrent()
         switch reason {
         case .oldDeviceUnavailable:
             if let output, routeOutputCanReplaceRemovedDevice(output) {
@@ -1748,6 +1759,8 @@ final class PlaybackEngine: PlaybackControlling {
         default:
             break
         }
+        let policyMs =
+            (CFAbsoluteTimeGetCurrent() - policyStartedAt) * 1_000
         let operationMs =
             (CFAbsoluteTimeGetCurrent() - operationStartedAt) * 1_000
         if operationMs >= 100 {
@@ -1762,7 +1775,10 @@ final class PlaybackEngine: PlaybackControlling {
                     "backend": engineUsesEngine
                         ? "AVAudioEngine" : "AVPlayer",
                     "bufferGeneration": "\(engineBufferGeneration)",
-                    "routeRestartGeneration": "\(routeRestartGeneration)"
+                    "routeRestartGeneration": "\(routeRestartGeneration)",
+                    "routeReadMs": String(format: "%.1f", routeReadMs),
+                    "loggingMs": String(format: "%.1f", loggingMs),
+                    "policyMs": String(format: "%.1f", policyMs)
                 ]
             )
         }

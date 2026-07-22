@@ -23,6 +23,7 @@ import ImageIO
 // 16:9 video thumbnails remain square in CarPlay and Now Playing artwork slots.
 struct CachedArtworkImage<Placeholder: View>: View {
     let url: URL?
+    var fallbackURL: URL? = nil
     var contentMode: ContentMode = .fill
     var targetSize: CGSize?
     var loadPriority: ArtworkLoadPriority = .visible
@@ -41,20 +42,43 @@ struct CachedArtworkImage<Placeholder: View>: View {
                 placeholder()
             }
         }
-        .task(id: url) {
-            guard let url else {
-                image = nil
-                return
+        .task(id: ArtworkImageRequest(primaryURL: url, fallbackURL: fallbackURL)) {
+            image = nil
+
+            let candidates = ArtworkImageRequest(
+                primaryURL: url,
+                fallbackURL: fallbackURL
+            ).candidateURLs
+
+            for candidate in candidates {
+                let loadedImage = await ArtworkImageCache.shared.image(
+                    for: candidate,
+                    targetSize: targetSize,
+                    scale: displayScale,
+                    priority: loadPriority
+                )
+                guard !Task.isCancelled else { return }
+                if let loadedImage {
+                    image = loadedImage
+                    return
+                }
             }
-            let loadedImage = await ArtworkImageCache.shared.image(
-                for: url,
-                targetSize: targetSize,
-                scale: displayScale,
-                priority: loadPriority
-            )
-            guard !Task.isCancelled else { return }
-            image = loadedImage
         }
+    }
+}
+
+struct ArtworkImageRequest: Hashable {
+    let primaryURL: URL?
+    let fallbackURL: URL?
+
+    var candidateURLs: [URL] {
+        [primaryURL, fallbackURL]
+            .compactMap { $0 }
+            .reduce(into: [URL]()) { urls, candidate in
+                if !urls.contains(candidate) {
+                    urls.append(candidate)
+                }
+            }
     }
 }
 

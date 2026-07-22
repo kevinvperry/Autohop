@@ -305,6 +305,7 @@ final class WidgetSnapshotCoordinator {
 
     private func publish(reasons: [String]) async {
         let startedAt = CFAbsoluteTimeGetCurrent()
+        var memorySample = ResourceMonitor.shared.memoryFootprintSample()
         let projectionStartedAt = CFAbsoluteTimeGetCurrent()
         let projections = makeEpisodeProjections()
         let projectionMs =
@@ -329,6 +330,11 @@ final class WidgetSnapshotCoordinator {
         let prepared = await prepareDisplayEpisodes(
             projections,
             existingThumbnails: existingThumbnails
+        )
+        memorySample = ResourceMonitor.shared.logMemoryStageDelta(
+            stage: "widget.artworkPreparation",
+            from: memorySample,
+            context: ["reason": reasons.joined(separator: ",")]
         )
         let artworkPreparationMs =
             (CFAbsoluteTimeGetCurrent() - artworkStartedAt) * 1_000
@@ -379,6 +385,14 @@ final class WidgetSnapshotCoordinator {
             let result = try await persistence.publish(
                 snapshot: snapshot,
                 thumbnails: prepared.thumbnails
+            )
+            _ = ResourceMonitor.shared.logMemoryStageDelta(
+                stage: "widget.persistence",
+                from: memorySample,
+                context: [
+                    "reason": reason,
+                    "artworkCount": "\(prepared.thumbnails.count)"
+                ]
             )
             let persistenceMs =
                 (CFAbsoluteTimeGetCurrent() - persistenceStartedAt) * 1_000

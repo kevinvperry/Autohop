@@ -10,6 +10,24 @@ release notes should be derived from completed entries and omit internal detail.
 
 ## Completed
 
+### Background refresh efficiency follow-up — 23 July 2026
+
+- Prevented active-audio polling from reopening the network within 90 seconds of
+  another successful due-feed cycle while retaining the existing four-minute
+  timer and urgent Release Radar selection policy.
+- Added hourly BGAppRefresh/background-audio efficiency summaries with completed
+  work, material-change yield, zero-result cycles, distinct feed hosts, wall time,
+  and power state.
+- Limited opportunistic BGAppRefresh follow-up work to two feeds while unplugged
+  and retained the four-feed allowance only while charging or full.
+- Removed broad AVAudioSession diagnostic inspection from the latency-critical
+  route callback and added focused route-read, logging, and policy timings.
+- Added physical-footprint stage deltas for feed fetch/parse, merge, download
+  settlement, widget artwork, and widget persistence, with proactive
+  high-footprint trimming at each boundary.
+- Shortened a no-work BGProcessing re-arm from 24–25 hours to 8–10 hours while
+  preserving charging and network requirements.
+
 ### Diagnostic logging efficiency and refresh observability — 21 July 2026
 
 - Reworked AppLogger admission so disabled diagnostics do not evaluate expensive

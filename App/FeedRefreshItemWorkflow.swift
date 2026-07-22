@@ -75,6 +75,11 @@ final class FeedRefreshItemWorkflow {
         episodeLimit: Int?,
         refreshUpNextAfterMerge: Bool
     ) async {
+        var memorySample = ResourceMonitor.shared.memoryFootprintSample()
+        let memoryContext = releaseRadarWorkflow.feedMetadata(
+            for: subscription,
+            includeURL: false
+        )
         runtimeWorkflow.logResourceSnapshot(
             reason: "feed.refresh.before",
             extra: releaseRadarWorkflow.feedMetadata(
@@ -105,6 +110,11 @@ final class FeedRefreshItemWorkflow {
                     etag: subscription.refreshStats.etag,
                     lastModified: subscription.refreshStats.lastModified
                 )
+            )
+            memorySample = ResourceMonitor.shared.logMemoryStageDelta(
+                stage: "feed.fetchParse",
+                from: memorySample,
+                context: memoryContext
             )
             feedRefreshCoordinator.failureBackoffUntil.removeValue(
                 forKey: subscription.id
@@ -207,6 +217,7 @@ final class FeedRefreshItemWorkflow {
                     ]
                 )
             if latestChanged || newlyObserved > 0 {
+                feedRefreshCoordinator.activeCycleMaterialChangeCount += 1
                 logger.info(
                     "feed.refreshMerge",
                     "Merging changed feed episodes",
@@ -273,6 +284,14 @@ final class FeedRefreshItemWorkflow {
             }
             let mergeMs =
                 (CFAbsoluteTimeGetCurrent() - mergeStartedAt) * 1_000
+            _ = ResourceMonitor.shared.logMemoryStageDelta(
+                stage: "feed.merge",
+                from: memorySample,
+                context: memoryContext.merging([
+                    "episodeCount": "\(result.episodes.count)",
+                    "latestChanged": "\(latestChanged)"
+                ]) { _, new in new }
+            )
             if mergeMs >= 100 {
                 logger.warning(
                     "ui.mainActorOperationSlow",

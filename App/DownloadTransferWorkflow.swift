@@ -202,6 +202,8 @@ final class DownloadTransferWorkflow {
                 at: localFileURL,
                 fallback: episode.fileSizeBytes ?? 0
             )
+            let settlementMemory = ResourceMonitor.shared
+                .memoryFootprintSample()
             let settlementStartedAt = CFAbsoluteTimeGetCurrent()
             let storeStartedAt = CFAbsoluteTimeGetCurrent()
             subscriptionStore.beginChangeNotificationCoalescing()
@@ -284,6 +286,15 @@ final class DownloadTransferWorkflow {
                     ]
                 )
             }
+            _ = ResourceMonitor.shared.logMemoryStageDelta(
+                stage: "download.settlement",
+                from: settlementMemory,
+                context: [
+                    "episode": episode.title,
+                    "podcast": podcastTitle,
+                    "durationMs": String(format: "%.1f", settlementMs)
+                ]
+            )
             runtimeWorkflow.logResourceSnapshot(reason: "download.afterSuccess", extra: [
                 "episode": episode.title,
                 "podcast": podcastTitle
