@@ -181,7 +181,7 @@ struct PodcastDetailView: View {
                         )
                     } catch {
                         AppLogger.shared.warning("podcast.previewCreateFailed", "Could not create podcast preview", metadata: [
-                            "feedURL": url.absoluteString,
+                            "feedHost": url.host ?? "unknown",
                             "error": String(describing: error)
                         ])
                     }

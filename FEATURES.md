@@ -438,6 +438,20 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 
 **Auto-download:** New episodes discovered during a feed refresh are automatically scheduled for download after the feed has been fetched, parsed, and merged. The refresh cycle does **not** wait for the media file to finish downloading; download progress/completion is reported separately through the normal Downloads surfaces. User-initiated download/play-now paths still await the download where that behaviour is intentional. For rolling one-item feeds, such as hourly news bulletins, a newly discovered latest episode cancels a stale in-progress download for the previous latest episode immediately instead of waiting for app-start orphan cleanup.
 
+**Stalled-download recovery:** The first-byte watchdog uses an absolute deadline
+for each URLSession attempt, including across process suspension. It is
+re-evaluated at lifecycle, network, BGTask, URLSession, and periodic checkpoints.
+Only transfers that have already received payload data receive suspension grace.
+Automatic retries are generation-owned and bounded; after exhaustion the durable
+automatic intent is retired so no independent drain can restart a terminally
+failed transfer. The Downloads page leaves the episode explicitly retryable.
+
+**BGAppRefresh backlog handling:** A normal background wake protects a short
+eight-feed base batch. If that batch finishes early, an optional second batch of
+two to four deferred feeds may run when deadline, power, thermal, network, and
+large-download conditions are safe. Conditional requests, Release Radar priority,
+failure backoff, and oldest-deferred fairness apply to both batches.
+
 **Development-only after Version 1.3:** The following Relay behavior is retained
 for controlled future testing and is not enabled in the 1.3 production build.
 Feed-specific relay wakes race their targeted feed
@@ -514,6 +528,12 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 ## 9. Video Podcasts
 
 **Support:** Full audio and video podcast support. `Episode.mediaKind` is either `.audio` or `.video`.
+
+**Artwork presentation:** Video feeds often supply 16:9 episode posters. Autohop
+uses a centred square crop for podcast-artwork slots in episode lists, Home
+Screen widgets, CarPlay, and system Now Playing rather than stretching the image
+or allowing it to overflow. The actual video player retains the source aspect
+ratio.
 
 **Playback path:** Video episodes always use AVPlayer (the video UI requires it). Vocal Boost can still be applied to video as an AVPlayer `audioMix`; Trim Silence is audio-only because it depends on the AVAudioEngine buffer-processing path.
 
@@ -884,7 +904,9 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 **Individual manual refresh:** An Inactive podcast can still be refreshed from its own Podcast Detail page. If that individual refresh finds a new latest episode, Autohop schedules the normal auto-download and may send a new-episode notification when both notification toggles are enabled.
 
-**Diagnostics:** When diagnostic logging is enabled, every all-feed cycle carries a `refreshCycleID`, `refreshReason`, `trigger` (`manualButton`, `foregroundTimer`, `BGAppRefreshTask`), and `executionContext` (`manual`, `foregroundVisible`, `backgroundRefreshTask`, `backgroundAudioAlive`). Timed/background cycles log `feed.refreshAll.plan` with eligible/due/selected counts, capped-out count, backlog count, state counts, top candidates, selected candidates, and deferred candidates. Candidate summaries include the subscription ID and stable feed hash. Each selected feed's `feed.refreshAll.itemStart` line includes subscription ID, feed hash, refresh score, scoring factors, profile kind/confidence, observation counts, learned release window, observed spread, prediction state/reason, expected window, next due time, recheck interval, and any deferred-backlog boost. Individual refresh merges log `latestChanged` and `releaseSignal` so manual refreshes that find out-of-window latest episodes can be confirmed as Radar learning signals. `background.refreshRequested`, `feed.foregroundPollDue`, `background.nextDue`, `background.schedule`, and `background.scheduleSkipped` distinguish true BGAppRefreshTask wakes, foreground catch-up, requested-vs-effective iOS wake timing, and already-pending requests. `feed.refreshAll.backlog`, `feed.refreshAll.checkpoint`, and `feed.refreshAll.cancelled` show backlog and cancellation behavior. `feed.autoDownloadScheduled`, `feed.autoDownloadStart`, and `feed.autoDownloadSkipped` trace the post-refresh media scheduling path. These logs are the primary tuning surface for Release Radar.
+**Diagnostics:** Normal diagnostic logging preserves a compact but complete foreground/background refresh trace. Every cycle carries `refreshCycleID`, `refreshReason`, `trigger` (`manualButton`, `foregroundTimer`, `BGAppRefreshTask`), and `executionContext` (`manual`, `foregroundVisible`, `backgroundRefreshTask`, `backgroundAudioAlive`). `feed.refreshAll.plan` records eligible/due/selected/capped/deferred/backoff counts and state totals; `feed.cycleSummary` is the authoritative terminal record with outcome, attempted/completed/unfinished counts, backlog and elapsed time. Material feed changes retain `feed.refreshMerge`; failures, cancellation, Auto Download intent decisions, `background.wakeSummary`, requested-versus-effective scheduling, and backlog age remain immediate. The optional **Detailed Refresh Trace** toggle adds `feed.refreshAll.planDetail`, per-feed start/finish, 304, no-op and auto-download-decision narration for short Release Radar investigations. It is off by default so ordinary overnight logs span substantially longer without losing evidence that foreground or background work ran.
+
+Every BGAppRefresh and BGProcessing execution also emits exactly one always-persisted `background.wakeSummary`. The summary records wake kind/outcome, elapsed and cold-bootstrap time, due/selected/attempted/completed feeds, unfinished feeds, downloads submitted/completed during the finite wake, Auto Archive passes/episode count, and widget projection events deferred. This makes wake frequency, useful work, deadline pressure, download submission, and zero-result archive behavior comparable from one diagnostic line per wake.
 
 **Important limitation:** Schedule learning depends on being able to identify distinct episodes. Feeds should provide a stable unique GUID or audio URL per episode. If a publisher reuses the same GUID and audio URL for every release while only changing title/date, observations may collapse into one record and the profile may remain less accurate.
 
@@ -1007,7 +1029,7 @@ data is verified.
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
-| Diagnostic Log | Hidden until Diagnostics are unlocked. Shares the local rotating diagnostic log, including `sync.*`, `feed.*`, `download.*`, `engine.*`, `audio.*`, `resources.*`, `stats.*`, `playback.*`, and `ui.*` events. Resource snapshots report real physical footprint as `footprintMB` plus resident memory, and — for battery/thermal diagnosis — `cpuPercent` (app CPU as a % of one core, summed over live threads; the primary "warm phone" signal), `threadCount`, `batteryDrainPctPerHour` (discharge rate between real 1% level changes, unplugged only), plus `thermalState`, `lowPowerMode`, and `playingVideo`. Physical footprint is the primary memory intervention threshold. Long refresh cycles add a checkpoint every 16 feeds. Thermal escalations and Low Power Mode changes are also logged as discrete `resources.thermalChange` / `resources.powerModeChange` events. Main-thread hang/recovery logs include lightweight app context such as playback, refresh, queue, scene, download state, and the most recent playback-tick timing (`lastPlaybackTick*`). `app.bootstrapTiming` separates construction from wiring/restore and `playback.resumeTiming` measures slow synchronous engine resumes. Slow playback ticks emit `playback.tickSlow`; rolling summaries emit `playback.tickSummary`. Routine Stats/history persistence diagnostics are five-minute summaries, while lifecycle/failure/slow-write events remain immediate. Download diagnostics distinguish a 30-minute first-byte wait from a 10-minute active-transfer stall. Repeated DayStats CloudKit conflicts emit `sync.conflictStorm`, with `statsConflictResolution` showing whether Autohop will refresh the local partition's server fields or apply another device's partition. Watchdog delays while the scene is inactive/backgrounded are classified as `ui.watchdogInactiveGap` rather than visible UI freezes. Route-change diagnostics distinguish pending/cancelled/confirmed route-loss pauses, previous/new route output, deferred restarts, delayed AVAudioEngine route restarts, and stale buffer-loop generations. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Normal mode shares a compact rotating log containing foreground/background refresh plans and cycle summaries, BGTask wake summaries, backlog age, material feed changes, downloads/watchdogs, Auto Archive outcomes, sync failures/conflicts, audio recovery, slow operations and five-minute resource heartbeats. **Detailed Refresh Trace** adds verbose per-feed plan candidates, item boundaries, 304 and no-op decisions only for short Release Radar investigations. With diagnostics off, full CPU/thread sampling and the 100 ms UI watchdog stop; a log-free five-minute physical-footprint safety check remains solely to preserve proactive cache trimming. Physical footprint remains the memory intervention threshold. Healthy playback timing is summarized every ten minutes, while slow ticks remain immediate. Download progress persists at 25% milestones; failures and first-byte/active-transfer watchdog classification remain unchanged. Export is queue-consistent, redacted, length-bounded and begins with build/mode/dropped-entry metadata. |
 
 ---
 
@@ -1287,3 +1309,57 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 **Empty state:** If there are no downloaded queue episodes, CarPlay shows a calm `No downloaded episodes` state without instructing the user to use the iPhone.
 
 **Explicitly excluded from CarPlay v1:** Search, Discover, RSS entry, podcast settings, subscription management, feed refresh, streaming, Sleep Timer, Sleep Schedule, notifications, Stats, OPML import/export, diagnostics, sharing, and long-form episode browsing. Downloads are limited to explicit confirmation from Play Now, Play Next, or Play Last on a subscribed-show episode row.
+
+---
+
+## 20. Now Playing & Up Next Widgets
+
+**What it is:** One adaptive iOS WidgetKit surface for downloaded Autohop
+content. Home Screen families are small, medium, and large; Lock Screen and
+StandBy families are accessory circular and accessory rectangular.
+
+**Displayed content:**
+- Home Screen widgets use a textured very-dark-charcoal glass background instead
+  of flat black. iOS 26+ renders native Liquid Glass on the background sheen;
+  older systems use a matching static fallback. Playback controls use an
+  always-visible purple glass-style gradient and edge because WidgetKit can hide
+  App Intent Toggle labels when native glass is attached directly to them. The
+  deterministic styling adds no animation, network work, or timeline churn.
+- Current episode first when one is loaded, followed by at most four downloaded
+  Up Next episodes.
+- If no current/queue episode is available, recently downloaded playable
+  episodes are used before showing the Discover empty state.
+- Remaining time is a static checkpoint refreshed after meaningful playback
+  events, not a simulated live countdown.
+- Small/medium/large widgets load at most 1/2/5 app-prepared 300-pixel JPEGs.
+  The extension never downloads artwork or opens Autohop's database.
+- Every Home Screen family applies its square crop after sizing, so widescreen
+  video-episode thumbnails cannot escape the artwork frame.
+
+**Interaction:**
+- A play control toggles the current episode or performs Play Now for another
+  downloaded row without foregrounding Autohop.
+- Every intent re-resolves the stable subscription/episode identity and confirms
+  the episode is still downloaded, unplayed, and unarchived before playback.
+- Artwork/header links open Player; Up Next headings open the existing Up Next
+  sheet; episode titles open Episode Detail; the empty state opens Discover.
+- A stale or removed episode fails safely and causes the snapshot to correct
+  itself rather than attempting playback from old paths.
+
+**Lock Screen privacy:** The circular accessory shows only the Up Next count.
+The rectangular accessory shows current/next title and podcast, marked
+privacy-sensitive so system redaction can hide it on a locked device. Both use
+system accentable rendering and system-owned backgrounds for tinted Lock Screen
+and StandBy appearances.
+
+**Persistence and refresh:** The app writes a versioned display-only snapshot
+atomically into `group.com.kevinperry.autohop`; it contains no media URL/path,
+CloudKit identifier, credential, or database object. Equivalent visible state
+is hash-deduplicated. Corrupt snapshots are discarded, local thumbnail reads
+are capped at 1 MB, and artwork garbage collection retains only the current and
+one previous generation.
+During a finite BGAppRefresh or BGProcessing execution, widget projection,
+artwork preparation, App Group writes, and WidgetKit reloads are suppressed.
+Change reasons are coalesced and publish once only when foreground or active
+audio provides a safe execution opportunity; otherwise they remain pending
+until the next foreground/domain event.

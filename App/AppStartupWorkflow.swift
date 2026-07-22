@@ -17,6 +17,8 @@ import Foundation
 // 5. Retain all asynchronous maintenance in AppLifecycleCoordinator.
 // 6. Reconcile interrupted downloads before draining durable auto-download
 //    intents, so stale `.downloading` rows cannot suppress recovery.
+// 7. When startup occurs inside an OS BGTask wake, publish bootstrap duration to
+//    BackgroundWakeMonitor so per-wake summaries expose cold-launch budget cost.
 //
 // PROHIBITED RESPONSIBILITIES:
 // This workflow owns no mutable playback, download, queue, refresh, archive,
@@ -163,17 +165,25 @@ final class AppStartupWorkflow {
         }
 
         let finishedAt = CFAbsoluteTimeGetCurrent()
+        let totalMilliseconds =
+            (finishedAt - bootstrapStartedAt) * 1_000
+        let constructionMilliseconds =
+            (constructionFinishedAt - bootstrapStartedAt) * 1_000
+        BackgroundWakeMonitor.shared.recordBootstrap(
+            totalMilliseconds: totalMilliseconds,
+            constructionMilliseconds: constructionMilliseconds
+        )
         logger.info(
             "app.bootstrapTiming",
             "Measured synchronous cold-bootstrap stages",
             metadata: [
                 "totalMs": String(
                     format: "%.1f",
-                    (finishedAt - bootstrapStartedAt) * 1000
+                    totalMilliseconds
                 ),
                 "constructionMs": String(
                     format: "%.1f",
-                    (constructionFinishedAt - bootstrapStartedAt) * 1000
+                    constructionMilliseconds
                 ),
                 "wiringAndRestoreMs": String(
                     format: "%.1f",
@@ -248,6 +258,7 @@ final class AppStartupWorkflow {
         downloadCoordinator.installWatchdogCallback(
             on: downloadManager,
             subscriptionStore: subscriptionStore,
+            autoDownloadIntentStore: autoDownloadIntentStore,
             logger: logger,
             actions: downloadActionsWorkflow
         )

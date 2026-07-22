@@ -67,6 +67,12 @@ compilation conditions are provided. The iPhone target remains device family 1;
   owns refresh-cycle state and planning. Diagnostics live in
   `Views/FeedRefreshScheduleView.swift`
   / `Views/SubscriptionRadarDiagnosticsView.swift`.
+- Diagnostics: `Logging/AppLogger.swift` owns bounded normal/verbose persistence.
+  Normal foreground/background refresh evidence is cycle/outcome based
+  (`feed.refreshAll.plan`, `feed.cycleSummary`, `background.wakeSummary`);
+  detailed per-feed traces require the explicit local setting. Full CPU/thread
+  sampling and the UI watchdog run only during an enabled diagnostic session;
+  `ResourceMonitor` otherwise retains a sparse, log-free footprint safety check.
 - Downloads: `Downloads/DownloadManager.swift` uses a background URLSession and
   validates response status, MIME type, and implausibly small files before moving
   media into the local downloads directory. Narrow UI progress is isolated in
@@ -88,6 +94,11 @@ compilation conditions are provided. The iPhone target remains device family 1;
   versions.
 - CarPlay: read-only/downloaded playback surface in `CarPlay/`, sharing the same
   playback, Up Next, archive, speed, and shared-listening state as the iPhone app.
+- Widgets: `WidgetSnapshotCoordinator` publishes a versioned, display-only,
+  hash-deduplicated App Group snapshot and bounded JPEGs. `AutohopWidgets`
+  renders without networking/database access. `PlayAutohopEpisodeIntent`
+  revalidates stable identity through the live store and delegates to existing
+  playback transport; `WidgetDeepLinkParser` emits typed navigation commands.
 
 ## Current Feature Map
 
@@ -111,8 +122,19 @@ compilation conditions are provided. The iPhone target remains device family 1;
   Release Radar protected background slots, foreground polling, adaptive seven-feed
   background-audio cycles every four minutes (urgent hard ceiling ten), and background
   URLSession media downloads.
+- BGAppRefresh uses an eight-feed protected base batch and may perform one
+  deadline/resource-aware two-to-four-feed follow-up for deferred work.
+  BGProcessing remains outcome-paced and charging/network constrained.
+- Download watchdog ownership is split deliberately: DownloadManager owns
+  absolute per-attempt first-byte/active-transfer deadlines; DownloadCoordinator
+  exclusively owns generation-guarded bounded retries. Exhaustion retires the
+  matching durable auto-download intent so later drains cannot create a competing
+  retry path.
 - Portability/privacy: OPML import/export, optional iCloud sync, on-device default
   stance, local logs, and a minimal privacy manifest.
+- System discovery: interactive Home Screen Now Playing/Up Next widgets plus
+  privacy-sensitive Lock Screen and StandBy accessories; downloaded-only play
+  controls and validated links to Player, Up Next, Episode Detail, and Discover.
 
 ## iCloud Sync Coverage
 

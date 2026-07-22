@@ -13,9 +13,10 @@ import UIKit
 //
 // CURRENT SCOPE: Phase 6 locked-device hardening. The provider sizes images for
 // CarPlay list rows using CPListItem.maximumImageSize, returns a placeholder for
-// missing/failed/protected/slow artwork, and relies on ArtworkImageCache disk
-// files being available after first unlock. It does not initiate downloads or
-// mutate app state.
+// missing/failed/protected/slow artwork, centre-crops non-square video posters
+// for CarPlay's square image slots, and relies on ArtworkImageCache disk files
+// being available after first unlock. It does not initiate downloads or mutate
+// app state.
 // ============================================================================
 
 @MainActor
@@ -36,12 +37,13 @@ final class CarPlayArtworkProvider {
         guard let url else { return placeholder }
         let size = CPListItem.maximumImageSize
         let targetSize = CGSize(width: max(48, size.width), height: max(48, size.height))
-        return await ArtworkImageCache.shared.image(
+        let image = await ArtworkImageCache.shared.image(
             for: url,
             targetSize: targetSize,
             scale: UIScreen.main.scale,
             priority: .visible
-        ) ?? placeholder
+        )
+        return image?.autohopSquareCropped() ?? placeholder
     }
 
     private static func makePlaceholder(size: CGSize) -> UIImage {

@@ -80,7 +80,7 @@ final class SubscriptionImportCoordinator: ObservableObject {
                 imported += 1
             } catch {
                 logger.error("opml.importPodcastFailed", "Could not import podcast", metadata: [
-                    "url": url.absoluteString,
+                    "feedHost": url.host ?? "unknown",
                     "error": String(describing: error)
                 ])
                 failed += 1
@@ -113,7 +113,7 @@ final class SubscriptionImportCoordinator: ObservableObject {
                 imported += 1
             } catch {
                 logger.error("starterPack.subscribeFailed", "Could not subscribe to feed", metadata: [
-                    "url": url.absoluteString,
+                    "feedHost": url.host ?? "unknown",
                     "error": String(describing: error)
                 ])
             }
@@ -146,7 +146,7 @@ final class SubscriptionImportCoordinator: ObservableObject {
         )
         logger.info("opml.importPodcast", "Imported podcast", metadata: [
             "podcast": result.subscriptionTitle,
-            "url": feedURL.absoluteString
+            "feedHost": feedURL.host ?? "unknown"
         ])
     }
 }

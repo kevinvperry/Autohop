@@ -10,8 +10,9 @@ import UIKit
 // surfaces such as CarPlay — seek command is enabled/disabled live by the Lock
 // Screen Scrubbing setting). AppState.bootstrap() wires the handlers once and
 // pushes state updates on every tick/transition. Artwork loads through
-// ArtworkImageCache at a 512 pt target and is guarded by currentArtworkURL so a
-// late image fetch cannot patch the lock-screen card for the wrong episode.
+// ArtworkImageCache at a 512 pt target, centre-crops 16:9 video posters for the
+// square system-artwork slot, and is guarded by currentArtworkURL so a late
+// image fetch cannot patch the lock-screen card for the wrong episode.
 // Metadata sets the podcast title as Artist only, not Album Title too, because
 // some CarPlay head units render both fields and duplicate the subscription
 // title on the main player screen.
@@ -170,7 +171,10 @@ final class NowPlayingService {
             )
             guard let image else { return }
 
-            let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            let squareImage = image.autohopSquareCropped()
+            let artwork = MPMediaItemArtwork(
+                boundsSize: squareImage.size
+            ) { _ in squareImage }
             artworkCache[url] = artwork
             guard currentArtworkURL == url else { return }
             if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {

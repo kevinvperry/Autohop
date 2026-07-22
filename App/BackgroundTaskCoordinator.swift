@@ -17,6 +17,11 @@ import UIKit
 // waiting." BGProcessing is outcome-paced and persisted: launch scheduling uses a
 // 12-hour delay, useful/empty runs use 18/24 hours, and expirations use exponential
 // retry backoff. Random positive jitter prevents synchronized, metronomic wakes.
+// Processing registration/schedule diagnostics are `alwaysPersist` because this
+// coordinator runs before AppState enables the user's normal diagnostic session.
+// `background.processingState` is the authoritative cold-launch record: it
+// exposes the pending request and persisted eligibility clock so a later audit
+// never mistakes an invisible pre-bootstrap submission for a missing request.
 // Never submit a replacement processing request at task start; submit it only after
 // the run outcome is known. BGAppRefresh feed-date selection calls
 // effectiveFeedDueDate so an active per-feed failure backoff overrides that feed's
@@ -87,32 +92,78 @@ struct BackgroundTaskCoordinator {
         }
     }
 
-    /// Schedules a refresh only when no request is already pending, preventing
-    /// every app launch from resetting the earliestBeginDate clock.
-    static func scheduleAppRefreshIfNeeded() {
+    private static let appRefreshFloor: TimeInterval = 15 * 60
+    private static let meaningfulEarlierThreshold: TimeInterval = 60
+
+    /// Pure replacement policy used by the scheduler and tests. A later (or only
+    /// trivially earlier) candidate must never replace a pending request because
+    /// frequent feed cycles would otherwise keep moving the 15-minute horizon.
+    static func shouldReplacePendingAppRefresh(
+        pendingDate: Date?,
+        candidateDate: Date
+    ) -> Bool {
+        guard let pendingDate else { return false }
+        return pendingDate.timeIntervalSince(candidateDate)
+            >= meaningfulEarlierThreshold
+    }
+
+    /// Schedules a refresh when none is pending. A pending request is replaced
+    /// only when the new effective date is at least one minute earlier. This
+    /// preserves an already-counting-down request across four-minute audio
+    /// background feed cycles while still allowing genuinely urgent work to pull
+    /// a distant request forward.
+    static func scheduleAppRefreshIfNeeded(
+        earliestBeginDate: Date? = nil
+    ) {
+        let now = Date()
+        let floorDate = now.addingTimeInterval(appRefreshFloor)
+        let candidateDate = max(earliestBeginDate ?? floorDate, floorDate)
         BGTaskScheduler.shared.getPendingTaskRequests { requests in
             if let pending = requests.first(where: { $0.identifier == feedRefreshIdentifier }) {
+                guard shouldReplacePendingAppRefresh(
+                    pendingDate: pending.earliestBeginDate,
+                    candidateDate: candidateDate
+                ) else {
                 AppLogger.shared.info("background.scheduleSkipped", "Background app refresh request is already pending", metadata: [
                     "identifier": feedRefreshIdentifier,
-                    "pendingEarliestBeginDate": pending.earliestBeginDate?.description ?? "unknown"
+                    "pendingEarliestBeginDate": pending.earliestBeginDate?.description ?? "unknown",
+                    "candidateEarliestBeginDate": candidateDate.description,
+                    "replacementReason": "notMateriallyEarlier"
                 ])
                 return
+                }
+                AppLogger.shared.info("background.scheduleReplacing", "Replacing background app refresh with materially earlier request", metadata: [
+                    "identifier": feedRefreshIdentifier,
+                    "pendingEarliestBeginDate": pending.earliestBeginDate?.description ?? "unknown",
+                    "candidateEarliestBeginDate": candidateDate.description,
+                    "earlierBySeconds": "\(Int((pending.earliestBeginDate?.timeIntervalSince(candidateDate) ?? 0).rounded()))"
+                ])
             }
-            scheduleAppRefresh()
+            scheduleAppRefresh(
+                earliestBeginDate: candidateDate,
+                now: now
+            )
         }
     }
 
     /// Submits a `BGAppRefreshTaskRequest`. Pass the soonest feed due date so iOS
     /// gets accurate scheduling information; wakes are opportunistic and the
     /// actual time is not guaranteed. Floor: 15 minutes from now.
-    static func scheduleAppRefresh(earliestBeginDate: Date? = nil) {
-        let floorDate = Date(timeIntervalSinceNow: 15 * 60)
+    static func scheduleAppRefresh(
+        earliestBeginDate: Date? = nil,
+        now: Date = Date()
+    ) {
+        let floorDate = now.addingTimeInterval(appRefreshFloor)
         let requestedDate = earliestBeginDate
-        let requestedSeconds = requestedDate.map { Int($0.timeIntervalSinceNow.rounded()) }
+        let requestedSeconds = requestedDate.map {
+            Int($0.timeIntervalSince(now).rounded())
+        }
         let request = BGAppRefreshTaskRequest(identifier: feedRefreshIdentifier)
         request.earliestBeginDate = max(requestedDate ?? floorDate, floorDate)
         let effectiveDate = request.earliestBeginDate
-        let effectiveSeconds = effectiveDate.map { Int($0.timeIntervalSinceNow.rounded()) }
+        let effectiveSeconds = effectiveDate.map {
+            Int($0.timeIntervalSince(now).rounded())
+        }
         do {
             try BGTaskScheduler.shared.submit(request)
             AppLogger.shared.info("background.schedule", "Scheduled background app refresh", metadata: [
@@ -148,10 +199,81 @@ struct BackgroundTaskCoordinator {
                     "identifier": feedProcessingIdentifier,
                     "outcome": outcome.label,
                     "pendingEarliestBeginDate": pending.earliestBeginDate?.description ?? "unknown"
-                ])
+                ], alwaysPersist: true)
+                logProcessingState(
+                    reason: "schedule.pending",
+                    pendingRequest: pending,
+                    outcome: outcome
+                )
                 return
             }
             scheduleProcessing(after: outcome)
+        }
+    }
+
+    /// Emits one pre-bootstrap-safe processing state record. Keep this compact:
+    /// it runs at launch and after processing outcomes, not on routine feed wakes.
+    static func logProcessingState(reason: String) {
+        BGTaskScheduler.shared.getPendingTaskRequests { requests in
+            let pending = requests.first {
+                $0.identifier == feedProcessingIdentifier
+            }
+            logProcessingState(
+                reason: reason,
+                pendingRequest: pending,
+                outcome: nil
+            )
+        }
+    }
+
+    private static func logProcessingState(
+        reason: String,
+        pendingRequest: BGTaskRequest?,
+        outcome: ProcessingScheduleOutcome?
+    ) {
+        let defaults = UserDefaults.standard
+        let nextEligible = defaults.object(
+            forKey: ProcessingStateKey.nextEligibleDate
+        ) as? Date
+        let lastSuccessful = defaults.object(
+            forKey: ProcessingStateKey.lastSuccessfulDate
+        ) as? Date
+        let now = Date()
+        Task { @MainActor in
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            let batteryState: String
+            switch UIDevice.current.batteryState {
+            case .charging: batteryState = "charging"
+            case .full: batteryState = "full"
+            case .unplugged: batteryState = "unplugged"
+            case .unknown: batteryState = "unknown"
+            @unknown default: batteryState = "unknown"
+            }
+            AppLogger.shared.info(
+                "background.processingState",
+                "Captured background processing scheduling state",
+                metadata: [
+                    "reason": reason,
+                    "identifier": feedProcessingIdentifier,
+                    "outcome": outcome?.label ?? "inspection",
+                    "requestPending": "\(pendingRequest != nil)",
+                    "pendingEarliestBeginDate": pendingRequest?
+                        .earliestBeginDate?.description ?? "none",
+                    "persistedNextEligibleDate": nextEligible?.description
+                        ?? "none",
+                    "secondsUntilEligibility": nextEligible.map {
+                        String(Int($0.timeIntervalSince(now).rounded()))
+                    } ?? "none",
+                    "lastSuccessfulDate": lastSuccessful?.description
+                        ?? "none",
+                    "consecutiveFailures": "\(defaults.integer(forKey: ProcessingStateKey.consecutiveFailures))",
+                    "requiresExternalPower": "true",
+                    "requiresNetworkConnectivity": "true",
+                    "batteryState": batteryState,
+                    "backgroundRefreshStatus": backgroundRefreshStatusLabel
+                ],
+                alwaysPersist: true
+            )
         }
     }
 
@@ -225,17 +347,22 @@ struct BackgroundTaskCoordinator {
                 "effectiveEarliestBeginDate": effectiveDate.description,
                 "secondsUntilEffective": "\(Int(effectiveDate.timeIntervalSince(now).rounded()))",
                 "preservedPersistedEligibility": "\(persistedDate.map { $0 > policyDate } ?? false)"
-            ])
+            ], alwaysPersist: true)
+            logProcessingState(
+                reason: "schedule.submitted",
+                pendingRequest: request,
+                outcome: outcome
+            )
         } catch BGTaskScheduler.Error.notPermitted {
             AppLogger.shared.error("background.scheduleProcessingFailed", "Background processing was not permitted", metadata: [
                 "identifier": feedProcessingIdentifier,
                 "reason": "notPermitted"
-            ])
+            ], alwaysPersist: true)
         } catch {
             AppLogger.shared.error("background.scheduleProcessingFailed", "Background processing could not be scheduled", metadata: [
                 "identifier": feedProcessingIdentifier,
                 "error": String(describing: error)
-            ])
+            ], alwaysPersist: true)
         }
     }
 }

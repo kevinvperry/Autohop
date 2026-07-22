@@ -496,7 +496,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     private func scheduleSlowLanePush(historyCount: Int, statsCount: Int) async {
         await MainActor.run {
             guard self.slowLanePushTask == nil else { return } // keep the earliest deadline
-            self.logger.info("sync.slowLaneDeferred", "History/stats-only changes held for slow-lane debounce", metadata: [
+            self.logger.verbose("sync.slowLaneDeferred", "History/stats-only changes held for slow-lane debounce", metadata: [
                 "history": "\(historyCount)",
                 "stats": "\(statsCount)",
                 "debounceSeconds": "\(Int(Self.slowLaneDebounceSeconds))"
@@ -603,7 +603,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         case .coalesce: slowLaneLabel = "piggyback"
         case .flush(let reason): slowLaneLabel = reason
         }
-        logger.info("sync.queued", "Queued local changes to push", metadata: [
+        let queuedMetadata = [
             "episodes": "\(episodeChanges.count)",
             "subscriptions": "\(subscriptionChanges.count)",
             "subscriptionOrder": "\(subscriptionOrderChanges.count)",
@@ -616,7 +616,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             "quarantined": "\((episodes.count + subscriptions.count + history.count + stats.count + (pendingQueue != nil ? 1 : 0) + (pendingSubscriptionOrder != nil ? 1 : 0)) - changes.count)",
             "slowLane": slowLaneLabel,
             "device": deviceID
-        ])
+        ]
+        if !fastChanges.isEmpty || slowLaneLabel != "piggyback" {
+            logger.info(
+                "sync.queued",
+                "Queued material local changes to push",
+                metadata: queuedMetadata
+            )
+        } else {
+            logger.verbose(
+                "sync.queued",
+                "Queued routine coalesced local changes to push",
+                metadata: queuedMetadata
+            )
+        }
     }
 
     private func recoverLegacySubscriptionSettingsIfNeeded() async {
@@ -963,7 +976,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             if case .needsMaterialization(let state) = outcome {
                 logger.info("sync.materialize", "Remote subscription needs local materialisation", metadata: [
                     "id": state.subscriptionID.uuidString,
-                    "feedURL": state.feedURL.absoluteString
+                    "feedHost": state.feedURL.host ?? "unknown"
                 ])
                 await onSubscriptionNeedsMaterialization?(state)
             }

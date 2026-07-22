@@ -14,7 +14,8 @@ import Network
 // CONCURRENCY / MEMORY:
 // FeedRefreshCoordinator stores the sole active Task and diagnostics. Feed
 // merges remain sequential. Every 16 feeds, the workflow logs physical
-// footprint and yields; large manual cycles add a 25 ms parser-drain pause.
+// footprint and yields; large manual cycles use smaller batches, trim transient
+// artwork allocations, and add a short parser/download-settlement drain pause.
 //
 // INVARIANTS:
 // - A BG task joins existing work instead of reporting premature completion.
@@ -25,6 +26,15 @@ import Network
 // - Foreground state is injected by AppRuntimeWorkflow; this state machine does
 //   not read UIApplication directly and can be exercised deterministically.
 // - AppState exposes entry commands but contains no refresh-cycle internals.
+// - While an OS BGTask diagnostic scope is active, selection/attempt/completion
+//   counters are reported to BackgroundWakeMonitor; the monitor is observational
+//   only and cannot alter selection, cancellation, or rescheduling behavior.
+// - BGAppRefresh may request one adaptive second batch after its eight-feed base
+//   batch. The follow-up is limited to 2–4 feeds and is rejected under low power,
+//   thermal/network pressure, large active downloads, or insufficient deadline.
+// - OS BGTask feed mutations are one SubscriptionStore notification transaction.
+//   Nested per-feed transactions are depth-counted by the store; queue, widget,
+//   sync, and view observers receive the settled batch rather than every setter.
 
 @MainActor
 final class FeedRefreshCycleWorkflow {
@@ -152,6 +162,47 @@ final class FeedRefreshCycleWorkflow {
             includeBackoffFeeds: false,
             onlyDueFeeds: true,
             joinActiveCycle: true,
+            backgroundTaskIdentifier: taskIdentifier
+        )
+    }
+
+    /// Attempts one small follow-up batch after the normal BGAppRefresh selection.
+    /// Recomputing due candidates naturally excludes feeds completed by batch one
+    /// and lets deferred-fairness scores choose the oldest remaining work.
+    @discardableResult
+    func refreshAdditionalForBackground(
+        taskIdentifier: String,
+        cooperativeSecondsRemaining: TimeInterval
+    ) async -> Bool {
+        let capacity = additionalBackgroundCapacity(
+            cooperativeSecondsRemaining: cooperativeSecondsRemaining
+        )
+        guard capacity > 0 else { return false }
+        logger.info(
+            "background.additionalBatch",
+            "Starting opportunistic BGAppRefresh follow-up batch",
+            metadata: [
+                "identifier": taskIdentifier,
+                "capacity": "\(capacity)",
+                "cooperativeSecondsRemaining": String(
+                    format: "%.1f",
+                    cooperativeSecondsRemaining
+                )
+            ]
+        )
+        return await refresh(
+            reason: "background.additional",
+            trigger: .backgroundRefreshTask,
+            executionContext: .backgroundRefreshTask,
+            maxSubscriptions: capacity,
+            protectedStates: policy.backgroundProtectedStates,
+            minimumProtectedSelections: min(
+                capacity,
+                policy.backgroundProtectedMinimum
+            ),
+            includeBackoffFeeds: false,
+            onlyDueFeeds: true,
+            joinActiveCycle: false,
             backgroundTaskIdentifier: taskIdentifier
         )
     }
@@ -370,13 +421,9 @@ final class FeedRefreshCycleWorkflow {
         onlyDueFeeds: Bool,
         targetSubscriptionIDs: Set<UUID>?
     ) async -> Bool {
+        let cycleStartedAt = CFAbsoluteTimeGetCurrent()
         let refreshContext = diagnostics.metadata(
             currentSceneActive: sceneActive()
-        )
-        runtimeWorkflow.logResourceSnapshot(
-            reason: "feed.refreshAll.before",
-            extra: refreshContext,
-            force: true
         )
         let requested = targetSubscriptionIDs.map { targetIDs in
             subscriptionStore.subscriptions.filter {
@@ -425,6 +472,10 @@ final class FeedRefreshCycleWorkflow {
         let subscriptions = onlyDueFeeds
             ? selected.map(\.subscription)
             : eligible
+        BackgroundWakeMonitor.shared.recordFeedPlan(
+            due: onlyDueFeeds ? dueCandidates.count : subscriptions.count,
+            selected: subscriptions.count
+        )
         if onlyDueFeeds {
             reconcileBacklog(
                 dueCandidates: dueCandidates,
@@ -450,15 +501,19 @@ final class FeedRefreshCycleWorkflow {
         }
         if onlyDueFeeds, selected.isEmpty {
             releaseRadar.scheduleNextBackgroundRefresh()
-            logger.info(
-                "feed.refreshAll.noDue",
-                "No due subscriptions selected for refresh cycle",
-                metadata: [
-                    "eligible": "\(eligible.count)",
-                    "due": "\(dueCandidates.count)",
-                    "skippedBackoff": "\(backedOff.count)",
-                    "skippedInactive": "\(skipped.count)"
-                ].merging(refreshContext) { _, new in new }
+            logCycleSummary(
+                outcome: "noDue",
+                attempted: 0,
+                completed: 0,
+                eligible: eligible.count,
+                due: dueCandidates.count,
+                deferred: deferred.count,
+                skippedBackoff: backedOff.count,
+                skippedInactive: skipped.count,
+                selectedSubscriptions: [],
+                completedIDs: [],
+                startedAt: cycleStartedAt,
+                context: refreshContext
             )
             return false
         }
@@ -469,7 +524,7 @@ final class FeedRefreshCycleWorkflow {
             }
         )
         if !skipped.isEmpty {
-            logger.info(
+            logger.verbose(
                 "feed.refreshAll.skippedInactive",
                 "Skipped subscriptions excluded from auto feed refresh",
                 metadata: [
@@ -479,7 +534,7 @@ final class FeedRefreshCycleWorkflow {
             )
         }
         if !includeBackoffFeeds, !backedOff.isEmpty {
-            logger.info(
+            logger.verbose(
                 "feed.refreshAll.skippedBackoff",
                 "Skipped subscriptions temporarily paused after failed refreshes",
                 metadata: [
@@ -491,9 +546,20 @@ final class FeedRefreshCycleWorkflow {
 
         var completedIDs = Set<UUID>()
         var wasCancelled = false
-        let batchSize = 16
+        let coalescesBackgroundMutations =
+            diagnostics.executionContext == .backgroundRefreshTask
+            || diagnostics.executionContext == .backgroundProcessingTask
+        if coalescesBackgroundMutations {
+            subscriptionStore.beginChangeNotificationCoalescing()
+        }
+        defer {
+            if coalescesBackgroundMutations {
+                subscriptionStore.endChangeNotificationCoalescing()
+            }
+        }
         let largeManual = diagnostics.executionContext == .manual
-            && subscriptions.count > batchSize
+            && subscriptions.count > 8
+        let batchSize = largeManual ? 8 : 16
         for (index, subscription) in subscriptions.enumerated() {
             if Task.isCancelled {
                 wasCancelled = true
@@ -512,11 +578,12 @@ final class FeedRefreshCycleWorkflow {
                     _, new in new
                 }
             }
-            logger.info(
+            logger.verbose(
                 "feed.refreshAll.itemStart",
                 "Refreshing subscription in timed cycle",
                 metadata: startMetadata
             )
+            BackgroundWakeMonitor.shared.recordFeedAttempt()
             await itemWorkflow.refresh(
                 subscription,
                 episodeLimit: policy.defaultEpisodeLimit,
@@ -527,7 +594,8 @@ final class FeedRefreshCycleWorkflow {
                 break
             }
             completedIDs.insert(subscription.id)
-            logger.info(
+            BackgroundWakeMonitor.shared.recordFeedCompletion()
+            logger.verbose(
                 "feed.refreshAll.itemFinished",
                 "Finished subscription in timed cycle",
                 metadata: releaseRadar.feedMetadata(
@@ -555,7 +623,14 @@ final class FeedRefreshCycleWorkflow {
                 )
                 await Task.yield()
                 if largeManual {
-                    try? await Task.sleep(for: .milliseconds(25))
+                    // Manual refresh can parse all active feeds while downloads
+                    // begin settling. Drain transient artwork/parser allocations
+                    // between smaller batches instead of allowing both workloads
+                    // to accumulate into a 700+ MB peak.
+                    await ArtworkImageCache.shared.trimMemory(
+                        reason: "manualRefreshBatch"
+                    )
+                    try? await Task.sleep(for: .milliseconds(75))
                 }
             }
         }
@@ -586,6 +661,20 @@ final class FeedRefreshCycleWorkflow {
                 extra: refreshContext,
                 force: true
             )
+            logCycleSummary(
+                outcome: "cancelled",
+                attempted: completedIDs.count + 1,
+                completed: completedIDs.count,
+                eligible: eligible.count,
+                due: onlyDueFeeds ? dueCandidates.count : subscriptions.count,
+                deferred: unfinished.count,
+                skippedBackoff: backedOff.count,
+                skippedInactive: skipped.count,
+                selectedSubscriptions: subscriptions,
+                completedIDs: completedIDs,
+                startedAt: cycleStartedAt,
+                context: refreshContext
+            )
             return !completedIDs.isEmpty
         }
 
@@ -595,23 +684,76 @@ final class FeedRefreshCycleWorkflow {
             reason: "feed.refreshAll",
             force: false
         )
-        logger.info(
-            "feed.refreshAll",
-            "Finished refreshing all podcast feeds",
-            metadata: [
-                "attempted": "\(subscriptions.count)",
-                "eligible": "\(eligible.count)",
-                "skippedBackoff": "\(backedOff.count)",
-                "skippedInactive": "\(skipped.count)",
-                "reason": diagnostics.reason
-            ].merging(refreshContext) { _, new in new }
-        )
-        runtimeWorkflow.logResourceSnapshot(
-            reason: "feed.refreshAll.after",
-            extra: refreshContext,
-            force: true
+        logCycleSummary(
+            outcome: "completed",
+            attempted: subscriptions.count,
+            completed: completedIDs.count,
+            eligible: eligible.count,
+            due: onlyDueFeeds ? dueCandidates.count : subscriptions.count,
+            deferred: deferred.count,
+            skippedBackoff: backedOff.count,
+            skippedInactive: skipped.count,
+            selectedSubscriptions: subscriptions,
+            completedIDs: completedIDs,
+            startedAt: cycleStartedAt,
+            context: refreshContext
         )
         return true
+    }
+
+    /// AI CONTEXT — Normal-tier terminal record for a complete foreground,
+    /// background-audio, BGAppRefresh, or BGProcessing feed cycle. It replaces
+    /// routine per-feed start/finish narration while retaining the selection,
+    /// fairness, execution-context, completion, and duration evidence needed to
+    /// diagnose missed background work. Per-feed traces remain available through
+    /// AppLogger's verbose tier; failures and material feed changes stay normal.
+    private func logCycleSummary(
+        outcome: String,
+        attempted: Int,
+        completed: Int,
+        eligible: Int,
+        due: Int,
+        deferred: Int,
+        skippedBackoff: Int,
+        skippedInactive: Int,
+        selectedSubscriptions: [Subscription],
+        completedIDs: Set<UUID>,
+        startedAt: CFAbsoluteTime,
+        context: [String: String]
+    ) {
+        logger.info(
+            "feed.cycleSummary",
+            "Feed refresh cycle summary",
+            metadata: [
+                "outcome": outcome,
+                "attempted": "\(attempted)",
+                "completed": "\(completed)",
+                "unfinished": "\(max(0, attempted - completed))",
+                "eligible": "\(eligible)",
+                "due": "\(due)",
+                "deferred": "\(deferred)",
+                "skippedBackoff": "\(skippedBackoff)",
+                "skippedInactive": "\(skippedInactive)",
+                "deferredBacklog": "\(coordinator.deferredBacklog.count)",
+                "selectedFeedHashes": selectedSubscriptions.prefix(10).map {
+                    releaseRadar.feedHash(for: $0.feedURL)
+                }.joined(separator: ","),
+                "completedFeedHashes": selectedSubscriptions.filter {
+                    completedIDs.contains($0.id)
+                }.prefix(10).map {
+                    releaseRadar.feedHash(for: $0.feedURL)
+                }.joined(separator: ","),
+                "unfinishedFeedHashes": selectedSubscriptions.filter {
+                    !completedIDs.contains($0.id)
+                }.prefix(10).map {
+                    releaseRadar.feedHash(for: $0.feedURL)
+                }.joined(separator: ","),
+                "durationMs": String(
+                    format: "%.0f",
+                    (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+                )
+            ].merging(context) { _, new in new }
+        )
     }
 
     private func backgroundAudioBudget()
@@ -653,6 +795,53 @@ final class FeedRefreshCycleWorkflow {
         return (routine, max(routine, hard))
     }
 
+    private func additionalBackgroundCapacity(
+        cooperativeSecondsRemaining: TimeInterval
+    ) -> Int {
+        func reject(_ reason: String) -> Int {
+            logger.info(
+                "background.additionalBatchSkipped",
+                "Skipped opportunistic BGAppRefresh follow-up batch",
+                metadata: [
+                    "reason": reason,
+                    "cooperativeSecondsRemaining": String(
+                        format: "%.1f",
+                        cooperativeSecondsRemaining
+                    )
+                ]
+            )
+            return 0
+        }
+        guard cooperativeSecondsRemaining >= 7 else {
+            return reject("deadline")
+        }
+        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else {
+            return reject("lowPowerMode")
+        }
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal, .fair:
+            break
+        case .serious, .critical:
+            return reject("thermal")
+        @unknown default:
+            return reject("thermalUnknown")
+        }
+        if let path = downloadCoordinator.latestNetworkPath,
+           path.usesInterfaceType(.cellular)
+                || path.isConstrained
+                || path.isExpensive {
+            return reject("networkConstrained")
+        }
+        let hasLargeDownload = downloadCoordinator.activityStore.activeActivities
+            .contains {
+                $0.status == .downloading
+                    && max($0.expectedBytes ?? 0, $0.writtenBytes)
+                        >= 100 * 1_024 * 1_024
+            }
+        guard !hasLargeDownload else { return reject("largeDownload") }
+        return cooperativeSecondsRemaining >= 11 ? 4 : 2
+    }
+
     private func logPlan(
         candidates: [RefreshCycleCandidate],
         selectedCandidates: [RefreshCycleCandidate],
@@ -688,22 +877,31 @@ final class FeedRefreshCycleWorkflow {
                 "protectedStates": stateList(protectedStates),
                 "protectedMinimum": "\(minimumProtectedSelections)",
                 "protectedSelected": "\(protectedSelectedCount)",
+                "selectedFeedHashes": selectedCandidates.prefix(10).map {
+                    releaseRadar.feedHash(for: $0.subscription.feedURL)
+                }.joined(separator: ","),
                 "skippedBackoff": "\(skippedBackoffCount)",
                 "skippedInactive": "\(skippedInactiveCount)",
                 "deferredBacklog":
                     "\(coordinator.deferredBacklog.count)",
-                "stateCounts": stateCounts(for: candidates),
-                "topCandidates": topSummary(for: candidates),
-                "selectedCandidates":
-                    topSummary(for: selectedCandidates),
-                "deferredCandidates":
-                    topSummary(for: deferredCandidates)
+                "stateCounts": stateCounts(for: candidates)
             ].merging(
                 backlogMetadata(now: runtimeWorkflow.now)
             ) { _, new in new }
              .merging(
                 diagnostics.metadata(currentSceneActive: sceneActive())
              ) { _, new in new }
+        )
+        logger.verbose(
+            "feed.refreshAll.planDetail",
+            "Verbose due-feed selection detail",
+            metadata: [
+                "topCandidates": topSummary(for: candidates),
+                "selectedCandidates": topSummary(for: selectedCandidates),
+                "deferredCandidates": topSummary(for: deferredCandidates)
+            ].merging(
+                diagnostics.metadata(currentSceneActive: sceneActive())
+            ) { _, new in new }
         )
     }
 

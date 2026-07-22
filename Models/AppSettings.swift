@@ -9,6 +9,9 @@ import Foundation
 // downloadOverWifi and downloadOverCellular both intentionally default true:
 // a fresh install should keep the download-first queue stocked on Wi-Fi and
 // mobile data unless the user chooses to restrict either network type.
+// Diagnostic logging has two local-only switches: the master enables compact
+// outcome-focused logging/resource monitoring; verboseDiagnosticLoggingEnabled
+// adds short-term per-feed Release Radar traces and defaults off.
 
 /// Which screen Autohop opens to on a normal cold launch (set in App Settings →
 /// Startup). The first-run Welcome flow always takes precedence for brand-new
@@ -53,6 +56,9 @@ struct AppSettings: Equatable, Codable {
     var keepScreenAwakeDuringPlayback: Bool
     var lockScreenScrubbingEnabled: Bool
     var diagnosticLoggingEnabled: Bool
+    // Detailed per-feed/queue/widget trace. OFF by default; normal diagnostics
+    // retain cycle summaries, failures, changes, background wakes and backlog.
+    var verboseDiagnosticLoggingEnabled: Bool
     var showQueueBadge: Bool
     // Shared Listening: global temporary override — caps speed (1.0–1.3x) and
     // disables Trim Silence on ALL podcasts without touching per-sub settings.
@@ -108,6 +114,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback: false,
         lockScreenScrubbingEnabled: true,
         diagnosticLoggingEnabled: false,
+        verboseDiagnosticLoggingEnabled: false,
         showQueueBadge: true,
         sharedListeningActive: false,
         sharedListeningSpeed: 1.0,
@@ -145,6 +152,7 @@ struct AppSettings: Equatable, Codable {
         case keepScreenAwakeDuringPlayback
         case lockScreenScrubbingEnabled
         case diagnosticLoggingEnabled
+        case verboseDiagnosticLoggingEnabled
         case showQueueBadge
         case sharedListeningActive
         case sharedListeningSpeed
@@ -182,6 +190,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback: Bool,
         lockScreenScrubbingEnabled: Bool,
         diagnosticLoggingEnabled: Bool,
+        verboseDiagnosticLoggingEnabled: Bool,
         showQueueBadge: Bool,
         sharedListeningActive: Bool,
         sharedListeningSpeed: Double,
@@ -217,6 +226,7 @@ struct AppSettings: Equatable, Codable {
         self.keepScreenAwakeDuringPlayback = keepScreenAwakeDuringPlayback
         self.lockScreenScrubbingEnabled = lockScreenScrubbingEnabled
         self.diagnosticLoggingEnabled = diagnosticLoggingEnabled
+        self.verboseDiagnosticLoggingEnabled = verboseDiagnosticLoggingEnabled
         self.showQueueBadge = showQueueBadge
         self.sharedListeningActive = sharedListeningActive
         self.sharedListeningSpeed = sharedListeningSpeed
@@ -255,6 +265,7 @@ struct AppSettings: Equatable, Codable {
         keepScreenAwakeDuringPlayback = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwakeDuringPlayback) ?? Self.default.keepScreenAwakeDuringPlayback
         lockScreenScrubbingEnabled = try container.decodeIfPresent(Bool.self, forKey: .lockScreenScrubbingEnabled) ?? Self.default.lockScreenScrubbingEnabled
         diagnosticLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .diagnosticLoggingEnabled) ?? Self.default.diagnosticLoggingEnabled
+        verboseDiagnosticLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .verboseDiagnosticLoggingEnabled) ?? Self.default.verboseDiagnosticLoggingEnabled
         showQueueBadge = try container.decodeIfPresent(Bool.self, forKey: .showQueueBadge) ?? Self.default.showQueueBadge
         sharedListeningActive = try container.decodeIfPresent(Bool.self, forKey: .sharedListeningActive) ?? Self.default.sharedListeningActive
         sharedListeningSpeed = try container.decodeIfPresent(Double.self, forKey: .sharedListeningSpeed) ?? Self.default.sharedListeningSpeed

@@ -13,6 +13,9 @@
 //  diagnostic context use weak typed collaborators installed after composition.
 //  The coordinator never reaches back into AppState and never relabels
 //  listening history itself.
+//  Completed passes contribute their archive count to BackgroundWakeMonitor when
+//  an OS BGTask window is active; this diagnostic has no effect on the 25-minute
+//  gate or rule evaluation.
 //
 
 import Combine
@@ -97,7 +100,7 @@ final class AutoArchiveCoordinator: ObservableObject {
         if !force,
            let lastRun = settingsStore.appSettings.lastAutoArchiveRunAt,
            now.timeIntervalSince(lastRun) < interval {
-            if lastSkipLogAt.map({ now.timeIntervalSince($0) >= 5 * 60 }) ?? true {
+            if lastSkipLogAt.map({ now.timeIntervalSince($0) >= 30 * 60 }) ?? true {
                 lastSkipLogAt = now
                 logger.info("autoArchive.skip", "Auto archive skipped", metadata: [
                     "reason": reason,
@@ -154,17 +157,11 @@ final class AutoArchiveCoordinator: ObservableObject {
     }
 
     private func run(reason: String, now: Date) async {
+        let passStartedAt = CFAbsoluteTimeGetCurrent()
         guard hasArchiveExecutor else {
             logger.error("autoArchive.workflowMissing", "Auto Archive workflow was not installed")
             return
         }
-        logger.info("autoArchive.start", "Auto archive started", metadata: ["reason": reason])
-        resourceMonitor.logSnapshot(
-            reason: "autoArchive.before",
-            context: currentResourceContext,
-            force: true
-        )
-
         var archivedCount = 0
         let playingID = activeEpisodeID
         var playedEvaluated = 0
@@ -286,8 +283,12 @@ final class AutoArchiveCoordinator: ObservableObject {
         }
 
         refreshQueue(reason: "autoArchive.finished")
-        logger.info("autoArchive.eligibility", "Auto Archive eligibility summary", metadata: [
+        logger.info("autoArchive.pass", "Auto Archive pass summary", metadata: [
             "reason": reason,
+            "durationMs": String(
+                format: "%.0f",
+                (CFAbsoluteTimeGetCurrent() - passStartedAt) * 1_000
+            ),
             "subscriptions": "\(subscriptions.count)",
             "playedEvaluated": "\(playedEvaluated)",
             "playedWaiting": "\(playedWaiting)",
@@ -299,15 +300,21 @@ final class AutoArchiveCoordinator: ObservableObject {
             "limitBacklogProtected": "\(limitBacklogProtected)",
             "archivedPlayed": "\(archivedPlayed)",
             "archivedInactive": "\(archivedInactive)",
-            "archivedLimit": "\(archivedLimit)"
-        ])
-        logger.info("autoArchive.finished", "Auto archive finished", metadata: [
-            "reason": reason,
+            "archivedLimit": "\(archivedLimit)",
             "archivedCount": "\(archivedCount)"
         ])
-        var context = currentResourceContext
-        context["archivedCount"] = "\(archivedCount)"
-        resourceMonitor.logSnapshot(reason: "autoArchive.after", context: context, force: true)
+        BackgroundWakeMonitor.shared.recordAutoArchivePass(
+            archivedCount: archivedCount
+        )
+        if archivedCount > 0 {
+            var context = currentResourceContext
+            context["archivedCount"] = "\(archivedCount)"
+            resourceMonitor.logSnapshot(
+                reason: "autoArchive.changed",
+                context: context,
+                force: false
+            )
+        }
     }
 
     private func archive(

@@ -167,6 +167,9 @@ final class AppRuntimeWorkflow {
     ) {
         let previousSceneActive = isSceneActive
         setSceneActive(isActive)
+        downloadCoordinator.reevaluateWatchdog(
+            reason: "scene.\(phaseName)"
+        )
 
         var metadata = resourceContext([
             "phase": phaseName,
@@ -327,8 +330,11 @@ final class AppRuntimeWorkflow {
     }
 
     func syncDiagnosticLogging() {
-        AppLogger.shared.isEnabled =
-            settingsStore.appSettings.diagnosticLoggingEnabled
+        let enabled = settingsStore.appSettings.diagnosticLoggingEnabled
+        AppLogger.shared.isEnabled = enabled
+        AppLogger.shared.isVerboseEnabled = enabled
+            && settingsStore.appSettings.verboseDiagnosticLoggingEnabled
+        resourceMonitor.setDiagnosticSessionEnabled(enabled)
     }
 
     func syncSleepScheduleConfig() {

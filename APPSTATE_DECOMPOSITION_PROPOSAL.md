@@ -2576,6 +2576,28 @@ state. The final repository audit reports no Task, Combine sink,
 `objectWillChange` relay, domain callback assignment, or state-machine body in
 AppState.
 
+**Automated validation complete 2026-07-19.** Regenerated the Xcode project from
+`project.yml`; `git diff --check` passed; the Autohop iOS scheme passed
+build-for-testing and its complete simulator test bundle; the built iOS app
+installed, launched, restored its saved episode, and rendered the Player through
+the normal application entry point; the AutohopTV scheme compiled for the tvOS
+Simulator; and RSSParserSmoke, OPMLSmoke,
+SubscriptionStoreSmoke, DownloadManagerSmoke, and StatsSmoke all passed.
+SubscriptionStoreSmoke's obsolete Release Radar fixtures were aligned with the
+existing production policy: daily bursts require five active weekdays, regular
+weekday cadence requires three observed weeks, and quiet predicted feeds retain
+broad safety checks before their next learned window. No production scheduling
+policy changed in that fixture repair.
+
+**Cleanup pass 41 complete 2026-07-19.** Removed the 225-line
+non-authoritative pre-decomposition ownership narrative from AppState. The
+concise Stage 14 AI CONTEXT header is now its only file-level responsibility
+map; durable feature invariants remain with their owning coordinator/workflow
+headers and canonical project documents. AppState is approximately 1,116 lines,
+down from the 6,645-line review baseline. Every coordinator/workflow retains an
+AI CONTEXT header, the iOS test target rebuilt, and the focused
+AppStateCoordinatorExtractionTests and EpisodeCompletionWorkflowTests passed.
+
 ### Actions
 
 - [x] Remove AppState manual object-change forwarding only after every observable
@@ -2589,8 +2611,9 @@ AppState.
   composition-root/high-level-façade role.
 - [x] Verify AppState owns no domain callback, retained background task, persistence
   transaction, or state-machine implementation.
-- [ ] Run the complete iOS and tvOS build/test matrix and perform the documented
-  device-only validation checklist.
+- [x] Run the locally available iOS/tvOS build and automated test matrix.
+- [ ] Perform and record the documented physical-device/runtime validation
+  checklist for the release candidate.
 
 ### Exit gate
 

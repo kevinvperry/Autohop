@@ -33,6 +33,10 @@ import SwiftUI
 // RootView retains its local NavigationPath; AppRoutingCoordinator selects typed
 // launch/menu/notification commands and translates legacy notifications.
 // handleWelcome records hasCompletedWelcome and routes per the user's choice.
+// WIDGET STAGE 3: typed deep-link commands preserve the permanent Player root.
+// Episode identities are resolved against the live store before appending an
+// EpisodeDetail route; stale identities are logged and ignored. Up Next resets
+// to Player then asks PlayerView to present its one existing sheet.
 // LISTENING RECAPS: a launch .task re-arms the opt-in recap notifications from
 // saved settings (NotificationService.scheduleRecaps, idempotent) so they
 // survive relaunch/reinstall even if the user never reopens the Recaps screen.
@@ -43,6 +47,7 @@ enum AppRoute: Hashable {
     case stats(ListeningRecapPeriod?)
     case sleepSchedule
     case discover
+    case episode(subscriptionID: UUID, episodeID: UUID)
 }
 
 extension Notification.Name {
@@ -60,6 +65,8 @@ extension Notification.Name {
     /// Temporary compatibility output posted alongside OnboardingCoordinator's
     /// typed first-subscription event for any observer not migrated yet.
     static let autohopFirstSubscription = Notification.Name("autohopFirstSubscription")
+    /// Internal typed-route adapter: PlayerView owns the single Up Next sheet.
+    static let autohopOpenUpNext = Notification.Name("autohopOpenUpNext")
 }
 
 /// Standard close control for informational sheets (NavRules-SheetClose).
@@ -222,6 +229,11 @@ struct RootView: View {
                             SleepScheduleView()
                         case .discover:
                             DiscoverView()
+                        case .episode(let subscriptionID, let episodeID):
+                            EpisodeDetailView(
+                                subscriptionID: subscriptionID,
+                                episodeID: episodeID
+                            )
                         }
                     }
             }
@@ -284,7 +296,10 @@ struct RootView: View {
         .task {
             // Stage 5: typed launch selection, while RootView deliberately keeps
             // ownership of its local NavigationPath.
-            if !handledExplicitLaunchRoute,
+            if let widgetCommand =
+                appState.routingCoordinator.consumePendingWidgetCommand() {
+                handleRouteCommand(widgetCommand)
+            } else if !handledExplicitLaunchRoute,
                let command = appState.routingCoordinator.launchCommand(
                     isFirstRun: onboardingCoordinator.isFirstRunNoSubscriptions,
                     launchScreen: settingsViewModel.appSettings.launchScreen
@@ -298,6 +313,7 @@ struct RootView: View {
         }
         .onReceive(appState.routingCoordinator.commands) { command in
             handleRouteCommand(command)
+            appState.routingCoordinator.acknowledgeWidgetCommand(command)
         }
     }
 
@@ -305,6 +321,29 @@ struct RootView: View {
         switch command {
         case .returnToPlayer:
             navigationPath = NavigationPath()
+        case .openUpNext:
+            navigationPath = NavigationPath()
+            NotificationCenter.default.post(name: .autohopOpenUpNext, object: nil)
+        case .openEpisode(let identity):
+            guard let episode = resolveEpisode(identity) else {
+                AppLogger.shared.warning(
+                    "widget.routeEpisodeMissing",
+                    "Widget episode route no longer resolves",
+                    metadata: [
+                        "subscriptionID": identity.subscriptionID.uuidString
+                    ],
+                    alwaysPersist: true
+                )
+                return
+            }
+            handledExplicitLaunchRoute = true
+            showWelcome = false
+            navigationPath = NavigationPath()
+            navigationPath.append(AppRoute.podcasts)
+            navigationPath.append(AppRoute.episode(
+                subscriptionID: identity.subscriptionID,
+                episodeID: episode.id
+            ))
         case .openDiscover:
             handledExplicitLaunchRoute = true
             showWelcome = false
@@ -323,6 +362,20 @@ struct RootView: View {
             showWelcome = true
         case .presentFirstSubscription(let subscriptionID):
             firstSubscribeContext = FirstSubscribeContext(id: subscriptionID)
+        }
+    }
+
+    private func resolveEpisode(
+        _ identity: WidgetEpisodeIdentity
+    ) -> Episode? {
+        guard let subscription = appState.subscriptionStore.subscription(
+            id: identity.subscriptionID
+        ) else { return nil }
+        let candidates = subscription.episodes.isEmpty
+            ? subscription.latestEpisode.map { [$0] } ?? []
+            : subscription.episodes
+        return candidates.first {
+            PlaybackPositionStore.key(for: $0) == identity.episodeKey
         }
     }
 

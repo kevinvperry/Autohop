@@ -4,6 +4,8 @@
 // verify exclusive history/Stats tick ownership and checkpoint ordering, narrow
 // queue invalidation plus side-effect-free reads and legacy pin persistence,
 // onboarding single-vs-bulk milestone behavior, and typed routing commands.
+// BackgroundWakeMonitor characterization verifies the one-summary contract and
+// its cross-domain counters without launching an OS-owned BGTask.
 // They use isolated temporary persistence paths and no live CloudKit, Relay,
 // network, or audio endpoints. Stage 10's device-only CloudKit/Relay gates are
 // deliberately covered by their existing mapping and staging suites.
@@ -395,6 +397,65 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(subject.state, .stopped)
         XCTAssertEqual(ticks, stoppedAt)
         subject.stop()
+    }
+
+    func testBackgroundWakeMonitorProducesOneCompleteSummary() {
+        var currentDate = Date(timeIntervalSince1970: 1_000)
+        let subject = BackgroundWakeMonitor(now: { currentDate })
+        let wakeID = subject.begin(
+            kind: .appRefresh,
+            identifier: "test.background"
+        )
+
+        subject.recordBootstrap(
+            totalMilliseconds: 42.5,
+            constructionMilliseconds: 12.25
+        )
+        subject.recordFeedPlan(due: 9, selected: 8)
+        // AI CONTEXT — one BGAppRefresh wake can now contribute a second
+        // adaptive plan. Due backlog keeps the maximum seen; selected work is
+        // additive so wake diagnostics report the full base + follow-up budget.
+        subject.recordFeedPlan(due: 4, selected: 2)
+        subject.recordFeedAttempt()
+        subject.recordFeedCompletion()
+        subject.recordDownloadSubmitted()
+        subject.recordDownloadCompleted()
+        subject.recordAutoArchivePass(archivedCount: 3)
+        subject.recordWidgetProjectionDeferred()
+        currentDate = currentDate.addingTimeInterval(2)
+
+        let summary = subject.finish(
+            id: wakeID,
+            outcome: .completed,
+            didRun: true
+        )
+
+        XCTAssertFalse(subject.hasActiveWake)
+        XCTAssertEqual(summary?.metadata["kind"], "appRefresh")
+        XCTAssertEqual(summary?.metadata["outcome"], "completed")
+        XCTAssertEqual(summary?.metadata["elapsedMs"], "2000")
+        XCTAssertEqual(summary?.metadata["dueFeeds"], "9")
+        XCTAssertEqual(summary?.metadata["selectedFeeds"], "10")
+        XCTAssertEqual(summary?.metadata["feedAttempts"], "1")
+        XCTAssertEqual(summary?.metadata["feedsCompleted"], "1")
+        XCTAssertEqual(summary?.metadata["downloadsSubmitted"], "1")
+        XCTAssertEqual(
+            summary?.metadata["downloadsCompletedDuringWake"],
+            "1"
+        )
+        XCTAssertEqual(summary?.metadata["episodesArchived"], "3")
+        XCTAssertEqual(
+            summary?.metadata["widgetProjectionEventsDeferred"],
+            "1"
+        )
+        XCTAssertEqual(summary?.metadata["bootstrapTotalMs"], "42.5")
+        XCTAssertNil(
+            subject.finish(
+                id: wakeID,
+                outcome: .expired,
+                didRun: nil
+            )
+        )
     }
 
     private func makeEpisode(subscriptionID: UUID, guid: String) -> Episode {

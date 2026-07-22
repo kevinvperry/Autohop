@@ -169,7 +169,12 @@ let package = Package(
             dependencies: ["AutohopCore"],
             path: "Tests",
             exclude: [
-                "RSSParserSmokeTest.swift"
+                "RSSParserSmokeTest.swift",
+                // Widget contract/parser files compile into the iOS app and
+                // extension targets, not AutohopCore. Xcode's AutohopTests owns
+                // these iOS-only characterizations.
+                "WidgetSharedStorageTests.swift",
+                "WidgetDeepLinkParserTests.swift"
             ],
             resources: [
                 .copy("Fixtures")

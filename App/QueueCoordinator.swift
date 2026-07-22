@@ -221,6 +221,7 @@ final class QueueCoordinator: ObservableObject {
     }
 
     func recompute(reason: String) {
+        let operationStartedAt = CFAbsoluteTimeGetCurrent()
         let base = queueService.downloadedQueue(from: subscriptionStore.subscriptions)
         let computed = QueueModel.applyPins(base, pins: pins)
         let computedIDs = computed.map(\.id)
@@ -246,7 +247,7 @@ final class QueueCoordinator: ObservableObject {
         if upNextChanged {
             upNextEpisode = resolvedUpNext
         }
-        if compositionChanged || upNextChanged || reason != "state.changed" {
+        if compositionChanged || upNextChanged {
             logger.info("queue.upNextRefresh", "Resolved Up Next episode", metadata: [
                 "reason": reason,
                 "current": currentEpisode()?.title ?? "none",
@@ -255,6 +256,32 @@ final class QueueCoordinator: ObservableObject {
                 "compositionChanged": "\(compositionChanged)",
                 "upNextChanged": "\(upNextChanged)"
             ])
+        } else if reason != "state.changed" {
+            logger.verbose(
+                "queue.upNextRefreshNoChange",
+                "Queue recompute did not change the visible projection",
+                metadata: [
+                    "reason": reason,
+                    "queueCount": "\(computed.count)"
+                ]
+            )
+        }
+        let operationMs =
+            (CFAbsoluteTimeGetCurrent() - operationStartedAt) * 1_000
+        if operationMs >= 100 {
+            logger.warning(
+                "ui.mainActorOperationSlow",
+                "Queue projection occupied the main actor",
+                metadata: [
+                    "operation": "queue.recompute",
+                    "durationMs": String(format: "%.1f", operationMs),
+                    "reason": reason,
+                    "subscriptionCount":
+                        "\(subscriptionStore.subscriptions.count)",
+                    "queueCount": "\(computed.count)",
+                    "compositionChanged": "\(compositionChanged)"
+                ]
+            )
         }
     }
 

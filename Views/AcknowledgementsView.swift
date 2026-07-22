@@ -31,7 +31,7 @@ struct AcknowledgementsView: View {
                     licence: "Mozilla Public License, v. 2.0",
                     licenceURL: URL(string: "https://mozilla.org/MPL/2.0/"),
                     repoURL: URL(string: "https://github.com/Automattic/pocket-casts-ios"),
-                    description: "The silence-trimming algorithm used in Autohop's audio engine (including RMS thresholds, gap detection, and fade logic) is ported from AudioReadTask.swift in the Pocket Casts iOS project. The vocal boost signal chain architecture is also based on Pocket Casts' EffectsPlayer.swift. The @Synced field-level dirty-tracking wrapper used by Autohop's cross-device sync is ported from Pocket Casts' ModifiedDate property wrapper."
+                    description: "The silence-trimming algorithm used in Autohop's audio engine (including RMS thresholds, gap detection, and fade logic) is ported from AudioReadTask.swift in the Pocket Casts iOS project. The vocal boost signal chain architecture is also based on Pocket Casts' EffectsPlayer.swift. The @Synced field-level dirty-tracking wrapper used by Autohop's cross-device sync is ported from Pocket Casts' ModifiedDate property wrapper. Pocket Casts also informed the general app-publishes/widget-renders and interactive playback-intent architecture; Autohop's widget implementation is independently authored and remains MIT-licensed."
                 )
             } header: {
                 Text("Open Source Components")

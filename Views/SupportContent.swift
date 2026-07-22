@@ -103,7 +103,8 @@ enum SupportGuide {
     static let sections: [SupportSection] = [
         gettingStarted, priorityStack, queue, player, audioControls, carPlay, chapters,
         downloads, podcastSettings, sleepTimer, sleepSchedule, video,
-        notifications, opml, iCloudSync, listeningHistory, stats, appSettings, contact,
+        notifications, opml, iCloudSync, listeningHistory, stats, widgets,
+        appSettings, contact,
     ]
 
     // MARK: Getting Started
@@ -553,6 +554,30 @@ enum SupportGuide {
                 ["Auto Skipping", "Time saved by per-podcast start skip and end skip settings firing automatically at episode boundaries."],
             ]),
             .paragraph("The **Total** row sums all four categories. Time saved totals you accumulated in earlier versions of Autohop are preserved and included in the Lifetime view."),
+        ]
+    )
+
+    // MARK: Widgets
+
+    private static let widgets = SupportSection(
+        id: "widgets",
+        icon: "rectangle.3.group",
+        title: "Home & Lock Screen Widgets",
+        summary: "Now Playing and downloaded Up Next episodes at a glance",
+        blocks: [
+            .paragraph("Add **Now Playing & Up Next** from the iPhone widget gallery. Small, medium, and large Home Screen sizes show your current episode and downloaded episodes that are ready next. Lock Screen and StandBy accessories offer a compact Up Next count or current/next episode summary."),
+            .heading("Playing from a widget"),
+            .paragraph("Tap a purple play control to start that downloaded episode immediately. If it is already current, the same control toggles play and pause. Playback can begin without opening Autohop; a stale, archived, or no-longer-downloaded row is rejected safely."),
+            .table(headers: nil, rows: [
+                ["Artwork / header", "Opens the Player."],
+                ["Up Next heading or count", "Opens the existing Up Next sheet."],
+                ["Episode title", "Opens that episode's detail page."],
+                ["Discover empty state", "Opens Discover when nothing downloaded is ready."],
+            ]),
+            .heading("Privacy and updates"),
+            .paragraph("Widget data is a small display-only cache stored locally in Autohop's private App Group. It contains titles, durations, status flags, stable episode identity, and prepared thumbnails — never audio URLs, local media paths, credentials, or the podcast database. The widget extension does not contact podcast or artwork servers."),
+            .paragraph("Lock Screen episode text is marked privacy-sensitive so iOS can redact it while your device is locked. Remaining time is a checkpoint updated after meaningful playback events, not a second-by-second countdown. If the snapshot becomes old or unreadable, the widget asks you to open Autohop rather than showing misleading playback state."),
+            .callout(.tip, "For the freshest widget after installing an update, open Autohop once and let the downloaded Up Next list appear."),
         ]
     )
 

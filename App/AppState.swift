@@ -31,232 +31,6 @@ import Foundation
 // - Persistence formats, CloudKit/Relay schemas, queue rules, and release
 //   behavior are owned elsewhere and must not be duplicated here.
 //
-// ============================================================================
-// HISTORICAL AI CONTEXT — pre-final decomposition audit record.
-// NON-AUTHORITATIVE: the final header above and current typed collaborators are
-// the source of truth. The following retained incident notes describe behavior
-// that motivated extraction; ownership references may name the former AppState.
-//
-// PURPOSE: @MainActor composition-root façade for cross-domain commands and
-// platform entry points. SwiftUI pages observe their domain coordinators/stores
-// directly; AppCompositionRoot owns concrete production construction and
-// explicit startup. Stages 3–13 moved history/Stats, queue, onboarding,
-// typed routing, download runtime, feed-refresh/Radar state, durable automatic
-// intents, Auto Archive, subscription import, CloudKit/Relay, and playback
-// session state behind dedicated owners.
-//
-// COMPATIBILITY INVALIDATION AUDIT / STAGE 14 (2026-07-18):
-// AppState no longer forwards SubscriptionStore, QueueCoordinator,
-// HistoryStatsCoordinator, OnboardingCoordinator, DownloadCoordinator,
-// AutoArchiveCoordinator, SubscriptionImportCoordinator, or
-// PlaybackCoordinator objectWillChange. Their consumers observe those owners
-// directly. SleepTimerService and SleepScheduleService are injected directly.
-// SettingsViewModel is now the test-substitutable observable settings owner;
-// SettingsStore publishes through SettingsStoring.appSettingsPublisher.
-// Consequently AppState forwards no domain objectWillChange publisher.
-//
-// PERF (2026-07-02): currentPlayerTime is a proxy onto the dedicated PlaybackClock
-// observable (PERF-1 targeted fix — the 2 Hz tick no longer invalidates every
-// AppState observer; only PlayerView's scrubber + MiniPlayerBar observe the clock).
-// releaseRadarProfile(for:) is memoized per subscription (PERF-2 — fingerprint-
-// validated cache + off-main cold-launch warm-up via warmReleaseRadarProfileCache),
-// so the 30 s due-feed poll no longer rebuilds every profile on the main thread.
-// Download progress lives on the dedicated DownloadProgressModel observable
-// (2026-07-04, same pattern as PlaybackClock): AppState.downloadProgress is a
-// proxy; only progress-rendering surfaces observe the model, so ≥1% progress
-// steps no longer invalidate every AppState observer during active downloads.
-// RESPONSIBILITIES:
-//  - Play Instant: a per-podcast, automatic-download-only FIFO interruption
-//    pipeline. It warns over current playback, snapshots the interrupted episode
-//    at switch time, plays eligible arrivals outside normal Up Next order, then
-//    restores the snapshot after natural completion or Mark Played. Manual
-//    pause, archive, episode selection, or Next cancels restoration. Persisted
-//    automatic-download intent preserves provenance across URLSession relaunch.
-//  - Player state: currentPlayerEpisode / currentPlayerTime / isPlaying;
-//    starting playback (startPlayback), auto-advance (handleEpisodeFinished →
-//    playNextEpisode), seek, chapter navigation, per-podcast audio settings
-//    (speed / mono fold-down / vocal boost / trim silence) pushed live into PlaybackEngine.
-//    Playback DECISIONS (effective preference, resume-vs-start-skip, speed
-//    cycle/normalize, chapter prev/next targets) live in AutohopCore's
-//    PlaybackSessionPolicy (tvOS Phase 0 item 4) — AppState delegates the
-//    decisions and executes the effects. Keep new decisions in the policy.
-//    CarPlay is deliberately just another UI surface over these same methods:
-//    helpers such as episodeIsCurrent(_:), archiveCurrentEpisodeAndPlayNext(),
-    //    cyclePlaybackSpeedForCurrentEpisode(), setPlaybackSpeedForCurrentEpisode(_:),
-    //    and downloadEpisodeForCarPlayAction(_:) exist to keep CarPlay action routing
-    //    thin while preserving one shared playback/download/queue/settings model.
-    //    CarPlay-only cold launches use
-//    resumePlaybackForCarPlayLaunchIfNeeded() to resume the restored episode
-//    after the coordinator has installed its first Loading template; normal
-//    iPhone launch still restores into a paused state.
-//    External `podcast:chapters` are fetched AFTER play() begins (P7):
-//    fetchExternalChaptersInBackground runs off the start path (bounded 10 s
-//    ephemeral session) so a slow endpoint never delays the first audio frame,
-//    then applies chapters live to the store, currentPlayerEpisode, and the
-//    engine (PlaybackControlling.updateChapters) iff that episode still plays.
-//  - Queue: QueueCoordinator owns the downloaded Priority Stack projection,
-//    Play Next/Last pins, pin persistence, Up Next, badge count, narrow
-//    queue-change invalidation, and changed-composition QueueSnapshot writes.
-//    AppState downloadedQueue and pin commands remain compatibility façades for
-//    CarPlay/tests; SwiftUI reads QueueCoordinator directly.
-//    Queue pins and playback-position.json are marked available-after-first-unlock
-//    so CarPlay can render queue/progress and archive/play-next while locked.
-//  - Downloads: download-first model. maxConcurrentDownloads = 3 with a FIFO
-//    pendingDownloadQueue; NWPathMonitor enforces the WiFi/cellular toggles via
-//    isDownloadAllowed(). Before the monitor reports its first path (the launch
-//    window), gating falls back to the WiFi toggle (BG1) so a "WiFi downloads off"
-//    user can't slip a download through; cellular is additionally hard-gated at the
-//    transport layer by URLRequest.allowsCellularAccess in DownloadManager.
-//    reconcileOrphanedDownloads() repairs DB-vs-filesystem mismatches at launch.
-//  - Feed refresh: refreshSubscription fetches feeds conditionally, records
-//    per-episode release observations, merges new episodes, and applies per-feed
-//    failure backoff in feedFailureBackoffUntil. Auto-downloads discovered by a
-//    refresh are deliberately scheduled after the feed merge instead of awaited
-//    by the refresh cycle, so slow/stalled audio transfers cannot block manual
-//    refresh, due-feed polling, or BGAppRefresh completion. Refresh also updates
-//    mutable feed metadata on the Subscription (author + artworkURL) so changed
-//    podcast art is picked up by the shared artwork cache after the next
-//    successful refresh instead of being frozen at subscribe time.
-//    A changed latest episode is treated as a Release Radar "found new release"
-//    signal even when the episode had already been seen in history, so manual
-//    refreshes that discover out-of-window releases teach the schedule instead
-//    of only fixing the immediate feed state.
-//    IMPORTANT: keep user-initiated download/play-now paths awaitable, but do
-//    not put `await downloadEpisode` back inside the feed-refresh success path.
-//    scheduleAutoDownloadAfterRefresh persists a durable intent
-//    (AutoDownloadIntentStore) BEFORE spawning the download Task, and
-//    drainAutoDownloadIntents retries at launch/foreground/BG-task end — so a
-//    BG-wake suspension after the feed cycle can never silently lose a
-//    discovered episode (deep-scan AH-2026-06-28-01). Keep intents settled only
-//    via resolveAutoDownloadIntentIfSettled. A permanently-broken enclosure (server
-//    5xx/404 every attempt) is NOT retried on every drain: recordDownloadFailure sets
-//    an exponential per-guid cooldown (downloadFailureBackoff) that runAutoDownloadAfterRefresh
-//    honours (download.backoffSkipped); a success clears it. The intent stays until the
-//    cooldown lapses, so recovery still happens — just not as per-drain churn.
-//    Use scheduleAutoDownloadAfterRefresh/runAutoDownloadAfterRefresh so the
-//    scheduled media transfer re-validates subscription state, browse previews,
-//    current DownloadFilterSettings eligibility, scheduled-episode staleness,
-//    and played/archived status before entering the bounded download queue.
-//    Filters look back through the merged feed and choose the newest eligible
-//    episode; skipped episodes are also excluded from Release Radar observation
-//    learning and schedule prediction. Manual download/play paths bypass filters.
-//    Rolling one-item feeds also cancel stale downloads for the replaced latest
-//    item immediately, so the new bulletin/show is not blocked by a dead transfer
-//    until startup reconciliation.
-//    refreshDueSubscriptions and refreshSubscriptionsForBackground implement
-//    Release Radar due-feed polling. They ask Models/Subscription.swift for a
-//    learned schedule profile, FeedRefreshPrediction, and FeedRefreshPriority;
-//    only due feeds are considered, then limited foreground/background slots go
-//    to the highest-scoring feeds. Background refresh has 8 total slots and
-//    reserves 6 of them for Release Radar pre-window/active/missed-release
-//    candidates so daily one-episode shows are checked when iOS grants only a
-//    short wake. Capped-out feeds are checkpointed in deferredRefreshBacklog and
-//    receive a bounded fairness boost on later cycles so long wakes are drained
-//    over multiple runs instead of hammering every overdue feed at once. Manual
-//    refresh still ignores due dates and refreshes every eligible feed.
-//    Planning uses immutable snapshots and runs at utility priority off MainActor:
-//    profile fallback calculation, prediction, scoring, deferred boosts, and sort
-//    must never stall playback/UI. MainActor only filters mutable eligibility,
-//    applies the budget, reconciles backlog state, and starts network refreshes.
-//  - Refresh diagnostics: every all-feed cycle carries a stable refreshCycleID,
-//    trigger (manualButton / foregroundTimer / BGAppRefreshTask / BGProcessingTask),
-//    and executionContext (manual / foregroundVisible / backgroundRefreshTask /
-//    backgroundAudioAlive / backgroundProcessingTask). This deliberately avoids inferring background vs
-//    foreground from sceneActive alone: a BG task can join an already-running
-//    foreground poll, and background audio can keep the process alive while the
-//    UI scene is inactive. Timed/background cycles also log a feed.refreshAll.plan
-//    summary plus per-feed score/profile/prediction metadata on
-//    feed.refreshAll.itemStart when the diagnostic log is enabled, including the
-//    learned release window and observed spread when available. Refresh logs
-//    include subscriptionID + a stable feedHash alongside the title so renamed
-//    feeds remain traceable. ResourceMonitor's main-thread watchdog also calls
-//    resourceContext() only after a suspected hang, adding playback, refresh,
-//    queue, scene, download state, and the most recent playback-tick timing to
-//    ui.mainThreadHang/recovered logs. playback.tickSlow logs only ticks above
-//    the threshold; playback.tickSummary emits a compact rolling summary. These
-//    logs are the intended tuning surface for the learned refresh system and
-//    main-thread playback pressure.
-//  - Autohop Relay protocol v2 (2026-07-12): RelayCoordinator owns registration,
-//    membership reconciliation, retry pressure, and wake dispatch. The broad
-//    SubscriptionStore publisher is filtered through a canonical feed-URL set,
-//    so episode merges never generate membership traffic. Registration/recovery
-//    sends one idempotent full set; real subscribe/unsubscribe changes send
-//    add/remove deltas against the persisted server-acknowledged set. Debounce
-//    Tasks release their stored reference BEFORE URLSession begins, preventing a
-//    later mutation from canceling an in-flight request. Feed sync and sync-nudge
-//    use persisted exponential circuit breakers. A v2 `feed-updated` push maps
-//    opaque IDs to local subscriptions and refreshes only those feeds; a legacy
-//    ID-less push is capped to eight due feeds and respects failure backoff.
-//    Unknown IDs trigger mapping reconciliation, never a full-library sweep.
-//  - Auto archive: runAutoArchiveIfNeeded gates a full pass to every 25 min
-//    (autoArchiveInterval) unless forced; runAutoArchive applies the three
-//    per-podcast rules (after-played delay, inactive timeout, episode limit).
-//    DRIVEN BY the 30-second foreground poller (startForegroundPolling,
-//    reason: "poll.tick") so it runs on its own cadence whenever the app is
-//    alive (foreground OR background-audio) — NOT only at cold launch and at a
-//    completed feed-refresh cycle's tail, which left it barely running for
-//    long-lived processes (fixed 2026-07-11). Also runs at app.startup and at
-//    the end of a completed performRefreshCycle, plus the two manual buttons.
-//    The inactive/limit passes skip a subscription's pre-existing back-catalogue
-//    (episodes published on/before Subscription.subscribedAt) so subscribing to a
-//    show never archives its whole backlog on day one.
-//    INACTIVE EPISODES (Pass 2): only episodes with a non-nil Episode.downloadedAt
-//    are eligible — episodes that have never been downloaded are fully exempt.
-//    The inactivity clock runs from downloadedAt (when the file landed on device)
-//    and resets if lastPlayedAt is more recent. publishedAt is NOT used as the
-//    clock; an old episode downloaded today gets a fresh inactivity window.
-//    EPISODE LIMIT (Pass 3): candidates are episodes in .queued or .downloaded
-//    state only — .failed and .notDownloaded states do not consume a slot.
-//    This prevents a failed download from causing a working downloaded episode
-//    to be archived behind it.
-//  - Persistence side: playback positions live in
-//    Persistence/PlaybackPositionStore.swift (AppState-split first carve, in
-//    AutohopCore + headless-tested): write-through in-memory cache (P2),
-//    subscription-scoped GUID/URL keys, resume normalization, legacy decode.
-//    AppState keeps same-named thin wrappers (savePlaybackPosition /
-//    savedPlaybackTime / clearPlaybackPosition) and the ~10 s tick throttle.
-//    HistoryStatsCoordinator owns listening tick accumulation, completion marks,
-//    derived history groups/counts, Stats credits, remote apply adapters, and
-//    local-save-before-sync lifecycle checkpoints.
-//  - OPML import/export with progress reporting.
-//  - OnboardingCoordinator owns real-subscription counting, first-run and
-//    existing-user reconciliation, coalesced single-vs-bulk first-subscription
-//    output, coach-mark limits/seen state, and onboarding toast. AppRoutingCoordinator
-//    carries typed launch/menu/notification/onboarding commands; RootView retains
-//    the permanent PlayerView NavigationPath and a temporary NotificationCenter
-//    input adapter preserves existing producers.
-//
-// STAGE 1–5 ARCHITECTURE (2026-07-18): AppCompositionRoot constructs the
-// complete protocol-backed production graph. AppState init is side-effect-light;
-// idempotent start() formerly installed the compatibility callback graph before starting
-// services, migrations, restoration, pollers, or launch tasks. Physically
-// independent observables/policies/stores now live in their domain folders:
-// PlaybackClock, PlaybackCueService, DownloadProgressModel,
-// ReleaseRadarCyclePlanner, and ListeningHistoryStore. HistoryStatsCoordinator,
-// QueueCoordinator, OnboardingCoordinator, and AppRoutingCoordinator now own
-// their domains; AppState remains the compatibility façade and retains playback,
-// downloads, feed refresh, Auto Archive, sync/Relay, import, and lifecycle work.
-//
-// KEY COLLABORATORS: PlaybackEngine (audio), DownloadManager (URLSession),
-// FeedService/RSSParser (network), SubscriptionStore (SQLite-backed model
-// store), QueueService (pure queue ordering), ListeningHistoryStore &
-// ListeningStatsStore (persistence, both in Persistence/), NotificationService,
-// SleepTimerService,
-// SleepScheduleService (recurring nightly "still listening?" timer).
-//
-// INVARIANTS / GOTCHAS:
-//  - Queue only ever contains DOWNLOADED, unplayed episodes (download-first).
-//  - QueueCoordinator coalesces queue-affecting store events; transactional
-//    playback advancement forces one synchronous recompute before reading.
-//  - Listening history requires ≥ 60 s listened before an entry is shown.
-//  - AppState.shared is created through bootstrap/sharedOrBootstrap (used by
-//    AppDelegate/background tasks and CarPlay-only cold launches). bootstrap() is
-//    single-instance: it early-returns an existing `shared` and publishes the new
-//    instance the moment it's created, so racing/re-entrant callers (CarPlay cold
-//    launch + phone WindowGroup) can never build two AppStates.
-//  - All methods assume MainActor; long work hops to detached tasks/services.
-// ============================================================================
-
 // AI CONTEXT — AppState startup state exposed by AppLifecycleCoordinator.
 // AppStartupWorkflow performs ordered runtime startup after AppState publishes
 // the singleton. Re-entrant/repeated starts are ignored. `stopped` is the
@@ -346,7 +120,11 @@ final class AppState: ObservableObject {
 
     /// PlaybackPositionStore owns the durable JSON/cache. PlaybackMediaWorkflow
     /// owns filesystem repair and application-level save/restore transactions.
-    private let playbackPositionStore = PlaybackPositionStore()
+    private let playbackPositionStore: PlaybackPositionStore
+    /// AI CONTEXT — retained here only to bind its lifetime to the application
+    /// graph. Construction belongs to AppCompositionRoot and the coordinator
+    /// observes narrow domain publishers; AppState does not project widget data.
+    private var widgetSnapshotCoordinator: WidgetSnapshotCoordinator?
     private lazy var playbackMediaWorkflow = PlaybackMediaWorkflow(
         playback: playbackCoordinator,
         subscriptionStore: subscriptionStore,
@@ -640,6 +418,12 @@ final class AppState: ObservableObject {
     private let automaticReleaseRadarBaseInterval: TimeInterval = 3 * 60
     // MARK: - Init
 
+    /// AI CONTEXT — PlaybackPositionStore is explicit here even though AppState
+    /// is @MainActor. Do not restore `= PlaybackPositionStore()` as a default
+    /// argument: Swift evaluates default expressions in the caller's
+    /// synchronous nonisolated context and rejects this main-actor initializer.
+    /// AppCompositionRoot and the compatibility initializer construct it while
+    /// already on the main actor.
     init(
         feedService: FeedServicing,
         downloadManager: DownloadManaging,
@@ -651,7 +435,8 @@ final class AppState: ObservableObject {
         historyStatsCoordinator: HistoryStatsCoordinator,
         queueCoordinator: QueueCoordinator,
         onboardingCoordinator: OnboardingCoordinator,
-        routingCoordinator: AppRoutingCoordinator
+        routingCoordinator: AppRoutingCoordinator,
+        playbackPositionStore: PlaybackPositionStore
     ) {
         self.feedService = feedService
         self.downloadManager = downloadManager
@@ -665,6 +450,7 @@ final class AppState: ObservableObject {
         self.queueCoordinator = queueCoordinator
         self.onboardingCoordinator = onboardingCoordinator
         self.routingCoordinator = routingCoordinator
+        self.playbackPositionStore = playbackPositionStore
         self.downloadCoordinator = DownloadCoordinator()
         self.feedRefreshCoordinator = FeedRefreshCoordinator()
         self.autoDownloadWorkflow = AutoDownloadWorkflow()
@@ -717,6 +503,39 @@ final class AppState: ObservableObject {
         )
     }
 
+    /// Composition-only lifetime hook. Widget projection remains independently
+    /// owned and never becomes an AppState forwarding API.
+    func installWidgetSnapshotCoordinator(
+        _ coordinator: WidgetSnapshotCoordinator
+    ) {
+        guard widgetSnapshotCoordinator == nil else { return }
+        widgetSnapshotCoordinator = coordinator
+        coordinator.start()
+    }
+
+    /// Typed external-entry checkpoint used after an App Intent outcome. The
+    /// coordinator still owns projection, dedupe, persistence, and reload.
+    func requestWidgetSnapshotPublication(reason: String) {
+        widgetSnapshotCoordinator?.schedulePublication(
+            reason: reason,
+            immediately: true
+        )
+    }
+
+    /// AI CONTEXT — BGTask completion hook for nonessential widget projection.
+    /// The finite OS task window is already closed in BackgroundWakeMonitor.
+    /// Publish deferred reasons now only when foreground or active audio keeps
+    /// the process executable; otherwise the next foreground/domain event
+    /// coalesces them. This method does not affect feed/download/archive work.
+    func backgroundTaskExecutionDidEnd() {
+        widgetSnapshotCoordinator?.backgroundTaskExecutionDidEnd(
+            allowImmediatePublication:
+                appRuntimeWorkflow.isAppForeground
+                    || playbackCoordinator.isPlaying
+                    || playbackCoordinator.engine.isPlaying
+        )
+    }
+
     /// Compatibility initializer retained for existing tests and transitional
     /// call sites. Production construction is owned by AppCompositionRoot.
     convenience init(
@@ -753,7 +572,8 @@ final class AppState: ObservableObject {
                 subscriptionStore: subscriptionStore,
                 settingsStore: settingsStore
             ),
-            routingCoordinator: AppRoutingCoordinator()
+            routingCoordinator: AppRoutingCoordinator(),
+            playbackPositionStore: PlaybackPositionStore()
         )
     }
 
@@ -825,6 +645,7 @@ final class AppState: ObservableObject {
     /// Stage 12 deterministic teardown seam. Cancels coordinator-owned pollers
     /// and maintenance work without deleting persisted state.
     func stop() {
+        widgetSnapshotCoordinator?.stop()
         feedRefreshCycleWorkflow.cancel(reason: "app.stop")
         appRuntimeWorkflow.stop()
         lifecycleCoordinator.stop()
@@ -1144,6 +965,13 @@ final class AppState: ObservableObject {
         await autoDownloadIntentWorkflow.drain(reason: reason)
     }
 
+    /// Re-evaluates absolute download deadlines at process execution boundaries.
+    /// BGTask handlers call this before feed work so a transfer that exhausted its
+    /// first-byte window while suspended does not wait for the periodic timer.
+    func reevaluateDownloadWatchdog(reason: String) {
+        downloadCoordinator.reevaluateWatchdog(reason: reason)
+    }
+
     /// Manual refresh (pull-to-refresh): every feed, ignoring due dates.
     func refreshAllSubscriptions(includeBackoffFeeds: Bool = false) async {
         await feedRefreshCycleWorkflow.refreshAll(
@@ -1157,6 +985,17 @@ final class AppState: ObservableObject {
     ) async -> Bool {
         await feedRefreshCycleWorkflow.refreshForBackground(
             taskIdentifier: taskIdentifier
+        )
+    }
+
+    @discardableResult
+    func refreshAdditionalSubscriptionsForBackground(
+        taskIdentifier: String,
+        cooperativeSecondsRemaining: TimeInterval
+    ) async -> Bool {
+        await feedRefreshCycleWorkflow.refreshAdditionalForBackground(
+            taskIdentifier: taskIdentifier,
+            cooperativeSecondsRemaining: cooperativeSecondsRemaining
         )
     }
 

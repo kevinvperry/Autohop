@@ -56,7 +56,11 @@ import Foundation
 // storms do not immediately stop playback; a real built-in-speaker fallback
 // still pauses and prevents auto-resume. `.newDeviceAvailable`, settled
 // non-built-in route changes, and same-output category/unknown route churn may
-// restart only the active AVAudioEngine buffer loop, debounced and delayed, from
+// be coalesced for 400 ms so duplicate notifications cannot start competing
+// restart/reassert work. Buffer timeout diagnostics carry buffer/route generations
+// and engine/node state, making stale-loop and stopped-renderer failures separable.
+// Route recovery restarts only the active AVAudioEngine buffer loop, debounced
+// and delayed, from
 // currentPlaybackTime(). Route-loss confirmation cancels stale restart timers;
 // if a replacement route appears inside that window, the restart is rescheduled
 // after the replacement route settles.
@@ -175,6 +179,11 @@ final class PlaybackEngine: PlaybackControlling {
     private var routeRestartScheduled = false
     private var hasPendingRouteLossPause = false
     private var routeRestartDeferredByRouteLoss: (reason: String, output: String)?
+    private var lastRouteEventFingerprint = ""
+    private var lastRouteEventOutputIdentifier = ""
+    private var lastRouteEventAt: CFAbsoluteTime = 0
+    private var routeChangeCoalesceGeneration = 0
+    private let routeChangeCoalesceDelay: TimeInterval = 0.25
     private let engineRenderStallThreshold: TimeInterval = 2.5
     private let engineReadFinishedEndTolerance: TimeInterval = 3.0
     private let routeLossPauseDelay: TimeInterval = 0.9
@@ -1069,7 +1078,12 @@ final class PlaybackEngine: PlaybackControlling {
                     if semWaitMs > 250, !pausedDuringWait, !self.hasPendingRouteLossPause {
                         self.logger.warning("engine.bufferStall", "Audio buffer loop stalled waiting for slot", metadata: [
                             "stallMs": "\(semWaitMs)",
-                            "positionSecs": String(format: "%.1f", chunkEndSeconds)
+                            "positionSecs": String(format: "%.1f", chunkEndSeconds),
+                            "bufferGeneration": "\(generation)",
+                            "currentBufferGeneration": "\(self.engineBufferGeneration)",
+                            "routeRestartGeneration": "\(self.routeRestartGeneration)",
+                            "audioEngineRunning": "\(self.audioEngine?.isRunning ?? false)",
+                            "audioPlayerNodePlaying": "\(node.isPlaying)"
                         ])
                     }
                     if semResult == .timedOut {
@@ -1077,7 +1091,14 @@ final class PlaybackEngine: PlaybackControlling {
                         if self.engineReadCancelled { break }
                         // Engine is not consuming buffers. Break out and request recovery.
                         self.logger.warning("engine.bufferStall.timeout", "Buffer slot timeout — engine appears stuck, requesting restart", metadata: [
-                            "positionSecs": String(format: "%.1f", chunkEndSeconds)
+                            "positionSecs": String(format: "%.1f", chunkEndSeconds),
+                            "bufferGeneration": "\(generation)",
+                            "currentBufferGeneration": "\(self.engineBufferGeneration)",
+                            "routeRestartGeneration": "\(self.routeRestartGeneration)",
+                            "routeRestartScheduled": "\(self.routeRestartScheduled)",
+                            "routeLossPending": "\(self.hasPendingRouteLossPause)",
+                            "audioEngineRunning": "\(self.audioEngine?.isRunning ?? false)",
+                            "audioPlayerNodePlaying": "\(node.isPlaying)"
                         ])
                         DispatchQueue.main.async { [weak self] in
                             guard let self,
@@ -1205,6 +1226,8 @@ final class PlaybackEngine: PlaybackControlling {
             "audioPlayerNodePlaying": "\(audioPlayerNode?.isPlaying ?? false)",
             "engineReadFinished": "\(engineReadFinished)",
             "engineReadPaused": "\(engineReadPaused)",
+            "bufferGeneration": "\(engineBufferGeneration)",
+            "routeRestartGeneration": "\(routeRestartGeneration)",
             "lastRenderedAgeMs": lastRenderedAgeMs.map { String(format: "%.0f", $0) } ?? "unknown",
             "playbackLikelyProducingAudio": "\(engineLikelyProducingAudio(now: now))"
         ]
@@ -1604,6 +1627,27 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     @objc private func handleRouteChange(_ notification: Notification) {
+        // AVAudioSession commonly emits old-device, new-device, category and
+        // configuration notifications as one physical transition. Processing
+        // each notification synchronously rebuilt/reasserted the graph several
+        // times and occupied the main actor for ~800 ms per event. Keep only the
+        // final settled notification in a short burst; genuine route loss still
+        // has the separate 0.9 s confirmation window below.
+        routeChangeCoalesceGeneration &+= 1
+        let generation = routeChangeCoalesceGeneration
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + routeChangeCoalesceDelay
+        ) { [weak self] in
+            guard let self,
+                  generation == self.routeChangeCoalesceGeneration else {
+                return
+            }
+            self.processRouteChange(notification)
+        }
+    }
+
+    private func processRouteChange(_ notification: Notification) {
+        let operationStartedAt = CFAbsoluteTimeGetCurrent()
         guard let info = notification.userInfo,
               let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
@@ -1619,6 +1663,34 @@ final class PlaybackEngine: PlaybackControlling {
         let previousPortType = previousOutput?.portType.rawValue ?? "none"
         let reasonLabel = routeChangeReasonLabel(reason)
         let outputChanged = routeOutputIdentifier(output) != routeOutputIdentifier(previousOutput)
+        let outputIdentifier = routeOutputIdentifier(output)
+        let routeFingerprint = "\(reason.rawValue)|\(outputIdentifier)|\(routeOutputIdentifier(previousOutput))"
+        let routeEventNow = CFAbsoluteTimeGetCurrent()
+        let isCoalescibleReason = reason == .unknown
+            || reason == .categoryChange
+            || reason == .routeConfigurationChange
+        if isCoalescibleReason,
+           !outputChanged,
+           (routeFingerprint == lastRouteEventFingerprint
+                || outputIdentifier == lastRouteEventOutputIdentifier),
+           routeEventNow - lastRouteEventAt
+                < routeRestartStabilizationDelay {
+            logger.info(
+                "audio.routeChangeCoalesced",
+                "Coalesced duplicate same-output audio route notification",
+                metadata: [
+                    "reason": reasonLabel,
+                    "newOutput": newPort,
+                    "coalesceWindowMs": "\(Int(routeRestartStabilizationDelay * 1000))",
+                    "bufferGeneration": "\(engineBufferGeneration)",
+                    "routeRestartGeneration": "\(routeRestartGeneration)"
+                ]
+            )
+            return
+        }
+        lastRouteEventFingerprint = routeFingerprint
+        lastRouteEventOutputIdentifier = outputIdentifier
+        lastRouteEventAt = routeEventNow
 
         var metadata = [
             "reason": reasonLabel,
@@ -1675,6 +1747,24 @@ final class PlaybackEngine: PlaybackControlling {
             }
         default:
             break
+        }
+        let operationMs =
+            (CFAbsoluteTimeGetCurrent() - operationStartedAt) * 1_000
+        if operationMs >= 100 {
+            logger.warning(
+                "ui.mainActorOperationSlow",
+                "Audio route handling occupied the main thread",
+                metadata: [
+                    "operation": "audio.routeChange",
+                    "durationMs": String(format: "%.1f", operationMs),
+                    "reason": reasonLabel,
+                    "outputChanged": "\(outputChanged)",
+                    "backend": engineUsesEngine
+                        ? "AVAudioEngine" : "AVPlayer",
+                    "bufferGeneration": "\(engineBufferGeneration)",
+                    "routeRestartGeneration": "\(routeRestartGeneration)"
+                ]
+            )
         }
     }
 

@@ -21,6 +21,9 @@ import SwiftUI
 //    (these are write-throttled in memory, so leaving foreground must force-save),
 //    then flushDeferredSyncPushes so slow-lane (history/stats) CloudKit changes
 //    held on the sync engine's ~60 s coalescing debounce upload before suspension.
+// WIDGET STAGE 3: onOpenURL forwards autohop:// URLs to the validated
+// WidgetDeepLinkParser through AppRoutingCoordinator. It never mutates
+// NavigationPath or playback directly at the scene boundary.
 @main
 struct AutohopApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -110,6 +113,14 @@ private struct AutohopRootBootstrapView: View {
                         appState = state
                     }
             }
+        }
+        .onOpenURL { url in
+            let state = appState ?? AppState.sharedOrBootstrap()
+            appDelegate.appState = state
+            if appState == nil {
+                appState = state
+            }
+            state.routingCoordinator.handleWidgetURL(url)
         }
     }
 

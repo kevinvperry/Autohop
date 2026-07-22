@@ -16,7 +16,11 @@ import ImageIO
 // holding full podcast covers in memory. Priority levels are visible/prefetch/
 // background: visible requests can cancel lower-priority prefetch work;
 // PodcastDetailView prefetches the next few episode row thumbnails and cancels
-// stale off-screen prefetches.
+// stale off-screen prefetches. Widget Stage 2 uses widgetJPEGData: the APP
+// resolves/downloads through this validated cache and receives a bounded JPEG;
+// the widget extension itself remains network-free. System surfaces that accept
+// a UIImage rather than a clipped SwiftUI view call `autohopSquareCropped()` so
+// 16:9 video thumbnails remain square in CarPlay and Now Playing artwork slots.
 struct CachedArtworkImage<Placeholder: View>: View {
     let url: URL?
     var contentMode: ContentMode = .fill
@@ -50,6 +54,38 @@ struct CachedArtworkImage<Placeholder: View>: View {
             )
             guard !Task.isCancelled else { return }
             image = loadedImage
+        }
+    }
+}
+
+// MARK: - System-surface square artwork
+
+extension UIImage {
+    /// Returns a centred square crop for system artwork APIs that do not provide
+    /// SwiftUI clipping. Podcast episode artwork is visually square throughout
+    /// Autohop; video feeds may supply a 16:9 poster, which is intentionally
+    /// cropped here rather than stretched. Full-screen video rendering does not
+    /// use this helper and therefore retains its native widescreen aspect ratio.
+    func autohopSquareCropped() -> UIImage {
+        let side = min(size.width, size.height)
+        guard side > 0, abs(size.width - size.height) > 0.5 else {
+            return self
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+        let squareSize = CGSize(width: side, height: side)
+        return UIGraphicsImageRenderer(
+            size: squareSize,
+            format: format
+        ).image { _ in
+            draw(
+                at: CGPoint(
+                    x: (side - size.width) / 2,
+                    y: (side - size.height) / 2
+                )
+            )
         }
     }
 }
@@ -255,6 +291,38 @@ actor ArtworkImageCache {
         let data = await request.task.value
         clearSourceDataInFlight(sourceKey: sourceKey, id: request.id)
         return data
+    }
+
+    /// Produces a bounded square-friendly JPEG for the App Group widget cache.
+    /// Source validation/deduplication stays in this actor; ImageIO decode and
+    /// JPEG encoding run off-actor so publishing up to five covers cannot block
+    /// the main actor or the artwork cache executor.
+    func widgetJPEGData(
+        for url: URL,
+        maxPixelSize: Int = 300,
+        compressionQuality: CGFloat = 0.82
+    ) async -> Data? {
+        guard maxPixelSize > 0,
+              let sourceData = await sourceData(
+                for: url,
+                priority: .background
+              )
+        else { return nil }
+
+        return await Task.detached(priority: .utility) {
+            let variant = ArtworkImageVariant(
+                targetSize: CGSize(
+                    width: maxPixelSize,
+                    height: maxPixelSize
+                ),
+                scale: 1
+            )
+            guard let image = Self.image(
+                from: sourceData,
+                variant: variant
+            ) else { return nil }
+            return image.jpegData(compressionQuality: compressionQuality)
+        }.value
     }
 
     func prefetch(urls: [URL], targetSize: CGSize, scale: CGFloat = 1) {

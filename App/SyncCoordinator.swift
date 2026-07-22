@@ -136,7 +136,7 @@ final class SyncCoordinator {
             subscriptionStore.applyRemoteSubscriptionState(state)
         } catch {
             logger.error("sync.materializeFailed", "Could not materialise synced subscription", metadata: [
-                "url": state.feedURL.absoluteString
+                "feedHost": state.feedURL.host ?? "unknown"
             ])
         }
     }

@@ -25,6 +25,11 @@ import MetricKit
 //     feeds into Release Radar's deferred backlog. Task
 //     identifiers are forwarded for diagnostics so logs can distinguish each wake
 //     source (BGAppRefreshTask / BGProcessingTask / foreground / background-audio).
+//     BackgroundWakeMonitor scopes each OS wake and emits one always-persisted
+//     `background.wakeSummary` containing bootstrap cost, feed plan/progress,
+//     download submissions/completions, Auto Archive results, deferred widget
+//     events, elapsed time, and terminal outcome. Widget projection is suppressed
+//     while this finite execution window is open.
 //  2. Background URLSession wake: bootstraps AppState on demand, then stores the
 //     system completion handler on DownloadManager so it fires after
 //     urlSessionDidFinishEvents. Logs `download.backgroundWake` (alwaysPersist) at
@@ -352,7 +357,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         AppLogger.shared.info("background.register", "Registered background app refresh task", metadata: [
             "identifier": BackgroundTaskCoordinator.feedRefreshIdentifier,
             "registered": "\(registered)"
-        ])
+        ], alwaysPersist: true)
 
         let processingRegistered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BackgroundTaskCoordinator.feedProcessingIdentifier,
@@ -366,10 +371,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         AppLogger.shared.info("background.register", "Registered background processing task", metadata: [
             "identifier": BackgroundTaskCoordinator.feedProcessingIdentifier,
             "registered": "\(processingRegistered)"
-        ])
+        ], alwaysPersist: true)
 
         BackgroundTaskCoordinator.scheduleAppRefreshIfNeeded()
         BackgroundTaskCoordinator.scheduleProcessingIfNeeded()
+        BackgroundTaskCoordinator.logProcessingState(reason: "app.launch")
     }
 
     private func registerMetricKitSubscriber() {
@@ -400,6 +406,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         let refreshStatus = MainActor.assumeIsolated {
             BackgroundTaskCoordinator.backgroundRefreshStatusLabel
         }
+        let wakeID = MainActor.assumeIsolated {
+            BackgroundWakeMonitor.shared.begin(
+                kind: .appRefresh,
+                identifier: task.identifier
+            )
+        }
         let startMetadata = [
             "identifier": task.identifier,
             "backgroundRefreshStatus": refreshStatus,
@@ -417,8 +429,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         var deadlineWork: Task<Void, Never>?
         let work = Task { @MainActor in
             let state = AppState.sharedOrBootstrap()
+            state.reevaluateDownloadWatchdog(reason: "BGAppRefreshTask.entry")
             state.logResourceSnapshot(reason: "background.appRefresh.workStart", extra: startMetadata, force: true)
-            let didRun = await state.refreshSubscriptionsForBackground(taskIdentifier: task.identifier)
+            let baseDidRun = await state.refreshSubscriptionsForBackground(
+                taskIdentifier: task.identifier
+            )
+            let elapsedBeforeFollowUp = Date().timeIntervalSince(startedAt)
+            let cooperativeRemaining = max(
+                0,
+                cooperativeDeadline - elapsedBeforeFollowUp
+            )
+            let systemRemaining = UIApplication.shared.backgroundTimeRemaining
+            let usableRemaining = systemRemaining.isFinite
+                ? min(cooperativeRemaining, systemRemaining)
+                : cooperativeRemaining
+            let additionalDidRun = baseDidRun
+                ? await state.refreshAdditionalSubscriptionsForBackground(
+                    taskIdentifier: task.identifier,
+                    cooperativeSecondsRemaining: usableRemaining
+                )
+                : false
+            let didRun = baseDidRun || additionalDidRun
             guard completionGate.claim() else { return }
             deadlineWork?.cancel()
             // Unawaited on purpose: draining awaits full media transfers, which
@@ -440,6 +471,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "elapsedMs": elapsedMs,
                 "taskKind": "BGAppRefreshTask"
             ], force: true)
+            finishBackgroundWake(
+                id: wakeID,
+                outcome: .completed,
+                didRun: didRun,
+                state: state
+            )
             // "No feeds due" is still a successful run — reporting failure here
             // teaches the system to deprioritise future refresh wakes.
             task.setTaskCompleted(success: true)
@@ -471,6 +508,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "elapsedMs": elapsedMs,
                 "taskKind": "BGAppRefreshTask"
             ], force: true)
+            finishBackgroundWake(
+                id: wakeID,
+                outcome: .cooperativeDeadline,
+                didRun: nil,
+                state: state
+            )
             task.setTaskCompleted(success: true)
         }
 
@@ -483,6 +526,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "elapsedMs": elapsedMs,
                 "taskKind": "BGAppRefreshTask"
             ])
+            work.cancel()
             Task { @MainActor in
                 let state = AppState.sharedOrBootstrap()
                 state.logResourceWarningSnapshot(
@@ -496,9 +540,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                     ]
                 )
                 state.cancelRefreshCycleIfBackgroundOnly(reason: "background.expired")
+                finishBackgroundWake(
+                    id: wakeID,
+                    outcome: .expired,
+                    didRun: nil,
+                    state: state
+                )
+                task.setTaskCompleted(success: false)
             }
-            work.cancel()
-            task.setTaskCompleted(success: false)
         }
     }
 
@@ -513,6 +562,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         // this launch marker could even be logged.
         let refreshStatus = MainActor.assumeIsolated {
             BackgroundTaskCoordinator.backgroundRefreshStatusLabel
+        }
+        let wakeID = MainActor.assumeIsolated {
+            BackgroundWakeMonitor.shared.begin(
+                kind: .processing,
+                identifier: task.identifier
+            )
         }
         let startMetadata = [
             "identifier": task.identifier,
@@ -532,6 +587,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
         let work = Task {
             let state = AppState.sharedOrBootstrap()
+            await MainActor.run {
+                state.reevaluateDownloadWatchdog(
+                    reason: "BGProcessingTask.entry"
+                )
+            }
             state.logResourceSnapshot(reason: "background.processing.workStart", extra: startMetadata, force: true)
             let didRun = await state.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
             guard completionGate.claim() else { return }
@@ -554,6 +614,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "taskKind": "BGProcessingTask"
             ], force: true)
             BackgroundTaskCoordinator.scheduleProcessingIfNeeded(after: .completed(didRun: didRun))
+            finishBackgroundWake(
+                id: wakeID,
+                outcome: .completed,
+                didRun: didRun,
+                state: state
+            )
             task.setTaskCompleted(success: true)
         }
 
@@ -565,6 +631,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                 "elapsedMs": elapsedMs,
                 "taskKind": "BGProcessingTask"
             ])
+            work.cancel()
             Task { @MainActor in
                 let state = AppState.sharedOrBootstrap()
                 state.logResourceWarningSnapshot(
@@ -578,11 +645,44 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                     ]
                 )
                 state.cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
+                BackgroundTaskCoordinator.scheduleProcessingIfNeeded(
+                    after: .expired
+                )
+                finishBackgroundWake(
+                    id: wakeID,
+                    outcome: .expired,
+                    didRun: nil,
+                    state: state
+                )
+                task.setTaskCompleted(success: false)
             }
-            work.cancel()
-            BackgroundTaskCoordinator.scheduleProcessingIfNeeded(after: .expired)
-            task.setTaskCompleted(success: false)
         }
+    }
+
+    /// AI CONTEXT — Single terminal path for per-wake diagnostics. Call only
+    /// after BackgroundTaskCompletionGate.claim() succeeds and before
+    /// setTaskCompleted. Closing the monitor first allows AppState to resume one
+    /// deferred widget projection only when foreground/audio execution remains.
+    @MainActor
+    private static func finishBackgroundWake(
+        id: UUID,
+        outcome: BackgroundWakeMonitor.Outcome,
+        didRun: Bool?,
+        state: AppState
+    ) {
+        if let summary = BackgroundWakeMonitor.shared.finish(
+            id: id,
+            outcome: outcome,
+            didRun: didRun
+        ) {
+            AppLogger.shared.info(
+                "background.wakeSummary",
+                "Background wake execution summary",
+                metadata: summary.metadata,
+                alwaysPersist: true
+            )
+        }
+        state.backgroundTaskExecutionDidEnd()
     }
 
     // MARK: - MetricKit

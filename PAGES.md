@@ -12,6 +12,8 @@ rows stay fixed below the draggable group, hidden browse previews are excluded,
 and Done commits one validated durable order.
 Version 1.3 exposes no Autohop Pro page: its retained view is development-only
 behind ReleaseFeatures.autohopPro. The tvOS target and Relay are also excluded.
+Version 1.4 includes one adaptive Now Playing & Up Next system widget. It is an
+external WidgetKit surface, not a page in the app navigation stack.
 -->
 
 **Source of truth for every screen in the app.**
@@ -58,7 +60,8 @@ Keep this file updated whenever a new page is added or an existing one is rename
 | **Menu** | `MenuSheetView` | Sheet | Slide-up menu from the Subscriptions toolbar. The single gateway to Discover (top item — dismisses the Menu and pushes the Discover page), Stats, Sleep Schedule, Listening History, Downloads, App Settings, and Support (last item). (Find Podcasts lives behind the + button only.) |
 | **Support** | `SupportView` | Page (inside Menu, last item) | In-app User Guide. A drill-down list of topic sections (icon + title + summary), including CarPlay support; tapping one pushes a native dark-themed detail page (`SupportSectionView`) rendering paragraphs, callouts, tables, status pills, and swipe-action cards. Content lives in `SupportContent.swift` and mirrors the website Support page. |
 | **Acknowledgements** | `AcknowledgementsView` | Page (inside App Settings) | Credits for open-source libraries used in the app. |
-| **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal log output for debugging playback, audio route changes, foreground/background feed scheduling, downloads, stats-sync/CloudKit conflicts, resource snapshots, playback tick timing, and main-thread watchdog gaps. Dev/support tool. |
+| **Diagnostic Log** | `DiagnosticLogView` | Page (inside App Settings) | Internal support output for playback, audio routes, foreground/background feed scheduling, downloads, Auto Archive, CloudKit, resources and UI stalls. **Enable Diagnostic Log** activates normal outcome-focused diagnostics and five-minute resource/UI monitoring. Optional **Detailed Refresh Trace** adds per-feed candidates, item boundaries, 304 and no-op decisions for short Release Radar investigations. Normal mode retains `feed.refreshAll.plan`, `feed.cycleSummary`, backlog age, scheduling and `background.wakeSummary`. Exports are redacted and include build/mode/dropped-entry metadata. |
+| **Now Playing & Up Next Widget** | `NowPlayingUpNextWidget` | Home Screen / Lock Screen / StandBy system surface | Small, medium, and large Home Screen layouts use a textured very-dark-charcoal glass surface and show downloaded current/Up Next episodes with local, centred-square artwork and interactive, always-visible purple glass-style playback controls. iOS 26+ uses native Liquid Glass for the background sheen and iOS 17–25 a matching static fallback; native glass is intentionally excluded from App Intent Toggle labels because WidgetKit can suppress those controls. 16:9 video thumbnails are cropped without distortion or overflow. Circular/rectangular accessories retain system backgrounds and show live count or privacy-sensitive current/next metadata. Links enter Player, the existing Up Next sheet, Episode Detail, or Discover through validated `autohop://` routes. It is not part of `NavigationPath`; WidgetKit owns presentation. |
 
 ---
 
@@ -100,6 +103,17 @@ Player (PlayerView — permanent NavigationStack root, never torn down)
         └── Support (SupportView)                     ← last menu item; in-app User Guide
             └── Support Section detail (SupportSectionView)
 ```
+
+### Widget external entry routes
+
+- `autohop://player` → pop to the permanent Player root.
+- `autohop://up-next` → pop to Player and present its existing Up Next sheet.
+- `autohop://episode/<subscription-id>/<encoded-stable-key>` → resolve the
+  identity against the live store, then push Subscriptions → Episode Detail.
+- `autohop://discover?source=widget` → push Subscriptions → Discover.
+
+Malformed, credentialed, unknown, stale, or oversized routes are rejected and
+logged. Widget playback is an App Intent rather than a route.
 
 ### First-run onboarding chrome (not in the tree above)
 

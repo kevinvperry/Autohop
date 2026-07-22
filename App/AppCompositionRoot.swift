@@ -5,7 +5,8 @@ import Foundation
 // PURPOSE:
 // Stage 1 composition factory for the iOS application graph. It is the only
 // production location that constructs the concrete feed, download, playback,
-// chapter, queue, settings, and subscription services required by AppState.
+// chapter, queue, settings, subscription, and read-only widget projection
+// services required by AppState.
 // `AppState.bootstrap()` retains process-wide singleton resolution and asks this
 // root for a fully constructed graph before invoking AppState's explicit start.
 //
@@ -14,12 +15,16 @@ import Foundation
 // AppState remains the singleton/high-level compatibility façade. Domain
 // callbacks, startup sequencing, runtime policy, and mutable state are owned by
 // named coordinators/workflows; AppState only connects the typed graph.
+// WidgetSnapshotCoordinator is constructed here and retained by AppState solely
+// for graph lifetime. Its narrow subscriptions and App Group writes remain its
+// own responsibility.
 //
 // TESTABILITY:
 // `Dependencies` and the explicit initializer form the Stage 0 application
 // harness seam. Tests can supply protocol-backed fakes without invoking concrete
-// production construction. `makeAppState()` never starts long-lived work;
-// AppStartupWorkflow begins it only after AppState publishes the singleton.
+// production construction. Test roots omit widget publication by default so
+// they never require production App Group entitlements. `production()` enables
+// it explicitly.
 //
 // CONCURRENCY / INVARIANTS:
 // MainActor-only because AppState and several concrete services are MainActor
@@ -39,9 +44,14 @@ struct AppCompositionRoot {
     }
 
     let dependencies: Dependencies
+    private let installWidgetCoordinator: Bool
 
-    init(dependencies: Dependencies) {
+    init(
+        dependencies: Dependencies,
+        installWidgetCoordinator: Bool = false
+    ) {
         self.dependencies = dependencies
+        self.installWidgetCoordinator = installWidgetCoordinator
     }
 
     init(
@@ -51,17 +61,21 @@ struct AppCompositionRoot {
         chapterService: ChapterServicing,
         queueService: QueueServicing,
         settingsStore: SettingsStoring,
-        subscriptionStore: SubscriptionStore
+        subscriptionStore: SubscriptionStore,
+        installWidgetCoordinator: Bool = false
     ) {
-        self.init(dependencies: Dependencies(
-            feedService: feedService,
-            downloadManager: downloadManager,
-            playbackEngine: playbackEngine,
-            chapterService: chapterService,
-            queueService: queueService,
-            settingsStore: settingsStore,
-            subscriptionStore: subscriptionStore
-        ))
+        self.init(
+            dependencies: Dependencies(
+                feedService: feedService,
+                downloadManager: downloadManager,
+                playbackEngine: playbackEngine,
+                chapterService: chapterService,
+                queueService: queueService,
+                settingsStore: settingsStore,
+                subscriptionStore: subscriptionStore
+            ),
+            installWidgetCoordinator: installWidgetCoordinator
+        )
     }
 
     static func production() -> AppCompositionRoot {
@@ -78,11 +92,13 @@ struct AppCompositionRoot {
             chapterService: chapterService,
             queueService: queueService,
             settingsStore: SettingsStore(),
-            subscriptionStore: SubscriptionStore()
+            subscriptionStore: SubscriptionStore(),
+            installWidgetCoordinator: true
         )
     }
 
     func makeAppState() -> AppState {
+        let playbackPositionStore = PlaybackPositionStore()
         let historyStatsCoordinator = HistoryStatsCoordinator(
             historyStore: ListeningHistoryStore(),
             statsStore: ListeningStatsStore(),
@@ -98,7 +114,7 @@ struct AppCompositionRoot {
             subscriptionStore: dependencies.subscriptionStore,
             settingsStore: dependencies.settingsStore
         )
-        return AppState(
+        let appState = AppState(
             feedService: dependencies.feedService,
             downloadManager: dependencies.downloadManager,
             playbackEngine: dependencies.playbackEngine,
@@ -109,7 +125,19 @@ struct AppCompositionRoot {
             historyStatsCoordinator: historyStatsCoordinator,
             queueCoordinator: queueCoordinator,
             onboardingCoordinator: onboardingCoordinator,
-            routingCoordinator: AppRoutingCoordinator()
+            routingCoordinator: AppRoutingCoordinator(),
+            playbackPositionStore: playbackPositionStore
         )
+        if installWidgetCoordinator {
+            appState.installWidgetSnapshotCoordinator(
+                WidgetSnapshotCoordinator(
+                    queueCoordinator: queueCoordinator,
+                    playbackCoordinator: appState.playbackCoordinator,
+                    subscriptionStore: dependencies.subscriptionStore,
+                    playbackPositionStore: playbackPositionStore
+                )
+            )
+        }
+        return appState
     }
 }

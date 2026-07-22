@@ -315,7 +315,7 @@ final class ReleaseRadarWorkflow {
                 ]
             )
         }
-        BackgroundTaskCoordinator.scheduleAppRefresh(
+        BackgroundTaskCoordinator.scheduleAppRefreshIfNeeded(
             earliestBeginDate: nextDue?.effectiveDueAt
         )
     }

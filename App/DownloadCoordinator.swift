@@ -45,9 +45,11 @@ final class DownloadCoordinator: ObservableObject {
     private var watchdogCallbackInstalled = false
     private var backgroundCompletionCallbackInstalled = false
     private var remoteFileDeletionCallbackInstalled = false
+    private weak var watchdogDownloadManager: (any DownloadManaging)?
     private(set) var latestNetworkPath: NWPath?
     private var cancellables = Set<AnyCancellable>()
     private var watchdogRetryTasks: [UUID: Task<Void, Never>] = [:]
+    private var watchdogRetryGeneration: [UUID: Int] = [:]
 
     // Internal access is limited to typed download/runtime workflows. These
     // values have one storage owner and are not published.
@@ -78,6 +80,7 @@ final class DownloadCoordinator: ObservableObject {
         networkMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
                 self?.latestNetworkPath = path
+                self?.reevaluateWatchdog(reason: "networkPathChanged")
             }
         }
         networkMonitor.start(
@@ -148,25 +151,31 @@ final class DownloadCoordinator: ObservableObject {
     func installWatchdogCallback(
         on downloadManager: any DownloadManaging,
         subscriptionStore: SubscriptionStore,
+        autoDownloadIntentStore: AutoDownloadIntentStore,
         logger: AppLogger,
         actions: DownloadActionsWorkflow
     ) {
         guard !watchdogCallbackInstalled else { return }
         watchdogCallbackInstalled = true
+        watchdogDownloadManager = downloadManager
 
         downloadManager.onWatchdogCancelled = {
-            [weak self, weak downloadManager, weak subscriptionStore] episodeID in
+            [weak self, weak downloadManager, weak subscriptionStore, weak autoDownloadIntentStore] episodeID in
             Task { @MainActor in
-                guard let self, let downloadManager, let subscriptionStore else {
+                guard let self, let downloadManager, let subscriptionStore,
+                      let autoDownloadIntentStore else {
                     return
                 }
                 self.watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+                let generation = (self.watchdogRetryGeneration[episodeID] ?? 0) + 1
+                self.watchdogRetryGeneration[episodeID] = generation
                 let attempt = (self.watchdogRetryCounts[episodeID] ?? 0) + 1
                 self.watchdogRetryCounts[episodeID] = attempt
 
                 guard attempt <= 3 else {
                     downloadManager.cancelDownload(episodeID: episodeID)
                     downloadManager.clearResumeData(episodeID: episodeID)
+                    autoDownloadIntentStore.remove(episodeID: episodeID)
                     if let activity = self.activityStore.activeActivities.first(
                         where: { $0.episodeID == episodeID }
                     ),
@@ -192,7 +201,9 @@ final class DownloadCoordinator: ObservableObject {
                         "Automatic retries stopped after repeated confirmed stalls",
                         metadata: [
                             "episodeID": episodeID.uuidString,
-                            "attempts": "\(attempt - 1)"
+                            "attempts": "\(attempt - 1)",
+                            "durableIntentRetired": "true",
+                            "retryGeneration": "\(generation)"
                         ]
                     )
                     return
@@ -211,7 +222,9 @@ final class DownloadCoordinator: ObservableObject {
                 self.watchdogRetryTasks[episodeID] = Task {
                     @MainActor [weak self, weak actions] in
                     try? await Task.sleep(for: .seconds(delay))
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled,
+                          self?.watchdogRetryGeneration[episodeID] == generation
+                    else { return }
                     await actions?.retryWatchdogCancelledDownload(
                         episodeID: episodeID
                     )
@@ -224,6 +237,15 @@ final class DownloadCoordinator: ObservableObject {
     func clearWatchdogRetryState(for episodeID: UUID) {
         watchdogRetryCounts.removeValue(forKey: episodeID)
         watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+        watchdogRetryGeneration[episodeID, default: 0] += 1
+    }
+
+    /// AI CONTEXT — Lifecycle/BGTask/network owners enter through this narrow
+    /// seam instead of retaining or downcasting the concrete DownloadManager.
+    /// The manager evaluates absolute first-byte deadlines immediately while
+    /// preserving suspension grace only for transfers that already received data.
+    func reevaluateWatchdog(reason: String) {
+        watchdogDownloadManager?.reevaluateWatchdog(reason: reason)
     }
 
     /// Owns the out-of-process completion callback delivered after iOS
@@ -233,7 +255,9 @@ final class DownloadCoordinator: ObservableObject {
     /// because only automatic transfers may trigger Play Instant. This method
     /// owns download-state, duration, byte-stat, activity, progress, and
     /// downloaded-projection settlement. Notification, Play Instant, and durable
-    /// intent policy enter through their typed workflow owners.
+    /// intent policy enter through their typed workflow owners. File metadata is
+    /// prepared off-main; store mutations use one observer transaction; slow
+    /// settlements report sub-stage timings instead of one opaque duration.
     func installBackgroundCompletionCallback(
         on downloadManager: any DownloadManaging,
         subscriptionStore: SubscriptionStore,
@@ -258,6 +282,7 @@ final class DownloadCoordinator: ObservableObject {
             ]
             episodeID, subscriptionID, localFileURL in
             Task { @MainActor in
+                let settlementStartedAt = CFAbsoluteTimeGetCurrent()
                 guard let self,
                       let subscriptionStore,
                       let autoDownloadIntentStore,
@@ -268,30 +293,49 @@ final class DownloadCoordinator: ObservableObject {
                     return
                 }
 
+                let lookupStartedAt = CFAbsoluteTimeGetCurrent()
                 let wasAutomatic = autoDownloadIntentStore.contains(
                     episodeID: episodeID
                 )
+                async let mediaDuration = Self.localMediaDuration(
+                    from: localFileURL
+                )
+                async let downloadedByteCount = Self.localFileByteCount(
+                    at: localFileURL
+                )
+                // Resolve file metadata before opening the store notification
+                // transaction. Holding the transaction across suspension could
+                // accidentally defer unrelated foreground store publications.
+                let resolvedDuration = await mediaDuration
+                let downloadedBytes = await downloadedByteCount
+                let lookupMs =
+                    (CFAbsoluteTimeGetCurrent() - lookupStartedAt) * 1_000
+
+                let storeStartedAt = CFAbsoluteTimeGetCurrent()
+                subscriptionStore.beginChangeNotificationCoalescing()
                 subscriptionStore.markEpisodeDownloaded(
                     subscriptionID: subscriptionID,
                     episodeID: episodeID,
                     localFileURL: localFileURL
                 )
-                if let duration = await Self.localMediaDuration(from: localFileURL) {
+                if let duration = resolvedDuration {
                     subscriptionStore.updateEpisodeDuration(
                         subscriptionID: subscriptionID,
                         episodeID: episodeID,
                         durationSeconds: duration
                     )
                 }
+                subscriptionStore.endChangeNotificationCoalescing()
+                let storeMs =
+                    (CFAbsoluteTimeGetCurrent() - storeStartedAt) * 1_000
                 self.progressModel.progress.removeValue(forKey: episodeID)
 
-                let downloadedBytes = (
-                    (try? FileManager.default.attributesOfItem(
-                        atPath: localFileURL.path
-                    ))?[.size] as? NSNumber
-                )?.int64Value ?? 0
+                let statsStartedAt = CFAbsoluteTimeGetCurrent()
                 historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
+                let statsMs =
+                    (CFAbsoluteTimeGetCurrent() - statsStartedAt) * 1_000
 
+                let effectsStartedAt = CFAbsoluteTimeGetCurrent()
                 if let subscription = subscriptionStore.subscription(
                     id: subscriptionID
                 ),
@@ -299,11 +343,12 @@ final class DownloadCoordinator: ObservableObject {
                     subscriptionID: subscriptionID,
                     episodeID: episodeID
                    ) {
-                    self.activityStore.complete(
-                        episode: episode,
-                        podcastTitle: subscription.title,
-                        localFileName: localFileURL.lastPathComponent
-                    )
+                self.activityStore.complete(
+                    episode: episode,
+                    podcastTitle: subscription.title,
+                    localFileName: localFileURL.lastPathComponent
+                )
+                BackgroundWakeMonitor.shared.recordDownloadCompleted()
                     notificationWorkflow.notifyIfAllowed(
                         episode: episode,
                         subscription: subscription
@@ -323,6 +368,26 @@ final class DownloadCoordinator: ObservableObject {
                 self.rebuildDownloadedActivities(
                     from: subscriptionStore.subscriptions
                 )
+                let effectsMs =
+                    (CFAbsoluteTimeGetCurrent() - effectsStartedAt) * 1_000
+                let totalMs =
+                    (CFAbsoluteTimeGetCurrent() - settlementStartedAt) * 1_000
+                if totalMs >= 100 {
+                    AppLogger.shared.warning(
+                        "ui.mainActorOperationSlow",
+                        "Download completion settlement occupied the main actor",
+                        metadata: [
+                            "operation": "download.settlement",
+                            "durationMs": String(format: "%.1f", totalMs),
+                            "lookupMs": String(format: "%.1f", lookupMs),
+                            "storeAndMediaMs": String(format: "%.1f", storeMs),
+                            "statsMs": String(format: "%.1f", statsMs),
+                            "effectsMs": String(format: "%.1f", effectsMs),
+                            "episodeID": episodeID.uuidString,
+                            "subscriptionCount": "\(subscriptionStore.subscriptions.count)"
+                        ]
+                    )
+                }
             }
         }
     }
@@ -335,6 +400,16 @@ final class DownloadCoordinator: ObservableObject {
             return nil
         }
         return duration
+    }
+
+    private static func localFileByteCount(at url: URL) async -> Int64 {
+        await Task.detached(priority: .utility) {
+            (
+                (try? FileManager.default.attributesOfItem(
+                    atPath: url.path
+                ))?[.size] as? NSNumber
+            )?.int64Value ?? 0
+        }.value
     }
 
     func isAllowed(settings: AppSettings) -> Bool {

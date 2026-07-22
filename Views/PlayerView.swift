@@ -215,6 +215,9 @@ struct PlayerView: View {
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             audioRouteName = Self.currentAudioRouteName()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopOpenUpNext)) { _ in
+            showQueue = true
+        }
         .onChange(of: scenePhase) { _, phase in
             // When the scene becomes inactive (home button, lock screen, app switch)
             // during inline video playback, kick off PiP via VideoPictureInPictureHost

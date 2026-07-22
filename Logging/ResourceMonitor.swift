@@ -4,11 +4,11 @@ import Darwin.Mach
 
 // AI CONTEXT — Logging/ResourceMonitor.swift
 // Captures device/process resource snapshots (Mach task memory, battery,
-// thermal state, low-power mode) for diagnostic log context. AppState attaches
-// a snapshot's metadata to significant log events and runs a periodic sampling
+// thermal state, low-power mode) for diagnostic log context. AppRuntimeWorkflow
+// attaches coordinator-owned context to significant events and controls periodic sampling
 // timer while diagnostics are enabled. Routine logSnapshot calls are throttled
 // (8 s foreground, 45 s while the scene is inactive) so a background-audio night
-// fits the capped diagnostic file; the forced 60 s periodic heartbeat and warning
+// fits the capped diagnostic file; the forced five-minute periodic heartbeat and warning
 // snapshots (thermal/power/memory/hang) bypass the throttle.
 // BATTERY/THERMAL DIAGNOSTICS: each snapshot also carries `cpuPercent` (app CPU as
 // a % of one core, summed over live non-idle threads via task_threads/thread_info —
@@ -17,7 +17,7 @@ import Darwin.Mach
 // `batteryDrainPctPerHour` (discharge rate tracked between real 1% level changes,
 // unplugged only). Thermal escalations and Low Power Mode flips are ALSO logged as
 // discrete events (resources.thermalChange / resources.powerModeChange) so they're
-// timestamped, not just caught at the next 60 s sample. Pair with AppState.resource
+// timestamped, not just caught at the next sample. Pair with AppRuntimeWorkflow
 // context's `playingVideo`, `activeDownloads`, `refreshActive`, and the playback-tick
 // cost fields to attribute the load. The main-thread watchdog reuses the same
 // lightweight context provider only when a hang/recovery is detected, so hang
@@ -34,7 +34,12 @@ import Darwin.Mach
 // (task_vm_info.phys_footprint) and intentionally replaced the old virtual
 // address-space `memoryMB` value, which could report hundreds of GB and was not
 // useful. Do not reintroduce `memoryMB` unless it is a clearly labelled virtual
-// size. Debug/observability only — no feature behaviour depends on these values.
+// size. DIAGNOSTIC SESSION POLICY (2026-07-21): full CPU/thread sampling and the
+// 100 ms main-thread watchdog run only while user-enabled diagnostics are active.
+// A five-minute safety heartbeat remains alive with logging off, but reads only
+// physical footprint so proactive artwork-cache eviction still operates; it does
+// not enumerate threads, build runtime context, or write a routine log line.
+// Debug/observability only — no feature behaviour depends on logged values.
 struct ResourceSnapshot {
     /// iOS jetsam-relevant physical footprint from task_vm_info.phys_footprint.
     /// This replaced the old virtual address-space metric, which reported
@@ -97,6 +102,7 @@ private final class MainThreadWatchdog: @unchecked Sendable {
     private var watchdogHanging: Bool = false      // true while a hang is in progress
     private var watchdogAwaitingPong: Bool = false // true while a main-queue ping is outstanding
     private var watchdogLastInactiveGapLogTime: Double = 0
+    private var isActive = false
     private let watchdogPollInterval: TimeInterval = 0.1
     private let watchdogHangThreshold: TimeInterval = 0.25
     private let watchdogInactiveGapLogInterval: TimeInterval = 5
@@ -112,17 +118,28 @@ private final class MainThreadWatchdog: @unchecked Sendable {
         self.contextProvider = contextProvider
         let now = CFAbsoluteTimeGetCurrent()
         watchdogQueue.async { [weak self] in
-            self?.watchdogPingTime = now
-            self?.watchdogPongTime = now
-            self?.watchdogAwaitingPong = false
-            self?.watchdogLastInactiveGapLogTime = 0
+            guard let self, !self.isActive else { return }
+            self.isActive = true
+            self.watchdogPingTime = now
+            self.watchdogPongTime = now
+            self.watchdogAwaitingPong = false
+            self.watchdogLastInactiveGapLogTime = 0
+            self.scheduleWatchdogTick()
         }
-        scheduleWatchdogTick()
+    }
+
+    func stop() {
+        watchdogQueue.async { [weak self] in
+            self?.isActive = false
+            self?.watchdogAwaitingPong = false
+            self?.watchdogHanging = false
+        }
     }
 
     private func scheduleWatchdogTick() {
         watchdogQueue.asyncAfter(deadline: .now() + watchdogPollInterval) { [weak self] in
-            self?.watchdogTick()
+            guard let self, self.isActive else { return }
+            self.watchdogTick()
         }
     }
 
@@ -156,6 +173,10 @@ private final class MainThreadWatchdog: @unchecked Sendable {
     }
 
     private func watchdogPong(pingTime: Double, elapsed: TimeInterval, context: [String: String]) {
+        guard isActive else {
+            watchdogAwaitingPong = false
+            return
+        }
         let pongTime = CFAbsoluteTimeGetCurrent()
         watchdogAwaitingPong = false
 
@@ -205,12 +226,13 @@ final class ResourceMonitor {
     private let logger = AppLogger.shared
     private let watchdog = MainThreadWatchdog(logger: AppLogger.shared)
     private var samplingTask: Task<Void, Never>?
+    private var diagnosticSessionEnabled = false
     private var contextProvider: (@MainActor () -> [String: String])?
     private var lastSnapshotTime: Date?
     private let minimumManualSnapshotInterval: TimeInterval = 8
     /// While the scene is inactive (background audio overnight is the case that matters),
     /// routine non-forced snapshots are throttled harder so the ~5 MB diagnostic log can
-    /// span a whole night of playback instead of rotating every ~30 min. The forced 60 s
+    /// span a whole night of playback instead of rotating every ~30 min. The forced five-minute
     /// periodic heartbeat and all warning snapshots (thermal/power/memory/hang) bypass this,
     /// so escalations are still timestamped promptly.
     private let minimumBackgroundSnapshotInterval: TimeInterval = 45
@@ -264,17 +286,48 @@ final class ResourceMonitor {
     func startPeriodicSampling(context: @escaping @MainActor () -> [String: String]) {
         guard samplingTask == nil else { return }
         contextProvider = context
-        logger.info("resources.monitorStart", "Resource monitor started")
         samplingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                self?.logSnapshot(reason: "periodic", context: context(), force: true)
-                try? await Task.sleep(for: .seconds(60))
+                guard let self else { return }
+                if self.diagnosticSessionEnabled {
+                    self.logSnapshot(reason: "periodic", context: context(), force: true)
+                } else {
+                    let memory = self.taskMemoryMB()
+                    self.requestHighMemoryTrimIfNeeded(
+                        footprintMB: memory.footprintMB,
+                        residentMemoryMB: memory.residentMB,
+                        reason: "safetyHeartbeat"
+                    )
+                }
+                try? await Task.sleep(for: .seconds(5 * 60))
             }
         }
-        watchdog.start(contextProvider: context)
+        if diagnosticSessionEnabled {
+            watchdog.start(contextProvider: context)
+            logSnapshot(
+                reason: "diagnosticSession.started",
+                context: context(),
+                force: true
+            )
+        } else {
+            setDiagnosticSessionEnabled(logger.isEnabled)
+        }
+    }
+
+    func setDiagnosticSessionEnabled(_ enabled: Bool) {
+        guard diagnosticSessionEnabled != enabled else { return }
+        diagnosticSessionEnabled = enabled
+        if enabled, let contextProvider {
+            logger.info("resources.monitorStart", "Diagnostic resource monitoring started")
+            watchdog.start(contextProvider: contextProvider)
+            logSnapshot(reason: "diagnosticSession.started", context: contextProvider(), force: true)
+        } else {
+            watchdog.stop()
+        }
     }
 
     func logSnapshot(reason: String, context: [String: String] = [:], force: Bool = false) {
+        guard diagnosticSessionEnabled, logger.isEnabled else { return }
         if !force, let lastSnapshotTime {
             // Background (scene-inactive) sessions log far more sparsely so the capped
             // file can cover a whole night; foreground keeps the tighter 8 s cadence.
@@ -296,23 +349,36 @@ final class ResourceMonitor {
 
     func logWarningSnapshot(event: String, message: String, reason: String, context: [String: String] = [:]) {
         lastSnapshotTime = Date()
-        var metadata = snapshot().metadata
+        let resourceSnapshot = snapshot()
+        var metadata = resourceSnapshot.metadata
         metadata["reason"] = reason
         context.forEach { metadata[$0.key] = $0.value }
         logger.warning(event, message, metadata: metadata)
-        requestHighMemoryTrimIfNeeded(snapshot: snapshot(), reason: reason)
+        requestHighMemoryTrimIfNeeded(snapshot: resourceSnapshot, reason: reason)
     }
 
     /// Proactive decoded-image eviction keeps a transient artwork/list load from
     /// becoming a sustained 600–700 MB process. Cooldown prevents trim/log churn.
     private func requestHighMemoryTrimIfNeeded(snapshot: ResourceSnapshot, reason: String) {
-        guard snapshot.footprintMB >= highMemoryTrimThresholdMB else { return }
+        requestHighMemoryTrimIfNeeded(
+            footprintMB: snapshot.footprintMB,
+            residentMemoryMB: snapshot.residentMemoryMB,
+            reason: reason
+        )
+    }
+
+    private func requestHighMemoryTrimIfNeeded(
+        footprintMB: Int,
+        residentMemoryMB: Int,
+        reason: String
+    ) {
+        guard footprintMB >= highMemoryTrimThresholdMB else { return }
         let now = Date()
         guard lastHighMemoryTrimAt.map({ now.timeIntervalSince($0) >= highMemoryTrimCooldown }) ?? true else { return }
         lastHighMemoryTrimAt = now
         logger.warning("resources.highMemoryTrim", "High process footprint triggered cache eviction", metadata: [
-            "footprintMB": "\(snapshot.footprintMB)",
-            "residentMemoryMB": "\(snapshot.residentMemoryMB)",
+            "footprintMB": "\(footprintMB)",
+            "residentMemoryMB": "\(residentMemoryMB)",
             "reason": reason
         ])
         Task { await ArtworkImageCache.shared.trimMemory(reason: "highFootprint") }

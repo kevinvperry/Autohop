@@ -39,6 +39,9 @@ import UniformTypeIdentifiers
 // off-main and returned as one Int64 to keep Swift 6 concurrency checks clean),
 // About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
+// Diagnostics uses a master normal-tier switch plus a subordinate Detailed
+// Refresh Trace toggle; normal mode retains foreground/background cycle and wake
+// summaries, while detailed mode adds high-volume per-feed Release Radar traces.
 // All section footer copy here must stay in sync with FEATURES.md §15 and the
 // website Support page. Version 1.3 wording describes best-effort iOS background
 // opportunities accurately and never implies Relay or Pro availability.
@@ -472,6 +475,9 @@ struct SettingsView: View {
                 rowLabel("Enable Diagnostic Log", systemImage: "waveform.path.ecg")
             }
             if settingsViewModel.appSettings.diagnosticLoggingEnabled {
+                Toggle(isOn: verboseDiagnosticLoggingBinding) {
+                    rowLabel("Detailed Refresh Trace", systemImage: "list.bullet.rectangle")
+                }
                 NavigationLink {
                     DiagnosticLogView()
                 } label: {
@@ -481,7 +487,7 @@ struct SettingsView: View {
         } header: {
             Text("Diagnostics")
         } footer: {
-            Text("The diagnostic log records app events to help diagnose playback issues. Disable when not needed to preserve battery and storage.")
+            Text("Normal diagnostics retain refresh-cycle summaries, background wakes, backlog, downloads, failures and playback recovery with low routine overhead. Detailed Refresh Trace adds per-feed decisions for short Release Radar investigations and creates a larger log. Disable diagnostics when testing is complete.")
         }
         .listRowBackground(cardBackground)
     }
@@ -701,6 +707,17 @@ struct SettingsView: View {
         Binding(
             get: { settingsViewModel.appSettings.diagnosticLoggingEnabled },
             set: { settingsViewModel.appSettings.diagnosticLoggingEnabled = $0 }
+        )
+    }
+
+    private var verboseDiagnosticLoggingBinding: Binding<Bool> {
+        Binding(
+            get: {
+                settingsViewModel.appSettings.verboseDiagnosticLoggingEnabled
+            },
+            set: {
+                settingsViewModel.appSettings.verboseDiagnosticLoggingEnabled = $0
+            }
         )
     }
 

@@ -15,7 +15,7 @@ import Foundation
 // always recorded (used by CloudSyncEngine so a sync failure that happens
 // before a user enables diagnostics still leaves a trace). Read by
 // DiagnosticLogView. Event keys are dot-namespaced ("background.schedule",
-// "download.stalled", "sync.pushFailed", ...) — grep-friendly.
+// "feed.cycleSummary", "download.watchdog", "sync.pushFailed", ...) — grep-friendly.
 // WRITE MECHANISM (P4): a single append FileHandle is held open for the serial
 // queue's lifetime (lazy appendHandle()) and reused per line instead of paying
 // open+seek+close per entry. It is closed via closeHandle() before rotateIfNeeded
@@ -23,19 +23,45 @@ import Foundation
 // fresh log; all handle access stays on `queue`, so no lock is required. If
 // opening succeeds but seek-to-end fails, appendHandle() closes the handle and
 // returns nil rather than risking a write at the wrong offset.
-// PERFORMANCE (2026-07-12): callers now enqueue raw fields immediately; timestamp
-// formatting, metadata sorting, regex redaction, console mirroring, and encoding all
-// run on the logger queue. Rotation uses an incrementally maintained byte count
+// PERFORMANCE (2026-07-12/21): the enabled/verbosity gate runs before lazy
+// metadata construction. Accepted metadata is captured on its owning caller,
+// while timestamp formatting, sorting, redaction, optional console mirroring, and
+// encoding run on the logger queue. Rotation uses an incrementally maintained byte count
 // initialized when the handle opens, avoiding attributesOfItem on every line. The
 // DiagnosticLogView's lastUpdated publication is trailing-edge coalesced to 1 Hz,
 // preventing log bursts from dispatching hundreds of main-thread invalidations.
+// LOG LEVELS / COST CONTROL (2026-07-21): `info` is the normal diagnostic tier;
+// `verbose` is reserved for per-item traces such as individual 304 feed results.
+// Metadata is an autoclosure and is evaluated only after the thread-safe enabled
+// gate accepts the event, so disabled diagnostics do not build large dictionaries.
+// A bounded pending queue drops routine bursts before they can retain unbounded
+// metadata; the next accepted line reports the dropped count. Errors and forced
+// lifecycle evidence bypass that routine limit. Scalar metadata avoids regex work,
+// while all free-form/URL values still use the complete security redactor.
 // PUBLIC logging surface since tvOS Phase 1: the TV target imports AutohopCore
 // as a library and must reach the shared diagnostic log. Internals stay internal.
 public final class AppLogger: ObservableObject {
     public static let shared = AppLogger()
 
     @Published private(set) var lastUpdated = Date()
-    var isEnabled: Bool = false
+    private let stateLock = NSLock()
+    private var enabledState = false
+    private var verboseState = false
+    private var consoleMirroringState = false
+    private var pendingRoutineEntries = 0
+    private var droppedRoutineEntries = 0
+    private var totalDroppedRoutineEntries = 0
+    private let maximumPendingRoutineEntries = 500
+
+    var isEnabled: Bool {
+        get { stateLock.withLock { enabledState } }
+        set { setEnabled(newValue) }
+    }
+
+    var isVerboseEnabled: Bool {
+        get { stateLock.withLock { verboseState } }
+        set { setVerboseEnabled(newValue) }
+    }
 
     /// Library-consumer switch (2026-07-11, TV diagnostics): `isEnabled` is
     /// internal (iOS sets it directly from the hidden Diagnostics toggle), but
@@ -44,7 +70,17 @@ public final class AppLogger: ObservableObject {
     /// silently dropped. The TV enables logging unconditionally at TVAppModel
     /// init (the file is capped + rotated, and TV has no user-facing toggle).
     public func setEnabled(_ enabled: Bool) {
-        isEnabled = enabled
+        stateLock.withLock { enabledState = enabled }
+    }
+
+    public func setVerboseEnabled(_ enabled: Bool) {
+        stateLock.withLock { verboseState = enabled }
+    }
+
+    /// Debug-console output is deliberately independent from file diagnostics;
+    /// leaving it off avoids Xcode console I/O distorting timing investigations.
+    public func setConsoleMirroringEnabled(_ enabled: Bool) {
+        stateLock.withLock { consoleMirroringState = enabled }
     }
 
     let logFileURL: URL
@@ -66,6 +102,20 @@ public final class AppLogger: ObservableObject {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+    /// Precompiled once for the process. Values proven to be scalar skip these
+    /// rules, but free-form strings still receive the complete conservative set.
+    private static let redactionRules: [(NSRegularExpression, String)] = [
+        (#"(?i)(https?://)[^/@\s]+@"#, "$1[redacted]@"),
+        (#"(?i)(https?://[^\s?#]+)\?[^\s#]*"#, "$1?[redacted]"),
+        (#"(?i)(https?://[^\s#]+)#[^\s]+"#, "$1#[redacted]"),
+        (#"(?i)((?:authorization|auth|access_token|refresh_token|token|api_key|apikey|x-api-key|key|secret|password|passwd|signature|sig|expires|policy|x-amz-signature|cookie|set-cookie|jwt)=)[^\s&]+"#, "$1[redacted]"),
+        (#"(?i)\bbearer\s+[A-Za-z0-9._~+/\-]+=*"#, "Bearer [redacted]")
+    ].compactMap { pattern, replacement in
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        return (expression, replacement)
+    }
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -86,20 +136,24 @@ public final class AppLogger: ObservableObject {
     ///   can be enabled and are needed after the fact — e.g. `app.launch`, which fires
     ///   in `didFinishLaunching` before AppState turns logging on, so without this it
     ///   is silently dropped on every launch.
-    public func info(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
+    public func info(_ event: String, _ message: String, metadata: @autoclosure () -> [String: String] = [:], alwaysPersist: Bool = false) {
         write(level: "INFO", event: event, message: message, metadata: metadata, force: alwaysPersist)
     }
 
-    public func warning(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
-        write(level: "WARN", event: event, message: message, metadata: metadata, force: alwaysPersist)
+    public func verbose(_ event: String, _ message: String, metadata: @autoclosure () -> [String: String] = [:]) {
+        write(level: "TRACE", event: event, message: message, metadata: metadata, requiresVerbose: true)
+    }
+
+    public func warning(_ event: String, _ message: String, metadata: @autoclosure () -> [String: String] = [:], alwaysPersist: Bool = false) {
+        write(level: "WARN", event: event, message: message, metadata: metadata, force: alwaysPersist, important: true)
     }
 
     /// - Parameter alwaysPersist: when true, the entry is written even if the
     ///   Diagnostics toggle is off. Reserve for errors a user would need a trace
     ///   of after the fact (e.g. iCloud sync failures). The file stays capped and
     ///   rotated, so these can't grow unbounded.
-    public func error(_ event: String, _ message: String, metadata: [String: String] = [:], alwaysPersist: Bool = false) {
-        write(level: "ERROR", event: event, message: message, metadata: metadata, force: alwaysPersist)
+    public func error(_ event: String, _ message: String, metadata: @autoclosure () -> [String: String] = [:], alwaysPersist: Bool = false) {
+        write(level: "ERROR", event: event, message: message, metadata: metadata, force: alwaysPersist, important: true)
     }
 
     /// The single rotated (older) log segment produced by `rotateIfNeeded`. Defined
@@ -110,7 +164,10 @@ public final class AppLogger: ObservableObject {
 
     /// Current log segment only — cheap, used by the live in-app viewer.
     func contents() -> String {
-        (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? ""
+        queue.sync {
+            try? fileHandle?.synchronize()
+            return (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? ""
+        }
     }
 
     /// The rotated (older) segment followed by the current one, oldest first, so a
@@ -118,16 +175,33 @@ public final class AppLogger: ObservableObject {
     /// a mid-session rotation. The live viewer deliberately stays on `contents()` to
     /// avoid reading up to two full segments on every update.
     func combinedContents() -> String {
-        let previous = (try? String(contentsOf: archivedLogFileURL, encoding: .utf8)) ?? ""
-        let current = contents()
-        if previous.isEmpty { return current }
-        if current.isEmpty { return previous }
-        let joiner = previous.hasSuffix("\n") ? "" : "\n"
-        return previous + joiner + current
+        queue.sync {
+            try? fileHandle?.synchronize()
+            let previous = (try? String(contentsOf: archivedLogFileURL, encoding: .utf8)) ?? ""
+            let current = (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? ""
+            if previous.isEmpty { return current }
+            if current.isEmpty { return previous }
+            let joiner = previous.hasSuffix("\n") ? "" : "\n"
+            return previous + joiner + current
+        }
     }
 
     func redactedContents() -> String {
-        Self.redactSensitiveText(combinedContents())
+        let state = stateLock.withLock {
+            (
+                enabled: enabledState,
+                verbose: verboseState,
+                dropped: totalDroppedRoutineEntries
+            )
+        }
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "unknown"
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "unknown"
+        let header = "# Autohop Diagnostic Export version=\(version) build=\(build) normalEnabled=\(state.enabled) detailedRefreshTrace=\(state.verbose) routineEntriesDropped=\(state.dropped) exportedAt=\(dateFormatter.string(from: Date()))\n"
+        return header + Self.redactSensitiveText(combinedContents())
     }
 
     func redactedExportURL() -> URL {
@@ -148,6 +222,10 @@ public final class AppLogger: ObservableObject {
     }
 
     func clear() {
+        stateLock.withLock {
+            droppedRoutineEntries = 0
+            totalDroppedRoutineEntries = 0
+        }
         queue.async { [weak self] in
             guard let self else { return }
             self.closeHandle()
@@ -163,22 +241,79 @@ public final class AppLogger: ObservableObject {
         }
     }
 
-    private func write(level: String, event: String, message: String, metadata: [String: String], force: Bool = false) {
-        guard isEnabled || force else { return }
+    private func write(
+        level: String,
+        event: String,
+        message: String,
+        metadata: () -> [String: String],
+        force: Bool = false,
+        requiresVerbose: Bool = false,
+        important: Bool = false
+    ) {
+        let admission: (accepted: Bool, dropped: Int) = stateLock.withLock {
+            guard enabledState || force else { return (false, 0) }
+            guard !requiresVerbose || verboseState else { return (false, 0) }
+            if !important && !force && pendingRoutineEntries >= maximumPendingRoutineEntries {
+                droppedRoutineEntries += 1
+                totalDroppedRoutineEntries += 1
+                return (false, 0)
+            }
+            if !important && !force { pendingRoutineEntries += 1 }
+            let dropped = droppedRoutineEntries
+            droppedRoutineEntries = 0
+            return (true, dropped)
+        }
+        guard admission.accepted else { return }
+        let capturedMetadata = metadata()
         queue.async { [weak self] in
             guard let self else { return }
+            defer {
+                if !important && !force {
+                    self.stateLock.withLock {
+                        self.pendingRoutineEntries = max(0, self.pendingRoutineEntries - 1)
+                    }
+                }
+            }
+            if admission.dropped > 0 {
+                self.appendFormattedLine(
+                    level: "WARN",
+                    event: "log.entriesDropped",
+                    message: "Routine diagnostic entries were dropped under logging backpressure",
+                    metadata: ["count": "\(admission.dropped)"]
+                )
+            }
+            self.appendFormattedLine(
+                level: level,
+                event: event,
+                message: message,
+                metadata: capturedMetadata
+            )
+            self.scheduleLastUpdatedPublication()
+        }
+    }
+
+    private func appendFormattedLine(
+        level: String,
+        event: String,
+        message: String,
+        metadata: [String: String]
+    ) {
             let timestamp = self.dateFormatter.string(from: Date())
             let metadataText = metadata.isEmpty
                 ? ""
                 : " " + metadata.sorted { $0.key < $1.key }.map { key, value in
-                    let oneLineValue = value.replacingOccurrences(of: "\n", with: " ")
-                    return "\(key)=\(Self.redactSensitiveText(oneLineValue))"
+                    return "\(Self.normalized(key, limit: 80))=\(Self.redactedMetadataValue(value, key: key))"
                 }.joined(separator: " ")
-            let cleanMessage = Self.redactSensitiveText(message.replacingOccurrences(of: "\n", with: " "))
-            let line = "\(timestamp) [\(level)] \(event): \(cleanMessage)\(metadataText)\n"
+            let cleanMessage = Self.redactSensitiveText(Self.normalized(message, limit: 2_048))
+            var line = "\(timestamp) [\(level)] \(Self.normalized(event, limit: 120)): \(cleanMessage)\(metadataText)\n"
+            if line.utf8.count > 16_384 {
+                line = String(line.prefix(16_360)) + " [truncated]\n"
+            }
 
             #if DEBUG
-            print(line, terminator: "")
+            if stateLock.withLock({ consoleMirroringState }) {
+                print(line, terminator: "")
+            }
             #endif
 
             guard let data = line.data(using: .utf8) else { return }
@@ -191,8 +326,6 @@ public final class AppLogger: ObservableObject {
                     // Drop this diagnostic rather than recursively logging a logger failure.
                 }
             }
-            self.scheduleLastUpdatedPublication()
-        }
     }
 
     /// Coalesces a burst into one trailing main-thread notification so the live log
@@ -253,31 +386,40 @@ public final class AppLogger: ObservableObject {
 
     static func redactSensitiveText(_ text: String) -> String {
         var redacted = text
-        // Strip URL query strings (signed CDN tokens commonly live here).
-        redacted = redacted.replacingOccurrences(
-            of: #"(?i)(https?://[^\s?#]+)\?[^\s#]*"#,
-            with: "$1?[redacted]",
-            options: .regularExpression
-        )
-        // Strip URL fragments too — credentials occasionally arrive after `#`.
-        redacted = redacted.replacingOccurrences(
-            of: #"(?i)(https?://[^\s#]+)#[^\s]+"#,
-            with: "$1#[redacted]",
-            options: .regularExpression
-        )
-        // Redact `key=value` credentials anywhere (query params, metadata values). The list covers
-        // the common credential keys including auth/cookie/jwt locations Codex flagged.
-        redacted = redacted.replacingOccurrences(
-            of: #"(?i)((?:authorization|auth|access_token|refresh_token|token|api_key|apikey|x-api-key|key|secret|password|passwd|signature|sig|expires|policy|x-amz-signature|cookie|set-cookie|jwt)=)[^\s&]+"#,
-            with: "$1[redacted]",
-            options: .regularExpression
-        )
-        // Redact bearer tokens in Authorization-style strings (`Bearer <token>`).
-        redacted = redacted.replacingOccurrences(
-            of: #"(?i)\bbearer\s+[A-Za-z0-9._~+/\-]+=*"#,
-            with: "Bearer [redacted]",
-            options: .regularExpression
-        )
+        for (expression, replacement) in redactionRules {
+            let range = NSRange(redacted.startIndex..., in: redacted)
+            redacted = expression.stringByReplacingMatches(
+                in: redacted,
+                range: range,
+                withTemplate: replacement
+            )
+        }
         return redacted
+    }
+
+    private static func redactedMetadataValue(_ value: String, key: String) -> String {
+        let normalizedValue = normalized(value, limit: 4_096)
+        if isSafeScalar(normalizedValue) { return normalizedValue }
+        return redactSensitiveText(normalizedValue)
+    }
+
+    private static func isSafeScalar(_ value: String) -> Bool {
+        if ["true", "false", "none", "unknown", "available", "unavailable"].contains(value.lowercased()) {
+            return true
+        }
+        guard !value.isEmpty else { return true }
+        return value.unicodeScalars.allSatisfy {
+            CharacterSet(charactersIn: "0123456789.+-").contains($0)
+        }
+    }
+
+    private static func normalized(_ text: String, limit: Int) -> String {
+        let flattened = text.unicodeScalars.map { scalar -> Character in
+            if scalar == "\n" || scalar == "\r" || scalar == "\t" || scalar.value < 0x20 {
+                return " "
+            }
+            return Character(scalar)
+        }
+        return String(flattened.prefix(limit))
     }
 }

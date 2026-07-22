@@ -22,6 +22,10 @@ SwiftUI observes narrow owners directly. AppState is now only the process
 singleton, composition root, and stable high-level façade retained for SwiftUI,
 CarPlay, AppDelegate, BGTask, APNs, and file-open entry points. The remaining
 release-candidate device matrix is validation, not an ownership extraction.
+Version 1.4 adds one adaptive Home Screen / Lock Screen widget backed by a
+device-local App Group display snapshot. Widget playback reuses the existing
+transport workflow through AudioPlaybackIntent; the extension never opens the
+database, streams media, or performs network requests.
 -->
 
 **The podcast player for people who are serious about listening.**
@@ -75,6 +79,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Chapter support with active-chapter filtering and disabled-chapter skipping
 - Audio and video podcast support with landscape unlock for full-screen video
 - Release Radar adaptive feed refresh — learns each podcast's release schedule from filter-eligible publish history and automatically selects a 2–3 minute active-window, 5 minute pre-window, 5–10 minute missed-release, or 15–60 minute surveillance cadence; HTTP conditional requests (ETag/304) keep checks tiny
+- Tiered, low-overhead diagnostics — normal logs preserve foreground/background refresh cycles, backlog, BGTask wakes, downloads and failures; an optional Detailed Refresh Trace adds per-feed Release Radar evidence only when investigating scheduling
 - Deadline-aware background feed refresh, four-minute background-audio cycles (seven routine feeds; hard ceiling ten for urgent windows), resource-aware budget reduction, deferred-feed fairness/age diagnostics, and per-podcast exclude-from-refresh
 - Explainable Auto Archive with a 25-minute execution gate, per-pass eligibility diagnostics, and a local Activity page recording the rule, threshold, and measured age behind each automatic archive
 - Per-podcast Download Filters for automatic RSS downloads by episode duration, title, and description
@@ -97,8 +102,16 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Keep screen awake during playback and lock screen scrubbing options
 - Lock screen / Now Playing controls (MPRemoteCommandCenter)
 - CarPlay audio support: Now Playing, Up Next actions, downloaded-only playback, Play Now, Play Next, Play Last, Archive, playback speed adjustment, and Shared Listening controls
+- Interactive **Now Playing & Up Next widgets** for small, medium, and large
+  Home Screen families plus circular and rectangular Lock Screen/StandBy
+  accessories. They show downloaded episodes only, use local prepared artwork,
+  support play/pause or Play Now without foregrounding, and deep-link to Player,
+  Up Next, episode details, or Discover.
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
+- Deadline-aware background reliability: absolute download watchdog deadlines,
+  generation-owned bounded retries, and an opportunistic BGAppRefresh backlog
+  batch that runs only under safe time, power, thermal, network, and download load
 
 ## Documentation Map
 
@@ -113,6 +126,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`SYNC_DESIGN.md`](SYNC_DESIGN.md) | Cross-device iCloud (CloudKit) sync design + build status — transport, conflict strategy, the `@Synced` field-level dirty-tracking, and per-domain merge rules. |
 | [`APPSTATE_DECOMPOSITION_PROPOSAL.md`](APPSTATE_DECOMPOSITION_PROPOSAL.md) | Authoritative staged AppState ownership-migration design and implementation status. |
 | [`APPSTATE_DECOMPOSITION_BASELINE.md`](APPSTATE_DECOMPOSITION_BASELINE.md) | Stage 0 source, automated-test, diagnostic, and device-only regression baseline. |
+| [`Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md`](Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md) | Widget architecture, privacy/performance invariants, staged execution ledger, and device validation gates. |
 | [`project_autohop.md`](project_autohop.md) | Fast machine-readable project brief: architecture, feature map, sync coverage, build notes, and licensing orientation. |
 | [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) | Latest detailed code, feature, settings, sync, documentation, website, performance, security, and Apple-design assessment. |
 | [`ASSESSMENT.md`](ASSESSMENT.md) | Historical machine-oriented code/feature/security assessment. Superseded by the deep scan above for current work. |

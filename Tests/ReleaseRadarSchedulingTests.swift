@@ -1017,5 +1017,31 @@ final class BackgroundProcessingScheduleTests: XCTestCase {
         let expired = now.addingTimeInterval(-hour)
         XCTAssertEqual(BackgroundTaskCoordinator.effectiveFeedDueDate(feedDueDate: due, backoffUntil: expired, now: now), due)
     }
+
+    func testPendingAppRefreshIsNotReplacedByLaterCandidate() {
+        let pending = Date(timeIntervalSince1970: 10_000)
+        XCTAssertFalse(
+            BackgroundTaskCoordinator.shouldReplacePendingAppRefresh(
+                pendingDate: pending,
+                candidateDate: pending.addingTimeInterval(4 * 60)
+            )
+        )
+    }
+
+    func testPendingAppRefreshRequiresMateriallyEarlierCandidate() {
+        let pending = Date(timeIntervalSince1970: 10_000)
+        XCTAssertFalse(
+            BackgroundTaskCoordinator.shouldReplacePendingAppRefresh(
+                pendingDate: pending,
+                candidateDate: pending.addingTimeInterval(-30)
+            )
+        )
+        XCTAssertTrue(
+            BackgroundTaskCoordinator.shouldReplacePendingAppRefresh(
+                pendingDate: pending,
+                candidateDate: pending.addingTimeInterval(-60)
+            )
+        )
+    }
 }
 #endif

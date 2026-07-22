@@ -10,6 +10,28 @@ release notes should be derived from completed entries and omit internal detail.
 
 ## Completed
 
+### Diagnostic logging efficiency and refresh observability — 21 July 2026
+
+- Reworked AppLogger admission so disabled diagnostics do not evaluate expensive
+  metadata. Added thread-safe normal/verbose state, bounded routine-event
+  backpressure, dropped-entry accounting, queue-consistent export, line/value
+  bounds, control-character normalization, URL user-info redaction, precompiled
+  security regexes, and a build/mode header on exported logs.
+- Added a user-controlled **Detailed Refresh Trace** tier. Normal diagnostics keep
+  feed plans, backlog age, material merges, failures, downloads, scheduling,
+  `feed.cycleSummary`, and `background.wakeSummary`; verbose mode adds per-feed
+  boundaries, 304/no-op decisions, and candidate-list detail for short Release
+  Radar investigations.
+- Full CPU/thread resource sampling and the 100 ms main-thread watchdog now run
+  only while diagnostics are enabled. Healthy resource sampling is five-minute,
+  while a log-free five-minute footprint-only safety heartbeat preserves proactive
+  artwork-cache trimming when diagnostics are off.
+- Reduced healthy-path volume: download progress uses 25% milestones, playback
+  tick summaries use a ten-minute interval while slow ticks remain immediate,
+  unchanged queue recomputes and routine widget/sync events are verbose, and Auto
+  Archive emits one eligibility/outcome pass summary instead of start/finish pairs.
+
+
 ### AppState decomposition Stages 0–14 — 18–19 July 2026
 
 - Established a frozen regression baseline and explicit AppCompositionRoot with
@@ -225,6 +247,18 @@ release notes should be derived from completed entries and omit internal detail.
   AppState AI CONTEXT header, and verified that AppState contains no retained
   Task, Combine relay, domain callback assignment, persistence transaction, or
   state-machine implementation.
+- Regenerated and validated the complete local matrix: iOS build-for-testing and
+  simulator tests, normal iOS app installation/startup, tvOS Simulator
+  compilation, plus the RSS, OPML, Subscription Store, Download Manager, and
+  Stats smoke suites. Updated stale Release Radar
+  smoke fixtures to reflect the existing five-active-day burst gate,
+  three-observed-week regular-cadence gate, and broad quiet-period safety checks;
+  production scheduling behavior was unchanged.
+- Removed AppState's obsolete 225-line pre-decomposition ownership narrative.
+  Its concise authoritative Stage 14 AI header is now the only file-level
+  responsibility map, while feature invariants remain beside their extracted
+  owners. AppState is approximately 1,116 lines versus the 6,645-line review
+  baseline; focused extraction and completion-workflow tests pass.
 - Preserved existing JSON formats, CloudKit schemas, queue ordering, CarPlay
   entry points, playback behavior, and user-facing navigation.
 
@@ -438,6 +472,92 @@ release notes should be derived from completed entries and omit internal detail.
 - Retained proactive memory trimming at the physical-footprint threshold. Added
   parse/merge autorelease boundaries, 16-feed refresh memory checkpoints, actor
   yields, and a 25 ms drain pause between batches during large manual refreshes.
+
+### Background download and playback reliability — 21 July 2026
+
+- Anchored download first-byte watchdog decisions to an absolute per-attempt
+  deadline. Process suspension no longer extends a zero-byte wait; scene changes,
+  network-path changes, BGTask entry, URLSession activity, and the periodic timer
+  can all request immediate re-evaluation. Suspension grace remains limited to
+  active transfers whose delegate progress may legitimately be withheld.
+- Added generation ownership to delayed watchdog retries and retired the durable
+  automatic-download intent when all bounded retries are exhausted. This creates
+  one authoritative retry path and prevents a later intent drain from silently
+  restarting an episode already presented as terminally failed.
+- Added an optional second BGAppRefresh feed batch. After the normal eight-feed
+  batch, Autohop may process two to four deferred feeds only when cooperative and
+  system deadlines permit and Low Power Mode, thermal pressure, constrained or
+  expensive networking, and large active downloads are absent. BGProcessing's
+  persisted 12/18/24-hour outcome policy is unchanged.
+- Added named slow-main-actor diagnostics around feed merges, queue projection,
+  widget projection, download completion settlement, and audio-route handling.
+  These records correlate future hang reports with the synchronous operation that
+  occupied the UI thread.
+- Coalesced duplicate same-output audio route notifications within 400 ms and
+  enriched buffer-stall/recovery diagnostics with buffer generation, route
+  generation, engine/node state, and route-coordination state. Existing
+  generation guards continue to prevent stale buffer loops from launching a
+  competing recovery.
+
+### Overnight refresh and main-thread efficiency — 22 July 2026
+
+- Added a genuine unchanged-feed fast path. Episode and subscription metadata
+  setters now compare incoming values before persisting or publishing, preventing
+  an unchanged one-episode feed from triggering broad store reconciliation.
+- Added per-stage feed-merge timing so future diagnostics distinguish episode,
+  artwork, author, description, category, and explicit-rating work instead of
+  reporting only one opaque main-actor duration.
+- Coalesced store publications across each background refresh cycle while keeping
+  the final queue projection explicit. Nested transactions remain safe when an
+  individual feed or download settlement also coalesces its own mutations.
+- Reduced download completion settlement cost by resolving file metadata away
+  from the main actor and applying downloaded-state and duration mutations as one
+  store transaction. Slow settlements now identify lookup, store/media, Stats,
+  and follow-up-effect stages.
+- Persisted BGProcessing registration, scheduling, and launch-state diagnostics.
+  Launch records now expose pending-request and next-eligibility dates, outcome
+  pacing, failure count, power/network requirements, battery state, and system
+  background-refresh availability. The existing 12/18/24-hour policy is unchanged.
+- Reused existing widget thumbnails when episode identity and artwork source are
+  unchanged. Publication diagnostics now separate projection, thumbnail lookup,
+  artwork rendering, atomic persistence, and timeline reload timing, allowing the
+  previously observed multi-second outliers to be located precisely.
+- Expanded same-output route-change coalescing to absorb near-simultaneous route,
+  configuration, and category notifications during the stabilization window while
+  retaining route-generation ownership for genuine output changes.
+- Deliberately retained the current BGAppRefresh batch policy. Additional backlog
+  batches remain deferred until the new BGProcessing state records prove whether
+  the overnight mechanism is unavailable, pending too far ahead, or simply not
+  granted by iOS.
+
+### Now Playing & Up Next widgets — 20 July 2026
+
+- Added small, medium, and large Home Screen widgets for the current episode and
+  downloaded Up Next queue, plus circular and rectangular Lock Screen/StandBy
+  accessories.
+- Added interactive play/pause and Play Now controls backed by
+  AudioPlaybackIntent. Requests execute without foregrounding and revalidate the
+  stable episode identity, downloaded state, and archive/play status against the
+  live store before using the existing playback transaction.
+- Added validated `autohop://` routes for Player, Up Next, Episode Detail, and
+  Discover. Malformed or stale links fail safely and are logged.
+- Added an atomic, versioned App Group display snapshot, bounded local JPEG
+  artwork, visible-state hash deduplication, targeted timeline reloads, corrupt
+  snapshot recovery, a 24-hour stale state, and current/previous-generation
+  artwork cleanup. The extension performs no networking or database access.
+- Added privacy-sensitive rectangular Lock Screen metadata, a non-sensitive
+  circular queue count, and accentable rendering for tinted Lock Screen and
+  StandBy modes.
+- Increased Home Screen widget metadata contrast with an explicit light-grey
+  token and reduced the large widget's Up Next heading to caption size, leaving
+  more vertical room and emphasis for episode rows.
+- Standardised video-podcast artwork presentation across widgets, CarPlay, and
+  system Now Playing. Widescreen episode posters are now centre-cropped into
+  square artwork slots without distortion; full-screen video remains widescreen.
+- Added widget publication/skip/failure, intent outcome, and route
+  accept/reject diagnostics plus isolated storage and route-parser coverage.
+- Discovery/Stats widget concepts remain deliberately deferred and are not part
+  of this implementation.
 
 ## Verification status
 

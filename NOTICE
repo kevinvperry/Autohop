@@ -64,6 +64,13 @@ architecturally based on Pocket Casts for iOS:
 Pocket Casts for iOS is copyright © Automattic, Inc. and contributors.
 Repository: https://github.com/Automattic/pocket-casts-ios
 
+Autohop's independently authored Home Screen / Lock Screen widget uses Pocket
+Casts for iOS as a product and architecture reference for the general
+app-publishes/widget-renders pattern, bounded family artwork, and interactive
+AudioPlaybackIntent controls. No Pocket Casts widget source, strings, artwork,
+or visual layouts were copied; Autohop's widget files remain MIT-licensed and
+are not added to the MPL-2.0-covered file list above.
+
 The files marked "Derived from: podcasts/AudioReadTask.swift",
 "Derived from: podcasts/EffectsPlayer.swift", and "Derived from:
 Modules/Sources/PocketCastsUtils/General/ModifiedDate.swift" above are

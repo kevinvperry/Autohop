@@ -8,10 +8,16 @@ import Foundation
 // observation learning, old-latest media cleanup, rolling one-item replacement,
 // autorelease-scoped metadata/episode merge, browse-preview isolation, Up Next
 // invalidation, automatic-download candidate scheduling, failure backoff, and
-// per-feed resource diagnostics.
+// per-feed resource diagnostics. Normal diagnostics retain changes, failures,
+// backoff, and auto-download decisions; routine request/304/no-op narration is
+// verbose-only because FeedRefreshCycleWorkflow emits the correlated cycle
+// summary used for foreground/background refresh diagnosis.
 //
 // ORDERING:
 // - Validators and observations commit before the episode merge.
+// - A feed merge is one observer-notification transaction. Store setters are
+//   equality-guarded, so semantically unchanged HTTP-200 payloads author no
+//   persistence or projections. Per-stage timings identify the remaining cost.
 // - Obsolete latest media is protected when it is currently playing.
 // - Browse previews merge display data but stop before queue/download effects.
 // - Automatic intent scheduling happens only after the authoritative merged
@@ -77,10 +83,13 @@ final class FeedRefreshItemWorkflow {
             ),
             force: false
         )
-        logger.info(
+        logger.verbose(
             "feed.refresh",
             "Refreshing podcast feed",
-            metadata: releaseRadarWorkflow.feedMetadata(for: subscription)
+            metadata: releaseRadarWorkflow.feedMetadata(
+                for: subscription,
+                includeURL: false
+            )
         )
         let knownKeys = Set(
             subscription.episodes.map(
@@ -107,7 +116,7 @@ final class FeedRefreshItemWorkflow {
                     subscriptionID: subscription.id,
                     stats: stats
                 )
-                logger.info(
+                logger.verbose(
                     "feed.notModified",
                     "Feed unchanged (304)",
                     metadata: releaseRadarWorkflow.feedMetadata(
@@ -184,10 +193,7 @@ final class FeedRefreshItemWorkflow {
                     )
             }
 
-            logger.info(
-                "feed.refreshMerge",
-                "Merging refreshed feed episodes",
-                metadata: releaseRadarWorkflow.feedMetadata(
+            let mergeMetadata = releaseRadarWorkflow.feedMetadata(
                     for: subscription,
                     includeURL: false,
                     extra: [
@@ -200,39 +206,102 @@ final class FeedRefreshItemWorkflow {
                             "\(newEligibleEpisode != nil || latestChangedEligible)"
                     ]
                 )
-            )
-            autoreleasepool {
-                subscriptionStore.updateEpisodes(
-                    subscriptionID: subscription.id,
-                    episodes: result.episodes
+            if latestChanged || newlyObserved > 0 {
+                logger.info(
+                    "feed.refreshMerge",
+                    "Merging changed feed episodes",
+                    metadata: mergeMetadata
                 )
-                if let artworkURL = result.artworkURL {
-                    subscriptionStore.updateArtworkURL(
+            } else {
+                logger.verbose(
+                    "feed.refreshMerge",
+                    "Merging refreshed feed metadata without a release change",
+                    metadata: mergeMetadata
+                )
+            }
+            let mergeStartedAt = CFAbsoluteTimeGetCurrent()
+            var mergeStageMilliseconds: [String: Double] = [:]
+            func measure(_ name: String, _ operation: () -> Void) {
+                let startedAt = CFAbsoluteTimeGetCurrent()
+                operation()
+                mergeStageMilliseconds[name] =
+                    (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+            }
+            autoreleasepool {
+                subscriptionStore.beginChangeNotificationCoalescing()
+                defer {
+                    subscriptionStore.endChangeNotificationCoalescing()
+                }
+                measure("episodes") {
+                    subscriptionStore.updateEpisodes(
                         subscriptionID: subscription.id,
-                        artworkURL: artworkURL
+                        episodes: result.episodes
                     )
                 }
-                subscriptionStore.updateAuthor(
-                    subscriptionID: subscription.id,
-                    author: result.author
-                )
-                subscriptionStore.updateDescription(
-                    subscriptionID: subscription.id,
-                    description: result.description
-                )
-                subscriptionStore.updateCategories(
-                    subscriptionID: subscription.id,
-                    categories: result.categories
-                )
-                subscriptionStore.updateIsExplicit(
-                    subscriptionID: subscription.id,
-                    isExplicit: result.isExplicit
+                if let artworkURL = result.artworkURL {
+                    measure("artwork") {
+                        subscriptionStore.updateArtworkURL(
+                            subscriptionID: subscription.id,
+                            artworkURL: artworkURL
+                        )
+                    }
+                }
+                measure("author") {
+                    subscriptionStore.updateAuthor(
+                        subscriptionID: subscription.id,
+                        author: result.author
+                    )
+                }
+                measure("description") {
+                    subscriptionStore.updateDescription(
+                        subscriptionID: subscription.id,
+                        description: result.description
+                    )
+                }
+                measure("categories") {
+                    subscriptionStore.updateCategories(
+                        subscriptionID: subscription.id,
+                        categories: result.categories
+                    )
+                }
+                measure("explicit") {
+                    subscriptionStore.updateIsExplicit(
+                        subscriptionID: subscription.id,
+                        isExplicit: result.isExplicit
+                    )
+                }
+            }
+            let mergeMs =
+                (CFAbsoluteTimeGetCurrent() - mergeStartedAt) * 1_000
+            if mergeMs >= 100 {
+                logger.warning(
+                    "ui.mainActorOperationSlow",
+                    "Feed merge occupied the main actor",
+                    metadata: releaseRadarWorkflow.feedMetadata(
+                        for: subscription,
+                        includeURL: false,
+                        extra: [
+                            "operation": "feed.merge",
+                            "durationMs": String(
+                                format: "%.1f",
+                                mergeMs
+                            ),
+                            "episodeCount": "\(result.episodes.count)",
+                            "latestChanged": "\(latestChanged)",
+                            "stageMs": mergeStageMilliseconds
+                                .sorted { $0.key < $1.key }
+                                .map {
+                                    "\($0.key)=\(String(format: "%.1f", $0.value))"
+                                }
+                                .joined(separator: ",")
+                        ]
+                    )
                 )
             }
 
             if subscriptionStore.subscription(id: subscription.id)?
                 .browseDate != nil {
-                logger.info(
+                logger.verbose(
                     "feed.refresh",
                     "Skipping auto-download for browse preview",
                     metadata: releaseRadarWorkflow.feedMetadata(
@@ -251,7 +320,7 @@ final class FeedRefreshItemWorkflow {
             guard let candidate = updated.flatMap({
                 autoDownloadIntentWorkflow.newestCandidate(in: $0)
             }) else {
-                logger.info(
+                logger.verbose(
                     "feed.refresh",
                     "No eligible episode found for auto-download",
                     metadata: releaseRadarWorkflow.feedMetadata(
@@ -263,7 +332,7 @@ final class FeedRefreshItemWorkflow {
             }
             guard result.latestEpisode.guid != oldLatestGUID
                     || oldLatestWasDownloaded == false else {
-                logger.info(
+                logger.verbose(
                     "feed.refresh",
                     "No new download needed",
                     metadata: releaseRadarWorkflow.feedMetadata(
@@ -279,7 +348,7 @@ final class FeedRefreshItemWorkflow {
                 podcastTitle: result.subscriptionTitle,
                 refreshUpNextAfterMerge: refreshUpNextAfterMerge
             )
-            logger.info(
+            logger.verbose(
                 "feed.refresh",
                 "Feed refresh completed",
                 metadata: releaseRadarWorkflow.feedMetadata(

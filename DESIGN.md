@@ -46,6 +46,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `ListRow-IdleBackground` | Non-playing rows in a card list use `Color.white.opacity(0.08)` |
 | `PositionIndicator-Playing` | Up Next number replaced by a small purple `play.fill` icon when the episode is playing |
 | `Artwork-Placeholder` | Purple-to-black gradient + waveform icon when no artwork URL is available |
+| `Artwork-SquareCrop` | Episode/podcast artwork displayed in lists, widgets, CarPlay and system Now Playing uses a centred square crop; 16:9 video thumbnails are never stretched or allowed to overflow. Full-screen video alone retains its native aspect ratio |
 | `Text-PodcastTitle` | Show name: `.caption`, `.secondary`, above the episode title |
 | `Text-SubscriptionTitle` | Priority page show name: `.headline.weight(.bold)`, `.primary` — it is the primary title |
 | `Text-EpisodeTitle` | Episode title: `.subheadline.bold()`, `.primary`, `lineLimit(2)` |
@@ -97,6 +98,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost / optional Volume Adjustment / Mono Audio card (`Views/PlaybackControlsCard.swift`). Per-podcast settings enable the −3…+3 dB adjustment between Vocal Boost and Mono; global Default Playback deliberately omits it. iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background. The `usesHostBackground` flag lets App Settings inherit its Form surface; Podcast Settings retains the self-contained glass card. |
 | `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
 | `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
+| `Diagnostics-Tiered` | Hidden App Settings diagnostics section. `Enable Diagnostic Log` is the normal, outcome-focused tier. While enabled, `Detailed Refresh Trace` appears directly beneath it using `SettingsRowLabel` and the same native Form row/card background. The detailed tier is off by default and is described as a short-term Release Radar investigation tool; it must not be styled as a warning or primary action. `View Diagnostic Log` remains the final NavigationLink in the section. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
@@ -2783,6 +2785,54 @@ The same `ChartCountryPicker` toolbar menu appears on Discover, Top Episodes,
 Top Podcasts, and category Top-50 pages. It binds to the shared
 `discoverCountryCode` preference, so a selection reloads the visible child chart
 and remains selected after navigating back.
+
+## Widgets — Now Playing & Up Next
+
+`AutohopWidgets` uses the same dark/purple episode hierarchy as the app while
+remaining a compact system surface rather than recreating a full page.
+
+| Family | Composition |
+|---|---|
+| Small | Wide rounded artwork, two-line semibold episode title, remaining-time caption, 27pt purple playback circle |
+| Medium | Current/ready column and one following row separated by a subtle divider; Up Next count is a navigation link |
+| Large | 76pt current artwork hero, headline title, high-contrast light-grey podcast/remaining metadata, 40pt playback circle, then a compact caption-sized Up Next count and four 38pt rows |
+| Accessory Circular | System accessory background, accentable stack glyph, monospaced Up Next count; no private title |
+| Accessory Rectangular | Accentable Now Playing/Up Next label plus one-line title/podcast marked privacy-sensitive |
+
+**Tokens and behavior:**
+- Home Screen background is an opaque, very-dark-charcoal glass surface rather
+  than pure black. It combines a charcoal diagonal gradient, deterministic
+  low-density fibre/grain, a restrained purple ambient glow, a top sheen, and a
+  subtle container-relative border. iOS 26+ adds native Liquid Glass to the
+  surface sheen; iOS 17–25 use a stable gradient/stroke fallback. Texture is
+  static Canvas drawing—never animated, random, network-backed, or stored.
+- Primary text is white; Home Screen metadata uses explicit
+  `white.opacity(0.64)` rather than semantic `.secondary` because the latter can
+  resolve near-black against a deliberately dark widget surface. Interactive
+  accents are purple. Playback circles use a bright purple gradient, translucent
+  highlight, fine white edge, and restrained glow on every supported OS. Native
+  `.glassEffect` is intentionally not attached to App Intent `Toggle` labels:
+  WidgetKit can extract those labels into a separate rendering layer and make
+  the entire control disappear on-device.
+- Artwork uses a 10pt rounded rectangle. Missing artwork uses the existing
+  purple-to-black waveform placeholder—never a network fetch from the extension.
+  A faint white edge separates artwork from the charcoal surface.
+- Playback uses an icon-only circular `Toggle` backed by AudioPlaybackIntent.
+  Episode/title and header navigation remain separate `Link` targets so controls
+  do not overlap.
+- Lock Screen accessories omit artwork, retain WidgetKit's system background
+  instead of forcing the Home Screen charcoal surface, use
+  `.widgetAccentable()`, and allow system privacy redaction. This is also the
+  accessory/StandBy rendering strategy.
+- Empty state: purple sparkle + Discover invitation. Stale/unreadable state:
+  neutral recovery copy instructing the user to open Autohop.
+- Dynamic content is capped at 1/2/5 artwork files for small/medium/large.
+  Remaining time does not animate; meaningful app events replace the snapshot.
+- BGAppRefresh/BGProcessing are protected execution windows: widget changes
+  accumulate as reason tokens without projecting rows, preparing artwork,
+  writing App Group files, or reloading WidgetKit. After the wake, one coalesced
+  publication is allowed only if foreground or active audio keeps the process
+  executable; otherwise the next foreground/domain trigger publishes it.
 
 ## Apple TV Patterns (tvOS Phase 2)
 

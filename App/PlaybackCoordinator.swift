@@ -148,7 +148,10 @@ final class PlaybackCoordinator: ObservableObject {
     private var lastTickDiagnostics: TickDiagnostics?
     private var tickSummary = TickSummary()
     private let tickSlowThresholdMs = 120.0
-    private let tickSummarySampleInterval = 120
+    // AI CONTEXT — At the 2 Hz engine callback this is a ten-minute healthy-path
+    // summary. Slow ticks still log immediately, and the latest in-memory timing
+    // remains available to main-thread/resource diagnostics between summaries.
+    private let tickSummarySampleInterval = 1_200
     private weak var chapterPresentation: (any PlaybackChapterPresenting)?
 
     var currentChapter: Chapter? { chapterPresentation?.currentChapter }

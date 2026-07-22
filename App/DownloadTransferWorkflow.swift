@@ -24,6 +24,11 @@ import Foundation
 // - Genuine failures retain durable automatic intent and receive exponential
 //   per-GUID backoff through DownloadCoordinator.
 // - PlaybackMediaWorkflow supplies canonical local-media resolution/duration.
+// - File-size inspection runs off-main and downloaded-state/duration mutations
+//   publish as one observer transaction. Slow-settlement diagnostics expose
+//   store, stats, and effects sub-stages for actionable overnight-log evidence.
+// - BackgroundWakeMonitor counts a transfer only when DownloadManager submission
+//   begins; queued/blocked/reused requests are not misreported as network starts.
 
 @MainActor
 final class DownloadTransferWorkflow {
@@ -170,7 +175,7 @@ final class DownloadTransferWorkflow {
         logger.info("download.start", "Starting episode download", metadata: [
             "episode": episode.title,
             "podcast": podcastTitle,
-            "url": episode.audioURL.absoluteString,
+            "mediaHost": episode.audioURL.host ?? "unknown",
             "mediaKind": episode.mediaKind.rawValue,
             "fileSizeBytes": episode.fileSizeBytes.map(String.init) ?? "unknown"
         ])
@@ -183,6 +188,7 @@ final class DownloadTransferWorkflow {
             subscriptionID: subscriptionID,
             episodeID: episode.id
         )
+        BackgroundWakeMonitor.shared.recordDownloadSubmitted()
 
         do {
             let localFileURL = try await downloadManager.download(
@@ -192,6 +198,13 @@ final class DownloadTransferWorkflow {
             let duration = await mediaWorkflow.localDuration(
                 from: localFileURL
             )
+            let downloadedBytes = await localFileByteCount(
+                at: localFileURL,
+                fallback: episode.fileSizeBytes ?? 0
+            )
+            let settlementStartedAt = CFAbsoluteTimeGetCurrent()
+            let storeStartedAt = CFAbsoluteTimeGetCurrent()
+            subscriptionStore.beginChangeNotificationCoalescing()
             subscriptionStore.markEpisodeDownloaded(
                 subscriptionID: subscriptionID,
                 episodeID: episode.id,
@@ -206,14 +219,16 @@ final class DownloadTransferWorkflow {
                     durationSeconds: duration
                 )
             }
+            subscriptionStore.endChangeNotificationCoalescing()
+            let storeMs =
+                (CFAbsoluteTimeGetCurrent() - storeStartedAt) * 1_000
             coordinator.progressModel.progress.removeValue(forKey: episode.id)
 
-            let downloadedBytes = (
-                (try? FileManager.default.attributesOfItem(
-                    atPath: localFileURL.path
-                ))?[.size] as? NSNumber
-            )?.int64Value ?? episode.fileSizeBytes ?? 0
+            let statsStartedAt = CFAbsoluteTimeGetCurrent()
             historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
+            let statsMs =
+                (CFAbsoluteTimeGetCurrent() - statsStartedAt) * 1_000
+            let effectsStartedAt = CFAbsoluteTimeGetCurrent()
             if showCompletionMessage {
                 coordinator.message = "Downloaded \(episode.title)."
             }
@@ -229,6 +244,7 @@ final class DownloadTransferWorkflow {
                 podcastTitle: podcastTitle,
                 localFileName: localFileURL.lastPathComponent
             )
+            BackgroundWakeMonitor.shared.recordDownloadCompleted()
             if let subscription = subscriptionStore.subscription(id: subscriptionID) {
                 notificationWorkflow.notifyIfAllowed(
                     episode: episode,
@@ -244,6 +260,30 @@ final class DownloadTransferWorkflow {
             coordinator.rebuildDownloadedActivities(
                 from: subscriptionStore.subscriptions
             )
+            let effectsMs =
+                (CFAbsoluteTimeGetCurrent() - effectsStartedAt) * 1_000
+            let settlementMs =
+                (CFAbsoluteTimeGetCurrent() - settlementStartedAt) * 1_000
+            if settlementMs >= 100 {
+                logger.warning(
+                    "ui.mainActorOperationSlow",
+                    "Download completion settlement occupied the main actor",
+                    metadata: [
+                        "operation": "download.settlement",
+                        "durationMs": String(
+                            format: "%.1f",
+                            settlementMs
+                        ),
+                        "episode": episode.title,
+                        "podcast": podcastTitle,
+                        "storeMs": String(format: "%.1f", storeMs),
+                        "statsMs": String(format: "%.1f", statsMs),
+                        "effectsMs": String(format: "%.1f", effectsMs),
+                        "subscriptionCount":
+                            "\(subscriptionStore.subscriptions.count)"
+                    ]
+                )
+            }
             runtimeWorkflow.logResourceSnapshot(reason: "download.afterSuccess", extra: [
                 "episode": episode.title,
                 "podcast": podcastTitle
@@ -256,6 +296,19 @@ final class DownloadTransferWorkflow {
                 podcastTitle: podcastTitle
             )
         }
+    }
+
+    private func localFileByteCount(
+        at url: URL,
+        fallback: Int64
+    ) async -> Int64 {
+        await Task.detached(priority: .utility) {
+            (
+                (try? FileManager.default.attributesOfItem(
+                    atPath: url.path
+                ))?[.size] as? NSNumber
+            )?.int64Value ?? fallback
+        }.value
     }
 
     private func drainQueue() {

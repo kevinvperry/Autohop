@@ -20,6 +20,11 @@ import Foundation
 // subscription identity/browse status. QueueCoordinator and
 // OnboardingCoordinator observe these narrow streams instead of using broad
 // objectWillChange for domain work. Keep signatures free of display-only fields.
+// WIDGET STAGE 2: presentationDidChange is a third narrow stream for
+// display-only projections whose queue identity is unchanged (title, artwork,
+// duration, media/explicit metadata). WidgetSnapshotCoordinator observes it so
+// the extension never subscribes to raw objectWillChange. Its signature is
+// limited to playable downloaded episode presentation, not settings/stats.
 // RESPONSIBILITIES beyond CRUD: episode merge on feed refresh (match by guid,
 // preserving local fields like downloadState/playedState/localFileURL/
 // wasCompleted/downloadedAt — the merge also reconstructs wasCompleted from
@@ -55,6 +60,12 @@ import Foundation
 // GOTCHA: accessors generally distinguish real subscriptions (browseDate == nil)
 // from browse ones; queue/UI may still include Inactive real subscriptions, but
 // automatic/feed-all refresh must skip `excludeFromAutoFeedRefresh`.
+// FEED MERGE PERFORMANCE: refresh metadata setters and updateEpisodes are
+// equality-guarded. FeedRefreshItemWorkflow wraps the related calls in one
+// change-notification transaction, so a conditional 200 response whose content
+// is semantically unchanged performs comparison work but authors no persistence,
+// narrow-domain invalidation, broad objectWillChange, queue projection, or sync
+// work. Do not remove these guards: unchanged feeds are the dominant refresh case.
 // DOWNLOAD TIMESTAMPS: markEpisodeDownloaded sets Episode.downloadedAt to now
 // if not already set (preserves the original date on re-download). This is the
 // clock used by Auto Archive "After Inactive" — do not clear downloadedAt when
@@ -69,8 +80,12 @@ public final class SubscriptionStore: ObservableObject {
     /// Stage 5 narrow membership stream. OnboardingCoordinator observes only
     /// real/browse subscription membership changes, never episode merges.
     let membershipDidChange = PassthroughSubject<Void, Never>()
+    /// Narrow display invalidation for downloaded episode projections. This is
+    /// intentionally distinct from queue identity/order and broad UI changes.
+    let presentationDidChange = PassthroughSubject<Void, Never>()
     private var lastQueueAffectingSignature: [String] = []
     private var lastMembershipSignature: [String] = []
+    private var lastPresentationSignature: [String] = []
     /// Record store. Exposed within the module so CloudSyncEngine can read
     /// pending sync-state and cached CKRecord system fields.
     let database: AutohopDatabase?
@@ -558,19 +573,22 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func updateDescription(subscriptionID: UUID, description: String?) {
-        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].description != description else { return }
         subscriptions[index].description = description
         save()
     }
 
     public func updateAuthor(subscriptionID: UUID, author: String?) {
-        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].author != author else { return }
         subscriptions[index].author = author
         save()
     }
 
     public func updateArtworkURL(subscriptionID: UUID, artworkURL: URL) {
-        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].artworkURL != artworkURL else { return }
         subscriptions[index].artworkURL = artworkURL
         save()
     }
@@ -585,13 +603,15 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func updateCategories(subscriptionID: UUID, categories: [String]) {
-        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].categories != categories else { return }
         subscriptions[index].categories = categories
         save()
     }
 
     public func updateIsExplicit(subscriptionID: UUID, isExplicit: Bool?) {
-        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }),
+              subscriptions[index].isExplicit != isExplicit else { return }
         subscriptions[index].isExplicit = isExplicit
         save()
     }
@@ -1365,6 +1385,9 @@ public final class SubscriptionStore: ObservableObject {
             }
             return merged
         }
+        guard subscriptions[index].episodes != mergedEpisodes
+                || subscriptions[index].latestEpisode != mergedEpisodes.first
+        else { return }
         subscriptions[index].episodes = mergedEpisodes
         subscriptions[index].latestEpisode = mergedEpisodes.first
         save()
@@ -1828,18 +1851,25 @@ public final class SubscriptionStore: ObservableObject {
     /// fetched-changes apply loop: a post-launch sync burst (e.g. 18 remote records)
     /// otherwise fires 18 whole-app invalidations back-to-back on the main thread.
     /// Disk persistence is unaffected — only the UI/sync notification is coalesced.
-    private var changeNotificationsCoalesced = false
+    private var changeNotificationCoalescingDepth = 0
     private var coalescedChangeNotificationPending = false
+    private var coalescedNarrowDomainNotificationPending = false
 
     /// Begin deferring observer notifications. Must be paired with
     /// `endChangeNotificationCoalescing()` on the main actor.
     public func beginChangeNotificationCoalescing() {
-        changeNotificationsCoalesced = true
+        changeNotificationCoalescingDepth += 1
     }
 
     /// Stop deferring and fire ONE `objectWillChange` if any save was suppressed.
     public func endChangeNotificationCoalescing() {
-        changeNotificationsCoalesced = false
+        guard changeNotificationCoalescingDepth > 0 else { return }
+        changeNotificationCoalescingDepth -= 1
+        guard changeNotificationCoalescingDepth == 0 else { return }
+        if coalescedNarrowDomainNotificationPending {
+            coalescedNarrowDomainNotificationPending = false
+            publishNarrowDomainChangesIfNeeded()
+        }
         if coalescedChangeNotificationPending {
             coalescedChangeNotificationPending = false
             objectWillChange.send()
@@ -1847,7 +1877,7 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     private func publishChange() {
-        if changeNotificationsCoalesced {
+        if changeNotificationCoalescingDepth > 0 {
             coalescedChangeNotificationPending = true
         } else {
             objectWillChange.send()
@@ -1965,12 +1995,47 @@ public final class SubscriptionStore: ObservableObject {
             .sorted()
     }
 
+    private func presentationSignature() -> [String] {
+        subscriptions
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .flatMap { subscription in
+                let episodes = subscription.episodes.isEmpty
+                    ? subscription.latestEpisode.map { [$0] } ?? []
+                    : subscription.episodes
+                return episodes
+                    .filter {
+                        $0.downloadState == .downloaded
+                            && ($0.localFileURL != nil || $0.localFileName != nil)
+                            && $0.playedState != .played
+                            && $0.playedState != .archived
+                    }
+                    .map { episode in
+                        [
+                            subscription.id.uuidString,
+                            subscription.title,
+                            subscription.artworkURL?.absoluteString ?? "",
+                            PlaybackPositionStore.key(for: episode),
+                            episode.title,
+                            "\(episode.durationSeconds ?? 0)",
+                            episode.artworkURL?.absoluteString ?? "",
+                            episode.mediaKind.rawValue,
+                            episode.isExplicit.map { String($0) } ?? "unknown"
+                        ].joined(separator: "|")
+                    }
+            }
+    }
+
     private func seedDomainChangeSignatures() {
         lastQueueAffectingSignature = queueAffectingSignature()
         lastMembershipSignature = membershipSignature()
+        lastPresentationSignature = presentationSignature()
     }
 
     private func publishNarrowDomainChangesIfNeeded() {
+        if changeNotificationCoalescingDepth > 0 {
+            coalescedNarrowDomainNotificationPending = true
+            return
+        }
         let queueSignature = queueAffectingSignature()
         if queueSignature != lastQueueAffectingSignature {
             lastQueueAffectingSignature = queueSignature
@@ -1980,6 +2045,11 @@ public final class SubscriptionStore: ObservableObject {
         if membership != lastMembershipSignature {
             lastMembershipSignature = membership
             membershipDidChange.send()
+        }
+        let presentation = presentationSignature()
+        if presentation != lastPresentationSignature {
+            lastPresentationSignature = presentation
+            presentationDidChange.send()
         }
     }
 

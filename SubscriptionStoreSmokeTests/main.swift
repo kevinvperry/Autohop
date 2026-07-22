@@ -4,7 +4,7 @@
 // Also carries the focused Release Radar regression checks that do not need the
 // full app/dependency graph: RefreshStats legacy decoding and history caps,
 // release-observation persistence, learned schedule classification (hourly,
-// rolling-bulletin, burst, weekday, weekly, unreliable dates), learned-window
+// rolling-bulletin, five-active-day burst, weekday, weekly, unreliable dates), learned-window
 // due prediction, missed-release urgency expiry, learning/random cadence decay, and
 // FeedRefreshPrioritizer ordering for missed, active, learning, ranked, stale,
 // and random due feeds, plus pure refresh-budget selection.
@@ -285,7 +285,10 @@ require(
     "Expected rolling bulletin profile to learn :00 and :30 minute slots"
 )
 
-let burstObservations = (0..<4).flatMap { dayOffset in
+// AI CONTEXT — Burst classification deliberately requires multiple episodes on
+// at least five active weekdays. Four-day fixtures are expected to fall through
+// to a regular cadence and must not be used as proof of a daily burst.
+let burstObservations = (0..<5).flatMap { dayOffset in
     [
         observation("burst-\(dayOffset)-a", publishedAt: makeDate(2026, 1, 5 + dayOffset, 8, 3)),
         observation("burst-\(dayOffset)-b", publishedAt: makeDate(2026, 1, 5 + dayOffset, 8, 22)),
@@ -296,16 +299,24 @@ let burstProfile = FeedScheduleProfiler.profile(from: burstObservations, calenda
 require(burstProfile.kind == .burst, "Expected multi-episode morning window to be profiled as burst")
 
 let weekdayObservations = [
+    // AI CONTEXT — Three complete Monday–Friday weeks end before the scheduling
+    // assertions below begin. Do not place future observations after 9 January:
+    // prediction tests intentionally model the following weekend/Monday.
+    makeDate(2025, 12, 22, 9, 30),
+    makeDate(2025, 12, 23, 9, 31),
+    makeDate(2025, 12, 24, 9, 29),
+    makeDate(2025, 12, 25, 9, 30),
+    makeDate(2025, 12, 26, 9, 32),
+    makeDate(2025, 12, 29, 9, 30),
+    makeDate(2025, 12, 30, 9, 31),
+    makeDate(2025, 12, 31, 9, 29),
+    makeDate(2026, 1, 1, 9, 30),
+    makeDate(2026, 1, 2, 9, 32),
     makeDate(2026, 1, 5, 9, 30),
     makeDate(2026, 1, 6, 9, 31),
     makeDate(2026, 1, 7, 9, 29),
     makeDate(2026, 1, 8, 9, 30),
-    makeDate(2026, 1, 9, 9, 32),
-    makeDate(2026, 1, 12, 9, 30),
-    makeDate(2026, 1, 13, 9, 31),
-    makeDate(2026, 1, 14, 9, 29),
-    makeDate(2026, 1, 15, 9, 30),
-    makeDate(2026, 1, 16, 9, 32)
+    makeDate(2026, 1, 9, 9, 32)
 ].enumerated().map { observation("weekday-\($0.offset)", publishedAt: $0.element) }
 let weekdayProfile = FeedScheduleProfiler.profile(from: weekdayObservations, calendar: utcCalendar)
 require(weekdayProfile.kind == .dailyWeekdays, "Expected Monday-Friday morning profile")
@@ -400,7 +411,14 @@ let weekdayWeekendQuiet = FeedRefreshScheduling.prediction(
     calendar: utcCalendar
 )
 require(weekdayWeekendQuiet.state == .quiet, "Expected weekday feed to stay quiet on Saturday")
-require(weekdayWeekendQuiet.nextDueAt == makeDate(2026, 1, 12, 9, 0), "Expected next weekday pre-window on Monday")
+// AI CONTEXT — Quiet feeds retain broad safety checks outside predicted
+// release windows. Therefore nextDueAt may precede Monday's pre-window, but it
+// must stay in the future and never miss the learned window.
+require(
+    weekdayWeekendQuiet.nextDueAt > makeDate(2026, 1, 10, 12, 0)
+        && weekdayWeekendQuiet.nextDueAt <= makeDate(2026, 1, 12, 9, 0),
+    "Expected a future safety/pre-window check no later than Monday 09:00; got \(weekdayWeekendQuiet.nextDueAt)"
+)
 
 let weekdayMissed = FeedRefreshScheduling.prediction(
     profile: weekdayProfile,
@@ -449,7 +467,11 @@ let weeklyWeekendQuiet = FeedRefreshScheduling.prediction(
     calendar: utcCalendar
 )
 require(weeklyWeekendQuiet.state == .quiet, "Expected Wednesday weekly feed to stay quiet on Saturday")
-require(weeklyWeekendQuiet.nextDueAt == makeDate(2026, 1, 14, 6, 30), "Expected next weekly pre-window on Wednesday")
+require(
+    weeklyWeekendQuiet.nextDueAt > makeDate(2026, 1, 10, 12, 0)
+        && weeklyWeekendQuiet.nextDueAt <= makeDate(2026, 1, 14, 6, 30),
+    "Expected a future safety/pre-window check no later than Wednesday 06:30"
+)
 
 let weeklyMissedExpiredByAge = FeedRefreshScheduling.prediction(
     profile: weeklyProfile,

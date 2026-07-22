@@ -2,6 +2,8 @@
 // overload of SubscriptionStore.updateEpisodes used by the tvOS feed refresh
 // (so "Latest" tracks the phone): a re-fetched feed must add new episodes,
 // advance `latestEpisode`, and PRESERVE local played/download state by guid.
+// It also verifies the unchanged-feed fast path: identical refresh content must
+// not emit a broad store invalidation or schedule redundant persistence work.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -56,5 +58,33 @@ final class FeedRefreshMergeTests: XCTestCase {
         XCTAssertEqual(sub.latestEpisode?.guid, "ep-new", "latestEpisode advances to the newest")
         XCTAssertEqual(sub.episodes.first { $0.guid == "ep-old" }?.playedState, .played,
                        "The refresh preserves local played state by guid")
+    }
+
+    func testIdenticalRefreshDoesNotPublishBroadStoreChange() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let feedURL = URL(string: "https://f.com/feed")!
+        let published = Date(timeIntervalSince1970: 2_000_000)
+        let feed = ParsedFeed(
+            title: "Show", author: "Presenter", artworkURL: nil,
+            latestEpisode: nil,
+            episodes: [parsedEpisode(guid: "ep-one", title: "Episode", published: published)]
+        )
+        _ = store.materialize(parsedFeed: feed, feedURL: feedURL, subscriptionID: id)
+        await store.flushPendingSaves()
+
+        var broadChangeCount = 0
+        let cancellable = store.objectWillChange.sink {
+            broadChangeCount += 1
+        }
+        defer { cancellable.cancel() }
+
+        store.beginChangeNotificationCoalescing()
+        store.updateEpisodes(subscriptionID: id, from: feed)
+        store.updateAuthor(subscriptionID: id, author: "Presenter")
+        store.endChangeNotificationCoalescing()
+
+        XCTAssertEqual(broadChangeCount, 0,
+                       "An unchanged feed must not invalidate every store observer")
     }
 }
