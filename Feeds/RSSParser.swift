@@ -17,8 +17,17 @@ public final class RSSParser: NSObject {
     public override init() {}
 
     public func parse(data: Data, maxEpisodes: Int? = nil) throws -> ParsedFeed {
+        try parseWithDiagnostics(data: data, maxEpisodes: maxEpisodes).feed
+    }
+
+    func parseWithDiagnostics(
+        data: Data,
+        maxEpisodes: Int? = nil
+    ) throws -> (feed: ParsedFeed, diagnostics: RSSParserDiagnostics) {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let delegate = RSSParserDelegate(maxEpisodes: maxEpisodes)
-        let parser = XMLParser(data: Self.dataByEscapingBareAmpersands(in: data))
+        let repair = Self.ampersandRepair(in: data)
+        let parser = XMLParser(data: repair.data)
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
         parser.shouldReportNamespacePrefixes = false
@@ -27,15 +36,30 @@ public final class RSSParser: NSObject {
             throw RSSParserError.invalidXML(parser.parserError)
         }
 
-        return try delegate.buildFeed()
+        return (
+            try delegate.buildFeed(),
+            delegate.diagnostics(
+                sourceBytes: data.count,
+                repairedBytes: repair.data.count,
+                repairedAmpersands: repair.repairedCount,
+                durationMilliseconds:
+                    (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+            )
+        )
     }
 
     // Internal (not private) so the linear-time guarantee can be unit-tested directly without
     // routing a pathologically large single text node through XMLParser.
     static func dataByEscapingBareAmpersands(in data: Data) -> Data {
+        ampersandRepair(in: data).data
+    }
+
+    private static func ampersandRepair(
+        in data: Data
+    ) -> (data: Data, repairedCount: Int) {
         let ampersand = UInt8(ascii: "&")
         // Fast path: nothing to repair.
-        guard data.contains(ampersand) else { return data }
+        guard data.contains(ampersand) else { return (data, 0) }
 
         let semicolon = UInt8(ascii: ";")
         let hash = UInt8(ascii: "#")
@@ -53,11 +77,24 @@ public final class RSSParser: NSObject {
         // ASCII `&`/`;`/`#` can't appear inside a multi-byte UTF-8 sequence, so byte scanning is safe.
         let maxEntityNameLength = 9
 
+        // Most feeds contain ampersands only as valid XML entities. Inspect the
+        // original Data first and return it directly in that common case,
+        // avoiding both the full `[UInt8]` source copy and a second full output
+        // allocation. This is the critical path for large feeds.
+        guard containsBareAmpersand(
+            in: data,
+            knownEntities: knownEntities,
+            maxEntityNameLength: maxEntityNameLength
+        ) else {
+            return (data, 0)
+        }
+
         let bytes = [UInt8](data)
         let count = bytes.count
         let ampReplacement = Array("&amp;".utf8)
         var output = [UInt8]()
         output.reserveCapacity(count + 16)
+        var repairedCount = 0
 
         var i = 0
         while i < count {
@@ -86,11 +123,81 @@ public final class RSSParser: NSObject {
             }
 
             output.append(contentsOf: ampReplacement)
+            repairedCount += 1
             i += 1
         }
 
-        return Data(output)
+        return (Data(output), repairedCount)
     }
+
+    static func containsBareAmpersand(in data: Data) -> Bool {
+        containsBareAmpersand(
+            in: data,
+            knownEntities: [
+                Array("amp".utf8), Array("lt".utf8), Array("gt".utf8),
+                Array("quot".utf8), Array("apos".utf8)
+            ],
+            maxEntityNameLength: 9
+        )
+    }
+
+    private static func containsBareAmpersand(
+        in data: Data,
+        knownEntities: Set<[UInt8]>,
+        maxEntityNameLength: Int
+    ) -> Bool {
+        let ampersand = UInt8(ascii: "&")
+        let semicolon = UInt8(ascii: ";")
+        let hash = UInt8(ascii: "#")
+        return data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var i = 0
+            while i < bytes.count {
+                guard bytes[i] == ampersand else {
+                    i += 1
+                    continue
+                }
+                let limit = min(
+                    bytes.count,
+                    i + 1 + maxEntityNameLength
+                )
+                var semicolonIndex: Int?
+                var j = i + 1
+                while j < limit {
+                    if bytes[j] == semicolon {
+                        semicolonIndex = j
+                        break
+                    }
+                    j += 1
+                }
+                guard let semicolonIndex else { return true }
+                let entity = Array(bytes[(i + 1)..<semicolonIndex])
+                if entity.first != hash && !knownEntities.contains(entity) {
+                    return true
+                }
+                i = semicolonIndex + 1
+            }
+            return false
+        }
+    }
+}
+
+struct RSSParserDiagnostics: Equatable {
+    let sourceBytes: Int
+    let repairedBytes: Int
+    let repairedAmpersands: Int
+    let durationMilliseconds: Double
+    let characterCallbacks: Int
+    let deliveredCharacters: Int
+    let retainedCharacters: Int
+    let discardedCharacters: Int
+    let largestRetainedElementCharacters: Int
+    let largestRetainedElement: String
+    let largestDeliveredElementCharacters: Int
+    let largestDeliveredElement: String
+    let descriptionElements: Int
+    let contentEncodedElements: Int
+    let truncatedElements: Int
 }
 
 enum RSSParserError: Error, LocalizedError {
@@ -108,9 +215,25 @@ enum RSSParserError: Error, LocalizedError {
 }
 
 private final class RSSParserDelegate: NSObject, XMLParserDelegate {
+    private static let descriptionCharacterLimit = 128 * 1_024
+    private static let ordinaryTextCharacterLimit = 8 * 1_024
     private let maxEpisodes: Int?
     private var elementStack: [String] = []
-    private var textBuffer = ""
+    private var textFragments: [String] = []
+    private var deliveredCharactersForElement = 0
+    private var retainedCharactersForElement = 0
+    private var discardedCharactersForElement = 0
+    private var characterCallbacks = 0
+    private var deliveredCharacters = 0
+    private var retainedCharacters = 0
+    private var discardedCharacters = 0
+    private var largestRetainedElementCharacters = 0
+    private var largestRetainedElement = "none"
+    private var largestDeliveredElementCharacters = 0
+    private var largestDeliveredElement = "none"
+    private var descriptionElements = 0
+    private var contentEncodedElements = 0
+    private var truncatedElements = 0
     private var channelTitle: String?
     private var channelDescription: String?
     private var channelAuthor: String?
@@ -136,7 +259,7 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
     ) {
         let name = qName ?? elementName
         elementStack.append(name)
-        textBuffer = ""
+        resetElementText()
 
         if Self.matches(name, localName: elementName, namespaceURI: namespaceURI, qualified: "item", local: "item") {
             currentItem = EpisodeAccumulator()
@@ -197,7 +320,32 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        textBuffer += string
+        characterCallbacks += 1
+        let delivered = string.count
+        deliveredCharacters += delivered
+        deliveredCharactersForElement += delivered
+        let limit = textLimit(for: elementStack.last)
+        // Text belonging to an element Autohop does not consume is ignored by
+        // design, not reported as a field truncation.
+        guard limit > 0 else { return }
+        let remaining = max(0, limit - retainedCharactersForElement)
+        guard remaining > 0 else {
+            discardedCharactersForElement += delivered
+            discardedCharacters += delivered
+            return
+        }
+        if delivered <= remaining {
+            textFragments.append(string)
+            retainedCharactersForElement += delivered
+            retainedCharacters += delivered
+        } else {
+            textFragments.append(String(string.prefix(remaining)))
+            retainedCharactersForElement += remaining
+            retainedCharacters += remaining
+            let discarded = delivered - remaining
+            discardedCharactersForElement += discarded
+            discardedCharacters += discarded
+        }
     }
 
     func parser(
@@ -207,10 +355,27 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         qualifiedName qName: String?
     ) {
         let name = qName ?? elementName
-        let text = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = textFragments.joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if retainedCharactersForElement > largestRetainedElementCharacters {
+            largestRetainedElementCharacters = retainedCharactersForElement
+            largestRetainedElement = name
+        }
+        if deliveredCharactersForElement > largestDeliveredElementCharacters {
+            largestDeliveredElementCharacters = deliveredCharactersForElement
+            largestDeliveredElement = name
+        }
+        if discardedCharactersForElement > 0 {
+            truncatedElements += 1
+        }
+        if name == "description" {
+            descriptionElements += 1
+        } else if name == "content:encoded" {
+            contentEncodedElements += 1
+        }
         defer {
             _ = elementStack.popLast()
-            textBuffer = ""
+            resetElementText()
         }
 
         if currentItem != nil {
@@ -244,6 +409,53 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             latestEpisode: items.first?.parsedEpisode,
             episodes: items.map(\.parsedEpisode)
         )
+    }
+
+    func diagnostics(
+        sourceBytes: Int,
+        repairedBytes: Int,
+        repairedAmpersands: Int,
+        durationMilliseconds: Double
+    ) -> RSSParserDiagnostics {
+        RSSParserDiagnostics(
+            sourceBytes: sourceBytes,
+            repairedBytes: repairedBytes,
+            repairedAmpersands: repairedAmpersands,
+            durationMilliseconds: durationMilliseconds,
+            characterCallbacks: characterCallbacks,
+            deliveredCharacters: deliveredCharacters,
+            retainedCharacters: retainedCharacters,
+            discardedCharacters: discardedCharacters,
+            largestRetainedElementCharacters: largestRetainedElementCharacters,
+            largestRetainedElement: largestRetainedElement,
+            largestDeliveredElementCharacters:
+                largestDeliveredElementCharacters,
+            largestDeliveredElement: largestDeliveredElement,
+            descriptionElements: descriptionElements,
+            contentEncodedElements: contentEncodedElements,
+            truncatedElements: truncatedElements
+        )
+    }
+
+    private func resetElementText() {
+        textFragments.removeAll(keepingCapacity: true)
+        deliveredCharactersForElement = 0
+        retainedCharactersForElement = 0
+        discardedCharactersForElement = 0
+    }
+
+    private func textLimit(for name: String?) -> Int {
+        guard let name else { return 0 }
+        switch name {
+        case "description", "content:encoded", "itunes:summary":
+            return Self.descriptionCharacterLimit
+        case "guid", "link", "title", "itunes:subtitle",
+             "itunes:author", "author", "pubDate", "itunes:duration",
+             "duration", "itunes:explicit":
+            return Self.ordinaryTextCharacterLimit
+        default:
+            return 0
+        }
     }
 
     private func captureChannelText(name: String, text: String) {
@@ -290,9 +502,14 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             }
         case "title":
             currentItem?.title = Self.decodingEntities(text)
-        case "description", "content:encoded":
-            if currentItem?.description == nil {
+        case "description":
+            currentItem?.description = Self.decodingEntities(text)
+            currentItem?.descriptionCameFromContentEncoded = false
+        case "content:encoded":
+            if currentItem?.description == nil
+                || currentItem?.descriptionCameFromContentEncoded == true {
                 currentItem?.description = Self.decodingEntities(text)
+                currentItem?.descriptionCameFromContentEncoded = true
             }
         case "itunes:subtitle":
             currentItem?.subtitle = Self.decodingEntities(text)
@@ -595,6 +812,7 @@ private struct EpisodeAccumulator {
     var guid: String?
     var title: String?
     var description: String?
+    var descriptionCameFromContentEncoded = false
     var subtitle: String?
     var author: String?
     var publishedAt: Date?

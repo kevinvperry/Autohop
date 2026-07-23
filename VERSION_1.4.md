@@ -6,9 +6,55 @@ Canonical running ledger for code, behaviour, diagnostics, and user-visible
 changes made after the Version 1.3 release tag. Add every accepted Version 1.4
 change here when implemented. Do not describe planned work as complete. Public
 release notes should be derived from completed entries and omit internal detail.
+Updating this ledger is part of the implementation definition of done: add or
+amend the relevant Completed entry in the same change before handoff, including
+small user-facing fixes and diagnostic/performance policy changes rather than
+waiting for a later documentation pass.
 -->
 
 ## Completed
+
+### Player Details metadata label adjustment — 24 July 2026
+
+- Swapped the **Published** and **Distributed** headings on the main player's
+  Details metadata pills while preserving their existing values and positions.
+
+### Feed-parser memory and download-watchdog race hardening — 24 July 2026
+
+- Bounded RSS text retention by field and replaced repeated growing-string
+  concatenation with fragment collection plus one final join. Oversized
+  `content:encoded` show notes can no longer drive unbounded retained text or
+  repeated growing-prefix copies; ordinary RSS descriptions take priority, while
+  a bounded `content:encoded` value remains available as fallback.
+- Added per-parse diagnostics for source/repair growth, repaired ampersands,
+  XML character callbacks, delivered/retained/discarded text, truncation,
+  description sources, and the largest retained element.
+- Added a persisted automatic-refresh circuit breaker for feeds whose parse raises
+  footprint or resident memory by at least 200 MB. The first event pauses automatic
+  refresh for six hours and a repeat for twelve hours; manual refresh remains
+  available and a subsequent bounded parse clears the quarantine.
+- Serialized download-watchdog evaluation and made timeout cancellation one-shot
+  per URLSession task. Before cancelling, Autohop yields for queued delegate
+  completion, then revalidates live task identity, state, connectivity and received
+  bytes so concurrent deadline/periodic wakes cannot cancel a transfer that has
+  already completed out of process.
+- Added parser regression coverage for oversized show notes, bounded
+  `content:encoded` fallback, truncation diagnostics, and normal-description
+  precedence, plus backward-compatible and round-trip coverage for persisted
+  parse-quarantine state.
+
+### Artwork resilience and feed-link sharing — 23 July 2026
+
+- Fixed Now Playing artwork resolution so episode-specific artwork retains first
+  priority but a failed, oversized, unavailable, or undecodable episode image now
+  falls back to the subscription's channel artwork instead of leaving the player
+  on its waveform placeholder. Duplicate episode/channel URLs are attempted only
+  once, and artwork state is cleared when the request identity changes.
+- Added regression coverage for episode-first artwork ordering, missing episode
+  artwork, and duplicate episode/channel artwork URLs.
+- Added a **Copy Link** action to the Feed section of Individual Subscription
+  Settings. It copies the exact RSS feed URL to the system clipboard, shows a
+  temporary **Copied** confirmation, and includes VoiceOver label and hint text.
 
 ### Background refresh efficiency follow-up — 23 July 2026
 
@@ -498,10 +544,9 @@ release notes should be derived from completed entries and omit internal detail.
   network-path changes, BGTask entry, URLSession activity, and the periodic timer
   can all request immediate re-evaluation. Suspension grace remains limited to
   active transfers whose delegate progress may legitimately be withheld.
-- Added generation ownership to delayed watchdog retries and retired the durable
-  automatic-download intent when all bounded retries are exhausted. This creates
-  one authoritative retry path and prevents a later intent drain from silently
-  restarting an episode already presented as terminally failed.
+- Added generation ownership to delayed watchdog retries. Terminal exhaustion is
+  now persisted against the episode and enclosure URL with a progressive cooldown,
+  so a later feed refresh cannot silently restart unchanged failed media.
 - Added an optional second BGAppRefresh feed batch. After the normal eight-feed
   batch, Autohop may process two to four deferred feeds only when cooperative and
   system deadlines permit and Low Power Mode, thermal pressure, constrained or
@@ -577,8 +622,46 @@ release notes should be derived from completed entries and omit internal detail.
 - Discovery/Stats widget concepts remain deliberately deferred and are not part
   of this implementation.
 
+### Unplugged background refresh hardening — 23 July 2026
+
+- Persisted terminal automatic-download failures by episode and enclosure URL.
+  Unchanged media now observes 15-, 30-, then 60-minute cooldowns across feed
+  refreshes and app launches; a changed enclosure, successful transfer, or manual
+  user action can proceed without inheriting stale failure state.
+- Added automatic-only failure circuit breakers. Two terminal failures from one
+  media host pause further automatic starts for that host for 15 minutes; failures
+  across three hosts briefly slow new automatic starts session-wide. Healthy hosts,
+  feed refreshes, and explicit user downloads remain available.
+- Added an independently scheduled first-byte deadline to each URLSession transfer
+  attempt. The 15-second watchdog remains as fallback diagnostics, while an
+  executable app now evaluates the attempt at its actual 60-second deadline.
+- Removed the normal-case full-feed byte copy from bare-ampersand repair. Correctly
+  encoded feeds pass their original Data directly to XMLParser; malformed feeds
+  retain the bounded linear repair. Feed responses above 32 MB are rejected before
+  parsing, and large/repair-required responses record response size, validators,
+  episode limit, and repair status for memory analysis.
+- Added a durable 30-minute recheck floor for successfully fetched fallback,
+  random-surveillance, and unreliable-date feeds so unchanged weekly shows do not
+  repeatedly occupy four-minute background-audio batches.
+- Made background-audio batch size backlog-aware while retaining the four-minute
+  cadence. The routine seven-feed batch can expand to eight or ten when deferrals
+  age, but only below the memory guard and outside Low Power Mode, serious thermal
+  pressure, constrained networking, or large active downloads.
+- Added regression coverage for legacy intent-store migration, persisted progressive
+  cooldowns, enclosure replacement, and valid-versus-bare ampersand detection.
+
 ## Verification status
 
+- Full SwiftPM core test suite: 288 tests passed on 24 July 2026 after
+  feed-parser, persisted quarantine, and watchdog-race hardening.
+- App-only Swift sources passed compiler syntax validation on 24 July 2026.
+  The unsigned iOS `xcodebuild` verification could not start because the
+  execution environment blocked SwiftPM's nested manifest sandbox during package
+  resolution; this was an environment restriction rather than a source failure.
+- iPhone simulator Debug build: passed 23 July 2026 after unplugged-background
+  hardening.
+- Full iOS test bundle: compiled 23 July 2026; simulator test execution exited
+  before the XCTest host established its connection.
 - iPhone simulator Debug build: passed 14 July 2026.
 - Full automated test bundle: compiled successfully; simulator execution was
   blocked when the unsigned test host exited during CloudKit entitlement setup.

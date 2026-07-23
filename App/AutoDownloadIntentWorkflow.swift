@@ -75,10 +75,30 @@ final class AutoDownloadIntentWorkflow {
         podcastTitle: String,
         refreshUpNextAfterMerge: Bool
     ) {
+        if let failure = state.intentStore.activeFailure(
+            episodeID: episode.id,
+            mediaURL: episode.audioURL
+        ) {
+            logger.info(
+                "download.exhaustionCooldownSkipped",
+                "Unchanged exhausted enclosure remains in its durable cooldown",
+                metadata: [
+                    "podcast": podcastTitle,
+                    "episodeID": episode.id.uuidString,
+                    "exhaustions": "\(failure.consecutiveExhaustions)",
+                    "retryAfterSeconds": String(
+                        format: "%.0f",
+                        failure.retryAfter.timeIntervalSinceNow
+                    )
+                ]
+            )
+            return
+        }
         state.intentStore.record(
             episodeID: episode.id,
             subscriptionID: subscriptionID,
-            podcastTitle: podcastTitle
+            podcastTitle: podcastTitle,
+            mediaURL: episode.audioURL
         )
         logger.info(
             "feed.autoDownloadScheduled",
@@ -186,6 +206,24 @@ final class AutoDownloadIntentWorkflow {
                     || episode.downloadState == .queued {
                     continue
                 }
+                if let failure = self.state.intentStore.activeFailure(
+                    episodeID: episode.id,
+                    mediaURL: episode.audioURL
+                ) {
+                    self.logger.info(
+                        "download.exhaustionCooldownSkipped",
+                        "Persisted auto-download remains in terminal-failure cooldown",
+                        metadata: [
+                            "episodeID": episode.id.uuidString,
+                            "exhaustions": "\(failure.consecutiveExhaustions)",
+                            "retryAfterSeconds": String(
+                                format: "%.0f",
+                                failure.retryAfter.timeIntervalSinceNow
+                            )
+                        ]
+                    )
+                    continue
+                }
                 await self.run(
                     episode: episode,
                     subscriptionID: intent.subscriptionID,
@@ -233,6 +271,25 @@ final class AutoDownloadIntentWorkflow {
                     "podcast": subscription.title,
                     "scheduledEpisode": episode.title,
                     "scheduledEpisodeID": episode.id.uuidString
+                ]
+            )
+            return
+        }
+        if let failure = state.intentStore.activeFailure(
+            episodeID: candidate.id,
+            mediaURL: candidate.audioURL
+        ) {
+            logger.info(
+                "download.exhaustionCooldownSkipped",
+                "Auto-download suppressed until the durable exhaustion cooldown ends",
+                metadata: [
+                    "podcast": subscription.title,
+                    "episodeID": candidate.id.uuidString,
+                    "exhaustions": "\(failure.consecutiveExhaustions)",
+                    "retryAfterSeconds": String(
+                        format: "%.0f",
+                        failure.retryAfter.timeIntervalSinceNow
+                    )
                 ]
             )
             return

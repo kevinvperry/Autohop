@@ -101,6 +101,12 @@ public final class DownloadManager: NSObject, DownloadManaging {
     /// still waiting for its first response byte; that phase is not an active stall.
     private var taskStartedAtByEpisodeID: [UUID: Date] = [:]
     private var firstByteDeadlineByEpisodeID: [UUID: Date] = [:]
+    /// One independently scheduled deadline per transfer attempt. The periodic
+    /// watchdog remains a fallback/diagnostic sampler, but no longer determines
+    /// when an executable process notices an expired first-byte wait.
+    private var firstByteDeadlineWorkItems: [UUID: DispatchWorkItem] = [:]
+    private var watchdogEvaluationInFlight = false
+    private var watchdogCancellationClaimedTaskIDs = Set<Int>()
     private var lastFirstByteDiagnosticAtByEpisodeID: [UUID: Date] = [:]
     private var connectivityWaitingTaskIDs = Set<Int>()
     private var downloadWatchdogTimer: Timer?
@@ -169,6 +175,13 @@ public final class DownloadManager: NSObject, DownloadManaging {
                         attemptStartedAt.addingTimeInterval(
                             self.firstByteWaitThreshold
                         )
+                    self.scheduleFirstByteDeadline(
+                        episodeID: meta.episodeID,
+                        taskID: task.taskIdentifier,
+                        deadline: attemptStartedAt.addingTimeInterval(
+                            self.firstByteWaitThreshold
+                        )
+                    )
                     self.progressLastReceivedAt[meta.episodeID] = reconnectedAt
                     self.progressLastObservedBytes[meta.episodeID] = task.countOfBytesReceived
                     self.logger.info("download.taskReconnected", "Reconnected live task from previous session", metadata: [
@@ -261,6 +274,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
         taskStartedAtByEpisodeID[episode.id] = startedAt
         firstByteDeadlineByEpisodeID[episode.id] =
             startedAt.addingTimeInterval(firstByteWaitThreshold)
+        scheduleFirstByteDeadline(
+            episodeID: episode.id,
+            taskID: task.taskIdentifier,
+            deadline: startedAt.addingTimeInterval(firstByteWaitThreshold)
+        )
         progressLastObservedBytes[episode.id] = task.countOfBytesReceived
         logger.info("download.taskResume", "Download task resumed", metadata: [
             "episode": episode.title,
@@ -284,6 +302,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         progressLastObservedBytes.removeValue(forKey: episodeID)
         taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
         firstByteDeadlineByEpisodeID.removeValue(forKey: episodeID)
+        cancelFirstByteDeadline(for: episodeID)
         lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
         connectivityWaitingTaskIDs.remove(taskID)
     }
@@ -344,6 +363,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             self.progressLastObservedBytes.removeValue(forKey: episodeID)
             self.taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
             self.firstByteDeadlineByEpisodeID.removeValue(forKey: episodeID)
+            self.cancelFirstByteDeadline(for: episodeID)
             self.lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
             self.watchdogStalledEpisodeIDs.remove(episodeID)
             self.intentionallyPausedEpisodeIDs.remove(episodeID)
@@ -526,6 +546,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 self.firstByteDeadlineByEpisodeID.removeValue(
                     forKey: episodeID
                 )
+                self.cancelFirstByteDeadline(for: episodeID)
             }
             self.connectivityWaitingTaskIDs.remove(taskID)
             // Unknown Content-Length is still proof that active transfer began.
@@ -817,6 +838,7 @@ extension DownloadManager {
 
 extension DownloadManager {
     func clearTaskTracking(taskID: Int) {
+        watchdogCancellationClaimedTaskIDs.remove(taskID)
         guard let episodeID = episodeIDByTask.removeValue(forKey: taskID) else { return }
         taskIDByEpisodeID.removeValue(forKey: episodeID)
         if let mediaURL = mediaURLByEpisodeID.removeValue(forKey: episodeID) {
@@ -828,6 +850,7 @@ extension DownloadManager {
         progressLastObservedBytes.removeValue(forKey: episodeID)
         taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
         firstByteDeadlineByEpisodeID.removeValue(forKey: episodeID)
+        cancelFirstByteDeadline(for: episodeID)
         lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
         connectivityWaitingTaskIDs.remove(taskID)
     }
@@ -843,6 +866,30 @@ extension DownloadManager {
         }
     }
 
+    private func scheduleFirstByteDeadline(
+        episodeID: UUID,
+        taskID: Int,
+        deadline: Date
+    ) {
+        cancelFirstByteDeadline(for: episodeID)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.taskIDByEpisodeID[episodeID] == taskID,
+                  (self.progressLastObservedBytes[episodeID] ?? 0) == 0
+            else { return }
+            self.checkForStalledDownloads(reason: "attemptDeadline")
+        }
+        firstByteDeadlineWorkItems[episodeID] = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + max(0, deadline.timeIntervalSinceNow),
+            execute: work
+        )
+    }
+
+    private func cancelFirstByteDeadline(for episodeID: UUID) {
+        firstByteDeadlineWorkItems.removeValue(forKey: episodeID)?.cancel()
+    }
+
     public func reevaluateWatchdog(reason: String) {
         DispatchQueue.main.async { [weak self] in
             self?.checkForStalledDownloads(reason: reason)
@@ -850,6 +897,14 @@ extension DownloadManager {
     }
 
     private func checkForStalledDownloads(reason: String) {
+        guard !watchdogEvaluationInFlight else {
+            logger.verbose(
+                "download.watchdogEvaluationCoalesced",
+                "Skipped overlapping watchdog evaluation",
+                metadata: ["reason": reason]
+            )
+            return
+        }
         let now = Date()
         // The watchdog Timer only fires while the app is running. A gap far larger than
         // its interval means the app was suspended in between — during which a background
@@ -891,9 +946,11 @@ extension DownloadManager {
             return now >= deadline || diagnosticDue
         }
         guard !candidates.isEmpty else { return }
+        watchdogEvaluationInFlight = true
         session.getAllTasks { [weak self] tasks in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                defer { self.watchdogEvaluationInFlight = false }
                 let tasksByID = Dictionary(uniqueKeysWithValues: tasks.map { ($0.taskIdentifier, $0) })
                 for (episodeID, lastProgressAt) in candidates {
                     guard let taskID = self.taskIDByEpisodeID[episodeID],
@@ -910,11 +967,14 @@ extension DownloadManager {
                         self.progressLastObservedBytes.removeValue(forKey: episodeID)
                         self.taskStartedAtByEpisodeID.removeValue(forKey: episodeID)
                         self.firstByteDeadlineByEpisodeID.removeValue(forKey: episodeID)
+                        self.cancelFirstByteDeadline(for: episodeID)
                         self.lastFirstByteDiagnosticAtByEpisodeID.removeValue(forKey: episodeID)
                         self.watchdogStalledEpisodeIDs.remove(episodeID)
                         self.onWatchdogCancelled?(episodeID)
                         continue
                     }
+                    guard !self.watchdogCancellationClaimedTaskIDs
+                        .contains(taskID) else { continue }
 
                     // Request bytes are not response payload. Only received bytes
                     // establish that the active-transfer phase has begun.
@@ -960,23 +1020,14 @@ extension DownloadManager {
                             self.taskStartedAtByEpisodeID[episodeID] = now
                             continue
                         }
-                        self.logger.warning("download.watchdogFirstByteTimeout", "Cancelling download that exceeded the first-byte deadline", metadata: [
-                            "episodeID": episodeID.uuidString,
-                            "taskID": "\(taskID)",
-                            "waitSeconds": "\(Int(waitSeconds))",
-                            "responseReceived": "\(hasResponse)",
-                            "taskState": Self.taskStateLabel(task.state),
-                            "deadlineOverrunSeconds": "\(max(0, Int(now.timeIntervalSince(deadline))))",
-                            "evaluationReason": reason,
-                            "host": task.originalRequest?.url?.host ?? "unknown"
-                        ])
-                        self.watchdogStalledEpisodeIDs.insert(episodeID)
-                        task.cancel(byProducingResumeData: { [weak self] resumeData in
-                            DispatchQueue.main.async {
-                                guard let self, let resumeData else { return }
-                                self.resumeDataByEpisodeID[episodeID] = resumeData
-                            }
-                        })
+                        self.revalidateAndCancelFirstByteTimeout(
+                            task: task,
+                            episodeID: episodeID,
+                            taskID: taskID,
+                            startedAt: startedAt,
+                            deadline: deadline,
+                            evaluationReason: reason
+                        )
                         continue
                     }
 
@@ -1000,6 +1051,7 @@ extension DownloadManager {
                         "bytesExpected": "\(task.countOfBytesExpectedToReceive)",
                         "taskState": Self.taskStateLabel(task.state)
                     ])
+                    self.watchdogCancellationClaimedTaskIDs.insert(taskID)
                     self.watchdogStalledEpisodeIDs.insert(episodeID)
                     task.cancel(byProducingResumeData: { [weak self] resumeData in
                         DispatchQueue.main.async {
@@ -1009,6 +1061,72 @@ extension DownloadManager {
                     })
                 }
             }
+        }
+    }
+
+    private func revalidateAndCancelFirstByteTimeout(
+        task: URLSessionDownloadTask,
+        episodeID: UUID,
+        taskID: Int,
+        startedAt: Date,
+        deadline: Date,
+        evaluationReason: String
+    ) {
+        // Give URLSession progress/completion callbacks already queued by the
+        // same background wake one main-queue turn to settle first.
+        DispatchQueue.main.async { [weak self, weak task] in
+            guard let self, let task,
+                  self.taskIDByEpisodeID[episodeID] == taskID,
+                  !self.watchdogCancellationClaimedTaskIDs.contains(taskID)
+            else { return }
+            let liveBytes = task.countOfBytesReceived
+            let trackedBytes = self.progressLastObservedBytes[episodeID] ?? 0
+            guard task.state == .running,
+                  liveBytes == 0,
+                  trackedBytes == 0,
+                  !self.connectivityWaitingTaskIDs.contains(taskID)
+            else {
+                if max(liveBytes, trackedBytes) > 0 {
+                    self.progressLastObservedBytes[episodeID] =
+                        max(liveBytes, trackedBytes)
+                    self.progressLastReceivedAt[episodeID] = Date()
+                    self.logger.info(
+                        "download.watchdogProgressRecovered",
+                        "Transfer advanced before final watchdog cancellation",
+                        metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "taskID": "\(taskID)",
+                            "bytesReceived": "\(max(liveBytes, trackedBytes))",
+                            "evaluationReason": evaluationReason
+                        ]
+                    )
+                }
+                return
+            }
+            self.watchdogCancellationClaimedTaskIDs.insert(taskID)
+            let now = Date()
+            self.logger.warning(
+                "download.watchdogFirstByteTimeout",
+                "Cancelling download that exceeded the first-byte deadline",
+                metadata: [
+                    "episodeID": episodeID.uuidString,
+                    "taskID": "\(taskID)",
+                    "waitSeconds": "\(Int(now.timeIntervalSince(startedAt)))",
+                    "responseReceived": "\(task.response != nil)",
+                    "taskState": Self.taskStateLabel(task.state),
+                    "deadlineOverrunSeconds":
+                        "\(max(0, Int(now.timeIntervalSince(deadline))))",
+                    "evaluationReason": evaluationReason,
+                    "host": task.originalRequest?.url?.host ?? "unknown"
+                ]
+            )
+            self.watchdogStalledEpisodeIDs.insert(episodeID)
+            task.cancel(byProducingResumeData: { [weak self] resumeData in
+                DispatchQueue.main.async {
+                    guard let self, let resumeData else { return }
+                    self.resumeDataByEpisodeID[episodeID] = resumeData
+                }
+            })
         }
     }
 
@@ -1033,6 +1151,13 @@ extension DownloadManager {
                 self.taskStartedAtByEpisodeID[episodeID] = Date()
                 self.firstByteDeadlineByEpisodeID[episodeID] =
                     Date().addingTimeInterval(self.firstByteWaitThreshold)
+                self.scheduleFirstByteDeadline(
+                    episodeID: episodeID,
+                    taskID: task.taskIdentifier,
+                    deadline: Date().addingTimeInterval(
+                        self.firstByteWaitThreshold
+                    )
+                )
             }
             self.logger.info("download.waitingForConnectivity", "Download is waiting for network connectivity", metadata: [
                 "taskID": "\(task.taskIdentifier)"

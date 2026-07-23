@@ -1265,9 +1265,9 @@ struct PlayerView: View {
     private func detailsMetaGrid(ep: Episode, sub: Subscription?) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             if let date = ep.publishedAt {
-                metaCard("Published", relativePublishedDateLabel(date))
+                metaCard("Distributed", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
-                metaCard("Distributed", releasedWeekdayLabel(date))
+                metaCard("Published", releasedWeekdayLabel(date))
             }
             if let dur = ep.durationSeconds {
                 metaCard("Duration", formatDurationLong(dur))

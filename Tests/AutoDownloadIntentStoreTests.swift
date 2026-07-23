@@ -97,4 +97,86 @@ final class AutoDownloadIntentStoreTests: XCTestCase {
         let store = AutoDownloadIntentStore(fileURL: temporaryFileURL())
         XCTAssertTrue(store.intents.isEmpty)
     }
+
+    func testTerminalExhaustionPersistsAndUsesProgressiveCooldown() {
+        let url = temporaryFileURL()
+        let episodeID = UUID()
+        let subscriptionID = UUID()
+        let mediaURL = URL(string: "https://media.example/episode.mp3")!
+        let now = Date()
+        let store = AutoDownloadIntentStore(fileURL: url)
+
+        let first = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: now
+        )
+        XCTAssertEqual(first.retryAfter.timeIntervalSince(now), 15 * 60, accuracy: 0.01)
+
+        let secondAt = first.retryAfter
+        let second = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: secondAt
+        )
+        XCTAssertEqual(second.retryAfter.timeIntervalSince(secondAt), 30 * 60, accuracy: 0.01)
+
+        let reloaded = AutoDownloadIntentStore(fileURL: url)
+        XCTAssertEqual(reloaded.failures.first?.consecutiveExhaustions, 2)
+        XCTAssertNotNil(reloaded.activeFailure(
+            episodeID: episodeID,
+            mediaURL: mediaURL,
+            now: secondAt
+        ))
+    }
+
+    func testChangedEnclosureClearsTerminalCooldown() {
+        let store = AutoDownloadIntentStore(fileURL: temporaryFileURL())
+        let episodeID = UUID()
+        let oldURL = URL(string: "https://media.example/old.mp3")!
+        let newURL = URL(string: "https://media.example/new.mp3")!
+        store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: UUID(),
+            mediaURL: oldURL,
+            host: oldURL.host
+        )
+
+        XCTAssertNil(store.activeFailure(
+            episodeID: episodeID,
+            mediaURL: newURL
+        ))
+        XCTAssertTrue(store.failures.isEmpty)
+    }
+
+    func testLoadsLegacyIntentArrayAndMigratesOnNextSave() throws {
+        let url = temporaryFileURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let episodeID = UUID()
+        let legacy = [AutoDownloadIntent(
+            episodeID: episodeID,
+            subscriptionID: UUID(),
+            podcastTitle: "Legacy"
+        )]
+        try JSONEncoder().encode(legacy).write(to: url)
+
+        let store = AutoDownloadIntentStore(fileURL: url)
+        XCTAssertTrue(store.contains(episodeID: episodeID))
+        store.record(
+            episodeID: UUID(),
+            subscriptionID: UUID(),
+            podcastTitle: "New"
+        )
+        XCTAssertEqual(
+            AutoDownloadIntentStore(fileURL: url).intents.count,
+            2
+        )
+    }
 }

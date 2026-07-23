@@ -90,6 +90,22 @@ final class DownloadTransferWorkflow {
             coordinator.message = "Downloads are disabled on the current network."
             return
         }
+        if isAutomatic,
+           let circuit = coordinator.automaticDownloadBlock(
+            for: episode.audioURL
+           ) {
+            logger.info(
+                "download.circuitBreakerSkipped",
+                "Automatic download deferred by failure circuit breaker",
+                metadata: [
+                    "episode": episode.title,
+                    "podcast": podcastTitle,
+                    "scope": circuit,
+                    "mediaHost": episode.audioURL.host ?? "unknown"
+                ]
+            )
+            return
+        }
 
         if let activeActivity = coordinator.activityStore.activeActivities.first(
             where: {
@@ -214,6 +230,10 @@ final class DownloadTransferWorkflow {
             )
             coordinator.clearWatchdogRetryState(for: episode.id)
             coordinator.failureBackoff.removeValue(forKey: episode.guid)
+            coordinator.recordDownloadSuccess(
+                episodeID: episode.id,
+                mediaURL: episode.audioURL
+            )
             if let duration {
                 subscriptionStore.updateEpisodeDuration(
                     subscriptionID: subscriptionID,

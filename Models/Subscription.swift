@@ -329,6 +329,10 @@ public struct RefreshStats: Equatable, Codable, Sendable {
     /// Longer per-episode observation history for schedule learning and the
     /// Release Radar schedule profile.
     public var releaseObservations: [FeedReleaseObservation]
+    /// Extreme parser-memory growth pauses automatic refresh for this feed.
+    /// Explicit/manual refresh bypasses the persisted quarantine.
+    public var parseQuarantineUntil: Date?
+    public var consecutiveHighMemoryParses: Int
 
     public static let maxRecentPublishDates = 10
     public static let maxReleaseObservations = 200
@@ -340,7 +344,9 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         lastNewEpisodeAt: Date? = nil,
         consecutiveEmptyFetches: Int = 0,
         recentPublishDates: [Date] = [],
-        releaseObservations: [FeedReleaseObservation] = []
+        releaseObservations: [FeedReleaseObservation] = [],
+        parseQuarantineUntil: Date? = nil,
+        consecutiveHighMemoryParses: Int = 0
     ) {
         self.etag = etag
         self.lastModified = lastModified
@@ -349,6 +355,8 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         self.consecutiveEmptyFetches = consecutiveEmptyFetches
         self.recentPublishDates = recentPublishDates
         self.releaseObservations = releaseObservations
+        self.parseQuarantineUntil = parseQuarantineUntil
+        self.consecutiveHighMemoryParses = consecutiveHighMemoryParses
     }
 
     public init(from decoder: Decoder) throws {
@@ -360,6 +368,14 @@ public struct RefreshStats: Equatable, Codable, Sendable {
         consecutiveEmptyFetches = try container.decodeIfPresent(Int.self, forKey: .consecutiveEmptyFetches) ?? 0
         recentPublishDates = try container.decodeIfPresent([Date].self, forKey: .recentPublishDates) ?? []
         releaseObservations = try container.decodeIfPresent([FeedReleaseObservation].self, forKey: .releaseObservations) ?? []
+        parseQuarantineUntil = try container.decodeIfPresent(
+            Date.self,
+            forKey: .parseQuarantineUntil
+        )
+        consecutiveHighMemoryParses = try container.decodeIfPresent(
+            Int.self,
+            forKey: .consecutiveHighMemoryParses
+        ) ?? 0
     }
 
     public mutating func recordFetch(foundNewEpisode: Bool, publishedAt: Date? = nil, at date: Date = Date()) {

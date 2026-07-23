@@ -80,6 +80,18 @@ enum ReleaseRadarCyclePlanner {
                 now: now
             )
             guard prediction.nextDueAt <= now else { return nil }
+            // Surveillance/fallback feeds with no reliable release window must
+            // not re-enter every four-minute audio batch merely because their
+            // calculated due date remains in the past. A successful fetch
+            // advances lastFetchedAt, which supplies this durable floor.
+            let slowSurveillanceStates: Set<FeedRefreshWindowState> = [
+                .fallback, .randomSurveillance, .unreliableDates
+            ]
+            if slowSurveillanceStates.contains(prediction.state),
+               let lastFetchedAt = subscription.refreshStats.lastFetchedAt,
+               now.timeIntervalSince(lastFetchedAt) < 30 * 60 {
+                return nil
+            }
             var priority = FeedRefreshPrioritizer.priority(
                 prediction: prediction,
                 profile: profile,

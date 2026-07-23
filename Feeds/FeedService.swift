@@ -52,16 +52,19 @@ final class FeedService: FeedServicing {
     private let parser: RSSParser
     private let session: URLSession
     private let requestTimeoutSeconds: TimeInterval
+    private let maxFeedResponseBytes: Int
 
     init(
         chapterService: ChapterServicing,
         parser: RSSParser = RSSParser(),
         session: URLSession? = nil,
-        requestTimeoutSeconds: TimeInterval = 25
+        requestTimeoutSeconds: TimeInterval = 25,
+        maxFeedResponseBytes: Int = 32 * 1_024 * 1_024
     ) {
         self.chapterService = chapterService
         self.parser = parser
         self.requestTimeoutSeconds = requestTimeoutSeconds
+        self.maxFeedResponseBytes = maxFeedResponseBytes
         if let session {
             self.session = session
         } else {
@@ -119,14 +122,100 @@ final class FeedService: FeedServicing {
             newValidators.etag = http.value(forHTTPHeaderField: "ETag")
             newValidators.lastModified = http.value(forHTTPHeaderField: "Last-Modified")
         }
+        if response.expectedContentLength > Int64(maxFeedResponseBytes)
+            || data.count > maxFeedResponseBytes {
+            AppLogger.shared.warning(
+                "feed.responseTooLarge",
+                "Feed response exceeded the safe in-memory parsing limit",
+                metadata: [
+                    "host": feedURL.host ?? "unknown",
+                    "responseBytes": "\(data.count)",
+                    "contentLength": "\(response.expectedContentLength)",
+                    "limitBytes": "\(maxFeedResponseBytes)"
+                ],
+                alwaysPersist: true
+            )
+            throw FeedServiceError.responseTooLarge
+        }
+        let needsAmpersandRepair = RSSParser.containsBareAmpersand(in: data)
+        if data.count >= 5 * 1_024 * 1_024 || needsAmpersandRepair {
+            AppLogger.shared.info(
+                "feed.responseDiagnostics",
+                "Recorded large or repair-required feed response",
+                metadata: [
+                    "host": feedURL.host ?? "unknown",
+                    "responseBytes": "\(data.count)",
+                    "contentLength": "\(response.expectedContentLength)",
+                    "episodeLimit": episodeLimit.map(String.init) ?? "all",
+                    "conditionalRequest": "\(validators != nil)",
+                    "bareAmpersandRepair": "\(needsAmpersandRepair)"
+                ],
+                alwaysPersist: true
+            )
+        }
 
-        let result = try parseResult(data: data, subscriptionID: subscriptionID, episodeLimit: episodeLimit)
+        let result = try parseResult(
+            data: data,
+            subscriptionID: subscriptionID,
+            episodeLimit: episodeLimit,
+            feedURL: feedURL
+        )
         return .updated(result, newValidators)
     }
 
-    private func parseResult(data: Data, subscriptionID: UUID, episodeLimit: Int?) throws -> FeedRefreshResult {
+    private func parseResult(
+        data: Data,
+        subscriptionID: UUID,
+        episodeLimit: Int?,
+        feedURL: URL
+    ) throws -> FeedRefreshResult {
         try autoreleasepool {
-            let parsedFeed = try parser.parse(data: data, maxEpisodes: episodeLimit)
+            let parsed = try parser.parseWithDiagnostics(
+                data: data,
+                maxEpisodes: episodeLimit
+            )
+            let parsedFeed = parsed.feed
+            let diagnostics = parsed.diagnostics
+            if diagnostics.repairedAmpersands > 0
+                || diagnostics.truncatedElements > 0
+                || diagnostics.sourceBytes >= 1_024 * 1_024 {
+                AppLogger.shared.info(
+                    "feed.parseDiagnostics",
+                    "Recorded bounded RSS parser work",
+                    metadata: [
+                        "host": feedURL.host ?? "unknown",
+                        "sourceBytes": "\(diagnostics.sourceBytes)",
+                        "repairedBytes": "\(diagnostics.repairedBytes)",
+                        "repairGrowthBytes":
+                            "\(diagnostics.repairedBytes - diagnostics.sourceBytes)",
+                        "repairedAmpersands": "\(diagnostics.repairedAmpersands)",
+                        "durationMs":
+                            String(
+                                format: "%.1f",
+                                diagnostics.durationMilliseconds
+                            ),
+                        "characterCallbacks": "\(diagnostics.characterCallbacks)",
+                        "deliveredCharacters": "\(diagnostics.deliveredCharacters)",
+                        "retainedCharacters": "\(diagnostics.retainedCharacters)",
+                        "discardedCharacters": "\(diagnostics.discardedCharacters)",
+                        "largestRetainedElement":
+                            diagnostics.largestRetainedElement,
+                        "largestRetainedElementCharacters":
+                            "\(diagnostics.largestRetainedElementCharacters)",
+                        "largestDeliveredElement":
+                            diagnostics.largestDeliveredElement,
+                        "largestDeliveredElementCharacters":
+                            "\(diagnostics.largestDeliveredElementCharacters)",
+                        "descriptionElements":
+                            "\(diagnostics.descriptionElements)",
+                        "contentEncodedElements":
+                            "\(diagnostics.contentEncodedElements)",
+                        "truncatedElements": "\(diagnostics.truncatedElements)"
+                    ],
+                    alwaysPersist: diagnostics.repairedAmpersands > 0
+                        || diagnostics.truncatedElements > 0
+                )
+            }
 
             let playableEpisodes = parsedFeed.episodes.compactMap { parsedEpisode -> Episode? in
                 guard let audioURL = parsedEpisode.audioURL else { return nil }
@@ -217,6 +306,7 @@ enum FeedServiceError: Error {
     case invalidFeed
     case missingAudioEnclosure
     case timedOut
+    case responseTooLarge
     /// A server returned 304 Not Modified even though `refresh()` sent no
     /// validators (so it can't legitimately happen) — surfaced distinctly rather
     /// than as a misleading `missingAudioEnclosure`.

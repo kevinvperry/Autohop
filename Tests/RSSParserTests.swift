@@ -12,6 +12,54 @@ import XCTest
 #endif
 
 final class RSSParserTests: XCTestCase {
+    func testLargeContentEncodedIsBoundedAndDescriptionWins() throws {
+        let oversized = String(repeating: "show-notes-", count: 20_000)
+        let xml = """
+        <rss version="2.0"><channel><title>Bounded</title><item>
+        <guid>one</guid><title>Episode</title>
+        <content:encoded><![CDATA[\(oversized)]]></content:encoded>
+        <description>Short preferred description</description>
+        <enclosure url="https://example.com/one.mp3" type="audio/mpeg"/>
+        </item></channel></rss>
+        """
+
+        let parsed = try RSSParser().parseWithDiagnostics(
+            data: Data(xml.utf8)
+        )
+
+        XCTAssertEqual(
+            try XCTUnwrap(parsed.feed.latestEpisode).description,
+            "Short preferred description"
+        )
+        XCTAssertGreaterThan(parsed.diagnostics.discardedCharacters, 0)
+        XCTAssertEqual(parsed.diagnostics.truncatedElements, 1)
+        XCTAssertLessThanOrEqual(
+            parsed.diagnostics.largestRetainedElementCharacters,
+            128 * 1_024
+        )
+    }
+
+    func testContentEncodedRemainsBoundedFallbackWithoutDescription() throws {
+        let oversized = String(repeating: "x", count: 140 * 1_024)
+        let xml = """
+        <rss version="2.0"><channel><title>Fallback</title><item>
+        <guid>one</guid><title>Episode</title>
+        <content:encoded><![CDATA[\(oversized)]]></content:encoded>
+        <enclosure url="https://example.com/one.mp3" type="audio/mpeg"/>
+        </item></channel></rss>
+        """
+
+        let parsed = try RSSParser().parseWithDiagnostics(
+            data: Data(xml.utf8)
+        )
+        let description = try XCTUnwrap(
+            try XCTUnwrap(parsed.feed.latestEpisode).description
+        )
+
+        XCTAssertEqual(description.count, 128 * 1_024)
+        XCTAssertGreaterThan(parsed.diagnostics.discardedCharacters, 0)
+    }
+
     func testParsesABCBreakfastFixture() throws {
         let data = try fixtureData(named: "ABCBreakfastSampleFeed", extension: "xml")
 
@@ -278,6 +326,16 @@ final class RSSParserTests: XCTestCase {
         let xml = "<rss version=\"2.0\"><channel><title>S</title><item><title>Tom &amp; Jerry</title><enclosure url=\"https://e.com/a.mp3\" length=\"1\" type=\"audio/mpeg\"/></item></channel></rss>"
         let feed = try RSSParser().parse(data: Data(xml.utf8))
         XCTAssertEqual(try XCTUnwrap(feed.latestEpisode).title, "Tom & Jerry")
+        XCTAssertFalse(RSSParser.containsBareAmpersand(in: Data(xml.utf8)))
+    }
+
+    func testBareAmpersandDetectionDistinguishesValidEntities() {
+        XCTAssertFalse(RSSParser.containsBareAmpersand(
+            in: Data("A &amp; B &#8212; C".utf8)
+        ))
+        XCTAssertTrue(RSSParser.containsBareAmpersand(
+            in: Data("A & B".utf8)
+        ))
     }
 
     func testMixedAmpersandRepairAndNoQuadraticBlowup() throws {

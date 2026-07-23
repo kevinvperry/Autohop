@@ -459,15 +459,42 @@ final class FeedRefreshCycleWorkflow {
         let skipped = requested.filter(\.excludeFromAutoFeedRefresh)
         let active = requested.filter { !$0.excludeFromAutoFeedRefresh }
         let now = runtimeWorkflow.now
-        let backedOff = active.filter {
+        let isManual = diagnostics.executionContext == .manual
+        let parseQuarantined = active.filter {
+            !isManual
+                && ($0.refreshStats.parseQuarantineUntil.map { $0 > now }
+                    ?? false)
+        }
+        if !parseQuarantined.isEmpty {
+            logger.warning(
+                "feed.parseMemoryQuarantineSkipped",
+                "Skipped feeds protected by the parse-memory circuit breaker",
+                metadata: [
+                    "count": "\(parseQuarantined.count)",
+                    "reason": diagnostics.reason,
+                    "subscriptionIDs": parseQuarantined
+                        .map { $0.id.uuidString }
+                        .joined(separator: ",")
+                ]
+            )
+        }
+        let parseEligible = isManual
+            ? active
+            : active.filter {
+                guard let until = $0.refreshStats.parseQuarantineUntil else {
+                    return true
+                }
+                return until <= now
+            }
+        let backedOff = parseEligible.filter {
             guard let until = coordinator.failureBackoffUntil[$0.id] else {
                 return false
             }
             return until > now
         }
         let eligible = includeBackoffFeeds
-            ? active
-            : active.filter {
+            ? parseEligible
+            : parseEligible.filter {
                 guard let until = coordinator.failureBackoffUntil[$0.id]
                 else { return true }
                 return until <= now
@@ -849,6 +876,25 @@ final class FeedRefreshCycleWorkflow {
         -> (routineLimit: Int, hardLimit: Int) {
         var routine = policy.backgroundAudioLimit
         var hard = policy.backgroundAudioHardLimit
+        let now = runtimeWorkflow.now
+        let oldestBacklogAge = coordinator.deferredBacklog.values
+            .map { now.timeIntervalSince($0.firstDeferredAt) }
+            .max() ?? 0
+        let memory = ResourceMonitor.shared.memoryFootprintSample()
+        let canExpandForBacklog =
+            !ProcessInfo.processInfo.isLowPowerModeEnabled
+            && ProcessInfo.processInfo.thermalState != .serious
+            && ProcessInfo.processInfo.thermalState != .critical
+            && memory.footprintMB < 300
+        if canExpandForBacklog {
+            if coordinator.deferredBacklog.count >= 16
+                || oldestBacklogAge >= 20 * 60 {
+                routine = max(routine, min(10, hard))
+            } else if coordinator.deferredBacklog.count >= 8
+                        || oldestBacklogAge >= 8 * 60 {
+                routine = max(routine, min(8, hard))
+            }
+        }
         func reduce(routine newRoutine: Int, hard newHard: Int) {
             routine = min(routine, newRoutine)
             hard = min(hard, newHard)
@@ -880,6 +926,19 @@ final class FeedRefreshCycleWorkflow {
             }
         if largeDownload {
             reduce(routine: 4, hard: 6)
+        }
+        if routine > policy.backgroundAudioLimit {
+            logger.info(
+                "feed.backgroundAudioAdaptiveBudget",
+                "Expanded unplugged audio refresh batch for an aging backlog",
+                metadata: [
+                    "routineLimit": "\(routine)",
+                    "hardLimit": "\(max(routine, hard))",
+                    "backlogCount": "\(coordinator.deferredBacklog.count)",
+                    "oldestBacklogSeconds": "\(Int(oldestBacklogAge))",
+                    "footprintMB": "\(memory.footprintMB)"
+                ]
+            )
         }
         return (routine, max(routine, hard))
     }

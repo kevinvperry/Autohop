@@ -28,14 +28,32 @@ public struct AutoDownloadIntent: Codable, Equatable {
     public let episodeID: UUID
     public let subscriptionID: UUID
     public let podcastTitle: String
+    public let mediaURL: URL?
     public let createdAt: Date
 
-    public init(episodeID: UUID, subscriptionID: UUID, podcastTitle: String, createdAt: Date = Date()) {
+    public init(
+        episodeID: UUID,
+        subscriptionID: UUID,
+        podcastTitle: String,
+        mediaURL: URL? = nil,
+        createdAt: Date = Date()
+    ) {
         self.episodeID = episodeID
         self.subscriptionID = subscriptionID
         self.podcastTitle = podcastTitle
+        self.mediaURL = mediaURL
         self.createdAt = createdAt
     }
+}
+
+public struct AutoDownloadFailureRecord: Codable, Equatable {
+    public let episodeID: UUID
+    public let subscriptionID: UUID
+    public let mediaURL: URL
+    public let host: String?
+    public var consecutiveExhaustions: Int
+    public var retryAfter: Date
+    public var updatedAt: Date
 }
 
 @MainActor
@@ -49,7 +67,13 @@ public final class AutoDownloadIntentStore {
     public static let maxCount = 50
 
     public private(set) var intents: [AutoDownloadIntent] = []
+    public private(set) var failures: [AutoDownloadFailureRecord] = []
     private let fileURL: URL?
+
+    private struct StorageEnvelope: Codable {
+        var intents: [AutoDownloadIntent]
+        var failures: [AutoDownloadFailureRecord]
+    }
 
     /// Production store at Application Support/Autohop/auto-download-intents.json.
     public convenience init() {
@@ -76,12 +100,19 @@ public final class AutoDownloadIntentStore {
     /// Records (or refreshes) the intent for an episode. Write-through: the
     /// JSON is on disk before this returns, which is the whole point — it must
     /// beat a post-`setTaskCompleted` suspension.
-    public func record(episodeID: UUID, subscriptionID: UUID, podcastTitle: String, now: Date = Date()) {
+    public func record(
+        episodeID: UUID,
+        subscriptionID: UUID,
+        podcastTitle: String,
+        mediaURL: URL? = nil,
+        now: Date = Date()
+    ) {
         intents.removeAll { $0.episodeID == episodeID }
         intents.append(AutoDownloadIntent(
             episodeID: episodeID,
             subscriptionID: subscriptionID,
             podcastTitle: podcastTitle,
+            mediaURL: mediaURL,
             createdAt: now
         ))
         _ = prune(now: now)
@@ -95,6 +126,61 @@ public final class AutoDownloadIntentStore {
         if intents.count != before { save() }
     }
 
+    /// Returns an active terminal-failure cooldown only when the enclosure is
+    /// unchanged. A publisher replacing the enclosure is new work and clears
+    /// the stale failure automatically.
+    public func activeFailure(
+        episodeID: UUID,
+        mediaURL: URL,
+        now: Date = Date()
+    ) -> AutoDownloadFailureRecord? {
+        guard let record = failures.first(where: { $0.episodeID == episodeID })
+        else { return nil }
+        guard record.mediaURL == mediaURL else {
+            clearFailure(episodeID: episodeID)
+            return nil
+        }
+        return record.retryAfter > now ? record : nil
+    }
+
+    /// Persists terminal watchdog exhaustion across feed refreshes and process
+    /// launches. Repeated exhaustion uses 15, 30, then 60 minute cooldowns.
+    @discardableResult
+    public func recordExhaustion(
+        episodeID: UUID,
+        subscriptionID: UUID,
+        mediaURL: URL,
+        host: String?,
+        now: Date = Date()
+    ) -> AutoDownloadFailureRecord {
+        let previous = failures.first {
+            $0.episodeID == episodeID && $0.mediaURL == mediaURL
+        }
+        let count = (previous?.consecutiveExhaustions ?? 0) + 1
+        let intervals: [TimeInterval] = [15 * 60, 30 * 60, 60 * 60]
+        let interval = intervals[min(count - 1, intervals.count - 1)]
+        let record = AutoDownloadFailureRecord(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: host,
+            consecutiveExhaustions: count,
+            retryAfter: now.addingTimeInterval(interval),
+            updatedAt: now
+        )
+        failures.removeAll { $0.episodeID == episodeID }
+        failures.append(record)
+        _ = prune(now: now)
+        save()
+        return record
+    }
+
+    public func clearFailure(episodeID: UUID) {
+        let before = failures.count
+        failures.removeAll { $0.episodeID == episodeID }
+        if failures.count != before { save() }
+    }
+
     /// Drops expired intents and trims to the count cap (oldest first).
     /// Returns true when anything was removed.
     private func prune(now: Date = Date()) -> Bool {
@@ -104,16 +190,28 @@ public final class AutoDownloadIntentStore {
             intents.sort { $0.createdAt < $1.createdAt }
             intents.removeFirst(intents.count - Self.maxCount)
         }
-        return intents.count != before
+        let failuresBefore = failures.count
+        failures.removeAll { now.timeIntervalSince($0.updatedAt) > Self.maxAge }
+        if failures.count > Self.maxCount {
+            failures.sort { $0.updatedAt < $1.updatedAt }
+            failures.removeFirst(failures.count - Self.maxCount)
+        }
+        return intents.count != before || failures.count != failuresBefore
     }
 
     private func load() {
         guard let fileURL,
               FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([AutoDownloadIntent].self, from: data)
+              let data = try? Data(contentsOf: fileURL)
         else { return }
-        intents = decoded
+        let decoder = JSONDecoder()
+        if let envelope = try? decoder.decode(StorageEnvelope.self, from: data) {
+            intents = envelope.intents
+            failures = envelope.failures
+        } else if let legacy = try? decoder.decode([AutoDownloadIntent].self, from: data) {
+            intents = legacy
+            failures = []
+        }
     }
 
     private func save() {
@@ -123,14 +221,18 @@ public final class AutoDownloadIntentStore {
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let data = try JSONEncoder().encode(intents)
+            let data = try JSONEncoder().encode(StorageEnvelope(
+                intents: intents,
+                failures: failures
+            ))
             try data.write(to: fileURL, options: [.atomic])
         } catch {
             // A failed save degrades to pre-fix behavior (intent lives only in
             // memory) — log so a "my episode never downloaded" report has a trace.
             AppLogger.shared.error("download.intentSaveFailed", "Could not persist auto-download intents", metadata: [
                 "error": String(describing: error),
-                "count": "\(intents.count)"
+                "intentCount": "\(intents.count)",
+                "failureCount": "\(failures.count)"
             ], alwaysPersist: true)
         }
     }

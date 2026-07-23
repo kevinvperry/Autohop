@@ -50,6 +50,13 @@ final class DownloadCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var watchdogRetryTasks: [UUID: Task<Void, Never>] = [:]
     private var watchdogRetryGeneration: [UUID: Int] = [:]
+    private weak var autoDownloadIntentStore: AutoDownloadIntentStore?
+    private struct HostCircuit {
+        var terminalFailures: [Date] = []
+        var openUntil: Date?
+    }
+    private var hostCircuits: [String: HostCircuit] = [:]
+    private var globalCircuitOpenUntil: Date?
 
     // Internal access is limited to typed download/runtime workflows. These
     // values have one storage owner and are not published.
@@ -158,6 +165,7 @@ final class DownloadCoordinator: ObservableObject {
         guard !watchdogCallbackInstalled else { return }
         watchdogCallbackInstalled = true
         watchdogDownloadManager = downloadManager
+        self.autoDownloadIntentStore = autoDownloadIntentStore
 
         downloadManager.onWatchdogCancelled = {
             [weak self, weak downloadManager, weak subscriptionStore, weak autoDownloadIntentStore] episodeID in
@@ -175,7 +183,8 @@ final class DownloadCoordinator: ObservableObject {
                 guard attempt <= 3 else {
                     downloadManager.cancelDownload(episodeID: episodeID)
                     downloadManager.clearResumeData(episodeID: episodeID)
-                    autoDownloadIntentStore.remove(episodeID: episodeID)
+                    var durableCooldownSeconds = "unavailable"
+                    var consecutiveExhaustions = "unavailable"
                     if let activity = self.activityStore.activeActivities.first(
                         where: { $0.episodeID == episodeID }
                     ),
@@ -186,6 +195,23 @@ final class DownloadCoordinator: ObservableObject {
                        let subscription = subscriptionStore.subscription(
                         id: activity.subscriptionID
                        ) {
+                        let failure = autoDownloadIntentStore.recordExhaustion(
+                            episodeID: episodeID,
+                            subscriptionID: activity.subscriptionID,
+                            mediaURL: episode.audioURL,
+                            host: episode.audioURL.host,
+                            now: Date()
+                        )
+                        durableCooldownSeconds = String(
+                            format: "%.0f",
+                            failure.retryAfter.timeIntervalSinceNow
+                        )
+                        consecutiveExhaustions =
+                            "\(failure.consecutiveExhaustions)"
+                        self.recordTerminalHostFailure(
+                            for: episode.audioURL,
+                            now: Date()
+                        )
                         subscriptionStore.markEpisodeDownloadFailed(
                             subscriptionID: activity.subscriptionID,
                             episodeID: episodeID
@@ -202,7 +228,9 @@ final class DownloadCoordinator: ObservableObject {
                         metadata: [
                             "episodeID": episodeID.uuidString,
                             "attempts": "\(attempt - 1)",
-                            "durableIntentRetired": "true",
+                            "durableIntentRetired": "false",
+                            "durableCooldownSeconds": durableCooldownSeconds,
+                            "consecutiveExhaustions": consecutiveExhaustions,
                             "retryGeneration": "\(generation)"
                         ]
                     )
@@ -238,6 +266,48 @@ final class DownloadCoordinator: ObservableObject {
         watchdogRetryCounts.removeValue(forKey: episodeID)
         watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
         watchdogRetryGeneration[episodeID, default: 0] += 1
+    }
+
+    /// Automatic work observes per-host and cross-host circuit breakers.
+    /// Manual user actions deliberately bypass them.
+    func automaticDownloadBlock(for mediaURL: URL, now: Date = Date()) -> String? {
+        if let until = globalCircuitOpenUntil, until > now {
+            return "session"
+        }
+        guard let host = mediaURL.host?.lowercased(),
+              let until = hostCircuits[host]?.openUntil,
+              until > now else {
+            return nil
+        }
+        return "host"
+    }
+
+    func recordDownloadSuccess(episodeID: UUID, mediaURL: URL) {
+        autoDownloadIntentStore?.clearFailure(episodeID: episodeID)
+        guard let host = mediaURL.host?.lowercased() else { return }
+        hostCircuits.removeValue(forKey: host)
+        if hostCircuits.values.allSatisfy({ $0.openUntil == nil }) {
+            globalCircuitOpenUntil = nil
+        }
+    }
+
+    private func recordTerminalHostFailure(for mediaURL: URL, now: Date) {
+        guard let host = mediaURL.host?.lowercased() else { return }
+        let windowStart = now.addingTimeInterval(-10 * 60)
+        var circuit = hostCircuits[host] ?? HostCircuit()
+        circuit.terminalFailures.removeAll { $0 < windowStart }
+        circuit.terminalFailures.append(now)
+        if circuit.terminalFailures.count >= 2 {
+            circuit.openUntil = now.addingTimeInterval(15 * 60)
+        }
+        hostCircuits[host] = circuit
+
+        let failingHosts = hostCircuits.filter { _, value in
+            value.terminalFailures.contains { $0 >= windowStart }
+        }.count
+        if failingHosts >= 3 {
+            globalCircuitOpenUntil = now.addingTimeInterval(5 * 60)
+        }
     }
 
     /// AI CONTEXT — Lifecycle/BGTask/network owners enter through this narrow

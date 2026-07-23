@@ -111,16 +111,30 @@ final class FeedRefreshItemWorkflow {
                     lastModified: subscription.refreshStats.lastModified
                 )
             )
+            let parseMemoryBefore = memorySample
             memorySample = ResourceMonitor.shared.logMemoryStageDelta(
                 stage: "feed.fetchParse",
                 from: memorySample,
                 context: memoryContext
             )
+            let parseFootprintDelta =
+                memorySample.footprintMB - parseMemoryBefore.footprintMB
+            let parseResidentDelta =
+                memorySample.residentMemoryMB
+                    - parseMemoryBefore.residentMemoryMB
+            let highMemoryParse =
+                parseFootprintDelta >= 200 || parseResidentDelta >= 200
             feedRefreshCoordinator.failureBackoffUntil.removeValue(
                 forKey: subscription.id
             )
             guard case .updated(let result, let validators) = outcome else {
                 var stats = subscription.refreshStats
+                if stats.parseQuarantineUntil.map({
+                    $0 <= runtimeWorkflow.now
+                }) ?? false {
+                    stats.parseQuarantineUntil = nil
+                    stats.consecutiveHighMemoryParses = 0
+                }
                 stats.recordFetch(foundNewEpisode: false)
                 subscriptionStore.updateRefreshStats(
                     subscriptionID: subscription.id,
@@ -139,6 +153,34 @@ final class FeedRefreshItemWorkflow {
 
             let oldLatestGUID = subscription.latestEpisode?.guid
             var stats = subscription.refreshStats
+            if highMemoryParse {
+                stats.consecutiveHighMemoryParses += 1
+                let quarantineHours =
+                    stats.consecutiveHighMemoryParses > 1 ? 12.0 : 6.0
+                stats.parseQuarantineUntil = runtimeWorkflow.now
+                    .addingTimeInterval(quarantineHours * 60 * 60)
+                logger.warning(
+                    "feed.parseMemoryQuarantine",
+                    "Automatic refresh paused after extreme feed parse memory growth",
+                    metadata: releaseRadarWorkflow.feedMetadata(
+                        for: subscription,
+                        includeURL: false,
+                        extra: [
+                            "footprintDeltaMB": "\(parseFootprintDelta)",
+                            "residentDeltaMB": "\(parseResidentDelta)",
+                            "consecutiveHighMemoryParses":
+                                "\(stats.consecutiveHighMemoryParses)",
+                            "quarantineHours": "\(Int(quarantineHours))",
+                            "quarantineUntil":
+                                stats.parseQuarantineUntil?.ISO8601Format()
+                                    ?? "unknown"
+                        ]
+                    )
+                )
+            } else {
+                stats.parseQuarantineUntil = nil
+                stats.consecutiveHighMemoryParses = 0
+            }
             stats.etag = validators.etag
             stats.lastModified = validators.lastModified
             let filters = subscriptionStore.subscription(id: subscription.id)?
