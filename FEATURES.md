@@ -444,10 +444,30 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 **Stalled-download recovery:** The first-byte watchdog uses an absolute deadline
 for each URLSession attempt, including across process suspension. It is
 re-evaluated at lifecycle, network, BGTask, URLSession, and periodic checkpoints.
-Only transfers that have already received payload data receive suspension grace.
-Automatic retries are generation-owned and bounded; after exhaustion the durable
-automatic intent is retired so no independent drain can restart a terminally
-failed transfer. The Downloads page leaves the episode explicitly retryable.
+The deadline is **phase-aware**: an attempt created or first evaluated while the
+app is active gets 60 seconds to produce its first payload byte, while an attempt
+created or first evaluated while the app is backgrounded gets four minutes,
+because background URLSession delegate delivery is legitimately slower and a tight
+foreground deadline would otherwise cancel healthy transfers. Returning to the
+foreground never shortens an attempt's existing deadline generation. Only
+transfers that have already received payload data receive suspension grace.
+Cancellation is generation-safe: exactly one terminal decision is allowed per
+task generation, and live task progress/completion is re-checked before a cancel
+is issued so a transfer that has finished out-of-process is not cancelled.
+Automatic retries are bounded; after exhaustion the durable automatic intent is
+retired (with a persisted cooldown) so no independent drain restarts a terminally
+failed transfer before the cooldown elapses. The Downloads page leaves the episode
+explicitly retryable, and a manual retry bypasses the cooldown.
+
+**Host circuit breakers (automatic downloads only):** Repeated *terminal* download
+failures are tracked per media host. Two terminal failures on one host within a
+10-minute window pause new **automatic** downloads to that host for 15 minutes;
+if three or more distinct hosts are failing concurrently, new automatic download
+starts pause globally for 5 minutes. A successful download clears its host's
+breaker. Manual (user-initiated) downloads deliberately bypass all breakers, so a
+struggling host never blocks an explicit tap. This prevents a dead or throttled
+CDN from generating an endless retry storm in the background while leaving healthy
+hosts unaffected.
 
 **BGAppRefresh backlog handling:** A normal background wake protects a short
 eight-feed base batch. If that batch finishes early, an optional second batch of
@@ -889,9 +909,11 @@ If the expected episode has not appeared by the end of its learned window, the f
 
 **Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly, rolling-bulletin, burst, and daily-weekday feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their expected due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed. Background cycles protect 6 of their 8 slots for `preWindow`, `activeWindow`, and `missedRelease` candidates before filling remaining slots with ordinary due/backlog work; this is specifically intended to help daily one-episode shows that publish around a known time and rolling bulletin feeds that move between hourly and half-hourly slots.
 
-**Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
+**Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. During **background-audio** cycles there is also a hard fairness reservation: once a due feed has waited roughly 8 minutes in the backlog it is guaranteed one selection slot **within the same energy ceiling** (two slots after roughly 20 minutes), *replacing* a monopolising selection rather than enlarging the batch. This stops high-frequency active-window feeds (e.g. hourly news) from taking every slot of every four-minute cycle and starving a weekly show that has just become due. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
 
 **HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
+
+**Feed parse memory safety:** Parsing is bounded so a single large or malformed feed cannot spike physical memory enough to risk background termination. `RSSParser` retains at most 50 episodes per feed (parsing aborts once the limit is reached), caps retained text per element (long `description`/`content:encoded` bodies are truncated to a bounded character budget rather than held in full), drains each item's transient allocations through a per-item autorelease boundary, and repairs bare ampersands with a low-copy byte-level pass rather than expanding the whole document twice. As a safety net, a **parse-memory circuit breaker** watches per-feed physical-footprint growth: a feed whose parse repeatedly consumes extreme memory is temporarily excluded from **automatic** refresh (first for ~6 hours, then ~12 hours if it re-offends) and skipped cycles are logged (`feed.parseMemoryQuarantine` / `feed.parseMemoryQuarantineSkipped`). **Manual** refresh still processes a quarantined feed, so the user can always force an update. (The per-element caps are the primary fix; the quarantine is the fallback.)
 
 **Refresh/download separation:** A successful refresh finishes once the RSS response has been fetched, parsed, merged into the subscription, and any automatic download has been scheduled. Slow or stalled media transfers continue through the download queue and no longer keep manual refresh, timed Release Radar refresh, or background refresh marked in progress. The scheduled auto-download path re-validates that the subscription still exists, is not a browse preview, still has the same latest episode, and that the latest episode has not already been played or archived.
 

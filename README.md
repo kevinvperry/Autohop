@@ -111,9 +111,13 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
   Up Next, episode details, or Discover.
 - In-app Support / User Guide (Menu → Support): native drill-down guide that mirrors the website Support page
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
-- Deadline-aware background reliability: absolute download watchdog deadlines,
-  generation-owned bounded retries, and an opportunistic BGAppRefresh backlog
-  batch that runs only under safe time, power, thermal, network, and download load
+- Deadline-aware background reliability: phase-aware absolute download watchdog
+  deadlines (60s foreground / 4min background), generation-safe single-cancel
+  retries with a persisted post-exhaustion cooldown, per-host and cross-host
+  circuit breakers that pause only automatic downloads to a failing CDN, bounded
+  feed parsing (episode/character caps + a parse-memory quarantine for pathological
+  feeds), and an opportunistic BGAppRefresh backlog batch that runs only under safe
+  time, power, thermal, network, and download load
 
 ## Documentation Map
 

@@ -1,402 +1,310 @@
-# Autohop Whole-Project Assessment — 2026-07-24
+# Autohop Whole-Project Assessment — Independent Pass — 2026-07-24
 
 <!--
 AI CONTEXT — ASSESSMENT_2026-07-24.md
-Current source-based engineering, product, interface, sync, privacy, security,
-documentation, onboarding, iOS and tvOS assessment. This is a point-in-time
-review, not a behavioural source of truth. Re-locate every symbol and re-check
-the current implementation before applying a recommendation. FEATURES.md owns
-behaviour/defaults, PAGES.md owns visible names/navigation, DESIGN.md owns visual
-patterns, SYNC_DESIGN.md owns CloudKit, and VERSION_1.4.md owns the post-1.3
-implementation ledger. Internal `Queue*` names are intentional legacy symbols;
-the visible page name is Up Next.
+Independent, source-grounded, point-in-time engineering/product/UI/sync/security
+assessment of the Autohop iOS + tvOS codebase and the kevmarl-site public pages.
+Produced by re-deriving findings from the CURRENT working tree, not from prior
+Claude memories or the previously committed assessment. Every claim below is
+anchored to a symbol or file:line verified at review time; RE-LOCATE and RE-READ
+before acting on any recommendation — code moves.
+
+AUTHORITY BOUNDARIES (do not restate behaviour here as truth):
+- FEATURES.md owns behaviour/defaults. PAGES.md owns visible names/navigation.
+- DESIGN.md owns visual patterns. SYNC_DESIGN.md owns CloudKit semantics.
+- VERSION_1.4.md owns the post-1.3 implementation ledger.
+- Internal `Queue*` symbols are intentional legacy names; the visible page is
+  "Up Next".
+
+SUPERSEDES the prior 2026-07-24 assessment committed at 938163c (recoverable via
+git). This pass CONFIRMS the bulk of that report against code and adds hard
+quantification, verified file:line evidence, one near-divergence that verification
+resolved (host circuit breaker DOES exist), and a single unifying frame: the
+logs 15–17 background remediation is CODE-COMPLETE but DEVICE-UNVERIFIED.
 -->
 
-## 1. Executive assessment
+## 1. Executive summary
 
-Autohop is a capable, unusually well-instrumented podcast player with a coherent
-download-first product model. The current architecture is substantially stronger
-than the historical reports imply: AppState has been decomposed into domain
-coordinators/workflows, feed selection and parsing have bounded recovery paths,
-download intent is durable, background scheduling avoids the moving-horizon
-replacement bug, CloudKit writes use explicit conflict policies, and source files
-already carry extensive machine-oriented context.
+Autohop is a mature, unusually well-instrumented, download-first podcast player.
+The architecture is materially stronger than legacy reports imply: AppState is
+decomposed into domain coordinators/workflows, feed selection/parsing/downloads
+have bounded recovery paths, background scheduling avoids the moving-horizon
+replacement defect, and nearly every file carries a machine-oriented AI CONTEXT
+header. The codebase is clean: 1 TODO/FIXME across non-test source, no deprecated
+UIKit window/keyWindow/unarchive APIs, no embedded secret, ad tracker, or
+behavioural-analytics SDK found.
 
-No embedded production secret, advertising tracker, behavioural analytics SDK,
-or obvious credential leak was found. The highest remaining risks are not
-emergency defects. They are compatibility/security trade-offs around arbitrary
-HTTP feeds, conflict limitations in whole-list sync records, oversized source
-units that increase regression risk, accessibility and layout consistency gaps,
-and public wording that can accidentally over-promise background execution.
+**The single most important finding is a status, not a defect.** Every remediation
+that the diagnostic logs 15–17 recommended is now implemented in the working tree
+— feed-selection fairness, phase-aware download deadlines, per-host + cross-host
+circuit breakers, generation-safe watchdog cancellation, per-item parse memory
+caps, and a parse-memory quarantine. **None of it has been verified on a physical
+device under battery.** The logs that motivated the work all predate the code that
+fixes it (log 17 export = build 4, 08:34 AEST; fixes are uncommitted-then-snapshotted
+work now at HEAD). The correct next action is a device matrix, not more code.
 
-The checked-in shipping configuration is **iPhone Version 1.3 build 4**. The
-repository also contains implemented Version 1.4 work and development-gated
-tvOS, Autohop Pro, and Relay code. Documentation and public website claims must
-continue to distinguish “implemented in source” from “available in the App
-Store.”
+Remaining genuine risks are trade-offs and polish, not emergencies: a global ATS
+exception for legacy HTTP feeds, development APNs entitlements that must be
+release-gated, whole-list LWW sync records that cannot merge concurrent reorders,
+high UI reliance on fixed font sizes/geometry (a Dynamic-Type accessibility gap),
+and public copy that must never promise fixed background intervals.
+
+Checked-in shipping config is **iPhone 1.3 build 4**. The tree also contains
+implemented 1.4 work plus development-gated tvOS, Autohop Pro, and Relay code.
+Docs and website must keep distinguishing "implemented in source" from "shipping".
 
 ## 2. Scope and method
 
-The review covered:
-
-- 216 Swift source/test files (approximately 69,000 lines), project generation
-  settings, plists, entitlements, privacy manifests, assets and StoreKit config.
-- iPhone navigation, Player panels, Up Next, Priority, Discover/Search, podcast
-  and episode detail, Settings, per-podcast Settings, Downloads, History, Stats,
-  widgets, CarPlay, onboarding, notifications, audio and video playback.
-- tvOS browse, search, library materialisation, Up Next, playback and CloudKit/
-  Relay development paths.
-- feed parsing/repair, refresh selection, background tasks, URLSession downloads,
-  persistence, diagnostics, artwork caching, auto-archive and Play Instant.
-- CloudKit data projections, conflict resolution, queue/order singletons,
-  materialisation, private-data boundaries and device-local exceptions.
-- the six canonical documents requested, onboarding plans, the in-app Support
-  model, and the Autohop features/support/privacy/intelligence website pages.
-
-This was static review plus build/test verification. Exact energy impact,
-background scheduling frequency, route stability and memory peaks still require
-physical-device traces; iOS controls background launch opportunities and a
-source review cannot guarantee their timing.
-
-## 3. Changes made during this assessment
-
-- Added the missing AI CONTEXT header to
-  `Tests/RefreshStatsPersistenceTests.swift`; all Swift files now have machine
-  context or are generated/project artefacts.
-- Updated stale user-facing Queue-page language to **Up Next** while retaining
-  internal Queue type, database, log and sync names.
-- Clarified global Downloading copy: background starts and feed checks are
-  opportunistic under iOS, not guaranteed timers.
-- Clarified per-podcast automation copy: Inactive feeds move to the bottom, are
-  excluded from automatic/Refresh All checks, but retain explicit single-feed
-  refresh.
-- Added Feed/Copy Link explanatory copy.
-- Revalidated and updated README, DESIGN, FEATURES, PAGES, SYNC_DESIGN and
-  project_autohop; linked this report as the current assessment.
-- Corrected website privacy and Intelligence claims, replaced stale Queue-page
-  naming, prioritised Release Radar near the top of the feature list, removed
-  absolute background promises, and removed the stale hard-coded Support version.
-- Added section-level AI context to the public Autohop pages and generated
-  `llms.txt` facts that distinguish local learning from optional private iCloud.
-- Added website response hardening: CSP, MIME sniffing protection, referrer
-  policy, permissions policy and frame-ancestor blocking.
-
-## 4. Architecture and performance
-
-### P1 — High: physical-device background and energy validation remains essential
-
-The design now has separate BGAppRefresh, power-required BGProcessing,
-background-audio refresh and foreground/manual paths. Recent fixes address
-moving-horizon scheduling, feed starvation, parse amplification, transfer retry
-resurrection and watchdog double-cancel. That is strong implementation work, but
-no code can force iOS to launch a suspended app.
-
-Recommendation: maintain a repeatable device matrix covering unplugged audio,
-locked screen, Wi-Fi/cellular transitions, Low Power Mode, thermal pressure,
-charging overnight and large backlogs. Report feed age, selected/deferred counts,
-successful material changes, transfer starts/completions, CPU, footprint and
-battery delta by execution context. Product copy must say “when iOS grants
-background time,” never “every N minutes.”
-
-### P2 — Medium: several source units remain too large
-
-`Models/Subscription.swift`, `Views/PlayerView.swift`,
-`Playback/PlaybackEngine.swift`, `Persistence/SubscriptionStore.swift`,
-`Views/StatsView.swift`, `Persistence/CloudSyncEngine.swift`,
-`Views/SubscriptionSettingsView.swift`, `App/FeedRefreshCycleWorkflow.swift`,
-`Downloads/DownloadManager.swift`, `Views/SettingsView.swift` and the tvOS app
-model remain large. Their comments are good, but size increases merge conflict,
-compile and regression surface.
-
-Recommendation: use behaviour-preserving extractions only. Split rendering
-subviews from state owners; split Codable models by domain extension; extract
-audio route, graph and metadata helpers behind tested protocols; split tvOS
-CloudKit/materialisation, Relay and playback ownership. Do not create a second
-parallel state model or re-aggregate the coordinators into AppState.
-
-### P3 — Medium: manual refresh and large-feed regression budgets need automation
-
-The parser now limits retained episodes, uses conditional requests, streams
-malformed-ampersand repair, records growth/repair metrics and quarantines repeated
-high-memory feeds. Those fixes should be protected by performance fixtures.
-
-Recommendation: add deterministic 3–10 MB malformed feeds, 10,000-item feeds,
-large descriptions and entity-heavy XML to CI. Assert retained item caps, peak
-temporary bytes where measurable, cancellation, quarantine persistence and
-conditional-request behaviour. Keep the deliberate 74-feed device test in the
-release checklist.
-
-### P4 — Medium: background transfer decisions must stay generation-safe
-
-The watchdog now has generation/decision guards and rechecks task progress, while
-durable episode/host cooldowns prevent refresh resurrection. Future edits could
-easily reintroduce duplicate cancellation or clear a newer retry state.
-
-Recommendation: preserve “one terminal decision per task generation,” require a
-post-`getAllTasks` progress/completion check, and add stress tests for delegate
-delivery after process suspension. Manual user action may bypass cooldown;
-ordinary four-minute refresh must not.
-
-### P5 — Low: use instrumentation selectively
-
-Diagnostics are comprehensive, redacted and gated, but verbose refresh tracing,
-resource sampling and main-thread watchdogs alter the system being measured.
-
-Recommendation: keep normal diagnostics low-volume, retain trace as an explicit
-short-lived mode, show trace state prominently, and include build/configuration
-metadata in every export. Do not add analytics to solve an observability problem.
-
-### P6 — Low: one Accelerate call uses a deprecated interface
-
-The verified iOS build reports `cblas_scopy` in `PlaybackEngine.swift` as
-deprecated since iOS 16.4 because Accelerate provides an updated ILP64-capable
-CBLAS interface. It still compiles and the current frame counts are far below
-32-bit limits, so this is maintenance debt rather than a playback defect.
-
-Recommendation: adopt the current Accelerate compile definitions/interface in a
-separate audio regression change, then compare mono duplication, route changes,
-Trim Silence and Vocal Boost on device before removing the old call.
-
-## 5. Reliability and correctness
-
-### R1 — Medium: whole-record sync domains can overwrite concurrent edits
-
-Priority order and Up Next are intentionally coherent whole-list LWW records.
-That avoids mixed generations but means two devices editing the same list
-concurrently cannot merge; one complete generation wins.
-
-Recommendation: document this precisely in user support. Keep deterministic
-generation/timestamp tie-breaking and stale-ack protection. If concurrent editing
-becomes common, consider an operation log for manual pins/order edits, but only
-with tombstones and bounded compaction; do not casually field-merge an ordered
-list.
-
-### R2 — Medium: global app settings and Release Radar learning are device-local
-
-Most per-podcast settings, subscriptions, order, history, position, Stats and Up
-Next roam. Global defaults, network preferences, onboarding state and learned
-refresh observations do not. This is defensible—network and launch preferences
-can be device-specific—but “all settings sync” is false.
-
-Recommendation: keep the explicit sync matrix in SYNC_DESIGN and Support. If
-global settings are later added, classify each as roamable or device-specific
-instead of syncing the entire AppSettings blob.
-
-### R3 — Medium: old played/archived key history remains a migration limitation
-
-CloudKit episode records and current Up Next filtering protect active surfaces,
-but historic pre-projection played/archive key sets are not a clean cross-device
-set merge. Union would prevent removals; LWW could lose concurrent additions.
-
-Recommendation: leave unchanged until semantics are chosen. A compact
-per-episode event/tombstone model is safer than syncing two mutable sets.
-
-### R4 — Low: multiple-scene declaration should be intentional
-
-The plist declares multiple scene support while playback, downloads and many
-coordinators are process-singleton services.
-
-Recommendation: either test two simultaneous windows and define route/editor
-ownership, or disable multiple-window presentation. Avoid implying independent
-players per scene.
-
-## 6. Security and privacy
-
-### S1 — Medium: global ATS exception is a real compatibility trade-off
-
-iOS and tvOS set `NSAllowsArbitraryLoads=true` so legacy HTTP podcast feeds and
-media remain usable. The project comments correctly explain why granular media
-exceptions do not cover RSS. This permits clear-text requests and broadens the
-network attack surface.
-
-Recommendation: prefer HTTPS, visibly warn before adding an HTTP feed, never send
-credentials/tokens over HTTP, reject URL user-info, and consider blocking
-loopback/link-local/private-network hosts unless the user explicitly confirms a
-local feed. Keep Relay, CloudKit and Apple endpoints HTTPS-only. Reassess whether
-the remaining HTTP feed population still justifies the global exception each
-release.
-
-### S2 — Medium: development APNs entitlements must be release-validated
-
-Checked-in entitlements use `aps-environment=development`. Signing can replace
-this for distribution, but an archive mistake would silently break push-related
-development features.
-
-Recommendation: add an archive CI/release check that inspects the signed
-entitlements and fails if the App Store artifact is not production. Because Relay
-is gated off in the current release, do not describe developer-operated push as a
-shipping dependency.
-
-### S3 — Medium: Relay entitlement verification is not production-ready
-
-The source header explicitly notes that server-side App Store transaction JWS
-verification is currently a decode-only placeholder. The feature gates prevent
-production use, which is the correct control.
-
-Recommendation: never enable Pro/Relay in production until the server verifies
-the complete Apple certificate chain, bundle/product/environment, signed date,
-revocation/expiry and transaction status. Rotate/revoke device credentials and
-rate-limit registration/nudges.
-
-### S4 — Low: diagnostics remain potentially sensitive even when redacted
-
-Feed hosts, episode/show titles, timing and behavior can reveal listening habits.
-The logger redacts credentials and exports only on user action, but exported files
-leave the app sandbox.
-
-Recommendation: keep titles bounded, maintain token/query redaction tests, explain
-the sensitivity before sharing, and avoid copying full feed URLs with secrets to
-logs. The new Feed Copy Link action is explicit user intent and is appropriate.
-
-### S5 — Website hardening applied
-
-The generated Worker previously returned content/cache headers only. It now adds
-CSP, `nosniff`, referrer policy, permissions policy and `frame-ancestors 'none'`.
-The CSP allows current inline styles/scripts and the contact form target; reduce
-`unsafe-inline` if assets are later externalised or hashed.
-
-## 7. Design, layout and accessibility
-
-### U1 — Medium: Settings information density is high
-
-The global and per-podcast Settings pages are coherent but long. Global Settings
-mix runtime controls, defaults, library management, storage, contact and hidden
-diagnostics. Per-podcast Settings mixes identity, filters, DSP, automation,
-archive, chapters and feed maintenance.
-
-Recommendation: retain current labels/defaults, but consider stable subpages for
-Playback Defaults, Automation/Background and Data/Sync. Keep frequently changed
-controls near the top and destructive actions last. Search is preferable to more
-collapsed disclosure if the list grows.
-
-### U2 — Medium: Dynamic Type and text fit need a dedicated pass
-
-Many polished surfaces use fixed system point sizes and fixed card geometry.
-That is appropriate for transport icons but can truncate titles, metadata pills,
-settings explanations and Stats labels at accessibility sizes.
-
-Recommendation: use semantic fonts for body/settings text, `@ScaledMetric` for
-deliberate geometry, allow multiline labels, and test the two largest Dynamic
-Type categories plus Bold Text, Button Shapes and Increased Contrast. Preserve
-minimum 44-point hit targets.
-
-### U3 — Medium: visual consistency spans three systems
-
-iOS 17–25 uses dark translucent cards, iOS 26 uses system glass, and tvOS has
-focus-driven cards. The code already centralises many components, but custom
-cards and native Form rows can still resolve at different shades and spacing.
-
-Recommendation: continue using named DESIGN patterns and shared components.
-Create snapshot/reference captures for Player, Priority, Up Next, Settings and
-Podcast Settings on iOS 17 and iOS 26, plus focused/unfocused tvOS. Avoid adding
-one-off blur/material recipes.
-
-### U4 — Low: page naming is now consistent
-
-The visible playback-order page is **Up Next**. Generic prose may describe a
-playback queue, and internal `QueueSheetView`, QueueSnapshot, database keys and
-diagnostic event names remain valid. Future user-facing IDs, accessibility labels
-and deep links should use `up-next`.
-
-### U5 — Medium: tvOS is a development companion, not parity UI
-
-tvOS intentionally has fewer controls and relies on synced library/Up Next data.
-It should not be documented as feature parity with iPhone. A television is also
-poorly suited to configuring dense per-podcast rules.
-
-Recommendation: define an explicit tvOS support matrix: browse/search, play,
-resume, Up Next and basic transport on TV; configuration on iPhone. Add empty,
-signed-out, CloudKit-unavailable and stale-snapshot states before release.
-
-## 8. Onboarding assessment
-
-The current onboarding reflects the product:
-
-1. A true new user with no real subscriptions sees the Welcome carousel.
-2. It teaches subscribe/download/Up Next, per-podcast audio controls, Sleep
-   Schedule and Shared Listening.
-3. Find Shows, OPML import and explore-without-import routes are available.
-4. Existing users are reconciled without being forced through Welcome.
-5. The first deliberate single subscription presents the “You’re all set” card,
-   ensures the newest episode is downloading, and starts playback only after the
-   user taps Play; bulk imports remain quiet.
-6. Empty states, at most three coach marks per session and the Getting Started
-   checklist provide progressive help without launch-time permission prompts.
-
-Release Radar scheduling is automatic; there is no current user-facing Radar
-sensitivity control. Recommended refinements: add a short optional “How
-background updates work” support link after the first subscription, not another blocking card; test Voice
-Over reading order and large text; ensure import summaries never trigger the
-single-show card; and keep screenshots/copy synchronized with Player panel and
-Up Next terminology. Do not promise exact background times.
-
-## 9. Menu and settings copy assessment
-
-Current global groups—Startup, Release Radar, Auto Archive, Downloading,
-Controls, Default Playback, Default Episode Trim, Subscriptions, Sync, Storage,
-Contact, About and hidden Diagnostics—match the code. Current per-podcast
-groups—Podcast, Download Feed Filters, Playback, Episode Trim, Automation, Auto
-Archive, Chapter Filter, Feed and Unsubscribe—also match.
-
-Descriptions were corrected where behavior was easy to misread:
-
-- Background checks/transfers are best effort under iOS.
-- Excluding a podcast affects automatic and Refresh All selection, but explicit
-  single-feed refresh remains.
-- Inactive timing starts from download activity, not publication date.
-- Filter rules affect automatic downloads; manual actions remain available.
-- Feed Copy Link copies the publisher RSS URL.
-- iCloud Sync covers the documented matrix, not every global preference or media
-  file.
-
-## 10. Website assessment
-
-The features page now leads with the product-defining Priority Stack and Release
-Radar, then the strongest automation/audio tools. It does not present tvOS, Pro
-or Relay as shipping. Background behavior is qualified by iOS execution policy.
-
-Support uses Up Next consistently as the page name, has no stale hard-coded app
-version, and explains current settings. Privacy now distinguishes:
-
-- developer collection (no account, ads or behavioral analytics),
-- necessary requests to Apple, feed, artwork and media providers,
-- optional private CloudKit sync,
-- local diagnostics and user-initiated export.
-
-Intelligence now distinguishes on-device Release Radar learning from listening
-records that can roam through optional private iCloud. Absolute “never leaves
-this device” and “never configure it” claims were removed. Every major public
-Autohop section has an AI CONTEXT comment, and `llms.txt` carries the same
-boundaries.
-
-## 11. Prioritised next work
-
-1. Run the physical-device background/energy matrix and set budgets by execution
-   context; avoid tuning from one anecdotal capture.
-2. Add archive-time entitlement checks and keep Pro/Relay disabled until
-   transaction verification is cryptographic and complete.
-3. Add malformed/large-feed memory fixtures and watchdog-generation stress tests
-   to CI.
-4. Decide whether unsupported multiple-window behavior should be disabled or
-   fully tested.
-5. Perform Dynamic Type, VoiceOver, contrast and tvOS focus audits with reference
-   screenshots.
-6. Add explicit HTTP-feed warning/private-network policy while preserving legacy
-   feed compatibility.
-7. Continue small, tested extractions from the largest files; do not perform a
-   broad architecture rewrite.
-8. Keep public docs and VERSION_1.4 updated in the same change as every
-   user-visible behavior/default.
-
-## 12. Release gate
+Static review of the current working tree (216 Swift files, ~69k LOC), plists,
+entitlements, privacy manifest, StoreKit config, and the kevmarl-site pages.
+Findings are anchored to verified symbols/lines. This pass did **not** run the app
+or capture device traces; iOS owns background launch timing and no static review
+can measure real energy/scheduling. Every "landed" claim below means "present and
+read in source", explicitly **not** "validated in behaviour".
+
+## 3. Logs 15–17 remediation — verification status (CODE-COMPLETE, DEVICE-UNVERIFIED)
+
+| Log finding | Fix in tree | Evidence | On-device verified |
+|---|---|---|---|
+| Feed-selection starvation (oldest deferred waited 45 min) | Fairness reservation: ≥8 min deferred → reserve 1 slot within the hard ceiling, ≥20 min → 2 | `FeedRefreshCycleWorkflow.swift:1137-1161` (`fairnessReservation`) + `:529-558` wiring into `FeedRefreshBudgeting` | ❌ |
+| 60 s first-byte deadline too aggressive backgrounded | Phase-aware: 60 s foreground, **240 s** background, anchored to task create/resume | `DownloadManager.swift:131-132`, header `:38-41` | ❌ |
+| No host circuit breaker (pdst.fm 36, Akamai 37 cancels) | Per-host: 2 terminal fails/10 min → host opens 15 min; cross-host: 3 failing hosts → global 5 min; success clears; manual bypasses | `DownloadCoordinator.swift:325-363` | ❌ |
+| Watchdog double-cancel race (cancelled a completed transfer) | Generation-safe: one terminal decision per task generation; per-attempt absolute deadline work items; post-`getAllTasks` recheck | `DownloadManager.swift:109-115` (`firstByteDeadlineWorkItems`, `watchdogEvaluationInFlight`, `watchdogCancellationClaimedTaskIDs`) | ❌ |
+| Retry-exhaustion resurrection | Durable per-episode cooldown (900 s), survives feed cycles; manual bypass only | `DownloadCoordinator.swift:192-238`; log 17 already showed it holding (min restart +15.8 min) | ⚠️ partially (log 17) |
+| Parse memory bomb (3 MB feed → +477 MB) | Per-element char caps (description 64 KB, ordinary 8 KB) + truncation + per-item autorelease + 50-episode abort | `RSSParser.swift:250-251, 354-381, 420, 423-425` | ❌ |
+| Parse memory as jetsam risk | Parse-memory quarantine (6 h → 12 h escalation) skips high-growth feeds from auto-refresh | `FeedRefreshCycleWorkflow.swift:490-512`; `Models/Subscription.swift` `parseQuarantineUntil` | ❌ |
+| BGAppRefresh cancelled a manual cycle (log 17 #4) | Deadline handler detaches when it does not own the active cycle, or when foreground/audio owns it | `FeedRefreshCycleWorkflow.swift:255-304` (`cancelIfOwnedByBackgroundTask`) | ❌ |
+| Moving-horizon BGAppRefresh replacement | Pending request replaced only if ≥60 s materially earlier | `BackgroundTaskCoordinator.swift:101-108` (`shouldReplacePendingAppRefresh`) — log 16/17 confirmed (73–176 skips / few schedules) | ✅ |
+| BGProcessing zero-wake | Outcome-paced + persisted eligibility; requires external power + network | `BackgroundTaskCoordinator.swift:285-343` | ✅ (log 16 03:08 run) |
+
+**Implication:** do not describe any of the ❌ rows as "fixed" in release notes,
+website, or docs until a battery capture confirms them. The prior assessment's
+P1 ("physical-device validation remains essential") is the correct top priority;
+this table is the concrete checklist for it.
+
+### 3.1 Two nuances a future model must not miss
+
+- **Fairness applies only to `backgroundAudioAlive`.** The hard-slot reservation
+  (`:1142` guard) is scoped to the audio-poll path. A real BGAppRefresh wake uses
+  `protectedStates`/`minimumProtectedSelections` (`refreshForBackground`,
+  `:159-185`) and the follow-up batch relies on `deferredScoreBoost` in the
+  Release Radar score — not the hard reservation. This asymmetry is intentional
+  but means the log-17 starvation fix does not transfer verbatim to BGAppRefresh;
+  verify both paths.
+- **Quarantine may now be near-redundant.** With the real per-element caps in
+  `RSSParser` (`:250-251`), the feeds that previously tripped the quarantine
+  (This Week in Tech: 3 MB → +477 MB) should no longer allocate hundreds of MB.
+  If a device capture shows the quarantine still firing, the caps are insufficient;
+  if it never fires, consider softening the 12 h escalation so a transiently
+  heavy feed is not frozen out of auto-refresh for half a day. Do not remove the
+  quarantine — keep it as the safety net — but instrument whether it still earns
+  its place.
+
+## 4. Background-task subsystem (priority review)
+
+**Scheduling (`BackgroundTaskCoordinator.swift`)** is sound. Moving-horizon defect
+resolved (`:101-108`). BGProcessing is outcome-paced (`processingDelay` `:285-309`:
+initial 12 h, completed-work 18 h, no-work 8 h, expiry 2→24 h exponential) with
+positive-only jitter and a persisted `nextEligibleDate` so relaunches cannot reset
+the clock. `requiresExternalPower`/`requiresNetworkConnectivity` are both set
+(`:338-339`). The 11-hour BGAppRefresh gap in log 17 is **iOS budget throttling on
+battery, not an app defect** — the app kept a single pending request correctly and
+iOS simply granted no window. No code change can force this; the mitigation is the
+background-audio poll path, which log 17 confirmed alive (104 screen-closed cycles).
+
+**Adaptive budget (`backgroundAudioBudget` `:924-993`)** is well-designed: base
+audio limits expand to 8/10 feeds for an aging/large backlog **only** when not in
+Low Power Mode, thermal state < serious, and footprint < 300 MB; and shrink under
+Low Power (4/6), thermal serious/critical (3/5, 2/3), constrained/cellular/expensive
+network (4/6), and ≥100 MB active downloads (4/6). This is the right shape.
+
+**Residual gaps / recommendations (background):**
+1. **Device matrix is the gate** — unplugged audio, locked screen, Wi-Fi/cellular
+   handoff, Low Power, thermal, overnight charging, large backlog. Report per
+   execution context: feed age, selected/deferred, material changes, transfer
+   start/complete, footprint, battery delta.
+2. **Add CI fixtures** for the parser (3–10 MB malformed, 10k-item, huge
+   `content:encoded`, entity-heavy) asserting retained-char caps, episode-limit
+   abort, quarantine persistence, and conditional-request reuse.
+3. **Add watchdog stress tests** for delegate delivery after simulated process
+   suspension — protect "one terminal decision per task generation" and the
+   post-`getAllTasks` recheck from regression.
+4. **Harden interruption recovery** (log 17, 13:19: `engine.restartFailed` ×3 →
+   `app.willTerminate`). `PlaybackEngine.swift` received +155 lines in the
+   snapshot; verify the Core-Audio `-50`/interruption-resume path rebuilds the
+   session+graph through one serialized recovery and cannot wedge into termination.
+
+## 5. Efficiency & performance
+
+- **P-A (Medium): oversized source units.** `Models/Subscription.swift` (3,199),
+  `Views/PlayerView.swift` (2,490), `Playback/PlaybackEngine.swift` (2,270),
+  `Persistence/SubscriptionStore.swift` (2,152), `Views/StatsView.swift` (1,609),
+  `Persistence/CloudSyncEngine.swift` (1,477). Comments are excellent but size
+  inflates merge/compile/regression surface. Recommend behaviour-preserving
+  extractions only (render subviews from state owners; Codable-by-domain
+  extensions; audio route/graph helpers behind tested protocols). Do **not**
+  re-aggregate coordinators back into AppState.
+- **P-B (Low): notification coalescing is correctly used** — background feed cycles
+  wrap mutations in one `begin/endChangeNotificationCoalescing` transaction
+  (`FeedRefreshCycleWorkflow.swift:641-648`) and CKSyncEngine fetch bursts do the
+  same (`CloudSyncEngine.swift` header). This is a real prior-fix; keep it.
+- **P-C (Low): deprecated Accelerate call.** Prior assessment flags `cblas_scopy`
+  in `PlaybackEngine.swift` as deprecated since iOS 16.4. Compiles; frame counts
+  far below 32-bit limits. Maintenance debt only; migrate behind an audio
+  regression test, not urgently.
+
+## 6. Reliability & correctness
+
+- **R1 (Medium): whole-list LWW sync records cannot merge concurrent edits.**
+  Subscription order (`subscription-order:current`) and the Up Next snapshot are
+  intentionally atomic whole-record LWW by `updatedAt`
+  (`CloudKitSyncMapping.swift:170, 211`). Two devices reordering concurrently:
+  one entire generation wins, the other's reorder is lost. Correct for coherence,
+  wrong for merge. Keep deterministic timestamp tie-break; document precisely in
+  Support; only consider an operation-log/CRDT for order if concurrent editing
+  becomes common (with tombstones + bounded compaction).
+- **R2 (Medium): "all settings sync" is false.** Episode state, per-podcast
+  settings, subscriptions, order, history, position, Stats, Up Next roam; global
+  AppSettings, network prefs, onboarding state, and learned Release Radar
+  observations are device-local. Defensible, but keep the explicit matrix in
+  SYNC_DESIGN + Support and never claim total sync.
+- **R3 (Low): multiple-scene declaration vs singleton services.** If the plist
+  declares multi-window while playback/downloads are process singletons, either
+  test two windows with defined ownership or disable multi-window. Verify the
+  plist state before acting.
+
+## 7. Cross-device sync
+
+Engine is well-built: opt-in (`iCloudSyncEnabled`), two-lane push (fast =
+user actions immediate; slow = history/stats debounced ~60 s), type-namespaced
+record names to prevent shared-zone collisions, and coalesced fetch apply
+(`CloudSyncEngine.swift` header). tvOS is structurally read-only for subscription
+state — `pushesSubscriptionState: false` is a hard one-way rule set at the TV
+composition root (`TV/App/AutohopTVApp.swift:444-456`), satisfying the explicit
+"TV must not alter phone subscriptions" constraint. **Improvement opportunities:**
+(a) resolve R1 whole-list merge if two-device reordering is real for users;
+(b) classify any future global setting as roamable vs device-specific rather than
+syncing the whole AppSettings blob; (c) a per-episode event/tombstone model would
+make historic played/archived sets a clean cross-device merge (currently union
+risks blocking removals, LWW risks losing concurrent adds).
+
+## 8. Security & privacy
+
+- **S1 (Medium/High trade-off): global ATS exception.** `Info.plist`
+  `NSAllowsArbitraryLoads = true` permits clear-text HTTP for legacy feeds/media.
+  Necessary for the long tail of HTTP RSS, but broadens attack surface. Recommend:
+  prefer HTTPS; warn visibly before adding an HTTP feed; never send credentials/
+  tokens over HTTP; reject URL user-info; consider blocking loopback/link-local/
+  private-network hosts unless the user confirms a local feed; keep Relay/CloudKit/
+  Apple HTTPS-only; re-justify the global exception each release.
+- **S2 (High for release): development APNs entitlement.** `Autohop.entitlements`
+  has `aps-environment = development`. Signing may override for distribution, but
+  an archive slip would silently break production push. Add a release/CI check that
+  inspects **signed** entitlements and fails if the App Store artifact is not
+  `production`.
+- **S3 (Medium): Relay JWS verification is a decode-only placeholder** (per source
+  header). Feature gates prevent production use — correct control. Never enable
+  Pro/Relay in production until the server verifies the full Apple cert chain,
+  bundle/product/environment, signed date, revocation/expiry, and transaction
+  status; rate-limit registration.
+- **S4 (Low): diagnostics remain behaviourally sensitive even when redacted** —
+  feed hosts + titles + timing reveal listening habits; exports leave the sandbox
+  on explicit user action. Keep titles bounded, maintain redaction tests, warn
+  before sharing.
+
+## 9. Design, UI, layout consistency, accessibility (quantified)
+
+- **U1 (Medium): Dynamic Type is the biggest UI gap.** **219** fixed
+  `.font(.system(size:))` call sites and **121** fixed `.frame(width/height:)` in
+  `Views/`. Fixed point sizes do not scale with the user's text setting and can
+  truncate titles, metadata pills, settings copy, and Stats labels at accessibility
+  sizes. Recommend semantic fonts for body/settings text, `@ScaledMetric` for
+  deliberate geometry, multiline labels, and testing the two largest Dynamic Type
+  categories + Bold Text + Increased Contrast. Preserve 44 pt hit targets.
+- **U2 (Medium): accessibility-label coverage is thin.** Only **21 of 39** view
+  files reference `accessibilityLabel/Hint/dynamicTypeSize/accessibilityElement`.
+  The mini-player is well-labelled (`RootView.swift`), but audit VoiceOver reading
+  order across Player panels, Up Next, Priority, Settings, and Podcast Settings.
+- **U3 (Medium): no code-level design-token abstraction found.** Zero references to
+  a central theme/`DesignSystem` in `Views/` vs **31** inline `Color(red:/hex:/sRGB)`
+  literals — colours appear defined at call sites (verify whether asset-catalog
+  named colours are used elsewhere). Combined with three visual systems (iOS 17–25
+  dark cards, iOS 26 glass, tvOS focus), this risks per-page shade/spacing drift.
+  Recommend consolidating colour into named tokens and adding reference snapshots
+  for Player/Priority/Up Next/Settings on iOS 17 + 26 and focused/unfocused tvOS.
+- **U4 (Medium): Settings density.** Global and per-podcast Settings are coherent
+  but long (mixed runtime controls, defaults, storage, contact, hidden diagnostics).
+  Keep labels/defaults; consider stable subpages (Playback Defaults,
+  Automation/Background, Data/Sync); frequently-changed controls up top, destructive
+  actions last.
+- **U5 (Low): page naming converged on "Up Next".** Internal `QueueSheetView`,
+  `QueueSnapshot`, DB keys, and log events stay valid; future user-facing IDs /
+  a11y labels / deep links should use `up-next`.
+
+## 10. tvOS assessment
+
+tvOS is a **companion**, not parity. `TV/Views/` ships 8 surfaces (Home, Library,
+Queue/Up Next, Player, Search, EpisodeList, MainTab, + Theme/Artwork) — no Stats,
+Discover depth, Downloads, or dense per-podcast configuration, which is correct
+(a TV is a poor place to configure rules). Read-only subscription-state sync is
+enforced structurally (`AutohopTVApp.swift:456`). Recommend: document an explicit
+tvOS support matrix (browse/search/play/resume/Up Next/transport on TV;
+configuration on iPhone) and verify empty / signed-out / CloudKit-unavailable /
+stale-snapshot states before any TV release. Keep tvOS in sync with every iOS
+design/fix change in the same pass (standing project rule).
+
+## 11. Stale / outdated code
+
+Very clean. **1** TODO/FIXME/HACK in non-test source; no `UIApplication.shared.windows`,
+`keyWindow`, or `NSKeyedUnarchiver.unarchiveObject`; vDSP/`withUnsafeBytes` uses are
+correct, not deprecated. Only genuine debt: the `cblas_scopy` Accelerate call (P-C)
+and the large-file regression surface (P-A). No dead-module or abandoned-feature
+smell found in the read sample.
+
+## 12. Confirmations of, and divergences from, the prior committed assessment
+
+- **Confirmed against code:** ATS exception (S1), development APNs (S2), Relay
+  placeholder (S3), whole-list LWW (R1), device-local settings/learning (R2),
+  Settings density (U1/prior U1), Dynamic Type risk (prior U2 — now quantified at
+  219/121), three-visual-system consistency (prior U3), tvOS companion status
+  (prior U5), oversized files (prior P2), moving-horizon + BGProcessing pacing.
+- **Near-divergence resolved by verification:** prior P4 asserts "durable episode/
+  **host** cooldowns". An initial grep suggested only per-episode cooldown; direct
+  read of `DownloadCoordinator.swift:325-363` **confirms** the per-host +
+  cross-host breaker exists. Prior report is correct; flag logged so future models
+  do not "correct" it away.
+- **Added by this pass:** the unified CODE-COMPLETE / DEVICE-UNVERIFIED status
+  table (§3); hard UI quantification (§9); the fairness-scope asymmetry and
+  quarantine-redundancy nuances (§3.1).
+
+## 13. Prioritised next work
+
+1. **Device background/energy matrix** (§3 table is the checklist). Nothing else
+   in the background story should be tuned from another single anecdotal capture.
+2. **Release gating:** archive-time signed-entitlement check (S2); keep Pro/Relay
+   off until JWS verification is cryptographically complete (S3).
+3. **CI fixtures:** malformed/large-feed parser memory + watchdog-generation stress
+   tests, protecting the §3 fixes from regression.
+4. **Accessibility pass:** migrate the 219 fixed fonts to semantic/`@ScaledMetric`;
+   raise a11y-label coverage; VoiceOver + Dynamic Type + contrast audit; tvOS focus.
+5. **HTTP-feed hardening** (S1): explicit warning + private-network policy while
+   preserving legacy compatibility.
+6. **Sync:** decide whether whole-list order/Up Next needs concurrent-merge (R1);
+   keep the explicit sync matrix authoritative (R2).
+7. **Small tested extractions** from the largest files (P-A) — no architecture
+   rewrite.
+8. **Docs/website discipline:** never describe a ❌ (§3) row as fixed until device
+   verified; never promise fixed background intervals.
+
+## 14. Release gate
 
 Before the next public build:
-
-- build iOS and tvOS schemes from a clean generated project;
-- run the full test suite and website generator/syntax checks;
-- inspect signed production entitlements and privacy manifest;
-- exercise fresh install, existing-user upgrade, OPML import, first subscription,
-  iCloud off/on, two-device conflict, HTTP/HTTPS feed, locked-screen audio,
-  unplugged background refresh, large malformed feed, CarPlay and widget actions;
-- compare website/support/privacy claims against the exact release feature gates;
-- update MARKETING_VERSION/build number only when the release scope is decided.
+- clean-generate the project (`xcodegen generate`), build iOS + tvOS schemes;
+- run the full test suite + website generator/syntax checks;
+- inspect **signed production** entitlements + privacy manifest;
+- exercise: fresh install, existing-user upgrade, OPML import, first subscription,
+  iCloud off→on, two-device order/Up-Next conflict, HTTP + HTTPS feed, locked-screen
+  audio, **unplugged background refresh (§3 matrix)**, large malformed feed,
+  interruption→resume, CarPlay, widget actions;
+- reconcile website/support/privacy claims against the exact release feature gates;
+- bump MARKETING_VERSION/build only once release scope is fixed.
