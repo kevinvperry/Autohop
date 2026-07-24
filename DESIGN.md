@@ -393,7 +393,7 @@ VStack(spacing: 12) {
 
 **Label: `ListRow-EpisodeRow`**
 
-The episode row used in the Individual Subscription episodes list. Differs from `ListRow-Standard` (Queue) in that it shows episode-level artwork (falling back to channel artwork), includes an episode description preview, uses no queue position number, and shows a download progress bar when actively downloading.
+The episode row used in the Individual Subscription episodes list. Differs from `ListRow-Standard` (Up Next) in that it shows episode-level artwork (falling back to channel artwork), includes an episode description preview, uses no queue position number, and shows a download progress bar when actively downloading.
 
 Structure:
 - **Artwork column** — 44×44 pt artwork (`cornerRadius 9`, `episode.artworkURL ?? sub.artworkURL`, falls back to `Artwork-Placeholder`). No badges below artwork.
@@ -668,7 +668,7 @@ The row for the currently playing episode gets a faint purple tint. Applied via 
 .listRowBackground(isPlaying ? Color.purple.opacity(0.08) : Color.white.opacity(0.08))
 ```
 
-> Note: on the Priority page (card list) and Individual Subscription page (card list), idle rows use `Color.white.opacity(0.08)` — not `.clear` — because the card background is already black. On the Queue (plain list against black), idle rows use `.clear`.
+> Note: on the Priority page (card list) and Individual Subscription page (card list), idle rows use `Color.white.opacity(0.08)` — not `.clear` — because the card background is already black. On the Up Next page (plain list against black), idle rows use `.clear`.
 
 ---
 
@@ -678,7 +678,7 @@ The row for the currently playing episode gets a faint purple tint. Applied via 
 
 | Page | Idle background |
 |---|---|
-| Queue (plain list on black) | `Color.clear` |
+| Up Next (plain list on black) | `Color.clear` |
 | Priority (card list) | `Color.white.opacity(0.08)` |
 | Individual Subscription (card list) | `Color.white.opacity(0.08)` |
 | Downloads (card group) | Inherited from card container |
@@ -1005,7 +1005,7 @@ Duration format: `"Xh Ym"` when ≥ 1 hour, otherwise `"Ym"`. No seconds.
 
 **Label: `Text-PodcastTitle`**
 
-The podcast (show) title above the episode title in Queue rows — small, grey, not bold.
+The podcast (show) title above the episode title in Up Next rows — small, grey, not bold.
 
 ```swift
 Text(podcastTitle)
@@ -1034,7 +1034,7 @@ Text(sub.title)
 
 **Label: `Text-EpisodeTitle`**
 
-Standard episode title style used in the Queue and Individual Subscription page — bold, primary, up to 2 lines.
+Standard episode title style used in the Up Next and Individual Subscription page — bold, primary, up to 2 lines.
 
 ```swift
 // Queue
@@ -1106,7 +1106,7 @@ Text(formatDuration(seconds))   // "1h 4m" or "58m"
 
 **Label: `Badge-Pin`**
 
-Appears in the trailing stack of a Queue row when the episode has been manually positioned. Sits above the duration. Blue = Play Next, Orange = Play Last.
+Appears in the trailing stack of an Up Next row when the episode has been manually positioned. Sits above the duration. Blue = Play Next, Orange = Play Last.
 
 ```swift
 VStack(alignment: .trailing, spacing: 4) {
@@ -1379,7 +1379,7 @@ Used on full navigation stack pages (Priority page). No "Done" dismiss button �
 
 **Label: `Toolbar-SheetStandard`**
 
-Used on sheet-presented pages (Queue). Three positions:
+Used on sheet-presented pages (Up Next). Three positions:
 
 | Placement | Content |
 |---|---|
@@ -1422,7 +1422,7 @@ Button { action() } label: {
 
 **Label: `Button-ContextualShortcut`**
 
-Downloads shortcut in the Queue toolbar. Navigates to Downloads and visually signals active download state.
+Downloads shortcut in the Up Next toolbar. Navigates to Downloads and visually signals active download state.
 
 - **Icon:** `arrow.down.circle.fill` (active) / `arrow.down.circle` (idle)
 - **Color:** `Color.purple` (active) / `Color.primary` (idle)
@@ -1990,10 +1990,10 @@ A bottom sheet presented when the Archive button is tapped in `AudioRow-Player`.
 
 **Label: `Button-PlayerAction`**
 
-The shared **glass** style used by the Player's six action pills — the audio-row buttons (Sound Settings, Sleep Timer, Share, Archive) plus the top-bar Queue pill and Sleep Schedule indicator. The icon style is the `playerActionIcon(_:highlighted:)` helper; the surface is the shared `playerGlassPill(highlighted:cornerRadius:)` modifier (`Player-GlassPill`, `Views/PlayerView.swift`).
+The shared **glass** style used by the Player's six action pills — the audio-row buttons (Sound Settings, Sleep Timer, Share, Archive) plus the top-bar Up Next pill and Sleep Schedule indicator. The icon style is the `playerActionIcon(_:highlighted:)` helper; the surface is the shared `playerGlassPill(highlighted:cornerRadius:)` modifier (`Player-GlassPill`, `Views/PlayerView.swift`).
 
 - **Icon** — SF Symbol at `size 18, weight .bold`; `Color.purple.opacity(0.85)` foreground when idle, `.white` when `highlighted` (Sleep Timer running, Shared Listening on)
-- **Frame** — `44×32 pt` (icon buttons); the Queue/Sleep-Schedule pills size to their content at height 32
+- **Frame** — `44×32 pt` (icon buttons); the Up Next/Sleep-Schedule pills size to their content at height 32
 - **Surface** — `playerGlassPill`:
   - **iOS 26+:** idle → neutral `.glassEffect(in: RoundedRectangle(cornerRadius: 9))`; highlighted → purple-tinted `.glassEffect(.regular.tint(.purple), in:)` — same idle/active split as the Priority page reorder toggle
   - **iOS 17–25 fallback:** the original `Color.purple.opacity(0.12)` fill + `Color.purple.opacity(0.3)` `lineWidth 0.5` stroke at `cornerRadius 9`
@@ -2209,7 +2209,7 @@ Sheets covered:
 ```
 
 - `.regularMaterial` renders as the system frosted material (Liquid Glass on iOS 26), blurring the content behind while staying legible.
-- List/scroll content inside must set `.scrollContentBackground(.hidden)` so the material shows through — see Queue list, Menu list, Podcast Search list.
+- List/scroll content inside must set `.scrollContentBackground(.hidden)` so the material shows through — see Up Next list, Menu list, Podcast Search list.
 - Row backgrounds inside these sheets use `Color.white.opacity(0.07)` (Menu rows, Podcast Search result rows) so they read as distinct rows on the material without fighting it.
 - Inner surface cards keep their own glass treatment — the Audio Controls speed stepper uses `.glassCard(cornerRadius: 10)` (iOS 26 glass, `.ultraThinMaterial` fallback), the Recently Viewed block in Podcast Search uses `.glassCard(cornerRadius: 16)`.
 - The full-screen Sleep Schedule prompt (`Overlay-SleepSchedulePrompt`) is **not** a card sheet — it stays a solid `black.opacity(0.72)` dimming scrim.
@@ -2552,7 +2552,7 @@ Native renderers in `SupportView` for the structured `SupportBlock` data (mirror
 - **Callout** (`tip` / `note` / `warning`) — tinted rounded card (`tint.opacity(0.14)` fill, `0.3` stroke, `cornerRadius 10`) with a leading symbol (`lightbulb.fill` purple / `info.circle.fill` blue / `exclamationmark.triangle.fill` orange).
 - **Table** — each row a `white.opacity(0.06)` card (`cornerRadius 12`): first cell a `.semibold` title, remaining cells labelled by the header (`**Header:** value`) or shown plain for two-column key/value tables.
 - **Pills** — adaptive `LazyVGrid` of capsule status chips (8pt colour dot + label, `color.opacity(0.18)` fill) reusing the `Episode Status Pill` colour set.
-- **Swipe-action cards** — two `white.opacity(0.06)` cards (Swipe Right / Swipe Left) listing each action as a colour dot + `**Label** — detail`, matching the Queue swipe semantics.
+- **Swipe-action cards** — two `white.opacity(0.06)` cards (Swipe Right / Swipe Left) listing each action as a colour dot + `**Label** — detail`, matching the Up Next swipe semantics.
 
 # Listening History Page
 
