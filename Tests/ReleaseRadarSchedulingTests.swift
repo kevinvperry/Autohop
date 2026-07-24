@@ -132,6 +132,45 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(selection.deferred.count, 2)
     }
 
+    func testDeferredFairnessReplacesUrgentBypassWithinHardMaximum() {
+        let candidates = [
+            Candidate(id: "urgent-1", state: .activeWindow),
+            Candidate(id: "urgent-2", state: .activeWindow),
+            Candidate(id: "urgent-3", state: .activeWindow),
+            Candidate(id: "urgent-4", state: .activeWindow),
+            Candidate(id: "urgent-5", state: .activeWindow),
+            Candidate(id: "urgent-6", state: .activeWindow),
+            Candidate(id: "oldest-deferred", state: .fallback),
+            Candidate(id: "missed-release", state: .missedRelease)
+        ]
+
+        let selection = FeedRefreshBudgeting.select(
+            candidates: candidates,
+            policy: FeedRefreshBudgetPolicy(
+                maxSelections: 4,
+                maxTotalSelections: 6,
+                capBypassStates: [.preWindow, .activeWindow, .missedRelease],
+                fairnessCandidateIndices: [6],
+                minimumFairnessSelections: 1
+            ),
+            state: { $0.state }
+        )
+
+        XCTAssertEqual(selection.selected.count, 6)
+        XCTAssertTrue(
+            selection.selected.map(\.id).contains("oldest-deferred")
+        )
+        XCTAssertEqual(
+            selection.selected.filter { $0.state == .activeWindow }.count,
+            4
+        )
+        XCTAssertTrue(selection.selected.map(\.id).contains("missed-release"))
+        XCTAssertEqual(
+            selection.deferred.map(\.id),
+            ["urgent-5", "urgent-6"]
+        )
+    }
+
     func testDailyWeekdayPredictionStartsCheckingBeforeExpectedRelease() {
         let calendar = utcCalendar()
         let now = date(2026, 6, 23, 7, 35, calendar: calendar)

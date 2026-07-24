@@ -173,6 +173,7 @@ final class PlaybackEngine: PlaybackControlling {
     private var lastRenderedAt: CFAbsoluteTime = 0
     private var resumedAt: CFAbsoluteTime = 0
     private var lastRecoveryAt: CFAbsoluteTime = 0
+    private var engineRecoveryTask: Task<Void, Never>?
     private var lastRouteRestartAt: CFAbsoluteTime = 0
     private var routeLossPauseGeneration = 0
     private var routeRestartGeneration = 0
@@ -442,10 +443,15 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     func resume() {
-        guard currentEpisode != nil else { return }
+        _ = resume(notifyAfterRebuild: false)
+    }
+
+    @discardableResult
+    private func resume(notifyAfterRebuild: Bool) -> Bool {
+        guard currentEpisode != nil else { return false }
         let resumeStartedAt = CFAbsoluteTimeGetCurrent()
         var engineStartMs: Double = 0
-        var fallbackRestartMs: Double = 0
+        let fallbackRestartMs: Double = 0
         cancelPendingRouteLossPause(reason: "resume", output: currentOutputPortName())
         routeRestartDeferredByRouteLoss = nil
         pausedByRouteChange = false
@@ -462,23 +468,21 @@ final class PlaybackEngine: PlaybackControlling {
                         "episode": currentEpisode?.title ?? "none"
                     ])
                 } catch {
-                    // Engine won't restart (e.g. audio session still interrupted). Fall back
-                    // to a full buffer-loop restart which sets up a fresh engine start.
+                    // Reusing the stopped graph can fail repeatedly after a
+                    // Core Audio route/interruption transition. Dispose and
+                    // rebuild the full session + graph through one serialized
+                    // recovery task instead of launching competing loop restarts.
                     logger.warning("engine.restartFailed", "AVAudioEngine restart failed on resume — doing full loop restart", metadata: [
                         "episode": currentEpisode?.title ?? "none",
                         "error": error.localizedDescription
                     ])
-                    let position = pausedAtSeconds
-                    let stageStartedAt = CFAbsoluteTimeGetCurrent()
-                    stopEngineBufferLoop()
-                    startEngineBufferLoop(from: position, shouldPlay: true)
-                    fallbackRestartMs = (CFAbsoluteTimeGetCurrent() - stageStartedAt) * 1000
-                    // Reset watchdog so the restarted loop gets a clean window.
-                    let now = CFAbsoluteTimeGetCurrent()
-                    resumedAt = now
-                    lastRenderedAt = now
+                    scheduleFullEngineRecovery(
+                        reason: "resumeStartFailed",
+                        error: error,
+                        notifyResumed: notifyAfterRebuild
+                    )
                     logResumeTiming(startedAt: resumeStartedAt, engineStartMs: engineStartMs, fallbackRestartMs: fallbackRestartMs, path: "fallback")
-                    return
+                    return false
                 }
             }
             audioPlayerNode?.play()
@@ -496,6 +500,7 @@ final class PlaybackEngine: PlaybackControlling {
             "speed": PlaybackPreference.speedLabel(currentPreference?.speed ?? 1.0)
         ])
         logResumeTiming(startedAt: resumeStartedAt, engineStartMs: engineStartMs, fallbackRestartMs: fallbackRestartMs, path: engineUsesEngine ? "engine" : "player")
+        return true
     }
 
     /// Main-thread hang instrumentation for the synchronous resume path. Always
@@ -729,6 +734,10 @@ final class PlaybackEngine: PlaybackControlling {
     func stop() { stop(resetEpisode: true) }
 
     private func stop(resetEpisode: Bool) {
+        if resetEpisode {
+            engineRecoveryTask?.cancel()
+            engineRecoveryTask = nil
+        }
         cancelPendingRouteLossPause(reason: "stop", output: currentOutputPortName())
         routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
@@ -1259,6 +1268,14 @@ final class PlaybackEngine: PlaybackControlling {
     /// Guards against rapid repeated calls (at most once every 3 s).
     private func recoverSilentEngine(reason: String = "silentEngine") {
         guard engineUsesEngine, engineIsPlaying else { return }
+        guard engineRecoveryTask == nil else {
+            logger.info(
+                "engine.silentRecoveryDeferred",
+                "Silent-engine recovery deferred to serialized full graph recovery",
+                metadata: ["reason": reason]
+            )
+            return
+        }
         guard !routeRestartScheduled, !hasPendingRouteLossPause else {
             logger.info("engine.silentRecoveryDeferred", "Silent-engine recovery deferred to pending route coordination", metadata: [
                 "reason": reason,
@@ -1291,6 +1308,11 @@ final class PlaybackEngine: PlaybackControlling {
                 logger.warning("engine.silentRecovery", "Engine restart failed during silent recovery", metadata: [
                     "error": error.localizedDescription
                 ])
+                scheduleFullEngineRecovery(
+                    reason: "silentRecoveryStartFailed",
+                    error: error,
+                    notifyResumed: true
+                )
                 return
             }
         }
@@ -1298,6 +1320,93 @@ final class PlaybackEngine: PlaybackControlling {
         startEngineBufferLoop(from: position, shouldPlay: true)
         resumedAt = now
         lastRenderedAt = now
+    }
+
+    /// One terminal recovery path for a stopped AVAudioEngine graph. Route,
+    /// interruption, and render-watchdog handlers all converge here, so only
+    /// one task may dispose/recreate the session and graph for the current
+    /// episode generation.
+    private func scheduleFullEngineRecovery(
+        reason: String,
+        error: Error,
+        notifyResumed: Bool
+    ) {
+        guard engineRecoveryTask == nil,
+              let episode = currentEpisode,
+              let preference = currentPreference else {
+            return
+        }
+        let episodeID = episode.id
+        let position = currentPlaybackTime()
+        let filter = currentFilter ?? ChapterFilter()
+        cancelPendingRouteRestart()
+        routeRestartDeferredByRouteLoss = nil
+        logger.warning(
+            "engine.fullRecoveryScheduled",
+            "Scheduled serialized audio-session and engine-graph rebuild",
+            metadata: [
+                "reason": reason,
+                "episode": episode.title,
+                "positionSecs": String(format: "%.1f", position),
+                "error": error.localizedDescription
+            ]
+        )
+
+        engineRecoveryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(350))
+            } catch {
+                return
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  self.currentEpisode?.id == episodeID else {
+                self?.engineRecoveryTask = nil
+                return
+            }
+            defer { self.engineRecoveryTask = nil }
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try? session.setActive(
+                    false,
+                    options: .notifyOthersOnDeactivation
+                )
+                try await self.startPlayback(
+                    episode: episode,
+                    preference: preference,
+                    filter: filter,
+                    resumeAt: position
+                )
+                self.logger.info(
+                    "engine.fullRecoveryCompleted",
+                    "Rebuilt audio session and engine graph after restart failure",
+                    metadata: [
+                        "reason": reason,
+                        "episode": episode.title,
+                        "positionSecs": String(format: "%.1f", position),
+                        "durationMs": String(
+                            format: "%.1f",
+                            (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+                        )
+                    ]
+                )
+                if notifyResumed {
+                    self.onPlaybackResumed?()
+                }
+            } catch {
+                self.logger.error(
+                    "engine.fullRecoveryFailed",
+                    "Could not rebuild audio session and engine graph",
+                    metadata: [
+                        "reason": reason,
+                        "episode": episode.title,
+                        "positionSecs": String(format: "%.1f", position),
+                        "error": String(describing: error)
+                    ]
+                )
+            }
+        }
     }
 
     private func startEngineTimer() {
@@ -1609,8 +1718,9 @@ final class PlaybackEngine: PlaybackControlling {
                 metadata.merge(playbackDiagnosticMetadata(reason: "interruptionEndedResume")) { existing, _ in existing }
                 logger.info("audio.interruptionEnded", "Audio session interruption ended, resuming playback", metadata: metadata)
                 try? AVAudioSession.sharedInstance().setActive(true)
-                resume()
-                onPlaybackResumed?()
+                if resume(notifyAfterRebuild: true) {
+                    onPlaybackResumed?()
+                }
             } else {
                 var metadata = [
                     "episode": currentEpisode?.title ?? "none",
@@ -1974,6 +2084,14 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func restartEngineAfterRouteChangeIfNeeded(reason: String, output: String) {
         guard engineUsesEngine, engineIsPlaying else { return }
+        guard engineRecoveryTask == nil else {
+            logger.info(
+                "engine.routeRestartDeferred",
+                "Route restart deferred to serialized full graph recovery",
+                metadata: ["reason": reason, "newOutput": output]
+            )
+            return
+        }
         let now = CFAbsoluteTimeGetCurrent()
         let position = currentPlaybackTime()
         if finishReadFinishedEngineIfNearEnd(
@@ -2012,6 +2130,11 @@ final class PlaybackEngine: PlaybackControlling {
                     "episode": currentEpisode?.title ?? "none",
                     "error": error.localizedDescription
                 ])
+                scheduleFullEngineRecovery(
+                    reason: "routeRestartStartFailed.\(reason)",
+                    error: error,
+                    notifyResumed: true
+                )
                 return
             }
         }

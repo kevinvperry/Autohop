@@ -166,7 +166,7 @@ enum SupportGuide {
     // MARK: Up Next
 
     private static let queue = SupportSection(
-        id: "queue", icon: "square.stack", title: "Up Next",
+        id: "up-next", icon: "square.stack", title: "Up Next",
         summary: "Swipe actions, pins, and what's playing after",
         blocks: [
             .paragraph("The Up Next sheet shows all episodes that are ready to play, in the order Autohop will play them. Open it by tapping the **Up Next** button in the player toolbar."),

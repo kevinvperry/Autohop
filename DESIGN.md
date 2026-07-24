@@ -11,7 +11,8 @@ and the labeled pattern names below so future prompts can target them.
 Subscriptions Reorder is a local UUID-draft interaction: only active real
 subscriptions receive drag grips, Inactive rows remain fixed below them, and
 browse previews are absent from the visual/index space. Done commits once.
-Version 1.3 presents only the iPhone design system. Retained Apple TV and
+The checked-in Version 1.3 configuration presents only the iPhone design system.
+Retained Apple TV and
 Autohop Pro screens are development references and are not shipping surfaces.
 -->
 

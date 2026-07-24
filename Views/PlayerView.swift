@@ -608,7 +608,7 @@ struct PlayerView: View {
 
                     Text(hasSubscriptions
                          ? "Autohop is downloading the latest episode so it plays instantly and works offline. This only takes a moment."
-                         : "Subscribe to a show and Autohop fills your queue automatically. Your latest episodes land here, ready to play.")
+                         : "Subscribe to a show and Autohop fills Up Next automatically. Your latest episodes land here, ready to play.")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Color(white: 0.62))
                         .multilineTextAlignment(.center)

@@ -148,7 +148,7 @@ final class DownloadActionsWorkflow {
             subscriptionID: episode.subscriptionID,
             episodeID: episode.id
         )
-        downloadCoordinator.message = "Removed \(episode.title) from the queue."
+        downloadCoordinator.message = "Removed \(episode.title) from Up Next."
     }
 
     func pauseDownload(_ activity: DownloadActivity) {
@@ -238,15 +238,20 @@ final class DownloadActionsWorkflow {
             "Retrying watchdog-paused download",
             metadata: [
                 "episode": episode.title,
-                "podcast": subscription.title
+                "podcast": subscription.title,
+                "automatic":
+                    "\(downloadCoordinator.isAutomaticDownload(episodeID: episodeID))"
             ]
+        )
+        let isAutomatic = downloadCoordinator.isAutomaticDownload(
+            episodeID: episodeID
         )
         await transferWorkflow.download(
             episode,
             subscriptionID: subscription.id,
             podcastTitle: subscription.title,
             showCompletionMessage: false,
-            isAutomatic: false
+            isAutomatic: isAutomatic
         )
     }
 

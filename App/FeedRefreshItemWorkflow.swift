@@ -407,7 +407,16 @@ final class FeedRefreshItemWorkflow {
                 episode: candidate,
                 subscriptionID: subscription.id,
                 podcastTitle: result.subscriptionTitle,
-                refreshUpNextAfterMerge: refreshUpNextAfterMerge
+                refreshUpNextAfterMerge: refreshUpNextAfterMerge,
+                detectionContext:
+                    feedRefreshCoordinator.activeCycleDiagnostics?
+                        .executionContext.rawValue ?? "singleFeedManual",
+                sceneActive: runtimeWorkflow.isSceneActive,
+                batteryState:
+                    ResourceMonitor.shared.externalPowerStateLabel,
+                detectedAt: runtimeWorkflow.now,
+                sceneActivationSequence:
+                    runtimeWorkflow.sceneActivationSequence
             )
             logger.verbose(
                 "feed.refresh",

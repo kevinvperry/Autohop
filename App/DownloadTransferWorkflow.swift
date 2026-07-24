@@ -99,10 +99,20 @@ final class DownloadTransferWorkflow {
                 "Automatic download deferred by failure circuit breaker",
                 metadata: [
                     "episode": episode.title,
+                    "episodeID": episode.id.uuidString,
                     "podcast": podcastTitle,
                     "scope": circuit,
                     "mediaHost": episode.audioURL.host ?? "unknown"
                 ]
+            )
+            subscriptionStore.markEpisodeDownloadFailed(
+                subscriptionID: subscriptionID,
+                episodeID: episode.id
+            )
+            coordinator.activityStore.fail(
+                episode: episode,
+                podcastTitle: podcastTitle,
+                error: "Download host is cooling down after repeated stalls."
             )
             return
         }
@@ -188,13 +198,25 @@ final class DownloadTransferWorkflow {
             return
         }
 
+        let transferStartedAt = runtimeWorkflow.now
+        let detectionAtStart = coordinator.detectionMetadata(
+            episodeID: episode.id,
+            now: transferStartedAt,
+            sceneActivationSequence: runtimeWorkflow.sceneActivationSequence
+        )
         logger.info("download.start", "Starting episode download", metadata: [
             "episode": episode.title,
+            "episodeID": episode.id.uuidString,
             "podcast": podcastTitle,
             "mediaHost": episode.audioURL.host ?? "unknown",
             "mediaKind": episode.mediaKind.rawValue,
-            "fileSizeBytes": episode.fileSizeBytes.map(String.init) ?? "unknown"
-        ])
+            "fileSizeBytes": episode.fileSizeBytes.map(String.init) ?? "unknown",
+            "automatic": "\(isAutomatic)",
+            "sceneActive": "\(runtimeWorkflow.isSceneActive)",
+            "applicationForeground": "\(runtimeWorkflow.isAppForeground)",
+            "batteryState": ResourceMonitor.shared.externalPowerStateLabel,
+            "publishedAt": episode.publishedAt?.ISO8601Format() ?? "unknown"
+        ].merging(detectionAtStart) { _, new in new })
         coordinator.activityStore.start(
             episode: episode,
             podcastTitle: podcastTitle,
@@ -254,13 +276,30 @@ final class DownloadTransferWorkflow {
             if showCompletionMessage {
                 coordinator.message = "Downloaded \(episode.title)."
             }
+            let completedAt = runtimeWorkflow.now
+            let detectionAtCompletion = coordinator.detectionMetadata(
+                episodeID: episode.id,
+                now: completedAt,
+                sceneActivationSequence:
+                    runtimeWorkflow.sceneActivationSequence
+            )
             logger.info("download.complete", "Episode downloaded", metadata: [
                 "episode": episode.title,
+                "episodeID": episode.id.uuidString,
                 "path": localFileURL.lastPathComponent,
                 "duration": duration.map { "\(Int($0))" } ?? "unknown",
                 "mediaKind": episode.mediaKind.rawValue,
-                "fileSizeBytes": episode.fileSizeBytes.map(String.init) ?? "unknown"
-            ])
+                "fileSizeBytes": episode.fileSizeBytes.map(String.init) ?? "unknown",
+                "automatic": "\(isAutomatic)",
+                "sceneActive": "\(runtimeWorkflow.isSceneActive)",
+                "applicationForeground": "\(runtimeWorkflow.isAppForeground)",
+                "batteryState": ResourceMonitor.shared.externalPowerStateLabel,
+                "transferElapsedSeconds": String(
+                    format: "%.1f",
+                    runtimeWorkflow.now.timeIntervalSince(transferStartedAt)
+                )
+            ].merging(detectionAtCompletion) { _, new in new })
+            coordinator.clearEpisodeDetection(episodeID: episode.id)
             coordinator.activityStore.complete(
                 episode: episode,
                 podcastTitle: podcastTitle,

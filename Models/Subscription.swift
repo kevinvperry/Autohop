@@ -6,7 +6,7 @@ import Foundation
 // scheduling/priority predictions. Contains:
 //  - AutoArchiveSettings: three independent rules (AfterPlayed delay,
 //    AfterInactive timeout, EpisodeLimit keep-N). Per-podcast AfterInactive
-//    includes a 40-minute bulletin option; the global-new-subscription picker
+//    includes a 30-minute bulletin option; the global-new-subscription picker
 //    deliberately omits that specialist value. Defaults remain afterPlaying /
 //    1 week / keep 1. The same backward-compatible payload carries the opt-in
 //    per-podcast Play Instant automation flag. Archive rules are enforced by
@@ -132,7 +132,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     // Rule 2: archive inactive (unplayed, untouched) episodes after this interval
     public enum AfterInactive: String, CaseIterable, Codable, Sendable {
         case never
-        case minutes40
+        case minutes30
         case hours4
         case hours6
         case hours8
@@ -151,7 +151,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
         public var title: String {
             switch self {
             case .never:   return "Never"
-            case .minutes40: return "40 Minutes"
+            case .minutes30: return "30 Minutes"
             case .hours4:  return "4 Hours"
             case .hours6:  return "6 Hours"
             case .hours8:  return "8 Hours"
@@ -172,7 +172,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
         public var interval: TimeInterval? {
             switch self {
             case .never:   return nil
-            case .minutes40: return 40 * 60
+            case .minutes30: return 30 * 60
             case .hours4:  return 4 * 3600
             case .hours6:  return 6 * 3600
             case .hours8:  return 8 * 3600
@@ -188,6 +188,29 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
             case .days30:  return 30 * 24 * 3600
             case .days90:  return 90 * 24 * 3600
             }
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let rawValue = try container.decode(String.self)
+            // Version 1.4 originally shipped this specialist per-podcast option
+            // as 40 minutes. Migrate an existing selection to the replacement
+            // 30-minute option instead of silently reverting to the default.
+            if rawValue == "minutes40" {
+                self = .minutes30
+            } else if let value = Self(rawValue: rawValue) {
+                self = value
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Unknown inactive archive interval: \(rawValue)"
+                )
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 
@@ -2464,19 +2487,29 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
     /// still consume budget, but they are tried before ordinary backlog work.
     public var protectedStates: Set<FeedRefreshWindowState>
     public var minimumProtectedSelections: Int
+    /// Candidate indices, in oldest-first order, that have already waited long
+    /// enough to receive a bounded fairness reservation. They consume ordinary
+    /// budget slots and therefore replace lower-priority repeated selections
+    /// rather than expanding background work.
+    public var fairnessCandidateIndices: [Int]
+    public var minimumFairnessSelections: Int
 
     public init(
         maxSelections: Int?,
         maxTotalSelections: Int? = nil,
         capBypassStates: Set<FeedRefreshWindowState> = [],
         protectedStates: Set<FeedRefreshWindowState> = [],
-        minimumProtectedSelections: Int = 0
+        minimumProtectedSelections: Int = 0,
+        fairnessCandidateIndices: [Int] = [],
+        minimumFairnessSelections: Int = 0
     ) {
         self.maxSelections = maxSelections
         self.maxTotalSelections = maxTotalSelections
         self.capBypassStates = capBypassStates
         self.protectedStates = protectedStates
         self.minimumProtectedSelections = minimumProtectedSelections
+        self.fairnessCandidateIndices = fairnessCandidateIndices
+        self.minimumFairnessSelections = minimumFairnessSelections
     }
 }
 
@@ -2506,7 +2539,9 @@ public enum FeedRefreshBudgeting {
             return FeedRefreshBudgetSelection(selected: candidates, deferred: [])
         }
 
-        if !policy.protectedStates.isEmpty, policy.minimumProtectedSelections > 0 {
+        if policy.minimumFairnessSelections > 0
+            || (!policy.protectedStates.isEmpty
+                && policy.minimumProtectedSelections > 0) {
             return selectWithProtectedStates(
                 candidates: candidates,
                 maxSelections: maxSelections,
@@ -2544,20 +2579,52 @@ public enum FeedRefreshBudgeting {
         state: (Candidate) -> FeedRefreshWindowState
     ) -> FeedRefreshBudgetSelection<Candidate> {
         let indexedCandidates = Array(candidates.enumerated())
-        let protectedLimit = min(
+        let totalLimit = policy.maxTotalSelections
+            .flatMap { $0 > 0 ? $0 : nil }
+            ?? Int.max
+        let fairnessLimit = min(
             maxSelections,
+            totalLimit,
+            max(0, policy.minimumFairnessSelections)
+        )
+        let fairnessIndices = policy.fairnessCandidateIndices
+            .filter { candidates.indices.contains($0) }
+            .prefix(fairnessLimit)
+        let fairnessIndexSet = Set(fairnessIndices)
+        let protectedLimit = min(
+            max(0, maxSelections - fairnessIndices.count),
             max(0, policy.minimumProtectedSelections)
         )
         let protectedIndices = indexedCandidates
-            .filter { policy.protectedStates.contains(state($0.element)) }
+            .filter {
+                !fairnessIndexSet.contains($0.offset)
+                    && policy.protectedStates.contains(state($0.element))
+            }
             .prefix(protectedLimit)
             .map { $0.offset }
-        let protectedIndexSet = Set(protectedIndices)
+        let protectedIndexSet = Set(protectedIndices).union(fairnessIndexSet)
 
-        var remainingBudget = maxSelections - protectedIndices.count
-        var selectedIndices = protectedIndices
+        var remainingBudget =
+            maxSelections - fairnessIndices.count - protectedIndices.count
+        var selectedIndices = Array(fairnessIndices) + protectedIndices
+        var reservedIndexSet = protectedIndexSet
 
-        for (index, candidate) in indexedCandidates where !protectedIndexSet.contains(index) {
+        // A fairness reservation may replace a repeatedly selected pre/active
+        // window candidate, but never a feed that is already in missed-release
+        // recovery. Protect those first inside the same absolute ceiling.
+        if !fairnessIndices.isEmpty,
+           policy.capBypassStates.contains(.missedRelease) {
+            for (index, candidate) in indexedCandidates
+            where !reservedIndexSet.contains(index)
+                && state(candidate) == .missedRelease
+                && selectedIndices.count < totalLimit {
+                selectedIndices.append(index)
+                reservedIndexSet.insert(index)
+            }
+        }
+
+        for (index, candidate) in indexedCandidates
+        where !reservedIndexSet.contains(index) {
             let candidateState = state(candidate)
             let totalLimitReached = policy.maxTotalSelections.map { selectedIndices.count >= $0 } ?? false
             if totalLimitReached {

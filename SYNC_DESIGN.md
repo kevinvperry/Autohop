@@ -3,7 +3,7 @@
 <!--
 AI CONTEXT — SYNC_DESIGN.md
 Canonical design/status note for Autohop's opt-in CloudKit sync layer. Verified
-again during the 2026-06-28 deep scan. Keep this
+again during the 2026-07-24 whole-project audit. Keep this
 aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
 App/SyncCoordinator.swift, App/RelayCoordinator.swift,
 Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and

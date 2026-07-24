@@ -14,6 +14,73 @@ waiting for a later documentation pass.
 
 ## Completed
 
+### Unplugged background-refresh and playback resilience — 24 July 2026
+
+- Added bounded age-based fairness to Background (Audio Playing) refresh cycles.
+  Once an eligible feed has been deferred for eight minutes, one slot is
+  reserved for the oldest deferred feed; after twenty minutes, two slots are
+  reserved. The existing background-audio work ceiling is unchanged, and a
+  genuinely missed Release Radar release remains protected inside that ceiling.
+- Made refresh-cycle cancellation owner-aware. An expiring BGAppRefresh or
+  BGProcessing request now cancels only work that it started; if it joined a
+  manual, foreground, or background-audio cycle, it detaches without terminating
+  that useful work.
+- Kept the first-byte watchdog responsive in the foreground while allowing
+  background URLSession transfers four minutes to deliver their first byte when
+  the app is not active. Existing attempt generations are extended, never
+  shortened, during a foreground-to-background transition, and timeout
+  cancellation remains serialized and revalidated against live task progress.
+- Preserved automatic-download provenance through watchdog retries so the
+  existing per-host and session-wide circuit breakers also govern resurrected
+  transfers. Two terminal automatic failures pause that host for fifteen minutes;
+  failures across three hosts pause new automatic starts for five minutes without
+  stopping feed refresh or manual downloads.
+- Reduced per-element RSS description retention from 128 KiB to 64 KiB, stopped
+  retaining duplicate `content:encoded` text when a usable description already
+  exists, released parser fragments and completed item state earlier, and removed
+  per-entity temporary allocations from malformed-ampersand validation.
+- Removed the broad manual-refresh escape from parse-memory quarantine. A full
+  manual refresh now respects quarantined feeds; an explicit refresh of one
+  subscription remains the deliberate override and is recorded as such.
+- Added one serialized full AVAudioEngine recovery path. When a stopped graph
+  cannot restart after a route or interruption change, Autohop disposes and
+  rebuilds the audio session and graph from the saved episode, preference,
+  filters, and position instead of repeatedly retrying the failed graph.
+- Added end-to-end episode timing diagnostics spanning feed detection,
+  automatic-download scheduling, first payload bytes, transfer start, and
+  storage completion,
+  including refresh context, foreground/background state, charging state,
+  publication age, transfer latency, and intervening foreground activations.
+  Refresh plans now also identify fairness-selected feeds and why they were
+  promoted.
+- Added regression coverage for deferred-feed fairness, missed-release
+  protection, foreground/background first-byte thresholds, and automatic
+  download host/session circuits. The existing four-minute background-audio
+  polling interval and durable retry cooldown policy remain unchanged pending
+  another long unplugged capture.
+
+### Inactive Episode archive reliability — 24 July 2026
+
+- Fixed full-feed refresh merges so an unchanged episode retains its device-local
+  `downloadedAt` and `lastPlayedAt` timestamps alongside its downloaded file and
+  playback state. Frequently regenerated HTTP 200 feeds can no longer erase the
+  inactivity clock and prevent downloaded-but-unplayed episodes from archiving.
+- Replaced the specialist per-podcast **40 Minutes** Inactive Episodes option with
+  **30 Minutes**. Existing saved 40-minute selections migrate automatically to
+  the new value; the global default remains one week.
+- Added regression coverage for repeated same-GUID feed merges and legacy
+  40-minute settings migration.
+
+### Animated Mini-Player playback control — 24 July 2026
+
+- Replaced the Mini-Player's playing-state Pause glyph with a live five-bar
+  waveform while retaining a Play glyph when paused. Both states share one
+  circular modern iOS glass control and transition smoothly without changing the
+  button's hit target or play/pause behaviour.
+- Preserved the semantic **Pause** VoiceOver action while the waveform is visible,
+  added explicit playback hints, and renders a calm static waveform when Reduce
+  Motion is enabled.
+
 ### Player Details metadata label adjustment — 24 July 2026
 
 - Swapped the **Published** and **Distributed** headings on the main player's
@@ -444,7 +511,8 @@ waiting for a later documentation pass.
 
 ### Auto Archive — 14 July 2026
 
-- Added a per-podcast **40 Minutes** option to the Inactive Episodes selector.
+- Added a specialist short-duration option to the per-podcast Inactive Episodes
+  selector (originally 40 minutes, replaced by **30 Minutes** on 24 July).
   It is intended for hourly news bulletins, allowing an aging downloaded bulletin
   to be archived around the time a replacement becomes available. The option uses
   the existing download/last-played inactivity clock; it is not offered as the

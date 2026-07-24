@@ -311,6 +311,32 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(subject.downloadedActivities.map(\.episodeID), [episode.id])
     }
 
+    func testDownloadCoordinatorOpensHostAndSessionCircuits() {
+        let subject = DownloadCoordinator()
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let firstHost = URL(string: "https://one.example/episode.mp3")!
+        let secondHost = URL(string: "https://two.example/episode.mp3")!
+        let thirdHost = URL(string: "https://three.example/episode.mp3")!
+        let unaffected = URL(string: "https://healthy.example/episode.mp3")!
+
+        subject.recordTerminalDownloadFailure(for: firstHost, now: now)
+        XCTAssertNil(subject.automaticDownloadBlock(for: firstHost, now: now))
+        subject.recordTerminalDownloadFailure(for: firstHost, now: now)
+        XCTAssertEqual(
+            subject.automaticDownloadBlock(for: firstHost, now: now),
+            "host"
+        )
+
+        for host in [secondHost, thirdHost] {
+            subject.recordTerminalDownloadFailure(for: host, now: now)
+            subject.recordTerminalDownloadFailure(for: host, now: now)
+        }
+        XCTAssertEqual(
+            subject.automaticDownloadBlock(for: unaffected, now: now),
+            "session"
+        )
+    }
+
     func testAutoDownloadWorkflowSerializesReentrantDrain() async {
         let subject = AutoDownloadWorkflow(
             intentStore: AutoDownloadIntentStore(fileURL: temporaryURL("intents.json"))

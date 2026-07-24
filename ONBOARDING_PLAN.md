@@ -31,7 +31,7 @@ When a phase ships, update FEATURES.md (First-Run Experience), SupportContent.sw
   existing users onboarded; `.autohopFirstSubscription` notification declared.
 - ✅ **Phase 1** — empty `PlayerView` state (no-subs → Find shows; subscribed-but-
   downloading variant); rich `PodcastsView` empty state (Find shows + working OPML
-  import via `fileImporter`); warmer `QueueSheetView` + Listening History empty copy.
+  import via `fileImporter`); warmer Up Next + Listening History empty copy.
 - ✅ **Phase 2** — launch routing in `RootView` (first-run → Welcome fullScreenCover;
   post-onboarding → the user's **Open at launch** preference, §15.0 / `AppSettings.launchScreen`
   — Player / Subscriptions / Discover. This superseded the original "subscribed-but-never-played
@@ -158,7 +158,7 @@ with a richer custom empty state that teaches the model and offers two actions:
 - Title `EMPTY_SUBS_TITLE`, body `EMPTY_SUBS_BODY`, primary `EMPTY_SUBS_CTA_FIND`
   (→ Discover), secondary `EMPTY_SUBS_CTA_IMPORT` (→ OPML import, Phase 6).
 
-**1c. Empty Queue (`Views/QueueSheetView.swift`)** — `EMPTY_QUEUE_TITLE` / `_BODY`.
+**1c. Empty Up Next (`Views/QueueSheetView.swift`)** — `EMPTY_QUEUE_TITLE` / `_BODY`.
 
 **1d. Empty Downloads / History / Stats** — light one-liners only:
 `EMPTY_DOWNLOADS_BODY`, `EMPTY_HISTORY_BODY`, `EMPTY_STATS_BODY`. (Stats/History likely
@@ -343,7 +343,7 @@ Park these in `FUTURE_VERSIONS.md`; build after P0/P1 prove out.
 - `EMPTY_SUBS_CTA_FIND` — "Find shows"
 - `EMPTY_SUBS_CTA_IMPORT` — "Import subscriptions"
 
-### Empty Queue / Downloads / History / Stats (Phase 1c/1d)
+### Empty Up Next / Downloads / History / Stats (Phase 1c/1d)
 - `EMPTY_QUEUE_TITLE` — "Up Next builds itself"
 - `EMPTY_QUEUE_BODY` — "As you subscribe and episodes download, they line up here in priority order — newest first, ready to play."
 - `EMPTY_DOWNLOADS_BODY` — "Downloaded episodes appear here. Autohop keeps your queue stocked automatically in the background."

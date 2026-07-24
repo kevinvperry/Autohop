@@ -62,11 +62,6 @@ public final class RSSParser: NSObject {
         guard data.contains(ampersand) else { return (data, 0) }
 
         let semicolon = UInt8(ascii: ";")
-        let hash = UInt8(ascii: "#")
-        let knownEntities: Set<[UInt8]> = [
-            Array("amp".utf8), Array("lt".utf8), Array("gt".utf8),
-            Array("quot".utf8), Array("apos".utf8)
-        ]
         // Longest thing we treat as an entity name: a numeric ref like "#x10FFFF" (8) or the named
         // entities (≤4). A bounded look-ahead keeps the whole pass O(n).
         //
@@ -83,7 +78,6 @@ public final class RSSParser: NSObject {
         // allocation. This is the critical path for large feeds.
         guard containsBareAmpersand(
             in: data,
-            knownEntities: knownEntities,
             maxEntityNameLength: maxEntityNameLength
         ) else {
             return (data, 0)
@@ -114,8 +108,11 @@ public final class RSSParser: NSObject {
                 j += 1
             }
             if semicolonIndex >= 0 {
-                let entity = Array(bytes[(i + 1)..<semicolonIndex])
-                if entity.first == hash || knownEntities.contains(entity) {
+                if isValidEntity(
+                    in: bytes,
+                    from: i + 1,
+                    to: semicolonIndex
+                ) {
                     output.append(ampersand) // already a valid entity — leave it intact
                     i += 1
                     continue
@@ -133,22 +130,16 @@ public final class RSSParser: NSObject {
     static func containsBareAmpersand(in data: Data) -> Bool {
         containsBareAmpersand(
             in: data,
-            knownEntities: [
-                Array("amp".utf8), Array("lt".utf8), Array("gt".utf8),
-                Array("quot".utf8), Array("apos".utf8)
-            ],
             maxEntityNameLength: 9
         )
     }
 
     private static func containsBareAmpersand(
         in data: Data,
-        knownEntities: Set<[UInt8]>,
         maxEntityNameLength: Int
     ) -> Bool {
         let ampersand = UInt8(ascii: "&")
         let semicolon = UInt8(ascii: ";")
-        let hash = UInt8(ascii: "#")
         return data.withUnsafeBytes { rawBuffer in
             let bytes = rawBuffer.bindMemory(to: UInt8.self)
             var i = 0
@@ -171,12 +162,53 @@ public final class RSSParser: NSObject {
                     j += 1
                 }
                 guard let semicolonIndex else { return true }
-                let entity = Array(bytes[(i + 1)..<semicolonIndex])
-                if entity.first != hash && !knownEntities.contains(entity) {
+                if !isValidEntity(
+                    in: bytes,
+                    from: i + 1,
+                    to: semicolonIndex
+                ) {
                     return true
                 }
                 i = semicolonIndex + 1
             }
+            return false
+        }
+    }
+
+    /// Recognises the five XML named entities and numeric references without
+    /// allocating an Array for every `&...;` encountered. Malformed feeds often
+    /// contain thousands of HTML entities, so the former slice-copy loop could
+    /// create substantial transient allocation pressure before XMLParser began.
+    private static func isValidEntity<Bytes: RandomAccessCollection>(
+        in bytes: Bytes,
+        from start: Int,
+        to end: Int
+    ) -> Bool where Bytes.Element == UInt8, Bytes.Index == Int {
+        guard start < end else { return false }
+        if bytes[start] == UInt8(ascii: "#") {
+            return end - start >= 2
+        }
+        switch end - start {
+        case 2:
+            return (bytes[start] == UInt8(ascii: "l")
+                    && bytes[start + 1] == UInt8(ascii: "t"))
+                || (bytes[start] == UInt8(ascii: "g")
+                    && bytes[start + 1] == UInt8(ascii: "t"))
+        case 3:
+            return bytes[start] == UInt8(ascii: "a")
+                && bytes[start + 1] == UInt8(ascii: "m")
+                && bytes[start + 2] == UInt8(ascii: "p")
+        case 4:
+            let isQuot = bytes[start] == UInt8(ascii: "q")
+                && bytes[start + 1] == UInt8(ascii: "u")
+                && bytes[start + 2] == UInt8(ascii: "o")
+                && bytes[start + 3] == UInt8(ascii: "t")
+            let isApos = bytes[start] == UInt8(ascii: "a")
+                && bytes[start + 1] == UInt8(ascii: "p")
+                && bytes[start + 2] == UInt8(ascii: "o")
+                && bytes[start + 3] == UInt8(ascii: "s")
+            return isQuot || isApos
+        default:
             return false
         }
     }
@@ -215,7 +247,7 @@ enum RSSParserError: Error, LocalizedError {
 }
 
 private final class RSSParserDelegate: NSObject, XMLParserDelegate {
-    private static let descriptionCharacterLimit = 128 * 1_024
+    private static let descriptionCharacterLimit = 64 * 1_024
     private static let ordinaryTextCharacterLimit = 8 * 1_024
     private let maxEpisodes: Int?
     private var elementStack: [String] = []
@@ -241,7 +273,7 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
     private var channelCategories: [String] = []
     private var channelIsExplicit: Bool?
     private var currentItem: EpisodeAccumulator?
-    private var items: [EpisodeAccumulator] = []
+    private var items: [ParsedEpisode] = []
     private var chapterPosition = 0
     private(set) var didReachEpisodeLimit = false
 
@@ -385,7 +417,8 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
         }
 
         if name == "item", let item = currentItem {
-            items.append(item)
+            let parsed = autoreleasepool { item.parsedEpisode }
+            items.append(parsed)
             currentItem = nil
             if let maxEpisodes, items.count >= maxEpisodes {
                 didReachEpisodeLimit = true
@@ -406,8 +439,8 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
             artworkURL: channelArtworkURL,
             categories: channelCategories,
             isExplicit: channelIsExplicit,
-            latestEpisode: items.first?.parsedEpisode,
-            episodes: items.map(\.parsedEpisode)
+            latestEpisode: items.first,
+            episodes: items
         )
     }
 
@@ -438,7 +471,7 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
     }
 
     private func resetElementText() {
-        textFragments.removeAll(keepingCapacity: true)
+        textFragments.removeAll(keepingCapacity: false)
         deliveredCharactersForElement = 0
         retainedCharactersForElement = 0
         discardedCharactersForElement = 0
@@ -446,6 +479,11 @@ private final class RSSParserDelegate: NSObject, XMLParserDelegate {
 
     private func textLimit(for name: String?) -> Int {
         guard let name else { return 0 }
+        if name == "content:encoded",
+           currentItem?.description != nil,
+           currentItem?.descriptionCameFromContentEncoded == false {
+            return 0
+        }
         switch name {
         case "description", "content:encoded", "itunes:summary":
             return Self.descriptionCharacterLimit

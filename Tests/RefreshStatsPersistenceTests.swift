@@ -5,6 +5,12 @@ import XCTest
 @testable import Autohop
 #endif
 
+// AI CONTEXT — Tests/RefreshStatsPersistenceTests.swift
+// Compatibility tests for the Release Radar parse-memory quarantine fields
+// persisted inside RefreshStats. Legacy JSON must decode with a disabled
+// quarantine, while current payloads must preserve both the expiry and strike
+// count. Keep these tests whenever RefreshStats gains non-optional persisted
+// fields: old subscription rows remain valid upgrade inputs.
 final class RefreshStatsPersistenceTests: XCTestCase {
     func testLegacyPayloadDefaultsParseQuarantineState() throws {
         let stats = try JSONDecoder().decode(

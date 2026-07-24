@@ -19,7 +19,7 @@ import MetricKit
 //     BGProcessing replacement requests are submitted only after the outcome is
 //     known: useful/empty successes resume an 18/24-hour cadence, while expiration
 //     uses persisted exponential backoff. Never reschedule one at handler entry.
-//     On expiration, cancelRefreshCycleIfBackgroundOnly cancels the active refresh
+//     On expiration, only a BGTask that owns the active cycle may cancel it
 //     cycle ONLY when no live foreground/audio context owns it (otherwise it detaches
 //     and lets that context finish) — a real cancel checkpoints selected-but-unfinished
 //     feeds into Release Radar's deferred backlog. Task
@@ -494,7 +494,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             }
             guard completionGate.claim() else { return }
             let state = AppState.sharedOrBootstrap()
-            state.cancelRefreshCycleIfBackgroundOnly(reason: "background.cooperativeDeadline")
+            state.cancelRefreshCycleIfOwnedByBackgroundTask(
+                taskIdentifier: task.identifier,
+                reason: "background.cooperativeDeadline"
+            )
             work.cancel()
             let elapsedMs = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.info("background.deadlineComplete", "Background app refresh stopped at cooperative deadline", metadata: [
@@ -539,7 +542,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                         "taskKind": "BGAppRefreshTask"
                     ]
                 )
-                state.cancelRefreshCycleIfBackgroundOnly(reason: "background.expired")
+                state.cancelRefreshCycleIfOwnedByBackgroundTask(
+                    taskIdentifier: task.identifier,
+                    reason: "background.expired"
+                )
                 finishBackgroundWake(
                     id: wakeID,
                     outcome: .expired,
@@ -644,7 +650,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                         "taskKind": "BGProcessingTask"
                     ]
                 )
-                state.cancelRefreshCycleIfBackgroundOnly(reason: "background.processing.expired")
+                state.cancelRefreshCycleIfOwnedByBackgroundTask(
+                    taskIdentifier: task.identifier,
+                    reason: "background.processing.expired"
+                )
                 BackgroundTaskCoordinator.scheduleProcessingIfNeeded(
                     after: .expired
                 )

@@ -10,6 +10,9 @@ implementation behaviour changes. Section 17 documents the shared artwork cache
 and lazy image-loading system: source-byte disk cache, downsampled memory
 variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
+Verified against the current code during the 2026-07-24 whole-project audit;
+VERSION_1.4.md distinguishes implemented post-1.3 work from the checked-in
+Version 1.3 build number.
 Section 15.1 documents Release Radar's learned scheduling, including hourly,
 rolling-bulletin, burst, daily, weekly, multi-slot, learning, unreliable-date,
 and random profiles; foreground/background caps; protected background slots for
@@ -602,7 +605,7 @@ Three independent rules. All are stored in `AutoArchiveSettings` on the `Subscri
 | Rule | Setting name | Options | Default | Description |
 |---|---|---|---|---|
 | Rule 1 | Played Episodes | Never / After Playing / After 24h / After 2 Days / After 1 Week | **After Playing** | Archives a played episode immediately on completion, or after a delay. "After Playing" archives as soon as the episode finishes. |
-| Rule 2 | Inactive Episodes | Never / **40 Minutes** / 4h / 6h / 8h / 12h / 16h / 24h / 2 Days / 3 Days / 4 Days / 5 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives downloaded-but-unplayed episodes that haven't been played within the set interval of being downloaded. The 40-minute per-podcast option targets hourly news bulletins so an aging downloaded bulletin is removed around the time its replacement becomes available. The inactivity clock starts when the file lands on device (`Episode.downloadedAt`) and resets if the user starts playing the episode (`Episode.lastPlayedAt`). Episodes that have **never been downloaded** are completely exempt. With the 25-minute gate, a 40-minute timeout is normally enforced between approximately 40 and 65 minutes after last activity. |
+| Rule 2 | Inactive Episodes | Never / **30 Minutes** / 4h / 6h / 8h / 12h / 16h / 24h / 2 Days / 3 Days / 4 Days / 5 Days / 1 Week / 2 Weeks / 30 Days / 90 Days | **1 Week** | Archives downloaded-but-unplayed episodes that haven't been played within the set interval of being downloaded. The 30-minute per-podcast option targets hourly news bulletins so an aging downloaded bulletin is removed around the time its replacement becomes available. The inactivity clock starts when the file lands on device (`Episode.downloadedAt`) and resets if the user starts playing the episode (`Episode.lastPlayedAt`). Episodes that have **never been downloaded** are completely exempt. Feed refreshes preserve both local timestamps by stable episode GUID. With the 25-minute gate, a 30-minute timeout is normally enforced between approximately 30 and 55 minutes after last activity. |
 | Rule 3 | Episode Limit | No Limit / 1 / 2 / 3 / 4 / 5 / 10 | **1** | Keeps only the N most recently published episodes that are downloaded or queued to download, archiving older ones. Episodes in a failed download state and episodes that have never been downloaded do not consume a slot. Default of 1 keeps storage lean. |
 
 **Footer note (shown in app):** "Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published downloaded episodes, archiving older ones. Auto Archive runs at most every 25 minutes."
@@ -921,7 +924,7 @@ Every BGAppRefresh and BGProcessing execution also emits exactly one always-pers
 | Run Auto Archive Now | Button | — | Manually triggers the archive pass across all subscriptions immediately, using each podcast's Auto Archive rules. Normally runs automatically at most every 25 minutes. Shows a spinner while running. |
 | Auto Archive Activity | Page link | — | Opens the newest-first local audit of automatic archives, including episode, podcast, exact date/time, rule, configured threshold, and measured age. The store retains the latest 500 events recorded after this feature was installed. |
 | Played Episodes | Menu picker | **After Playing** | Global default for Rule 1 (see §10.4) applied to **new subscriptions only**. |
-| Inactive Episodes | Menu picker | **1 Week** | Global default for Rule 2 applied to **new subscriptions only**. The specialist 40-minute bulletin option is intentionally limited to individual Podcast Settings. |
+| Inactive Episodes | Menu picker | **1 Week** | Global default for Rule 2 applied to **new subscriptions only**. The specialist 30-minute bulletin option is intentionally limited to individual Podcast Settings. |
 | Episode Limit | Menu picker | **1** | Global default for Rule 3 applied to **new subscriptions only**. |
 
 The three pickers mirror the per-podcast Auto Archive rules (§10.4) and set the **global default** seeded into each podcast at the moment it becomes a real subscription. Stored in `AppSettings.defaultAutoArchiveSettings` (an `AutoArchiveSettings`). **Scope:** these defaults only ever apply to *new* subscriptions (add / OPML import / browse-preview activation, via `SubscriptionStore`); editing them **never** changes the Auto Archive settings of podcasts already subscribed — those keep their own per-podcast values (§10.4). There is no bulk "apply to all" action. The initial value matches the historical hardcoded defaults (After Playing / 1 Week / Keep 1), so existing users see no behavioural change.

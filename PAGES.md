@@ -10,10 +10,11 @@ by accident.
 Subscriptions Reorder operates only on active real-subscription UUIDs: Inactive
 rows stay fixed below the draggable group, hidden browse previews are excluded,
 and Done commits one validated durable order.
-Version 1.3 exposes no Autohop Pro page: its retained view is development-only
+The checked-in Version 1.3 configuration exposes no Autohop Pro page: its retained view is development-only
 behind ReleaseFeatures.autohopPro. The tvOS target and Relay are also excluded.
 Version 1.4 includes one adaptive Now Playing & Up Next system widget. It is an
 external WidgetKit surface, not a page in the app navigation stack.
+Page names and routes were rechecked against current SwiftUI code on 2026-07-24.
 -->
 
 **Source of truth for every screen in the app.**

@@ -84,6 +84,7 @@ final class AppRuntimeWorkflow {
     private var hasStarted = false
 
     private(set) var isSceneActive = true
+    private(set) var sceneActivationSequence = 0
 
     init(
         lifecycle: AppLifecycleCoordinator,
@@ -154,6 +155,9 @@ final class AppRuntimeWorkflow {
     }
 
     func setSceneActive(_ active: Bool) {
+        if active && !isSceneActive {
+            sceneActivationSequence &+= 1
+        }
         isSceneActive = active
         if active {
             lifecycle.cancelDelayedDiagnostics()

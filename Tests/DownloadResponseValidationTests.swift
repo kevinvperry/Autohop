@@ -98,4 +98,15 @@ final class DownloadResponseValidationTests: XCTestCase {
         XCTAssertNotEqual(DownloadError.incompleteDownload(actualBytes: 17, expectedBytes: 30),
                           DownloadError.incompleteDownload(actualBytes: 18, expectedBytes: 30))
     }
+
+    func testFirstByteToleranceExpandsOutsideActiveApplication() {
+        XCTAssertEqual(
+            DownloadManager.firstByteWaitThreshold(applicationIsActive: true),
+            60
+        )
+        XCTAssertEqual(
+            DownloadManager.firstByteWaitThreshold(applicationIsActive: false),
+            4 * 60
+        )
+    }
 }

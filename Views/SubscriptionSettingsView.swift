@@ -39,7 +39,7 @@ import UIKit
 // Version 1.3 footer copy is also a website claim source: keep filter-aware
 // Auto Archive, live chapter changes, and Download Feed Filter integration
 // aligned with FEATURES.md and kevmarl-site/support.html.
-// AUTO ARCHIVE RULES: Inactive Episodes includes a per-podcast 40-minute option
+// AUTO ARCHIVE RULES: Inactive Episodes includes a per-podcast 30-minute option
 // for frequently replaced hourly bulletins. Rule 2 only archives episodes with a
 // non-nil Episode.downloadedAt — episodes never downloaded are fully exempt.
 // The footer copy describes download-date-based inactivity, not publish-date.
@@ -434,7 +434,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Automation")
         } footer: {
-            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes but are no longer checked for new ones — useful for completed shows.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Use it sparingly—only for your absolute favourite content. Manual downloads never trigger it.")
+            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Use it sparingly—only for your absolute favourite content. Manual downloads never trigger it.")
         }
 
         Section {
@@ -462,7 +462,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 40 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 30 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -522,7 +522,7 @@ struct SubscriptionSettingsView: View {
 
     @ViewBuilder
     private func feedSection(_ sub: Subscription) -> some View {
-        Section("Feed") {
+        Section {
             LabeledContent {
                 Text(sub.feedURL.absoluteString)
                     .foregroundStyle(.secondary)
@@ -548,6 +548,10 @@ struct SubscriptionSettingsView: View {
             }
             .accessibilityLabel(copiedFeedURL == sub.feedURL ? "Feed link copied" : "Copy feed link")
             .accessibilityHint("Copies the RSS feed URL to the clipboard")
+        } header: {
+            Text("Feed")
+        } footer: {
+            Text("This is the publisher's RSS address used to discover episodes. Copy Link places the complete address on the clipboard.")
         }
         .listRowBackground(sectionRowBackground)
     }

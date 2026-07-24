@@ -30,14 +30,23 @@ final class AppSettingsDefaultsTests: XCTestCase {
         XCTAssertTrue(settings.showQueueBadge)
     }
 
-    func testFortyMinuteInactiveArchiveOptionHasStablePersistenceAndDuration() throws {
-        let option = AutoArchiveSettings.AfterInactive.minutes40
+    func testThirtyMinuteInactiveArchiveOptionHasStablePersistenceAndDuration() throws {
+        let option = AutoArchiveSettings.AfterInactive.minutes30
 
-        XCTAssertEqual(option.title, "40 Minutes")
-        XCTAssertEqual(option.interval, 40 * 60)
+        XCTAssertEqual(option.title, "30 Minutes")
+        XCTAssertEqual(option.interval, 30 * 60)
 
         let encoded = try JSONEncoder().encode(option)
         XCTAssertEqual(try JSONDecoder().decode(AutoArchiveSettings.AfterInactive.self, from: encoded), option)
+    }
+
+    func testLegacyFortyMinuteInactiveArchiveOptionMigratesToThirtyMinutes() throws {
+        let legacy = Data(#""minutes40""#.utf8)
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(AutoArchiveSettings.AfterInactive.self, from: legacy),
+            .minutes30
+        )
     }
 
     func testPlayInstantDefaultsOffAndRoundTripsWhenEnabled() throws {

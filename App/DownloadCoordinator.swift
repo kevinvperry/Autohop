@@ -24,6 +24,11 @@ import Network
 
 @MainActor
 final class DownloadCoordinator: ObservableObject {
+    struct EpisodeDetection {
+        let detectedAt: Date
+        let context: String
+        let sceneActivationSequence: Int
+    }
     struct PendingDownload {
         let episode: Episode
         let subscriptionID: UUID
@@ -57,6 +62,7 @@ final class DownloadCoordinator: ObservableObject {
     }
     private var hostCircuits: [String: HostCircuit] = [:]
     private var globalCircuitOpenUntil: Date?
+    private var episodeDetections: [UUID: EpisodeDetection] = [:]
 
     // Internal access is limited to typed download/runtime workflows. These
     // values have one storage owner and are not published.
@@ -208,7 +214,7 @@ final class DownloadCoordinator: ObservableObject {
                         )
                         consecutiveExhaustions =
                             "\(failure.consecutiveExhaustions)"
-                        self.recordTerminalHostFailure(
+                        self.recordTerminalDownloadFailure(
                             for: episode.audioURL,
                             now: Date()
                         )
@@ -268,6 +274,52 @@ final class DownloadCoordinator: ObservableObject {
         watchdogRetryGeneration[episodeID, default: 0] += 1
     }
 
+    func isAutomaticDownload(episodeID: UUID) -> Bool {
+        autoDownloadIntentStore?.contains(episodeID: episodeID) == true
+    }
+
+    func recordEpisodeDetection(
+        episodeID: UUID,
+        detectedAt: Date,
+        context: String,
+        sceneActivationSequence: Int
+    ) {
+        episodeDetections[episodeID] = EpisodeDetection(
+            detectedAt: detectedAt,
+            context: context,
+            sceneActivationSequence: sceneActivationSequence
+        )
+    }
+
+    func detectionMetadata(
+        episodeID: UUID,
+        now: Date,
+        sceneActivationSequence: Int
+    ) -> [String: String] {
+        guard let detection = episodeDetections[episodeID] else {
+            return [
+                "detectedAt": "unknown",
+                "detectionContext": "unknown",
+                "detectElapsedSeconds": "unknown",
+                "foregroundActivationsSinceDetection": "unknown"
+            ]
+        }
+        return [
+            "detectedAt": detection.detectedAt.ISO8601Format(),
+            "detectionContext": detection.context,
+            "detectElapsedSeconds": String(
+                format: "%.1f",
+                max(0, now.timeIntervalSince(detection.detectedAt))
+            ),
+            "foregroundActivationsSinceDetection":
+                "\(max(0, sceneActivationSequence - detection.sceneActivationSequence))"
+        ]
+    }
+
+    func clearEpisodeDetection(episodeID: UUID) {
+        episodeDetections.removeValue(forKey: episodeID)
+    }
+
     /// Automatic work observes per-host and cross-host circuit breakers.
     /// Manual user actions deliberately bypass them.
     func automaticDownloadBlock(for mediaURL: URL, now: Date = Date()) -> String? {
@@ -291,7 +343,7 @@ final class DownloadCoordinator: ObservableObject {
         }
     }
 
-    private func recordTerminalHostFailure(for mediaURL: URL, now: Date) {
+    func recordTerminalDownloadFailure(for mediaURL: URL, now: Date) {
         guard let host = mediaURL.host?.lowercased() else { return }
         let windowStart = now.addingTimeInterval(-10 * 60)
         var circuit = hostCircuits[host] ?? HostCircuit()

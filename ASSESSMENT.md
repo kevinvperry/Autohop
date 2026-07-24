@@ -1,5 +1,10 @@
 # Autohop — Codebase Assessment (2026-06-17, refreshed 2026-06-19)
 
+> **ARCHIVED.** The current source-based assessment is
+> [`ASSESSMENT_2026-07-24.md`](ASSESSMENT_2026-07-24.md). Keep this document only
+> as historical decision context; do not implement a finding here without
+> re-verifying it against current code.
+
 > **⚠️ SUPERSEDED — newer pass available.** A fresh deep scan of the current
 > checkout was completed **2026-06-28**: see
 > [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md). Most findings in *this*

@@ -87,4 +87,36 @@ final class FeedRefreshMergeTests: XCTestCase {
         XCTAssertEqual(broadChangeCount, 0,
                        "An unchanged feed must not invalidate every store observer")
     }
+
+    func testRefreshPreservesDownloadedAndLastPlayedTimestampsByGUID() async throws {
+        let store = SubscriptionStore.inMemory()
+        let id = UUID()
+        let feedURL = URL(string: "https://f.com/feed")!
+        let published = Date(timeIntervalSince1970: 2_000_000)
+        let feed = ParsedFeed(
+            title: "Hourly Bulletin", author: nil, artworkURL: nil,
+            latestEpisode: nil,
+            episodes: [parsedEpisode(guid: "stable-guid", title: "Bulletin", published: published)]
+        )
+        _ = store.materialize(parsedFeed: feed, feedURL: feedURL, subscriptionID: id)
+        let episodeID = try XCTUnwrap(store.subscription(id: id)?.episodes.first?.id)
+        store.markEpisodeDownloaded(
+            subscriptionID: id,
+            episodeID: episodeID,
+            localFileURL: URL(fileURLWithPath: "/tmp/stable-guid.mp3")
+        )
+        store.markEpisodePlaying(subscriptionID: id, episodeID: episodeID)
+        let beforeRefresh = try XCTUnwrap(store.subscription(id: id)?.episodes.first)
+        let downloadedAt = try XCTUnwrap(beforeRefresh.downloadedAt)
+        let lastPlayedAt = try XCTUnwrap(beforeRefresh.lastPlayedAt)
+
+        // A Worker that returns a complete 200 response every few minutes
+        // repeatedly takes this merge path even when the GUID is unchanged.
+        store.updateEpisodes(subscriptionID: id, from: feed)
+
+        let refreshed = try XCTUnwrap(store.subscription(id: id)?.episodes.first)
+        XCTAssertEqual(refreshed.downloadState, .downloaded)
+        XCTAssertEqual(refreshed.downloadedAt, downloadedAt)
+        XCTAssertEqual(refreshed.lastPlayedAt, lastPlayedAt)
+    }
 }

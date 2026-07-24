@@ -252,13 +252,40 @@ final class FeedRefreshCycleWorkflow {
         )
     }
 
-    func cancelIfBackgroundOnly(reason: String) {
+    func cancelIfOwnedByBackgroundTask(
+        taskIdentifier: String,
+        reason: String
+    ) {
+        guard coordinator.activeCycleDiagnostics?.backgroundTaskIdentifier
+            == taskIdentifier else {
+            logger.info(
+                "feed.refreshAll.expirationDetached",
+                "BGTask deadline detached because it does not own the active refresh cycle",
+                metadata: [
+                    "reason": reason,
+                    "requestingTaskIdentifier": taskIdentifier,
+                    "activeTaskIdentifier":
+                        coordinator.activeCycleDiagnostics?
+                            .backgroundTaskIdentifier ?? "none",
+                    "activeCycleID":
+                        coordinator.activeCycleDiagnostics?.cycleID ?? "none",
+                    "activeTrigger":
+                        coordinator.activeCycleDiagnostics?.trigger.rawValue
+                            ?? "none",
+                    "activeExecutionContext":
+                        coordinator.activeCycleDiagnostics?
+                            .executionContext.rawValue ?? "none"
+                ]
+            )
+            return
+        }
         if isAppForeground || playback.isPlaying {
             logger.info(
                 "feed.refreshAll.expirationDetached",
                 "BGTask expired but a live foreground/audio context owns the refresh cycle — detaching, not cancelling",
                 metadata: [
                     "reason": reason,
+                    "requestingTaskIdentifier": taskIdentifier,
                     "appForeground": "\(isAppForeground)",
                     "isPlaying": "\(playback.isPlaying)",
                     "activeCycleID":
@@ -461,9 +488,7 @@ final class FeedRefreshCycleWorkflow {
         let now = runtimeWorkflow.now
         let isManual = diagnostics.executionContext == .manual
         let parseQuarantined = active.filter {
-            !isManual
-                && ($0.refreshStats.parseQuarantineUntil.map { $0 > now }
-                    ?? false)
+            $0.refreshStats.parseQuarantineUntil.map { $0 > now } ?? false
         }
         if !parseQuarantined.isEmpty {
             logger.warning(
@@ -472,20 +497,19 @@ final class FeedRefreshCycleWorkflow {
                 metadata: [
                     "count": "\(parseQuarantined.count)",
                     "reason": diagnostics.reason,
+                    "manualCycle": "\(isManual)",
                     "subscriptionIDs": parseQuarantined
                         .map { $0.id.uuidString }
                         .joined(separator: ",")
                 ]
             )
         }
-        let parseEligible = isManual
-            ? active
-            : active.filter {
-                guard let until = $0.refreshStats.parseQuarantineUntil else {
-                    return true
-                }
-                return until <= now
+        let parseEligible = active.filter {
+            guard let until = $0.refreshStats.parseQuarantineUntil else {
+                return true
             }
+            return until <= now
+        }
         let backedOff = parseEligible.filter {
             guard let until = coordinator.failureBackoffUntil[$0.id] else {
                 return false
@@ -502,6 +526,11 @@ final class FeedRefreshCycleWorkflow {
         let dueCandidates = onlyDueFeeds
             ? await releaseRadar.candidates(from: eligible, now: now)
             : []
+        let fairness = fairnessReservation(
+            in: dueCandidates,
+            now: now,
+            executionContext: diagnostics.executionContext
+        )
         let budget = FeedRefreshBudgeting.select(
             candidates: dueCandidates,
             policy: FeedRefreshBudgetPolicy(
@@ -509,12 +538,24 @@ final class FeedRefreshCycleWorkflow {
                 maxTotalSelections: maxTotalSelections,
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
-                minimumProtectedSelections: minimumProtectedSelections
+                minimumProtectedSelections: minimumProtectedSelections,
+                fairnessCandidateIndices: fairness.indices,
+                minimumFairnessSelections: fairness.count
             ),
             state: { $0.prediction.state }
         )
         let selected = budget.selected
         let deferred = budget.deferred
+        let fairnessReservedIDs = Set(
+            fairness.indices.prefix(fairness.count).map {
+                dueCandidates[$0].subscription.id
+            }
+        )
+        let fairnessSelectedIDs = Set(
+            selected.map(\.subscription.id).filter(
+                fairnessReservedIDs.contains
+            )
+        )
         let subscriptions = onlyDueFeeds
             ? selected.map(\.subscription)
             : eligible
@@ -542,6 +583,7 @@ final class FeedRefreshCycleWorkflow {
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
+                fairnessSelectedIDs: fairnessSelectedIDs,
                 diagnostics: diagnostics
             )
         }
@@ -624,6 +666,13 @@ final class FeedRefreshCycleWorkflow {
                 startMetadata.merge(decisionMetadata(for: candidate)) {
                     _, new in new
                 }
+            }
+            if fairnessSelectedIDs.contains(subscription.id),
+               let backlog = coordinator.deferredBacklog[subscription.id] {
+                startMetadata["selectionReason"] = "deferredFairness"
+                startMetadata["deferredWaitSeconds"] =
+                    "\(max(0, Int(now.timeIntervalSince(backlog.firstDeferredAt))))"
+                startMetadata["deferredCount"] = "\(backlog.deferralCount)"
             }
             logger.verbose(
                 "feed.refreshAll.itemStart",
@@ -1019,43 +1068,54 @@ final class FeedRefreshCycleWorkflow {
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
+        fairnessSelectedIDs: Set<UUID>,
         diagnostics: RefreshCycleDiagnostics
     ) {
         let protectedSelectedCount = selectedCandidates.filter {
             protectedStates.contains($0.prediction.state)
         }.count
+        let fairnessFeedHashes = selectedCandidates.filter {
+            fairnessSelectedIDs.contains($0.subscription.id)
+        }.map {
+            releaseRadar.feedHash(for: $0.subscription.feedURL)
+        }.joined(separator: ",")
+        let selectedFeedHashes = selectedCandidates.prefix(10).map {
+            releaseRadar.feedHash(for: $0.subscription.feedURL)
+        }.joined(separator: ",")
+        let baseMetadata: [String: String] = [
+            "reason": diagnostics.reason,
+            "eligible": "\(eligibleCount)",
+            "due": "\(candidates.count)",
+            "selected": "\(selectedCandidates.count)",
+            "cappedOut":
+                "\(max(0, candidates.count - selectedCandidates.count))",
+            "maxSubscriptions":
+                maxSubscriptions.map(String.init) ?? "all",
+            "maxTotalSelections":
+                maxTotalSelections.map(String.init) ?? "unlimited",
+            "capBypassStates": stateList(capBypassStates),
+            "protectedStates": stateList(protectedStates),
+            "protectedMinimum": "\(minimumProtectedSelections)",
+            "protectedSelected": "\(protectedSelectedCount)",
+            "fairnessReserved": "\(fairnessSelectedIDs.count)",
+            "fairnessFeedHashes": fairnessFeedHashes,
+            "selectedFeedHashes": selectedFeedHashes,
+            "skippedBackoff": "\(skippedBackoffCount)",
+            "skippedInactive": "\(skippedInactiveCount)",
+            "deferredBacklog": "\(coordinator.deferredBacklog.count)",
+            "stateCounts": stateCounts(for: candidates)
+        ]
+        let planMetadata = baseMetadata
+            .merging(backlogMetadata(now: runtimeWorkflow.now)) {
+                _, new in new
+            }
+            .merging(
+                diagnostics.metadata(currentSceneActive: sceneActive())
+            ) { _, new in new }
         logger.info(
             "feed.refreshAll.plan",
             "Planned due-feed refresh cycle",
-            metadata: [
-                "reason": diagnostics.reason,
-                "eligible": "\(eligibleCount)",
-                "due": "\(candidates.count)",
-                "selected": "\(selectedCandidates.count)",
-                "cappedOut":
-                    "\(max(0, candidates.count - selectedCandidates.count))",
-                "maxSubscriptions":
-                    maxSubscriptions.map(String.init) ?? "all",
-                "maxTotalSelections":
-                    maxTotalSelections.map(String.init) ?? "unlimited",
-                "capBypassStates": stateList(capBypassStates),
-                "protectedStates": stateList(protectedStates),
-                "protectedMinimum": "\(minimumProtectedSelections)",
-                "protectedSelected": "\(protectedSelectedCount)",
-                "selectedFeedHashes": selectedCandidates.prefix(10).map {
-                    releaseRadar.feedHash(for: $0.subscription.feedURL)
-                }.joined(separator: ","),
-                "skippedBackoff": "\(skippedBackoffCount)",
-                "skippedInactive": "\(skippedInactiveCount)",
-                "deferredBacklog":
-                    "\(coordinator.deferredBacklog.count)",
-                "stateCounts": stateCounts(for: candidates)
-            ].merging(
-                backlogMetadata(now: runtimeWorkflow.now)
-            ) { _, new in new }
-             .merging(
-                diagnostics.metadata(currentSceneActive: sceneActive())
-             ) { _, new in new }
+            metadata: planMetadata
         )
         logger.verbose(
             "feed.refreshAll.planDetail",
@@ -1068,6 +1128,36 @@ final class FeedRefreshCycleWorkflow {
                 diagnostics.metadata(currentSceneActive: sceneActive())
             ) { _, new in new }
         )
+    }
+
+    /// Background audio gets a strict energy/network ceiling. Once a due feed
+    /// has waited through multiple four-minute passes, reserve ordinary slots
+    /// inside that same ceiling so cap-bypass release-window feeds cannot
+    /// monopolise every cycle indefinitely.
+    private func fairnessReservation(
+        in candidates: [RefreshCycleCandidate],
+        now: Date,
+        executionContext: FeedRefreshExecutionContext
+    ) -> (indices: [Int], count: Int) {
+        guard executionContext == .backgroundAudioAlive else {
+            return ([], 0)
+        }
+        let aged = candidates.enumerated().compactMap {
+            index, candidate -> (index: Int, entry: DeferredRefreshBacklogEntry)?
+            in
+            guard let entry = coordinator.deferredBacklog[
+                candidate.subscription.id
+            ],
+                  now.timeIntervalSince(entry.firstDeferredAt) >= 8 * 60
+            else { return nil }
+            return (index, entry)
+        }.sorted {
+            $0.entry.firstDeferredAt < $1.entry.firstDeferredAt
+        }
+        guard let oldest = aged.first else { return ([], 0) }
+        let oldestAge = now.timeIntervalSince(oldest.entry.firstDeferredAt)
+        let count = oldestAge >= 20 * 60 ? 2 : 1
+        return (aged.map(\.index), min(count, aged.count))
     }
 
     private func decisionMetadata(

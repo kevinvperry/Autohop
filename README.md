@@ -5,13 +5,15 @@ AI CONTEXT — README.md
 High-level product, feature, documentation, build, and licensing index for AI
 agents. Treat FEATURES.md as the behaviour/default source of truth, PAGES.md as
 the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
-of truth, and DEEP_SCAN_2026-06-28.md as the newest assessment report. The
+of truth, and ASSESSMENT_2026-07-24.md as the newest assessment report. The
 visible playback-order sheet is "Up Next"; the Swift implementation still uses
 legacy `Queue*` type/property names in several places.
 Priority Stack reordering uses a stable active-subscription UUID draft and one
 atomic cross-device order generation; Inactive and hidden browse rows never share
 its move-index space.
-Version 1.3 is an iPhone-only production release. The separate tvOS target,
+The checked-in production configuration is Version 1.3 build 4 and iPhone-only.
+VERSION_1.4.md tracks implemented post-1.3 work without claiming it is already
+published. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
 features and are not offered, advertised, or contacted by the 1.3 build.
 AppState decomposition Stages 0–14 are implementation-complete. Domain
@@ -128,8 +130,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`APPSTATE_DECOMPOSITION_BASELINE.md`](APPSTATE_DECOMPOSITION_BASELINE.md) | Stage 0 source, automated-test, diagnostic, and device-only regression baseline. |
 | [`Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md`](Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md) | Widget architecture, privacy/performance invariants, staged execution ledger, and device validation gates. |
 | [`project_autohop.md`](project_autohop.md) | Fast machine-readable project brief: architecture, feature map, sync coverage, build notes, and licensing orientation. |
-| [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) | Latest detailed code, feature, settings, sync, documentation, website, performance, security, and Apple-design assessment. |
-| [`ASSESSMENT.md`](ASSESSMENT.md) | Historical machine-oriented code/feature/security assessment. Superseded by the deep scan above for current work. |
+| [`ASSESSMENT_2026-07-24.md`](ASSESSMENT_2026-07-24.md) | Latest whole-project code, feature, settings, iOS/tvOS, sync, website, performance, security and design assessment. |
+| [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) / [`ASSESSMENT.md`](ASSESSMENT.md) | Historical assessment context. Re-verify every finding against current source before acting. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
 | [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the four covered files and acknowledging Pocket Casts as a broader source of design ideas and inspiration. |
 

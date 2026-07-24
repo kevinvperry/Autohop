@@ -150,21 +150,42 @@ struct MiniPlayerBar: View {
                     Button {
                         Task { await appState.togglePlayPause() }
                     } label: {
-                        let playIcon = Image(systemName: playbackCoordinator.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
+                        Group {
+                            if playbackCoordinator.isPlaying {
+                                MiniPlayerWaveformIcon()
+                                    .transition(
+                                        .asymmetric(
+                                            insertion: .scale(scale: 0.72)
+                                                .combined(with: .opacity),
+                                            removal: .opacity
+                                        )
+                                    )
+                            } else {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .offset(x: 1)
+                                    .transition(
+                                        .scale(scale: 0.72)
+                                            .combined(with: .opacity)
+                                    )
+                            }
+                        }
                             .frame(width: 44, height: 44)
                             .contentShape(Circle())
-
-                        // Centred play/pause icon in a round iOS glass button.
-                        if #available(iOS 26, *) {
-                            playIcon.glassEffect(in: Circle())
-                        } else {
-                            playIcon.background(.ultraThinMaterial, in: Circle())
-                        }
+                            .modifier(MiniPlayerGlassControlStyle())
+                            .animation(
+                                .smooth(duration: 0.24),
+                                value: playbackCoordinator.isPlaying
+                            )
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(playbackCoordinator.isPlaying ? "Pause" : "Play")
+                    .accessibilityHint(
+                        playbackCoordinator.isPlaying
+                            ? "Double-tap to pause playback"
+                            : "Double-tap to resume playback"
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -189,6 +210,80 @@ struct MiniPlayerBar: View {
         let sec = s % 60
         if h > 0 { return String(format: "%d:%02d:%02d", h, m, sec) }
         return String(format: "%d:%02d", m, sec)
+    }
+}
+
+/// Compact live playback mark for the Mini-Player. A TimelineView avoids owning
+/// a repeating Timer and automatically pauses its updates when Reduce Motion is
+/// enabled. The button remains semantically a Pause action while this is visible.
+private struct MiniPlayerWaveformIcon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let restingHeights: [CGFloat] = [8, 13, 18, 13, 8]
+
+    var body: some View {
+        TimelineView(
+            .animation(
+                minimumInterval: 1.0 / 15.0,
+                paused: reduceMotion
+            )
+        ) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 2.5) {
+                ForEach(restingHeights.indices, id: \.self) { index in
+                    let wave = (
+                        sin(time * 5.4 + Double(index) * 1.18) + 1
+                    ) / 2
+                    let scale = reduceMotion
+                        ? 0.72
+                        : 0.48 + CGFloat(wave) * 0.52
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .white,
+                                    Color.purple.opacity(0.82)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(
+                            width: 3,
+                            height: max(4, restingHeights[index] * scale)
+                        )
+                }
+            }
+            .frame(width: 26, height: 22)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// One glass shell for both Mini-Player states so Play and the live waveform
+/// morph inside a stable, modern iOS control rather than changing button chrome.
+private struct MiniPlayerGlassControlStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content
+                .glassEffect(
+                    .regular.tint(Color.purple.opacity(0.22)),
+                    in: Circle()
+                )
+                .shadow(
+                    color: Color.purple.opacity(0.18),
+                    radius: 8,
+                    y: 3
+                )
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(.white.opacity(0.13), lineWidth: 0.75)
+                }
+                .shadow(color: .black.opacity(0.24), radius: 7, y: 3)
+        }
     }
 }
 

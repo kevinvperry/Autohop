@@ -1351,6 +1351,13 @@ public final class SubscriptionStore: ObservableObject {
                 merged.localFileName = existing.localFileName ?? existing.localFileURL?.lastPathComponent
                 merged.playedState = existing.playedState
                 merged.wasCompleted = existing.wasCompleted
+                // Feed fields are authoritative for RSS metadata, but these
+                // timestamps are device-local lifecycle state. Preserve them
+                // whenever identity matches so a routine HTTP 200 refresh
+                // cannot erase the Auto Archive inactivity clock or playback
+                // recency while retaining the corresponding local file/state.
+                merged.downloadedAt = existing.downloadedAt
+                merged.lastPlayedAt = existing.lastPlayedAt
                 merged.isExplicit = newEpisode.isExplicit ?? existing.isExplicit
                 if existing.localFileURL != nil, let duration = existing.durationSeconds {
                     merged.durationSeconds = duration

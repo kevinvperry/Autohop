@@ -2,7 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
-// settings Form. Autohop Pro is omitted from the Version 1.3 production build;
+// settings Form. Autohop Pro is omitted from production unless its explicit
+// release compilation condition is enabled;
 // when the explicit development feature is enabled its status row opens
 // AutohopProSettingsView, the only screen that calls AutohopProStore.purchase() — see
 // Docs/RELAY_TIER1_IMPLEMENTATION.md §4 and that file's own header for the
@@ -18,7 +19,7 @@ import UniformTypeIdentifiers
 // durable Auto Archive Activity audit-page link +
 // global default pickers for Played/Inactive/EpisodeLimit applied to new
 // subscriptions only — Inactive uses download-date clock, not publish date;
-// its specialist 40-minute bulletin value is intentionally available only in
+// its specialist 30-minute bulletin value is intentionally available only in
 // Podcast Settings, not as an all-new-subscriptions global default;
 // Episode Limit counts only .queued/.downloaded episodes, not .failed), Downloading
 // (Downloads link + WiFi/cellular toggles), Controls (keep screen awake,
@@ -43,8 +44,8 @@ import UniformTypeIdentifiers
 // Refresh Trace toggle; normal mode retains foreground/background cycle and wake
 // summaries, while detailed mode adds high-volume per-feed Release Radar traces.
 // All section footer copy here must stay in sync with FEATURES.md §15 and the
-// website Support page. Version 1.3 wording describes best-effort iOS background
-// opportunities accurately and never implies Relay or Pro availability.
+// website Support page. Copy describes best-effort iOS background opportunities
+// accurately and never implies Relay or Pro availability when those gates are off.
 // Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
 // subtle dark base (black.opacity(0.5)) with a faint white.opacity(0.05) tint on
 // each section card so edges read clearly, 36 pt listSectionSpacing between
@@ -315,7 +316,7 @@ struct SettingsView: View {
             .pickerStyle(.menu)
 
             Picker(selection: defaultAfterInactiveBinding) {
-                ForEach(AutoArchiveSettings.AfterInactive.allCases.filter { $0 != .minutes40 }, id: \.self) { v in
+                ForEach(AutoArchiveSettings.AfterInactive.allCases.filter { $0 != .minutes30 }, id: \.self) { v in
                     Text(v.title).tag(v)
                 }
             } label: {
@@ -356,7 +357,7 @@ struct SettingsView: View {
         } header: {
             Text("Downloading")
         } footer: {
-            Text("New episodes download automatically so the queue always plays from files on your device. Downloads use Wi-Fi and cellular by default — turn either network type off here if you want to restrict automatic downloads.")
+            Text("New episodes download automatically so Up Next plays from files already on your device. Downloads use Wi-Fi and cellular by default — turn either network type off here if you want to restrict automatic downloads. Feed checks and transfer starts in the background remain subject to execution time granted by iOS.")
         }
         .listRowBackground(cardBackground)
     }

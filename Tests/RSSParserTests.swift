@@ -35,7 +35,7 @@ final class RSSParserTests: XCTestCase {
         XCTAssertEqual(parsed.diagnostics.truncatedElements, 1)
         XCTAssertLessThanOrEqual(
             parsed.diagnostics.largestRetainedElementCharacters,
-            128 * 1_024
+            64 * 1_024
         )
     }
 
@@ -56,7 +56,7 @@ final class RSSParserTests: XCTestCase {
             try XCTUnwrap(parsed.feed.latestEpisode).description
         )
 
-        XCTAssertEqual(description.count, 128 * 1_024)
+        XCTAssertEqual(description.count, 64 * 1_024)
         XCTAssertGreaterThan(parsed.diagnostics.discardedCharacters, 0)
     }
 

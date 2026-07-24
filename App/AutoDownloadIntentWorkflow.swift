@@ -73,7 +73,12 @@ final class AutoDownloadIntentWorkflow {
         episode: Episode,
         subscriptionID: UUID,
         podcastTitle: String,
-        refreshUpNextAfterMerge: Bool
+        refreshUpNextAfterMerge: Bool,
+        detectionContext: String,
+        sceneActive: Bool,
+        batteryState: String,
+        detectedAt: Date,
+        sceneActivationSequence: Int
     ) {
         if let failure = state.intentStore.activeFailure(
             episodeID: episode.id,
@@ -100,6 +105,12 @@ final class AutoDownloadIntentWorkflow {
             podcastTitle: podcastTitle,
             mediaURL: episode.audioURL
         )
+        downloadCoordinator.recordEpisodeDetection(
+            episodeID: episode.id,
+            detectedAt: detectedAt,
+            context: detectionContext,
+            sceneActivationSequence: sceneActivationSequence
+        )
         logger.info(
             "feed.autoDownloadScheduled",
             "Auto-download scheduled after feed refresh",
@@ -107,7 +118,18 @@ final class AutoDownloadIntentWorkflow {
                 "podcast": podcastTitle,
                 "episode": episode.title,
                 "episodeID": episode.id.uuidString,
-                "intentPersisted": "true"
+                "intentPersisted": "true",
+                "publishedAt":
+                    episode.publishedAt?.ISO8601Format() ?? "unknown",
+                "publicationAgeSeconds": episode.publishedAt.map {
+                    String(
+                        format: "%.1f",
+                        max(0, detectedAt.timeIntervalSince($0))
+                    )
+                } ?? "unknown",
+                "detectionContext": detectionContext,
+                "sceneActive": "\(sceneActive)",
+                "batteryState": batteryState
             ]
         )
         Task { @MainActor [weak self] in

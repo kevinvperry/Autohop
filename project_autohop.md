@@ -2,11 +2,12 @@
 
 <!--
 AI CONTEXT — project_autohop.md
-Machine-oriented project brief created during the 2026-06-28 deep scan. Use this
+Machine-oriented project brief created during the 2026-06-28 deep scan and
+revalidated against the current source on 2026-07-24. Use this
 as a fast orientation file before reading the canonical docs. Do not treat it as
 the source of truth when it conflicts with code: FEATURES.md owns product
 behaviour, PAGES.md owns navigation/page names, DESIGN.md owns UI patterns,
-SYNC_DESIGN.md owns iCloud sync, and DEEP_SCAN_2026-06-28.md owns the latest
+SYNC_DESIGN.md owns iCloud sync, and ASSESSMENT_2026-07-24.md owns the latest
 assessment findings. Keep this brief refreshed when recent UI or sync behaviour
 changes so future AI agents do not inherit stale summary assumptions.
 Priority Stack ordering is one UUID-addressed `SubscriptionOrder` generation,

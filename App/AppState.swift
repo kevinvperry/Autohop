@@ -941,6 +941,18 @@ final class AppState: ObservableObject {
     // MARK: - Feed refresh
 
     func refreshSubscription(_ subscription: Subscription, episodeLimit: Int? = 50, refreshUpNextAfterMerge: Bool = true) async {
+        if let until = subscription.refreshStats.parseQuarantineUntil,
+           until > appRuntimeWorkflow.now {
+            logger.warning(
+                "feed.parseMemoryQuarantineManualOverride",
+                "User explicitly refreshed one feed despite its parse-memory quarantine",
+                metadata: [
+                    "podcast": subscription.title,
+                    "subscriptionID": subscription.id.uuidString,
+                    "quarantineUntil": until.ISO8601Format()
+                ]
+            )
+        }
         await feedRefreshItemWorkflow.refresh(
             subscription,
             episodeLimit: episodeLimit,
@@ -1020,8 +1032,14 @@ final class AppState: ObservableObject {
     /// will finish the cycle, so an expiring BGTask that merely *joined* it must
     /// detach rather than abort shared work. Uses the real UIApplication state, not
     /// the cached `isSceneActive`. Otherwise falls through to cancel + checkpoint.
-    func cancelRefreshCycleIfBackgroundOnly(reason: String) {
-        feedRefreshCycleWorkflow.cancelIfBackgroundOnly(reason: reason)
+    func cancelRefreshCycleIfOwnedByBackgroundTask(
+        taskIdentifier: String,
+        reason: String
+    ) {
+        feedRefreshCycleWorkflow.cancelIfOwnedByBackgroundTask(
+            taskIdentifier: taskIdentifier,
+            reason: reason
+        )
     }
 
     /// Snapshot for the Feed Refresh Schedule diagnostics page
