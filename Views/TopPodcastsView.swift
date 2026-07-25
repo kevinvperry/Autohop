@@ -67,8 +67,13 @@ struct TopPodcastsView: View {
         return false
     }
 
+    /// Uses the storefront-localised genre name so this page's title matches the
+    /// Discover rail the user tapped ("Sport" in the AU store, "Sports" in the
+    /// US store); falls back to the English name until the cached name map
+    /// arrives. See ChartGenre.localizedName(from:).
     private var pageTitle: String {
-        genre.map { "Top 50 - \($0.name)" } ?? "Top Podcasts"
+        genre.map { "Top 50 - \($0.localizedName(from: viewModel.genreNames))" }
+            ?? "Top Podcasts"
     }
 
     private var selectedCountry: ChartCountry {

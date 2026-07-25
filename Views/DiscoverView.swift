@@ -4,13 +4,17 @@ import SwiftUI
 // button on the Subscriptions toolbar AND the top Menu item; parent page of
 // Podcast Search, which is now reachable only through the search shortcut
 // here). Browse-and-explore page for finding
-// new podcasts: a Top-8 hero of big sideways-paging chart cards, horizontal
-// per-genre rails (PodcastChartsService / DiscoverViewModel), plus two
-// secondary "Top Podcasts · <Country>" spotlight heroes woven into the rail
-// list — spotlight A before Health & Fitness, spotlight B at the end — each a
-// fixed Top-8 storefront (US/UK/AU, resolved by DiscoverViewModel
-// .spotlightCountries so they never duplicate the user's selected country or
-// each other). A storefront
+// new podcasts. FEED ORDER (5 heroes, 19 rails, 4/5/5/5 cadence):
+//   Hero: Top Episodes            (fixed block ABOVE the feed, not a FeedSection)
+//   rails 1–4   → Hero: New & Notable
+//   rails 5–9   → Hero: Top Podcasts · <selected country>
+//   rails 10–14 → Hero: Top Podcasts · <International A>
+//   rails 15–19 → Hero: Top Podcasts · <International B>  (closes the feed)
+// Insertion points are the `newNotableAfterRail` / `podcastHeroAfterRail` /
+// `spotlightAAfterRail` constants; each has a fallback so a slow or failed
+// category fetch can never swallow a hero. Spotlight A/B are fixed Top-8
+// storefronts (US/UK/AU, resolved by DiscoverViewModel.spotlightCountries so
+// they never duplicate the user's selected country or each other). A storefront
 // country picker (defaults to Locale.current.region, falls back to US,
 // persisted in @AppStorage and shared by every Discover chart child page), and
 // a search-field-shaped shortcut that presents
@@ -33,9 +37,23 @@ import SwiftUI
 // CATEGORY TOP 50: each purple category chip and each icon-bearing rail heading
 // pushes TopPodcastsView configured with that ChartGenre. The horizontal Top-15
 // rails remain as quick previews; chips/headings are navigation controls.
-// PERF: the feed is a LazyVStack and each genre rail a LazyHStack, so the ~10
+// NEW & NOTABLE: deliberately has NO "See All" — the qualifying pool is only a
+// handful of shows, so a child page would duplicate the carousel or need a
+// looser filter that dilutes "new". It is hidden entirely below 3 cards
+// (DiscoverViewModel.minimumNewNotable) rather than rendering a stubby shelf.
+// GENRE NAMES: rail headings, category chips and the Top-50 category page title
+// all render `ChartGenre.localizedName(from: viewModel.genreNames)`, NOT the raw
+// English `genre.name` — Apple localises genre names per storefront (1545 is
+// "Sport" in AU, "Sports" in US). Keep new genre-name display sites consistent.
+// PERF: the feed is a LazyVStack and each genre rail a LazyHStack, so the 19
 // image-heavy rails + hero carousels build only as they scroll into view
 // (was a plain VStack/HStack, which laid everything out eagerly and stuttered).
+// Rendering laziness is not enough at 19 categories, so FETCHING is staged too:
+// DiscoverViewModel loads only ChartGenre.eagerRailCount rails up front and
+// prefetchRemainingRails(after:) triggers the rest as the user scrolls within
+// three rails of that boundary. Anchored to rails, not a hero, because any hero
+// can be absent. Net effect: a cold open costs about what the old 10-rail feed
+// did, and the deep categories cost nothing for users who never scroll.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
@@ -52,8 +70,9 @@ struct DiscoverView: View {
     @State private var showStarterPacks = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
-    @State private var episodeHeroIndex = 0   // top hero — Top Episodes
-    @State private var podcastHeroIndex = 0   // mid-feed hero — Top Podcasts
+    @State private var episodeHeroIndex = 0    // top hero — Top Episodes
+    @State private var newNotableIndex = 0     // hero 2 — New & Notable
+    @State private var podcastHeroIndex = 0    // mid-feed hero — Top Podcasts
     @State private var spotlightAIndex = 0
     @State private var spotlightBIndex = 0
     @State private var resolvingEpisodeID: String?
@@ -69,17 +88,20 @@ struct DiscoverView: View {
         case category(ChartGenre)
     }
 
-    /// Ordered Discover feed item: a genre rail or one of the two country
-    /// spotlight heroes. Spotlight A sits before Health & Fitness; B at the end.
+    /// Ordered Discover feed item: a genre rail or one of the four in-feed
+    /// heroes. (Top Episodes is NOT part of this list — it renders in the fixed
+    /// block above the feed.)
     private enum FeedSection: Identifiable {
         case rail(DiscoverViewModel.GenreRail)
-        case podcastHero                              // Top Podcasts — appears after rail 3
-        case spotlightA(DiscoverViewModel.CountrySpotlight)   // after rail 6
+        case newNotableHero                                   // after rail 4
+        case podcastHero                                      // after rail 9
+        case spotlightA(DiscoverViewModel.CountrySpotlight)   // after rail 14
         case spotlightB(DiscoverViewModel.CountrySpotlight)   // end of feed
 
         var id: String {
             switch self {
             case .rail(let r):      return "rail-\(r.id)"
+            case .newNotableHero:   return "newNotableHero"
             case .podcastHero:      return "podcastHero"
             case .spotlightA(let s): return "spotlightA-\(s.country.code)"
             case .spotlightB(let s): return "spotlightB-\(s.country.code)"
@@ -87,28 +109,57 @@ struct DiscoverView: View {
         }
     }
 
-    /// Builds the rail feed with three heroes woven in at fixed positions:
-    /// podcast hero after rail 3, spotlight A after rail 6, spotlight B at end.
+    /// Rail index each in-feed hero is inserted AFTER. With 19 categories this
+    /// yields the 4 / 5 / 5 / 5 cadence:
+    ///
+    ///   Top Episodes (fixed, above feed)
+    ///   rails 1–4   → New & Notable
+    ///   rails 5–9   → Top Podcasts
+    ///   rails 10–14 → Top Podcasts · International A
+    ///   rails 15–19 → Top Podcasts · International B (closes the feed)
+    ///
+    /// Kept as data so the cadence is adjustable without touching the builder.
+    private static let newNotableAfterRail = 4
+    private static let podcastHeroAfterRail = 9
+    private static let spotlightAAfterRail = 14
+
+    /// Weaves the four in-feed heroes into the rail list at the fixed positions
+    /// above. Rails arrive progressively (the below-the-fold ones are fetched
+    /// lazily), so every insertion point has a fallback that still emits its
+    /// hero when fewer rails have loaded than its threshold — otherwise a slow
+    /// or failed category fetch could swallow a hero entirely.
     private var feedSections: [FeedSection] {
         var result: [FeedSection] = []
         var railCount = 0
+        var addedNewNotable = false
+        var addedPodcastHero = false
         var addedSpotlightA = false
+
+        let hasNewNotable = !viewModel.newAndNotable.isEmpty
 
         for rail in viewModel.rails {
             result.append(.rail(rail))
             railCount += 1
 
-            if railCount == 3, !viewModel.heroPodcasts.isEmpty {
-                result.append(.podcastHero)
+            if railCount == Self.newNotableAfterRail, hasNewNotable {
+                result.append(.newNotableHero)
+                addedNewNotable = true
             }
-            if railCount == 6, let a = viewModel.spotlightA {
+            if railCount == Self.podcastHeroAfterRail, !viewModel.heroPodcasts.isEmpty {
+                result.append(.podcastHero)
+                addedPodcastHero = true
+            }
+            if railCount == Self.spotlightAAfterRail, let a = viewModel.spotlightA {
                 result.append(.spotlightA(a))
                 addedSpotlightA = true
             }
         }
 
         // Fallbacks when fewer rails loaded than the insertion thresholds.
-        if railCount < 3, !viewModel.heroPodcasts.isEmpty {
+        if !addedNewNotable, hasNewNotable {
+            result.append(.newNotableHero)
+        }
+        if !addedPodcastHero, !viewModel.heroPodcasts.isEmpty {
             result.append(.podcastHero)
         }
         if !addedSpotlightA, let a = viewModel.spotlightA {
@@ -122,6 +173,18 @@ struct DiscoverView: View {
 
     private var country: ChartCountry {
         storedCountryCode.isEmpty ? .deviceDefault : .named(storedCountryCode)
+    }
+
+    /// Starts the below-the-fold category fetch once the user scrolls within a
+    /// few rails of the eager/lazy boundary, so the lower half of the feed is
+    /// already arriving by the time they reach it. Anchored to rails rather
+    /// than a hero because any hero can be absent (empty spotlight, hidden New
+    /// & Notable). `loadRemainingRailsIfNeeded()` is itself one-shot per
+    /// storefront, so repeated `onAppear` calls are free.
+    private func prefetchRemainingRails(after rail: DiscoverViewModel.GenreRail) {
+        guard let index = ChartGenre.rails.firstIndex(of: rail.genre),
+              index >= ChartGenre.eagerRailCount - 3 else { return }
+        Task { await viewModel.loadRemainingRailsIfNeeded() }
     }
 
     var body: some View {
@@ -216,6 +279,16 @@ struct DiscoverView: View {
                         case .rail(let rail):
                             genreRail(rail)
                                 .id("rail-\(rail.id)")
+                                .onAppear { prefetchRemainingRails(after: rail) }
+                        case .newNotableHero:
+                            // No "See All": the qualifying pool is only ever a
+                            // handful of shows, so a child page would either
+                            // duplicate this carousel or need a looser filter
+                            // that dilutes what "new" means.
+                            heroCarousel(title: "New & Notable · \(country.name)",
+                                         podcasts: viewModel.newAndNotable,
+                                         index: $newNotableIndex,
+                                         resolveCountry: country.code)
                         case .podcastHero:
                             heroCarousel(title: "Top Podcasts · \(country.name)",
                                          podcasts: viewModel.heroPodcasts,
@@ -492,17 +565,28 @@ struct DiscoverView: View {
 
     // MARK: - Category shortcut chips
 
+    /// One SF Symbol per top-level Apple genre ID. Covers all 19 categories in
+    /// `ChartGenre.rails`; anything unmapped falls back to "waveform".
     private static let genreSymbols: [Int: String] = [
         1303: "face.smiling",            // Comedy
         1489: "newspaper",               // News
         1488: "magnifyingglass",         // True Crime
         1324: "person.2",                // Society & Culture
         1321: "chart.line.uptrend.xyaxis", // Business
-        1545: "figure.run",              // Sports
+        1545: "figure.run",              // Sports / Sport
+        1487: "hourglass",               // History
         1512: "heart",                   // Health & Fitness
+        1304: "graduationcap",           // Education
+        1301: "paintpalette",            // Arts
         1318: "cpu",                     // Technology
         1533: "atom",                    // Science
         1309: "tv",                      // TV & Film
+        1483: "books.vertical",          // Fiction
+        1310: "music.note",              // Music
+        1502: "gamecontroller",          // Leisure
+        1305: "figure.2.and.child.holdinghands", // Kids & Family
+        1314: "hands.sparkles",          // Religion & Spirituality
+        1511: "building.columns",        // Government
     ]
 
     private var categoryChips: some View {
@@ -516,7 +600,7 @@ struct DiscoverView: View {
                             Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.purple)
-                            Text(rail.genre.name)
+                            Text(rail.genre.localizedName(from: viewModel.genreNames))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
                         }
@@ -607,7 +691,7 @@ struct DiscoverView: View {
                     Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.purple)
-                    Text(rail.genre.name)
+                    Text(rail.genre.localizedName(from: viewModel.genreNames))
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.primary)
                     Spacer()
