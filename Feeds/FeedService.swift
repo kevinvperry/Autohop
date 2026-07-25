@@ -1,4 +1,5 @@
 import Foundation
+import Darwin.Mach
 
 // AI CONTEXT — Feeds/FeedService.swift
 // Network layer for fetching + parsing one RSS feed. Two entry points:
@@ -48,6 +49,84 @@ struct FeedRefreshResult {
 }
 
 final class FeedService: FeedServicing {
+    private struct ParseMemorySample {
+        var footprintMB: Int
+        var residentMB: Int
+    }
+
+    private static func memorySample() -> ParseMemorySample {
+        var basic = mach_task_basic_info()
+        var basicCount = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size
+        ) / 4
+        let basicResult = withUnsafeMutablePointer(to: &basic) {
+            $0.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(basicCount)
+            ) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    $0,
+                    &basicCount
+                )
+            }
+        }
+        let resident = basicResult == KERN_SUCCESS
+            ? Int(basic.resident_size / 1_048_576) : 0
+        var vm = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size
+        ) / 4
+        let vmResult = withUnsafeMutablePointer(to: &vm) {
+            $0.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(vmCount)
+            ) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    $0,
+                    &vmCount
+                )
+            }
+        }
+        return ParseMemorySample(
+            footprintMB: vmResult == KERN_SUCCESS
+                ? Int(vm.phys_footprint / 1_048_576) : resident,
+            residentMB: resident
+        )
+    }
+
+    private static func logMemoryStage(
+        _ stage: String,
+        before: ParseMemorySample,
+        after: ParseMemorySample,
+        feedURL: URL,
+        sourceBytes: Int
+    ) {
+        let footprintDelta = after.footprintMB - before.footprintMB
+        let residentDelta = after.residentMB - before.residentMB
+        guard sourceBytes >= 1_024 * 1_024
+                || abs(footprintDelta) >= 25
+                || after.footprintMB >= 300 else { return }
+        AppLogger.shared.info(
+            "feed.parseMemoryStage",
+            "Measured feed fetch/parse memory substage",
+            metadata: [
+                "stage": stage,
+                "host": feedURL.host ?? "unknown",
+                "sourceBytes": "\(sourceBytes)",
+                "footprintBeforeMB": "\(before.footprintMB)",
+                "footprintAfterMB": "\(after.footprintMB)",
+                "footprintDeltaMB": "\(footprintDelta)",
+                "residentBeforeMB": "\(before.residentMB)",
+                "residentAfterMB": "\(after.residentMB)",
+                "residentDeltaMB": "\(residentDelta)"
+            ],
+            alwaysPersist: abs(footprintDelta) >= 100
+        )
+    }
     private let chapterService: ChapterServicing
     private let parser: RSSParser
     private let session: URLSession
@@ -107,9 +186,18 @@ final class FeedService: FeedServicing {
             request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
         }
 
+        let beforeNetwork = Self.memorySample()
         let (data, response) = try await withTimeout(seconds: requestTimeoutSeconds) {
             try await self.session.data(for: request)
         }
+        let afterNetwork = Self.memorySample()
+        Self.logMemoryStage(
+            "networkData",
+            before: beforeNetwork,
+            after: afterNetwork,
+            feedURL: feedURL,
+            sourceBytes: data.count
+        )
 
         var newValidators = FeedValidators()
         if let http = response as? HTTPURLResponse {
@@ -170,9 +258,18 @@ final class FeedService: FeedServicing {
         feedURL: URL
     ) throws -> FeedRefreshResult {
         try autoreleasepool {
+            let beforeParser = Self.memorySample()
             let parsed = try parser.parseWithDiagnostics(
                 data: data,
                 maxEpisodes: episodeLimit
+            )
+            let afterParser = Self.memorySample()
+            Self.logMemoryStage(
+                "xmlParser",
+                before: beforeParser,
+                after: afterParser,
+                feedURL: feedURL,
+                sourceBytes: data.count
             )
             let parsedFeed = parsed.feed
             let diagnostics = parsed.diagnostics
@@ -221,6 +318,14 @@ final class FeedService: FeedServicing {
                 guard let audioURL = parsedEpisode.audioURL else { return nil }
                 return Self.episode(from: parsedEpisode, subscriptionID: subscriptionID, audioURL: audioURL, feedArtworkURL: parsedFeed.artworkURL)
             }
+            let afterModels = Self.memorySample()
+            Self.logMemoryStage(
+                "modelMaterialization",
+                before: afterParser,
+                after: afterModels,
+                feedURL: feedURL,
+                sourceBytes: data.count
+            )
 
             guard let latestEpisode = playableEpisodes.first else {
                 throw FeedServiceError.missingAudioEnclosure

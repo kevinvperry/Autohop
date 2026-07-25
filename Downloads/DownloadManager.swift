@@ -893,6 +893,28 @@ extension DownloadManager {
         applicationIsActive ? 60 : 4 * 60
     }
 
+    /// Pure final-cancellation gate used after URLSession task enumeration and
+    /// again after yielding one main-queue turn. It captures the race-sensitive
+    /// invariants in one testable place: task generation must still match, no
+    /// evaluator may already own cancellation, the task must still be running,
+    /// neither live nor delegate-tracked payload bytes may have arrived, and
+    /// connectivity waiting must be false.
+    static func shouldCancelFirstByteTimeout(
+        taskIdentityMatches: Bool,
+        cancellationAlreadyClaimed: Bool,
+        taskState: URLSessionTask.State,
+        liveBytes: Int64,
+        trackedBytes: Int64,
+        waitingForConnectivity: Bool
+    ) -> Bool {
+        taskIdentityMatches
+            && !cancellationAlreadyClaimed
+            && taskState == .running
+            && liveBytes == 0
+            && trackedBytes == 0
+            && !waitingForConnectivity
+    }
+
     private var effectiveFirstByteWaitThreshold: TimeInterval {
         #if canImport(UIKit)
         return Self.firstByteWaitThreshold(
@@ -1161,17 +1183,20 @@ extension DownloadManager {
         // Give URLSession progress/completion callbacks already queued by the
         // same background wake one main-queue turn to settle first.
         DispatchQueue.main.async { [weak self, weak task] in
-            guard let self, let task,
-                  self.taskIDByEpisodeID[episodeID] == taskID,
-                  !self.watchdogCancellationClaimedTaskIDs.contains(taskID)
-            else { return }
+            guard let self, let task else { return }
             let liveBytes = task.countOfBytesReceived
             let trackedBytes = self.progressLastObservedBytes[episodeID] ?? 0
-            guard task.state == .running,
-                  liveBytes == 0,
-                  trackedBytes == 0,
-                  !self.connectivityWaitingTaskIDs.contains(taskID)
-            else {
+            guard Self.shouldCancelFirstByteTimeout(
+                taskIdentityMatches:
+                    self.taskIDByEpisodeID[episodeID] == taskID,
+                cancellationAlreadyClaimed:
+                    self.watchdogCancellationClaimedTaskIDs.contains(taskID),
+                taskState: task.state,
+                liveBytes: liveBytes,
+                trackedBytes: trackedBytes,
+                waitingForConnectivity:
+                    self.connectivityWaitingTaskIDs.contains(taskID)
+            ) else {
                 if max(liveBytes, trackedBytes) > 0 {
                     self.progressLastObservedBytes[episodeID] =
                         max(liveBytes, trackedBytes)

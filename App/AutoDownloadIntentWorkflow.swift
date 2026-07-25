@@ -345,7 +345,8 @@ final class AutoDownloadIntentWorkflow {
             ]
         )
         await autoArchiveCoordinator.enforceEpisodeLimitBeforeDownload(
-            subscriptionID: subscriptionID
+            subscriptionID: subscriptionID,
+            incomingEpisodeID: candidate.id
         )
         let target = subscriptionStore.subscription(id: subscriptionID)
             .flatMap { newestCandidate(in: $0) } ?? candidate

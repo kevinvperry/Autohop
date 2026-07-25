@@ -206,7 +206,8 @@ final class ReleaseRadarWorkflow {
 
     func candidates(
         from subscriptions: [Subscription],
-        now: Date
+        now: Date,
+        maximumSuccessfulCheckAge: TimeInterval? = nil
     ) async -> [RefreshCycleCandidate] {
         let cachedProfiles = subscriptions.reduce(
             into: [UUID: FeedScheduleProfile]()
@@ -234,6 +235,7 @@ final class ReleaseRadarWorkflow {
                 cachedProfiles: cachedProfiles,
                 deferred: deferred,
                 minimumRecheckInterval: interval,
+                maximumSuccessfulCheckAge: maximumSuccessfulCheckAge,
                 now: now
             )
         }.value

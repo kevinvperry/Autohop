@@ -41,6 +41,9 @@ struct RefreshCycleCandidate: Sendable {
     var deferredCount: Int = 0
     var deferredSince: Date?
     var deferredScoreBoost: Double = 0
+    /// True when the candidate is selected because its last successful check
+    /// exceeded the context's hard freshness ceiling, irrespective of prediction.
+    var freshnessOverride = false
 }
 
 struct RefreshPlanningDeferredSnapshot: Sendable {
@@ -54,6 +57,7 @@ enum ReleaseRadarCyclePlanner {
         cachedProfiles: [UUID: FeedScheduleProfile],
         deferred: [UUID: RefreshPlanningDeferredSnapshot],
         minimumRecheckInterval: TimeInterval,
+        maximumSuccessfulCheckAge: TimeInterval? = nil,
         now: Date
     ) -> [RefreshCycleCandidate] {
         subscriptions.compactMap { subscription in
@@ -79,7 +83,15 @@ enum ReleaseRadarCyclePlanner {
                 minRecheckInterval: minimumRecheckInterval,
                 now: now
             )
-            guard prediction.nextDueAt <= now else { return nil }
+            let successfulCheckAge = subscription.refreshStats.lastFetchedAt
+                .map { max(0, now.timeIntervalSince($0)) }
+                ?? .greatestFiniteMagnitude
+            let freshnessOverride = maximumSuccessfulCheckAge.map {
+                successfulCheckAge >= $0
+            } ?? false
+            guard prediction.nextDueAt <= now || freshnessOverride else {
+                return nil
+            }
             // Surveillance/fallback feeds with no reliable release window must
             // not re-enter every four-minute audio batch merely because their
             // calculated due date remains in the past. A successful fetch
@@ -105,6 +117,16 @@ enum ReleaseRadarCyclePlanner {
                 prediction: prediction,
                 priority: priority
             )
+            candidate.freshnessOverride = freshnessOverride
+            if freshnessOverride {
+                priority.score += 1_000 + min(
+                    500,
+                    successfulCheckAge / 60
+                )
+                priority.factors.append("hard freshness ceiling")
+                priority.reason = priority.factors.joined(separator: ", ")
+                candidate.priority = priority
+            }
             if let deferred = deferred[subscription.id] {
                 let ageHours = max(0, now.timeIntervalSince(deferred.firstDeferredAt) / 3600)
                 let boost = min(40, Double(deferred.deferralCount) * 12 + ageHours * 2)

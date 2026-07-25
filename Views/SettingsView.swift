@@ -335,7 +335,7 @@ struct SettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains every automatic decision. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit keeps only the most recently published episodes.")
+            Text("Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains every automatic decision. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit rotates automatic downloads while protecting manually downloaded and manually positioned Up Next episodes.")
         }
         .listRowBackground(cardBackground)
     }

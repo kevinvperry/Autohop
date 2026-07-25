@@ -462,7 +462,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Auto Archive")
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 30 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit keeps only the most recently published episodes, archiving older ones. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
+            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 30 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit rotates automatic downloads to keep the newest selected number; manually downloaded and manually positioned Up Next episodes are protected. Changing the limit does not download older episodes. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }

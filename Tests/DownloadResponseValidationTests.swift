@@ -109,4 +109,75 @@ final class DownloadResponseValidationTests: XCTestCase {
             4 * 60
         )
     }
+
+    func testWatchdogFinalGateCancelsOnlyCurrentZeroByteRunningTask() {
+        XCTAssertTrue(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: true,
+            cancellationAlreadyClaimed: false,
+            taskState: .running,
+            liveBytes: 0,
+            trackedBytes: 0,
+            waitingForConnectivity: false
+        ))
+    }
+
+    func testWatchdogFinalGateRejectsDuplicateAndStaleGenerationDecisions() {
+        XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: true,
+            cancellationAlreadyClaimed: true,
+            taskState: .running,
+            liveBytes: 0,
+            trackedBytes: 0,
+            waitingForConnectivity: false
+        ))
+        XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: false,
+            cancellationAlreadyClaimed: false,
+            taskState: .running,
+            liveBytes: 0,
+            trackedBytes: 0,
+            waitingForConnectivity: false
+        ))
+    }
+
+    func testWatchdogFinalGateTreatsLatePayloadOrCompletionAsRecovery() {
+        for state in [
+            URLSessionTask.State.suspended,
+            .canceling,
+            .completed
+        ] {
+            XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+                taskIdentityMatches: true,
+                cancellationAlreadyClaimed: false,
+                taskState: state,
+                liveBytes: 0,
+                trackedBytes: 0,
+                waitingForConnectivity: false
+            ))
+        }
+        XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: true,
+            cancellationAlreadyClaimed: false,
+            taskState: .running,
+            liveBytes: 1,
+            trackedBytes: 0,
+            waitingForConnectivity: false
+        ))
+        XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: true,
+            cancellationAlreadyClaimed: false,
+            taskState: .running,
+            liveBytes: 0,
+            trackedBytes: 1,
+            waitingForConnectivity: false
+        ))
+        XCTAssertFalse(DownloadManager.shouldCancelFirstByteTimeout(
+            taskIdentityMatches: true,
+            cancellationAlreadyClaimed: false,
+            taskState: .running,
+            liveBytes: 0,
+            trackedBytes: 0,
+            waitingForConnectivity: true
+        ))
+    }
 }

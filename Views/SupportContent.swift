@@ -361,7 +361,7 @@ enum SupportGuide {
                 ["After 1 Week", "Archived 1 week after completion."],
             ]),
             .paragraph("**After Inactive** — how long an unplayed, untouched episode is kept before being archived. Options range from Never to 90 Days. Default: **1 Week**. Useful for news or daily shows where old episodes become irrelevant quickly."),
-            .paragraph("**Episode Limit** — keep only the N most recently published episodes; older ones are archived automatically. Options: No Limit, 1 (default), 2, 3, 4, 5, or 10 episodes."),
+            .paragraph("**Episode Limit** — retain the newest N automatic downloads and replace the oldest managed download when a newer episode arrives. Changing the limit does not download older episodes. Explicitly downloaded episodes and episodes you manually position with Play Next or Play Last are protected and may sit above the limit. Options: No Limit, 1 (default), 2, 3, 4, 5, or 10 episodes."),
             .paragraph("Automatic downloading continues to honour this podcast's Download Feed Filters."),
             .callout(.tip, "**Tip:** The defaults (archive immediately after playing, inactive episodes gone after 1 week, keep 1 episode) are designed for high-volume listeners who want zero maintenance."),
             .heading("Play Instant"),

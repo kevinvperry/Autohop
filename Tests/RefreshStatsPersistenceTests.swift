@@ -12,6 +12,49 @@ import XCTest
 // count. Keep these tests whenever RefreshStats gains non-optional persisted
 // fields: old subscription rows remain valid upgrade inputs.
 final class RefreshStatsPersistenceTests: XCTestCase {
+    func testParseMemorySafetyUsesEitherMetricAtInclusiveBoundary() {
+        XCTAssertNil(
+            FeedParseMemorySafety.quarantineDecision(
+                footprintDeltaMB: 199,
+                residentDeltaMB: 199,
+                previousConsecutiveHighMemoryParses: 0
+            )
+        )
+
+        let footprintDecision = FeedParseMemorySafety.quarantineDecision(
+            footprintDeltaMB: 200,
+            residentDeltaMB: 0,
+            previousConsecutiveHighMemoryParses: 0
+        )
+        XCTAssertEqual(footprintDecision?.consecutiveHighMemoryParses, 1)
+        XCTAssertEqual(
+            footprintDecision?.quarantineDuration,
+            FeedParseMemorySafety.initialQuarantine
+        )
+
+        XCTAssertNotNil(
+            FeedParseMemorySafety.quarantineDecision(
+                footprintDeltaMB: 0,
+                residentDeltaMB: 200,
+                previousConsecutiveHighMemoryParses: 0
+            )
+        )
+    }
+
+    func testRepeatedUnsafeParseEscalatesQuarantine() {
+        let decision = FeedParseMemorySafety.quarantineDecision(
+            footprintDeltaMB: 250,
+            residentDeltaMB: 0,
+            previousConsecutiveHighMemoryParses: 1
+        )
+
+        XCTAssertEqual(decision?.consecutiveHighMemoryParses, 2)
+        XCTAssertEqual(
+            decision?.quarantineDuration,
+            FeedParseMemorySafety.repeatedQuarantine
+        )
+    }
+
     func testLegacyPayloadDefaultsParseQuarantineState() throws {
         let stats = try JSONDecoder().decode(
             RefreshStats.self,

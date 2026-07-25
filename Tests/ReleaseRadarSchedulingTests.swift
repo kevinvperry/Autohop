@@ -32,6 +32,7 @@ import XCTest
 @testable import Autohop
 #endif
 
+@MainActor
 final class ReleaseRadarSchedulingTests: XCTestCase {
     private struct Candidate: Equatable {
         var id: String
@@ -81,6 +82,62 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(result.first?.deferredCount, 2)
         XCTAssertEqual(result.first?.deferredScoreBoost, 28)
         XCTAssertTrue(result.first?.priority.factors.contains("deferred 2x") == true)
+    }
+
+    func testHardSuccessfulCheckAgeOverridesFuturePrediction() {
+        let now = Date(timeIntervalSince1970: 1_774_137_600)
+        var subscription = Subscription(
+            feedURL: URL(string: "https://example.com/freshness.xml")!,
+            title: "Freshness",
+            priorityRank: 1
+        )
+        subscription.refreshStats.lastFetchedAt =
+            now.addingTimeInterval(-2 * 60 * 60)
+        let tomorrowWeekday = Calendar.current.component(
+            .weekday,
+            from: now.addingTimeInterval(24 * 60 * 60)
+        )
+        let profile = FeedScheduleProfile(
+            kind: .weekly,
+            confidence: 0.9,
+            observationCount: 8,
+            reliableDateCount: 8,
+            activeWeekdays: [tomorrowWeekday],
+            typicalMinuteOfDay: 12 * 60,
+            releaseWindow: FeedScheduleWindow(
+                activeWeekdays: [tomorrowWeekday],
+                startMinuteOfDay: 11 * 60,
+                endMinuteOfDay: 13 * 60,
+                typicalMinuteOfDay: 12 * 60,
+                observedEpisodeCount: 8
+            ),
+            reason: "Weekly tomorrow"
+        )
+
+        let withoutCeiling = ReleaseRadarCyclePlanner.candidates(
+            subscriptions: [subscription],
+            cachedProfiles: [subscription.id: profile],
+            deferred: [:],
+            minimumRecheckInterval: 5 * 60,
+            now: now
+        )
+        let withCeiling = ReleaseRadarCyclePlanner.candidates(
+            subscriptions: [subscription],
+            cachedProfiles: [subscription.id: profile],
+            deferred: [:],
+            minimumRecheckInterval: 5 * 60,
+            maximumSuccessfulCheckAge: 90 * 60,
+            now: now
+        )
+
+        XCTAssertTrue(withoutCeiling.isEmpty)
+        XCTAssertEqual(withCeiling.count, 1)
+        XCTAssertTrue(withCeiling[0].freshnessOverride)
+        XCTAssertTrue(
+            withCeiling[0].priority.factors.contains(
+                "hard freshness ceiling"
+            )
+        )
     }
 
     func testBackgroundBudgetProtectsReleaseRadarCandidatesFirst() {
@@ -170,6 +227,87 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
             ["urgent-5", "urgent-6"]
         )
     }
+
+    func testBackgroundAudioFairnessThresholdsReserveWithinExistingBudget() {
+        XCTAssertEqual(
+            FeedRefreshBudgeting.fairnessReservationCount(
+                isBackgroundAudio: true,
+                deferredAges: [7 * 60 + 59]
+            ),
+            0
+        )
+        XCTAssertEqual(
+            FeedRefreshBudgeting.fairnessReservationCount(
+                isBackgroundAudio: true,
+                deferredAges: [8 * 60]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            FeedRefreshBudgeting.fairnessReservationCount(
+                isBackgroundAudio: true,
+                deferredAges: [21 * 60]
+            ),
+            1,
+            "A second slot cannot be reserved when only one feed is eligible"
+        )
+        XCTAssertEqual(
+            FeedRefreshBudgeting.fairnessReservationCount(
+                isBackgroundAudio: true,
+                deferredAges: [20 * 60, 9 * 60, 2 * 60]
+            ),
+            2
+        )
+        XCTAssertEqual(
+            FeedRefreshBudgeting.fairnessReservationCount(
+                isBackgroundAudio: false,
+                deferredAges: [60 * 60, 60 * 60]
+            ),
+            0,
+            "Hard fairness reservation is intentionally audio-background only"
+        )
+    }
+
+    #if !AUTOHOP_SPM
+    func testBackgroundTaskExpirationCancelsOnlyItsOwnedHeadlessCycle() {
+        XCTAssertEqual(
+            FeedRefreshCycleWorkflow.backgroundExpirationDisposition(
+                activeTaskIdentifier: "other-task",
+                requestingTaskIdentifier: "expired-task",
+                appForeground: false,
+                audioPlaying: false
+            ),
+            .detachNotOwner
+        )
+        XCTAssertEqual(
+            FeedRefreshCycleWorkflow.backgroundExpirationDisposition(
+                activeTaskIdentifier: "expired-task",
+                requestingTaskIdentifier: "expired-task",
+                appForeground: true,
+                audioPlaying: false
+            ),
+            .detachLiveForegroundOrAudio
+        )
+        XCTAssertEqual(
+            FeedRefreshCycleWorkflow.backgroundExpirationDisposition(
+                activeTaskIdentifier: "expired-task",
+                requestingTaskIdentifier: "expired-task",
+                appForeground: false,
+                audioPlaying: true
+            ),
+            .detachLiveForegroundOrAudio
+        )
+        XCTAssertEqual(
+            FeedRefreshCycleWorkflow.backgroundExpirationDisposition(
+                activeTaskIdentifier: "expired-task",
+                requestingTaskIdentifier: "expired-task",
+                appForeground: false,
+                audioPlaying: false
+            ),
+            .cancelOwnedCycle
+        )
+    }
+    #endif
 
     func testDailyWeekdayPredictionStartsCheckingBeforeExpectedRelease() {
         let calendar = utcCalendar()

@@ -122,8 +122,6 @@ final class FeedRefreshItemWorkflow {
             let parseResidentDelta =
                 memorySample.residentMemoryMB
                     - parseMemoryBefore.residentMemoryMB
-            let highMemoryParse =
-                parseFootprintDelta >= 200 || parseResidentDelta >= 200
             feedRefreshCoordinator.failureBackoffUntil.removeValue(
                 forKey: subscription.id
             )
@@ -153,12 +151,16 @@ final class FeedRefreshItemWorkflow {
 
             let oldLatestGUID = subscription.latestEpisode?.guid
             var stats = subscription.refreshStats
-            if highMemoryParse {
-                stats.consecutiveHighMemoryParses += 1
-                let quarantineHours =
-                    stats.consecutiveHighMemoryParses > 1 ? 12.0 : 6.0
+            if let memoryDecision = FeedParseMemorySafety.quarantineDecision(
+                footprintDeltaMB: parseFootprintDelta,
+                residentDeltaMB: parseResidentDelta,
+                previousConsecutiveHighMemoryParses:
+                    stats.consecutiveHighMemoryParses
+            ) {
+                stats.consecutiveHighMemoryParses =
+                    memoryDecision.consecutiveHighMemoryParses
                 stats.parseQuarantineUntil = runtimeWorkflow.now
-                    .addingTimeInterval(quarantineHours * 60 * 60)
+                    .addingTimeInterval(memoryDecision.quarantineDuration)
                 logger.warning(
                     "feed.parseMemoryQuarantine",
                     "Automatic refresh paused after extreme feed parse memory growth",
@@ -170,7 +172,8 @@ final class FeedRefreshItemWorkflow {
                             "residentDeltaMB": "\(parseResidentDelta)",
                             "consecutiveHighMemoryParses":
                                 "\(stats.consecutiveHighMemoryParses)",
-                            "quarantineHours": "\(Int(quarantineHours))",
+                            "quarantineHours":
+                                "\(Int(memoryDecision.quarantineDuration / 3600))",
                             "quarantineUntil":
                                 stats.parseQuarantineUntil?.ISO8601Format()
                                     ?? "unknown"
@@ -216,7 +219,15 @@ final class FeedRefreshItemWorkflow {
             if let oldLatest = subscription.latestEpisode,
                latestChanged,
                playback.currentEpisode?.id != oldLatest.id {
-                if oldLatest.localFileURL != nil {
+                // AI CONTEXT — Only a one-item rolling feed supersedes its
+                // previous enclosure. Multi-item podcast feeds retain older
+                // downloads; AutoArchiveCoordinator rotates those files using
+                // the configured Episode Limit. The former unconditional
+                // deletion collapsed every normal show to one downloaded item.
+                if FeedReplacementPolicy.shouldDiscardPreviousLatest(
+                    parsedEpisodeCount: result.episodes.count
+                ),
+                   oldLatest.localFileURL != nil {
                     logger.info(
                         "feed.cleanupOldLatest",
                         "Deleting old latest episode after new feed item",

@@ -14,6 +14,84 @@ waiting for a later documentation pass.
 
 ## Completed
 
+### Release Radar tail-latency, parser diagnostics, and retry atomicity — 25 July 2026
+
+- Made learned release windows an optimisation rather than an absolute gate.
+  While audio is playing, any active feed whose last successful check is at
+  least 90 minutes old re-enters selection with hard freshness priority;
+  BGAppRefresh applies a four-hour ceiling, subject to iOS granting a wake.
+- Reduced the ordinary daily out-of-window safety sweep from 12 hours to four
+  hours, while retaining the productive four-minute background-audio cadence.
+- Split schedule cadence confidence from release-window confidence and added
+  learned per-weekday release windows, so a consistent daily show can still be
+  recognised as time-variable and Saturday timing no longer has to inherit its
+  weekday average.
+- Added launch identity fields for app version, build, bundled commit,
+  application container, process session, and release feature gates so mixed-
+  build diagnostic captures can be divided at explicit launch boundaries.
+- Made watchdog retry advancement generation-atomic at the coordinator:
+  duplicate cancellation decisions for an already pending retry are coalesced
+  instead of consuming two retry attempts.
+- Added network-data, XML-parser, and model-materialisation physical-memory
+  measurements. A feed that has already demonstrated extreme parse growth is
+  excluded from constrained background refresh until a foreground/manual parse
+  validates it safely.
+- Corrected `FEATURES.md`: parser episode/text caps bound retained app data, but
+  do not guarantee that Foundation cannot transiently amplify memory. The
+  documented 443 MB diagnostic observation and persistent protection now match
+  current evidence.
+
+### AirPods route-loss and Episode Limit retention repairs — 25 July 2026
+
+- Fixed a multi-episode feed regression that deleted the previously latest
+  local file on every changed feed refresh. Superseded-latest deletion is now
+  restricted to genuine one-item rolling feeds; ordinary shows retain their
+  downloaded episodes until the configured Episode Limit rotates them.
+- Made Episode Limit reserve a slot before each newly discovered automatic
+  download. A limit of 10 therefore accumulates and retains the newest ten
+  automatic downloads, then removes the oldest managed download when the next
+  episode arrives. Changing a setting does not backfill historical episodes.
+- Added durable device-local protection for explicitly requested downloads.
+  Manual downloads, the actively playing episode, and episodes manually pinned
+  to Play Next or Play Last are excluded from Episode Limit removal and do not
+  consume its automatic-download capacity.
+- Tightened AirPods route-loss confirmation. An `oldDeviceUnavailable` event can
+  no longer be cancelled merely because iOS's temporarily stale `currentRoute`
+  still reports the same AirPods; only a distinct non-built-in replacement
+  output cancels the pending pause.
+- Added headless regression tests covering same-device/missing-route AirPods
+  transitions, built-in fallback, genuine wireless replacement, ten-item
+  retention, incoming-item rotation, manual/pinned protection, and legacy
+  episode decoding.
+
+### Background regression suite and release gates — 25 July 2026
+
+- Added deterministic parser safeguards for pathological feeds: a generated
+  200-item/large-description feed now proves that parsing stops at the configured
+  50-episode limit, descriptions remain within 64 KiB, ordinary metadata remains
+  within 8 KiB, and discarded/truncated text is diagnosed.
+- Centralised the eight- and twenty-minute background-audio fairness thresholds
+  in `FeedRefreshBudgeting` and added boundary tests proving that reservations
+  remain audio-background-only and cannot request more slots than eligible feeds.
+- Extracted pure, production-used policy seams for watchdog final cancellation
+  and BGTask expiration ownership. Regression tests now reject duplicate/stale
+  watchdog decisions, late payload progress, completed/suspended/connectivity-
+  waiting tasks, non-owning BGTask expiry, and expiry while foreground/audio
+  remains a live owner.
+- Expanded automatic-download tests for 15/30/60-minute durable cooldown
+  escalation, one-hour capping, persistence, enclosure replacement, host/session
+  circuit opening, circuit expiry, and successful-host recovery.
+- Added a release validation script and GitHub workflow. Configuration checks
+  fail if Autohop Pro, Relay, or tvOS submission gates are enabled for the
+  iPhone-only release. Archive validation reads the exact signed `Autohop.app`
+  entitlements and fails unless `aps-environment` is `production`, and also
+  rejects an embedded `AutohopTV.app`.
+- Added an Xcode characterization that the compiled development-only product
+  surfaces default off. CI runs the shared-core suite and compiles the
+  iOS application plus Xcode-only regression tests.
+- Excluded `.github`, `.swiftpm`, and `Scripts` from application resources so
+  release tooling and workspace metadata cannot be bundled into Autohop.
+
 ### Unplugged background-refresh and playback resilience — 24 July 2026
 
 - Added bounded age-based fairness to Background (Audio Playing) refresh cycles.

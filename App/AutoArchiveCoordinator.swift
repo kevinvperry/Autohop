@@ -115,13 +115,16 @@ final class AutoArchiveCoordinator: ObservableObject {
         await run(reason: reason, now: now)
     }
 
-    func enforceEpisodeLimitBeforeDownload(subscriptionID: UUID) async {
+    func enforceEpisodeLimitBeforeDownload(
+        subscriptionID: UUID,
+        incomingEpisodeID: UUID
+    ) async {
         guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
         let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
         guard limit > 0 else { return }
 
         let cutoff = subscription.subscribedAt
-        let active = subscription.episodes
+        let eligible = subscription.episodes
             .filter { episode in
                 guard episode.playedState != .archived else { return false }
                 if let cutoff, let published = episode.publishedAt, published <= cutoff {
@@ -129,11 +132,16 @@ final class AutoArchiveCoordinator: ObservableObject {
                 }
                 return true
             }
-            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
-        guard active.count > limit else { return }
+        let protectedIDs = episodeLimitProtectedIDs()
+            .union([incomingEpisodeID])
+        let excess = EpisodeLimitRetentionPolicy.excessEpisodes(
+            from: eligible,
+            limit: limit,
+            reservedAutomaticSlots: 1,
+            externallyProtectedIDs: protectedIDs
+        )
 
-        for episode in active.dropFirst(limit)
-        where episode.id != activeEpisodeID {
+        for episode in excess {
             logger.info("autoArchive.inlineLimit", "Archiving excess episode before new download", metadata: [
                 "podcast": subscription.title,
                 "episode": episode.title,
@@ -254,17 +262,22 @@ final class AutoArchiveCoordinator: ObservableObject {
                 limitBacklogProtected += subscription.episodes.filter {
                     $0.playedState != .archived && isBacklog($0)
                 }.count
-                let candidates = subscription.episodes
+                let eligible = subscription.episodes
                     .filter {
                         $0.playedState != .archived
                             && !archivedIDs.contains($0.id)
-                            && ($0.downloadState == .queued || $0.downloadState == .downloaded)
                             && !isBacklog($0)
                     }
-                    .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
-                limitCandidates += candidates.count
-                for (index, episode) in candidates.enumerated()
-                where index >= limit && episode.id != playingID {
+                let candidates = EpisodeLimitRetentionPolicy.excessEpisodes(
+                    from: eligible,
+                    limit: limit,
+                    externallyProtectedIDs: episodeLimitProtectedIDs()
+                )
+                limitCandidates += eligible.filter {
+                    $0.downloadState == .queued
+                        || $0.downloadState == .downloaded
+                }.count
+                for episode in candidates {
                     await archive(
                         episode,
                         subscription: subscription,
@@ -344,6 +357,21 @@ final class AutoArchiveCoordinator: ObservableObject {
         }
 #endif
         return playbackCoordinator?.currentEpisode?.id
+    }
+
+    private func episodeLimitProtectedIDs() -> Set<UUID> {
+        var protected = Set<UUID>()
+        if let activeEpisodeID {
+            protected.insert(activeEpisodeID)
+        }
+        guard let queueCoordinator else { return protected }
+        for subscription in subscriptionStore.subscriptions {
+            for episode in subscription.episodes
+            where queueCoordinator.isProtectedFromEpisodeLimit(episode.id) {
+                protected.insert(episode.id)
+            }
+        }
+        return protected
     }
 
     private var currentResourceContext: [String: String] {

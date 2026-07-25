@@ -1,0 +1,35 @@
+name: Release Guards
+
+# AI CONTEXT — Fast, signing-independent protection for the checked-in Release
+# configuration. The signed APNs assertion cannot run on an unsigned CI checkout;
+# release operators must additionally run Scripts/validate-release.sh --archive
+# against the exact distribution archive before upload.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-configuration:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate disabled release feature gates
+        run: Scripts/validate-release.sh --configuration-only
+
+  regression-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shared-core regression suite
+        run: swift test --disable-sandbox
+      - name: Compile iOS application and Xcode-only regression tests
+        run: >
+          xcodebuild
+          -project Autohop.xcodeproj
+          -scheme Autohop
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build-for-testing

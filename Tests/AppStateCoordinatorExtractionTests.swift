@@ -337,6 +337,41 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         )
     }
 
+    func testDownloadCircuitsExpireAndSuccessClearsOnlyRecoveredHost() {
+        let subject = DownloadCoordinator()
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let one = URL(string: "https://one.example/episode.mp3")!
+        let two = URL(string: "https://two.example/episode.mp3")!
+        let three = URL(string: "https://three.example/episode.mp3")!
+
+        for host in [one, two, three] {
+            subject.recordTerminalDownloadFailure(for: host, now: now)
+            subject.recordTerminalDownloadFailure(for: host, now: now)
+        }
+        XCTAssertEqual(
+            subject.automaticDownloadBlock(for: one, now: now),
+            "session"
+        )
+
+        subject.recordDownloadSuccess(episodeID: UUID(), mediaURL: one)
+        XCTAssertEqual(
+            subject.automaticDownloadBlock(for: one, now: now),
+            "session",
+            "Other failing hosts keep the session breaker active"
+        )
+
+        subject.recordDownloadSuccess(episodeID: UUID(), mediaURL: two)
+        subject.recordDownloadSuccess(episodeID: UUID(), mediaURL: three)
+        XCTAssertNil(subject.automaticDownloadBlock(for: one, now: now))
+
+        subject.recordTerminalDownloadFailure(for: one, now: now)
+        subject.recordTerminalDownloadFailure(for: one, now: now)
+        XCTAssertNil(subject.automaticDownloadBlock(
+            for: one,
+            now: now.addingTimeInterval(15 * 60)
+        ))
+    }
+
     func testAutoDownloadWorkflowSerializesReentrantDrain() async {
         let subject = AutoDownloadWorkflow(
             intentStore: AutoDownloadIntentStore(fileURL: temporaryURL("intents.json"))

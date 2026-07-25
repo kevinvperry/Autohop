@@ -180,7 +180,18 @@ final class DownloadCoordinator: ObservableObject {
                       let autoDownloadIntentStore else {
                     return
                 }
-                self.watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+                // Two watchdog evaluators can observe the same URLSession task
+                // generation before either callback reaches MainActor. The first
+                // callback owns retry advancement; later callbacks are coalesced
+                // instead of consuming attempts 2 and 3 for one timeout.
+                guard self.watchdogRetryTasks[episodeID] == nil else {
+                    logger.info(
+                        "download.watchdogRetryCoalesced",
+                        "Ignored duplicate watchdog retry decision",
+                        metadata: ["episodeID": episodeID.uuidString]
+                    )
+                    return
+                }
                 let generation = (self.watchdogRetryGeneration[episodeID] ?? 0) + 1
                 self.watchdogRetryGeneration[episodeID] = generation
                 let attempt = (self.watchdogRetryCounts[episodeID] ?? 0) + 1
@@ -438,7 +449,8 @@ final class DownloadCoordinator: ObservableObject {
                 subscriptionStore.markEpisodeDownloaded(
                     subscriptionID: subscriptionID,
                     episodeID: episodeID,
-                    localFileURL: localFileURL
+                    localFileURL: localFileURL,
+                    protectFromEpisodeLimit: !wasAutomatic
                 )
                 if let duration = resolvedDuration {
                     subscriptionStore.updateEpisodeDuration(

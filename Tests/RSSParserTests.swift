@@ -12,6 +12,54 @@ import XCTest
 #endif
 
 final class RSSParserTests: XCTestCase {
+    func testEpisodeLimitStopsPathologicalFeedAtConfiguredBound() throws {
+        let oversizedDescription = String(repeating: "memory-bound-", count: 8_000)
+        let items = (0..<200).map { index in
+            """
+            <item>
+              <guid>episode-\(index)</guid>
+              <title>Episode \(index)</title>
+              <description><![CDATA[\(oversizedDescription)]]></description>
+              <enclosure url="https://example.com/\(index).mp3" type="audio/mpeg"/>
+            </item>
+            """
+        }.joined()
+        let xml = "<rss version=\"2.0\"><channel><title>Bounded</title>\(items)</channel></rss>"
+
+        let parsed = try RSSParser().parseWithDiagnostics(
+            data: Data(xml.utf8),
+            maxEpisodes: 50
+        )
+
+        XCTAssertEqual(parsed.feed.episodes.count, 50)
+        XCTAssertEqual(parsed.feed.episodes.first?.guid, "episode-0")
+        XCTAssertEqual(parsed.feed.episodes.last?.guid, "episode-49")
+        XCTAssertLessThanOrEqual(
+            parsed.diagnostics.largestRetainedElementCharacters,
+            64 * 1_024
+        )
+        XCTAssertGreaterThan(parsed.diagnostics.discardedCharacters, 0)
+    }
+
+    func testOrdinaryMetadataUsesSmallerRetentionBudget() throws {
+        let oversizedTitle = String(repeating: "T", count: 32 * 1_024)
+        let xml = """
+        <rss version="2.0"><channel><title>Bounded</title><item>
+        <guid>ordinary-cap</guid><title>\(oversizedTitle)</title>
+        <enclosure url="https://example.com/ordinary.mp3" type="audio/mpeg"/>
+        </item></channel></rss>
+        """
+
+        let parsed = try RSSParser().parseWithDiagnostics(data: Data(xml.utf8))
+
+        XCTAssertEqual(
+            try XCTUnwrap(parsed.feed.latestEpisode).title.count,
+            8 * 1_024
+        )
+        XCTAssertGreaterThan(parsed.diagnostics.discardedCharacters, 0)
+        XCTAssertEqual(parsed.diagnostics.truncatedElements, 1)
+    }
+
     func testLargeContentEncodedIsBoundedAndDescriptionWins() throws {
         let oversized = String(repeating: "show-notes-", count: 20_000)
         let xml = """

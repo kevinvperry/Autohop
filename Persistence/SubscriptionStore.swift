@@ -1009,7 +1009,12 @@ public final class SubscriptionStore: ObservableObject {
         }
     }
 
-    public func markEpisodeDownloaded(subscriptionID: UUID, episodeID: UUID, localFileURL: URL) {
+    public func markEpisodeDownloaded(
+        subscriptionID: UUID,
+        episodeID: UUID,
+        localFileURL: URL,
+        protectFromEpisodeLimit: Bool = false
+    ) {
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.downloadState = .downloaded
             $0.localFileURL = localFileURL
@@ -1017,6 +1022,11 @@ public final class SubscriptionStore: ObservableObject {
             $0.playedState = .unplayed
             $0.wasCompleted = false
             if $0.downloadedAt == nil { $0.downloadedAt = Date() }
+            // Automatic retries/repairs must not erase an earlier explicit
+            // user decision. Protection ends only when the file is disposed.
+            if protectFromEpisodeLimit {
+                $0.isManualDownloadProtected = true
+            }
         }
     }
 
@@ -1067,6 +1077,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileName = nil
             $0.playedState = .played
             $0.wasCompleted = true
+            $0.isManualDownloadProtected = false
         }
     }
 
@@ -1079,6 +1090,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.playedState = .played
             $0.lastPlayedAt = now
             $0.wasCompleted = true
+            $0.isManualDownloadProtected = false
         }
         rememberPlayedEpisode(subscriptionID: subscriptionID, episodeID: episodeID)
     }
@@ -1272,6 +1284,7 @@ public final class SubscriptionStore: ObservableObject {
             $0.localFileURL = nil
             $0.localFileName = nil
             $0.playedState = .archived
+            $0.isManualDownloadProtected = false
         }
         rememberArchivedEpisode(subscriptionID: subscriptionID, episodeID: episodeID)
     }
@@ -1286,6 +1299,7 @@ public final class SubscriptionStore: ObservableObject {
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.playedState = .unplayed
             $0.wasCompleted = false
+            $0.isManualDownloadProtected = false
         }
     }
 
@@ -1357,6 +1371,8 @@ public final class SubscriptionStore: ObservableObject {
                 // cannot erase the Auto Archive inactivity clock or playback
                 // recency while retaining the corresponding local file/state.
                 merged.downloadedAt = existing.downloadedAt
+                merged.isManualDownloadProtected =
+                    existing.isManualDownloadProtected
                 merged.lastPlayedAt = existing.lastPlayedAt
                 merged.isExplicit = newEpisode.isExplicit ?? existing.isExplicit
                 if existing.localFileURL != nil, let duration = existing.durationSeconds {
@@ -1517,6 +1533,7 @@ public final class SubscriptionStore: ObservableObject {
             episode.downloadState = .notDownloaded
             episode.localFileURL = nil
             episode.localFileName = nil
+            episode.isManualDownloadProtected = false
         }
 
         subscriptions[location.sub].episodes[location.ep] = episode

@@ -88,7 +88,10 @@ targets:
           - "**/.*.swp"                        # hidden Vim swap files (e.g. .PAGES.md.swp)
           - ".*.swp"                           # root-level hidden swap file (glob safety)
           - ".build/**"
+          - ".github/**"                     # CI metadata — never bundle in the app
           - ".git/**"                        # git internals — never bundle as app resources
+          - ".swiftpm/**"                    # SwiftPM/Xcode workspace metadata
+          - "Scripts/**"                     # developer/release tooling, not runtime resources
                                              # (branch/tag/log basenames can collide → "duplicate output file")
           - "SmokeTests/**"                  # contains main.swift
           - "OPMLSmokeTests/**"              # contains main.swift

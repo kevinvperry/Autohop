@@ -176,8 +176,17 @@ final class DownloadTransferWorkflow {
                 "podcast": podcastTitle
             ])
             if let localFileURL = reusableEpisode.localFileURL,
+               !isAutomatic {
+                subscriptionStore.markEpisodeDownloaded(
+                    subscriptionID: subscriptionID,
+                    episodeID: reusableEpisode.id,
+                    localFileURL: localFileURL,
+                    protectFromEpisodeLimit: true
+                )
+            }
+            if let localFileURL = reusableEpisode.localFileURL,
                let duration = await mediaWorkflow.localDuration(
-                from: localFileURL
+                    from: localFileURL
                ) {
                 subscriptionStore.updateEpisodeDuration(
                     subscriptionID: subscriptionID,
@@ -248,7 +257,8 @@ final class DownloadTransferWorkflow {
             subscriptionStore.markEpisodeDownloaded(
                 subscriptionID: subscriptionID,
                 episodeID: episode.id,
-                localFileURL: localFileURL
+                localFileURL: localFileURL,
+                protectFromEpisodeLimit: !isAutomatic
             )
             coordinator.clearWatchdogRetryState(for: episode.id)
             coordinator.failureBackoff.removeValue(forKey: episode.guid)

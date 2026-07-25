@@ -39,6 +39,31 @@ import Network
 
 @MainActor
 final class FeedRefreshCycleWorkflow {
+    enum BackgroundExpirationDisposition: Equatable {
+        case detachNotOwner
+        case detachLiveForegroundOrAudio
+        case cancelOwnedCycle
+    }
+
+    /// Pure ownership policy shared by the runtime expiration handler and unit
+    /// tests. An OS task may cancel only the cycle generation it owns, and even
+    /// then must detach if foreground UI or active playback still owns useful
+    /// work. This prevents a late BGTask expiry from killing a manual/audio cycle.
+    static func backgroundExpirationDisposition(
+        activeTaskIdentifier: String?,
+        requestingTaskIdentifier: String,
+        appForeground: Bool,
+        audioPlaying: Bool
+    ) -> BackgroundExpirationDisposition {
+        guard activeTaskIdentifier == requestingTaskIdentifier else {
+            return .detachNotOwner
+        }
+        guard !appForeground, !audioPlaying else {
+            return .detachLiveForegroundOrAudio
+        }
+        return .cancelOwnedCycle
+    }
+
     struct Policy {
         let defaultEpisodeLimit: Int
         let backgroundRefreshLimit: Int
@@ -256,8 +281,14 @@ final class FeedRefreshCycleWorkflow {
         taskIdentifier: String,
         reason: String
     ) {
-        guard coordinator.activeCycleDiagnostics?.backgroundTaskIdentifier
-            == taskIdentifier else {
+        let disposition = Self.backgroundExpirationDisposition(
+            activeTaskIdentifier:
+                coordinator.activeCycleDiagnostics?.backgroundTaskIdentifier,
+            requestingTaskIdentifier: taskIdentifier,
+            appForeground: isAppForeground,
+            audioPlaying: playback.isPlaying
+        )
+        guard disposition != .detachNotOwner else {
             logger.info(
                 "feed.refreshAll.expirationDetached",
                 "BGTask deadline detached because it does not own the active refresh cycle",
@@ -279,7 +310,7 @@ final class FeedRefreshCycleWorkflow {
             )
             return
         }
-        if isAppForeground || playback.isPlaying {
+        if disposition == .detachLiveForegroundOrAudio {
             logger.info(
                 "feed.refreshAll.expirationDetached",
                 "BGTask expired but a live foreground/audio context owns the refresh cycle — detaching, not cancelling",
@@ -487,8 +518,16 @@ final class FeedRefreshCycleWorkflow {
         let active = requested.filter { !$0.excludeFromAutoFeedRefresh }
         let now = runtimeWorkflow.now
         let isManual = diagnostics.executionContext == .manual
+        let isConstrainedBackground =
+            diagnostics.executionContext == .backgroundAudioAlive
+            || diagnostics.executionContext == .backgroundRefreshTask
+            || diagnostics.executionContext == .backgroundProcessingTask
         let parseQuarantined = active.filter {
-            $0.refreshStats.parseQuarantineUntil.map { $0 > now } ?? false
+            !isManual && (
+                ($0.refreshStats.parseQuarantineUntil.map { $0 > now } ?? false)
+                || (isConstrainedBackground
+                    && $0.refreshStats.consecutiveHighMemoryParses > 0)
+            )
         }
         if !parseQuarantined.isEmpty {
             logger.warning(
@@ -505,6 +544,11 @@ final class FeedRefreshCycleWorkflow {
             )
         }
         let parseEligible = active.filter {
+            if isManual { return true }
+            if isConstrainedBackground,
+               $0.refreshStats.consecutiveHighMemoryParses > 0 {
+                return false
+            }
             guard let until = $0.refreshStats.parseQuarantineUntil else {
                 return true
             }
@@ -523,8 +567,22 @@ final class FeedRefreshCycleWorkflow {
                 else { return true }
                 return until <= now
             }
+        let maximumSuccessfulCheckAge: TimeInterval? = {
+            switch diagnostics.executionContext {
+            case .backgroundAudioAlive:
+                return 90 * 60
+            case .backgroundRefreshTask:
+                return 4 * 60 * 60
+            default:
+                return nil
+            }
+        }()
         let dueCandidates = onlyDueFeeds
-            ? await releaseRadar.candidates(from: eligible, now: now)
+            ? await releaseRadar.candidates(
+                from: eligible,
+                now: now,
+                maximumSuccessfulCheckAge: maximumSuccessfulCheckAge
+            )
             : []
         let fairness = fairnessReservation(
             in: dueCandidates,
@@ -1148,16 +1206,21 @@ final class FeedRefreshCycleWorkflow {
             guard let entry = coordinator.deferredBacklog[
                 candidate.subscription.id
             ],
-                  now.timeIntervalSince(entry.firstDeferredAt) >= 8 * 60
+                  now.timeIntervalSince(entry.firstDeferredAt)
+                    >= FeedRefreshBudgeting.fairnessMinimumWait
             else { return nil }
             return (index, entry)
         }.sorted {
             $0.entry.firstDeferredAt < $1.entry.firstDeferredAt
         }
-        guard let oldest = aged.first else { return ([], 0) }
-        let oldestAge = now.timeIntervalSince(oldest.entry.firstDeferredAt)
-        let count = oldestAge >= 20 * 60 ? 2 : 1
-        return (aged.map(\.index), min(count, aged.count))
+        let count = FeedRefreshBudgeting.fairnessReservationCount(
+            isBackgroundAudio:
+                executionContext == .backgroundAudioAlive,
+            deferredAges: aged.map {
+                now.timeIntervalSince($0.entry.firstDeferredAt)
+            }
+        )
+        return (aged.map(\.index), count)
     }
 
     private func decisionMetadata(
@@ -1174,6 +1237,17 @@ final class FeedRefreshCycleWorkflow {
                 format: "%.2f",
                 candidate.profile.confidence
             ),
+            "cadenceConfidence": String(
+                format: "%.2f",
+                candidate.profile.cadenceConfidence
+                    ?? candidate.profile.confidence
+            ),
+            "windowConfidence": String(
+                format: "%.2f",
+                candidate.profile.windowConfidence
+                    ?? candidate.profile.confidence
+            ),
+            "freshnessOverride": "\(candidate.freshnessOverride)",
             "profileObservations":
                 "\(candidate.profile.observationCount)",
             "profileReliableDates":

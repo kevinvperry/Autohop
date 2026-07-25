@@ -153,6 +153,65 @@ final class AutoDownloadIntentStoreTests: XCTestCase {
         XCTAssertTrue(store.failures.isEmpty)
     }
 
+    func testTerminalCooldownCapsAtOneHourAndPersistsEscalation() {
+        let url = temporaryFileURL()
+        let store = AutoDownloadIntentStore(fileURL: url)
+        let episodeID = UUID()
+        let subscriptionID = UUID()
+        let mediaURL = URL(string: "https://media.example/retry.mp3")!
+        let start = Date()
+
+        let first = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: start
+        )
+        let second = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: first.retryAfter
+        )
+        let third = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: second.retryAfter
+        )
+        let fourth = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: subscriptionID,
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: third.retryAfter
+        )
+
+        XCTAssertEqual(
+            third.retryAfter.timeIntervalSince(second.retryAfter),
+            60 * 60,
+            accuracy: 0.01
+        )
+        XCTAssertEqual(
+            fourth.retryAfter.timeIntervalSince(third.retryAfter),
+            60 * 60,
+            accuracy: 0.01
+        )
+        XCTAssertNil(store.activeFailure(
+            episodeID: episodeID,
+            mediaURL: mediaURL,
+            now: fourth.retryAfter
+        ))
+        XCTAssertEqual(
+            AutoDownloadIntentStore(fileURL: url)
+                .failures.first?.consecutiveExhaustions,
+            4
+        )
+    }
+
     func testLoadsLegacyIntentArrayAndMigratesOnNextSave() throws {
         let url = temporaryFileURL()
         try FileManager.default.createDirectory(

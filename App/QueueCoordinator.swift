@@ -144,6 +144,11 @@ final class QueueCoordinator: ObservableObject {
         pins.playLastIDs.contains(episode.id)
     }
 
+    func isProtectedFromEpisodeLimit(_ episodeID: UUID) -> Bool {
+        pins.playNextIDs.contains(episodeID)
+            || pins.playLastIDs.contains(episodeID)
+    }
+
     func playNext(_ episode: Episode) {
         let current = currentEpisode()
         guard current?.id != episode.id else { return }

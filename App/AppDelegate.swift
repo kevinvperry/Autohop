@@ -104,6 +104,32 @@ import MetricKit
 //     to the guard above and completes with .noData, which is correct — CKSyncEngine
 //     has already claimed it before this method's userInfo check even matters.
 final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
+    private static let processSessionID = UUID().uuidString
+
+    private static func launchIdentityMetadata() -> [String: String] {
+        let bundle = Bundle.main
+        let version = bundle.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "unknown"
+        let build = bundle.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "unknown"
+        let commit = bundle.object(
+            forInfoDictionaryKey: "GitCommitSHA"
+        ) as? String ?? "unavailable"
+        let containerID = URL(fileURLWithPath: NSHomeDirectory())
+            .lastPathComponent
+        return [
+            "appVersion": version,
+            "appBuild": build,
+            "gitCommit": commit,
+            "containerID": containerID,
+            "processSessionID": processSessionID,
+            "featureAutohopPro": "\(ReleaseFeatures.autohopPro)",
+            "featureRelay": "\(ReleaseFeatures.relayService)",
+            "featureSubmitTVApp": "\(ReleaseFeatures.submitTVApp)"
+        ]
+    }
 
     /// Silent pushes normally receive only a short background execution window.
     /// Keep a safety margin below the system's practical ~30-second ceiling so
@@ -131,10 +157,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         }
         // alwaysPersist: this fires before AppState enables diagnostics logging, so
         // without it the launch marker (and its launchState) is dropped every launch.
-        AppLogger.shared.info("app.launch", "App launched", metadata: [
+        var launchMetadata = [
             "launchState": launchState,
             "backgroundRefreshStatus": BackgroundTaskCoordinator.backgroundRefreshStatusLabel
-        ], alwaysPersist: true)
+        ]
+        launchMetadata.merge(Self.launchIdentityMetadata()) { _, new in new }
+        AppLogger.shared.info(
+            "app.launch",
+            "App launched",
+            metadata: launchMetadata,
+            alwaysPersist: true
+        )
         // Install the notification-center delegate before launch returns so
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()

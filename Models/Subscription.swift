@@ -573,6 +573,12 @@ public struct FeedScheduleWindow: Equatable, Codable, Sendable {
 
 public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     public var kind: FeedScheduleKind
+    /// Confidence that the feed follows the classified cadence. This is kept
+    /// separate from release-time confidence: a feed may publish daily while
+    /// varying its publication time by many hours.
+    public var cadenceConfidence: Double?
+    /// Confidence that `releaseWindow` predicts publication time accurately.
+    public var windowConfidence: Double?
     public var confidence: Double
     public var observationCount: Int
     public var reliableDateCount: Int
@@ -590,6 +596,10 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     /// feed is too messy for a narrow window. `nil` for feeds the profiler hasn't
     /// windowed.
     public var releaseWindow: FeedScheduleWindow?
+    /// Per-Calendar-weekday release windows. A single global window can hide
+    /// real day-specific behaviour (for example, an early Saturday edition).
+    public var weekdayReleaseWindows: [Int: FeedScheduleWindow]?
+    public var weekdayWindowConfidences: [Int: Double]?
     /// Release Radar v2 (Stage 1): per-weekday publish likelihood — the fraction of
     /// observed weeks the feed published on each Calendar weekday (1 = Sun … 7 = Sat).
     /// This, plus cadence, is what classifies daily/weekdays/weekly/several-times-a-week
@@ -601,6 +611,8 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
     public init(
         kind: FeedScheduleKind,
         confidence: Double,
+        cadenceConfidence: Double? = nil,
+        windowConfidence: Double? = nil,
         observationCount: Int,
         reliableDateCount: Int,
         activeWeekdays: [Int],
@@ -610,11 +622,19 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         cadenceSeconds: TimeInterval? = nil,
         burstWindow: FeedScheduleWindow? = nil,
         releaseWindow: FeedScheduleWindow? = nil,
+        weekdayReleaseWindows: [Int: FeedScheduleWindow]? = nil,
+        weekdayWindowConfidences: [Int: Double]? = nil,
         weekdayProbabilities: [Int: Double]? = nil,
         reason: String
     ) {
         self.kind = kind
         self.confidence = min(max(confidence, 0), 1)
+        self.cadenceConfidence = cadenceConfidence.map {
+            min(max($0, 0), 1)
+        }
+        self.windowConfidence = windowConfidence.map {
+            min(max($0, 0), 1)
+        }
         self.observationCount = observationCount
         self.reliableDateCount = reliableDateCount
         self.activeWeekdays = activeWeekdays
@@ -624,6 +644,8 @@ public struct FeedScheduleProfile: Equatable, Codable, Sendable {
         self.cadenceSeconds = cadenceSeconds
         self.burstWindow = burstWindow
         self.releaseWindow = releaseWindow
+        self.weekdayReleaseWindows = weekdayReleaseWindows
+        self.weekdayWindowConfidences = weekdayWindowConfidences
         self.weekdayProbabilities = weekdayProbabilities
         self.reason = reason
     }
@@ -721,6 +743,8 @@ public enum FeedScheduleProfiler {
     /// fraction of observed weeks. 0.6 keeps one-off specials and biweekly noise out
     /// while tolerating the occasional skipped/holiday day.
     private static let activeDayThreshold = 0.6
+    /// Keep profiler construction aligned with the scheduler's light-day tier.
+    private static let lightDayThreshold = 0.25
     /// Daily/weekdays/several-times patterns need at least this many reliable dates
     /// (weekly is allowed fewer — see `regularMinimumReliableDates`).
     private static let multiDayMinimumReliableDates = 6
@@ -1205,21 +1229,49 @@ public enum FeedScheduleProfiler {
         }
 
         let window = releaseTimeWindow(dates: dates, activeWeekdays: resolvedActiveDays, calendar: calendar, now: now)
-        let confidence = regularCadenceConfidence(
+        let cadenceConfidence = regularCadenceConfidence(
             reliableDateCount: reliableDateCount,
             activeDays: resolvedActiveDays,
             probabilities: probabilities,
-            releaseWindow: window
+            releaseWindow: nil
         )
+        let windowConfidence = releaseWindowConfidence(window)
+        let watchedDays = Set(resolvedActiveDays).union(
+            probabilities.filter { $0.value >= lightDayThreshold }.map(\.key)
+        )
+        var weekdayWindows: [Int: FeedScheduleWindow] = [:]
+        var weekdayWindowConfidences: [Int: Double] = [:]
+        for weekday in watchedDays {
+            let weekdayDates = dates.filter {
+                calendar.component(.weekday, from: $0) == weekday
+            }
+            guard weekdayDates.count >= 2 else { continue }
+            let dayWindow = releaseTimeWindow(
+                dates: weekdayDates,
+                activeWeekdays: [weekday],
+                calendar: calendar,
+                now: now
+            )
+            weekdayWindows[weekday] = dayWindow
+            weekdayWindowConfidences[weekday] =
+                releaseWindowConfidence(dayWindow)
+        }
         return FeedScheduleProfile(
             kind: kind,
-            confidence: confidence,
+            confidence: cadenceConfidence,
+            cadenceConfidence: cadenceConfidence,
+            windowConfidence: windowConfidence,
             observationCount: observationCount,
             reliableDateCount: reliableDateCount,
             activeWeekdays: resolvedActiveDays,
             typicalMinuteOfDay: window.typicalMinuteOfDay,
             cadenceSeconds: windowedMedianInterval ?? medianInterval,
             releaseWindow: window,
+            weekdayReleaseWindows:
+                weekdayWindows.isEmpty ? nil : weekdayWindows,
+            weekdayWindowConfidences:
+                weekdayWindowConfidences.isEmpty
+                    ? nil : weekdayWindowConfidences,
             weekdayProbabilities: probabilities,
             reason: reason
         )
@@ -1384,7 +1436,7 @@ public enum FeedScheduleProfiler {
         reliableDateCount: Int,
         activeDays: [Int],
         probabilities: [Int: Double],
-        releaseWindow: FeedScheduleWindow
+        releaseWindow: FeedScheduleWindow?
     ) -> Double {
         let activeProbabilities = activeDays.map { probabilities[$0] ?? 0 }
         let meanActive = activeProbabilities.isEmpty
@@ -1393,6 +1445,7 @@ public enum FeedScheduleProfiler {
         let base = min(0.97, 0.55
             + 0.25 * meanActive
             + min(0.15, Double(reliableDateCount) / 200.0))
+        guard let releaseWindow else { return base }
         let windowWidth = max(1, releaseWindow.endMinuteOfDay - releaseWindow.startMinuteOfDay)
         let observedSpread = releaseWindow.observedSpreadMinutes ?? windowWidth
         let spreadPenalty: Double
@@ -1406,6 +1459,25 @@ public enum FeedScheduleProfiler {
             spreadPenalty = 0
         }
         return max(0.50, base - spreadPenalty)
+    }
+
+    private static func releaseWindowConfidence(
+        _ window: FeedScheduleWindow
+    ) -> Double {
+        let spread = window.observedSpreadMinutes
+            ?? max(1, window.endMinuteOfDay - window.startMinuteOfDay)
+        let history = min(
+            1.0,
+            Double(window.observedEpisodeCount) / 8.0
+        )
+        let spreadScore: Double
+        switch spread {
+        case ..<120: spreadScore = 0.95
+        case ..<240: spreadScore = 0.75
+        case ..<600: spreadScore = 0.45
+        default: spreadScore = 0.15
+        }
+        return min(0.98, max(0.10, 0.25 * history + 0.75 * spreadScore))
     }
 
     private static func countsByWeekday(_ dates: [Date], calendar: Calendar) -> [Int: Int] {
@@ -1596,7 +1668,7 @@ public enum FeedRefreshScheduling {
     /// window. Hourly/rolling bulletin feeds keep their tight minute slots; ordinary
     /// daily/weekly/multi feeds get a safety net so messy publisher timestamps don't
     /// force the user into manual refresh.
-    private static let dailySafetySweepInterval: TimeInterval = 12 * 60 * 60
+    private static let dailySafetySweepInterval: TimeInterval = 4 * 60 * 60
     private static let weeklySafetySweepInterval: TimeInterval = 24 * 60 * 60
 
     /// The watch tier a weekday gets for a given per-week publish probability. The single
@@ -2235,13 +2307,33 @@ public enum FeedRefreshScheduling {
         now: Date,
         calendar: Calendar
     ) -> [RefreshSlot] {
-        var slots = dailySlots(
-            activeWeekdays: profile.activeWeekdays,
-            windowStartMinute: windowStartMinute,
-            windowEndMinute: windowEndMinute,
+        func makeSlots(
+            for weekdays: [Int],
+            preWindowLead: TimeInterval,
+            isLight: Bool
+        ) -> [RefreshSlot] {
+            weekdays.flatMap { weekday in
+                let window = profile.weekdayReleaseWindows?[weekday]
+                return dailySlots(
+                    activeWeekdays: [weekday],
+                    windowStartMinute:
+                        window?.startMinuteOfDay ?? windowStartMinute,
+                    windowEndMinute:
+                        window?.endMinuteOfDay ?? windowEndMinute,
+                    preWindowLead: preWindowLead,
+                    now: now,
+                    calendar: calendar
+                ).map { slot in
+                    var result = slot
+                    result.isLight = isLight
+                    return result
+                }
+            }
+        }
+        var slots = makeSlots(
+            for: profile.activeWeekdays,
             preWindowLead: fullPreWindowLead,
-            now: now,
-            calendar: calendar
+            isLight: false
         )
 
         let fullSet = Set(profile.activeWeekdays)
@@ -2250,18 +2342,11 @@ public enum FeedRefreshScheduling {
             .keys
             .sorted()
         if !lightDays.isEmpty {
-            slots += dailySlots(
-                activeWeekdays: lightDays,
-                windowStartMinute: windowStartMinute,
-                windowEndMinute: windowEndMinute,
+            slots += makeSlots(
+                for: lightDays,
                 preWindowLead: 0,
-                now: now,
-                calendar: calendar
-            ).map { slot in
-                var light = slot
-                light.isLight = true
-                return light
-            }
+                isLight: true
+            )
         }
         return slots
     }
@@ -2525,7 +2610,103 @@ public struct FeedRefreshBudgetSelection<Candidate> {
     }
 }
 
+public enum FeedParseMemorySafety {
+    /// AI CONTEXT — A single feed parse that grows either process footprint
+    /// measure by 200 MB is considered unsafe. Keep this policy in shared core
+    /// so the live refresh workflow and regression tests use the same boundary.
+    public static let highGrowthThresholdMB = 200
+    public static let initialQuarantine: TimeInterval = 6 * 60 * 60
+    public static let repeatedQuarantine: TimeInterval = 12 * 60 * 60
+
+    public struct Decision: Equatable {
+        public let consecutiveHighMemoryParses: Int
+        public let quarantineDuration: TimeInterval
+    }
+
+    public static func quarantineDecision(
+        footprintDeltaMB: Int,
+        residentDeltaMB: Int,
+        previousConsecutiveHighMemoryParses: Int
+    ) -> Decision? {
+        guard footprintDeltaMB >= highGrowthThresholdMB
+            || residentDeltaMB >= highGrowthThresholdMB else {
+            return nil
+        }
+        let consecutive = max(0, previousConsecutiveHighMemoryParses) + 1
+        return Decision(
+            consecutiveHighMemoryParses: consecutive,
+            quarantineDuration:
+                consecutive > 1 ? repeatedQuarantine : initialQuarantine
+        )
+    }
+}
+
+public enum EpisodeLimitRetentionPolicy {
+    /// AI CONTEXT — Returns only automatically managed stored episodes that
+    /// exceed the configured capacity. Explicit downloads and externally
+    /// protected episodes (active playback or user queue pins) are additive:
+    /// they never consume automatic Episode Limit slots and are never selected
+    /// for removal. `reservedAutomaticSlots` lets a pending new automatic
+    /// download make room before its transfer begins without historical
+    /// backfill when the user merely changes the setting.
+    public static func excessEpisodes(
+        from episodes: [Episode],
+        limit: Int,
+        reservedAutomaticSlots: Int = 0,
+        externallyProtectedIDs: Set<UUID> = []
+    ) -> [Episode] {
+        guard limit > 0 else { return [] }
+        let retainedCapacity = max(0, limit - max(0, reservedAutomaticSlots))
+        let managed = episodes
+            .filter {
+                ($0.downloadState == .queued
+                    || $0.downloadState == .downloaded)
+                    && !$0.isManualDownloadProtected
+                    && !externallyProtectedIDs.contains($0.id)
+            }
+            .sorted {
+                if $0.publishedAt != $1.publishedAt {
+                    return ($0.publishedAt ?? .distantPast)
+                        > ($1.publishedAt ?? .distantPast)
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+        return Array(managed.dropFirst(retainedCapacity))
+    }
+}
+
+public enum FeedReplacementPolicy {
+    /// Only a feed that exposes one current item represents a rolling
+    /// replacement. Ordinary multi-item feeds retain the previous local file
+    /// and defer all rotation to Episode Limit.
+    public static func shouldDiscardPreviousLatest(
+        parsedEpisodeCount: Int
+    ) -> Bool {
+        parsedEpisodeCount == 1
+    }
+}
+
 public enum FeedRefreshBudgeting {
+    /// AI CONTEXT — Background-audio fairness thresholds are centralized here
+    /// so the production selector and deterministic tests cannot silently drift.
+    /// The reservation always replaces ordinary work inside the existing budget;
+    /// it never increases the network/energy ceiling.
+    public static let fairnessMinimumWait: TimeInterval = 8 * 60
+    public static let fairnessSecondSlotWait: TimeInterval = 20 * 60
+
+    public static func fairnessReservationCount(
+        isBackgroundAudio: Bool,
+        deferredAges: [TimeInterval]
+    ) -> Int {
+        guard isBackgroundAudio else { return 0 }
+        let eligibleAges = deferredAges.filter {
+            $0 >= fairnessMinimumWait
+        }
+        guard let oldestAge = eligibleAges.max() else { return 0 }
+        let requested = oldestAge >= fairnessSecondSlotWait ? 2 : 1
+        return min(requested, eligibleAges.count)
+    }
+
     /// Applies a refresh budget to an already-prioritized candidate list.
     /// Protected states get a first pass so release-window feeds are attempted
     /// before ordinary backlog work during short BGAppRefresh wakes. Bypass

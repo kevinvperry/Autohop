@@ -1831,7 +1831,14 @@ final class PlaybackEngine: PlaybackControlling {
         let policyStartedAt = CFAbsoluteTimeGetCurrent()
         switch reason {
         case .oldDeviceUnavailable:
-            if let output, routeOutputCanReplaceRemovedDevice(output) {
+            if let output,
+               AudioRouteLossPolicy.replacementOutputIsConfirmed(
+                currentOutputIdentifier: routeOutputIdentifier(output),
+                previousOutputIdentifier:
+                    previousOutput.map(routeOutputIdentifier),
+                currentOutputIsBuiltIn:
+                    routeOutputIsBuiltIn(output)
+               ) {
                 let wasRoutePaused = pausedByRouteChange
                 let scheduledDeferredRestart = cancelPendingRouteLossPause(
                     reason: reasonLabel,
@@ -1850,7 +1857,14 @@ final class PlaybackEngine: PlaybackControlling {
             }
         case .newDeviceAvailable, .routeConfigurationChange, .categoryChange, .override, .unknown:
             var scheduledDeferredRestart = false
-            if let output, routeOutputCanReplaceRemovedDevice(output) {
+            if let output,
+               AudioRouteLossPolicy.replacementOutputIsConfirmed(
+                currentOutputIdentifier: routeOutputIdentifier(output),
+                previousOutputIdentifier:
+                    previousOutput.map(routeOutputIdentifier),
+                currentOutputIsBuiltIn: routeOutputIsBuiltIn(output),
+                explicitNewDeviceSignal: reason == .newDeviceAvailable
+               ) {
                 let wasRoutePaused = pausedByRouteChange
                 scheduledDeferredRestart = cancelPendingRouteLossPause(
                     reason: reasonLabel,
@@ -2065,12 +2079,14 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     private func routeOutputCanReplaceRemovedDevice(_ output: AVAudioSessionPortDescription) -> Bool {
-        switch output.portType {
-        case .builtInReceiver, .builtInSpeaker:
-            return false
-        default:
-            return true
-        }
+        !routeOutputIsBuiltIn(output)
+    }
+
+    private func routeOutputIsBuiltIn(
+        _ output: AVAudioSessionPortDescription
+    ) -> Bool {
+        output.portType == .builtInReceiver
+            || output.portType == .builtInSpeaker
     }
 
     private func routeOutputIdentifier(_ output: AVAudioSessionPortDescription?) -> String {

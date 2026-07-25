@@ -20,6 +20,10 @@ import Foundation
 //    markEpisodeDownloaded; nil for never-downloaded episodes. Used as the
 //    inactivity clock for Auto Archive "After Inactive": only episodes with
 //    a non-nil downloadedAt are eligible, and the clock runs from this date.
+//  - isManualDownloadProtected records explicit user download ownership.
+//    Episode Limit may rotate automatic downloads, but must never delete an
+//    explicitly downloaded episode. It is device-local lifecycle state and is
+//    preserved across RSS merges while the local download remains present.
 //  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
 //  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
 //    (PodcastIndex JSON chapters) by AppState.
@@ -59,6 +63,9 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
     /// clock for the Auto Archive "After Inactive" rule — only downloaded episodes
     /// are eligible, and the clock runs from this date (not publish date).
     public var downloadedAt: Date?
+    /// True when the user explicitly requested this local download. Such files
+    /// are excluded from Episode Limit rotation until the user disposes them.
+    public var isManualDownloadProtected: Bool
 
     public init(
         id: UUID = UUID(),
@@ -92,6 +99,8 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
         self.playedState = playedState
         self.chapters = chapters
         self.wasCompleted = false
+        self.downloadedAt = nil
+        self.isManualDownloadProtected = false
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -119,6 +128,7 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
         case lastPlayedAt
         case wasCompleted
         case downloadedAt
+        case isManualDownloadProtected
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,6 +160,10 @@ public struct Episode: Identifiable, Equatable, Codable, Sendable {
         wasCompleted = try container.decodeIfPresent(Bool.self, forKey: .wasCompleted)
             ?? (playedState == .played)
         downloadedAt = try container.decodeIfPresent(Date.self, forKey: .downloadedAt)
+        isManualDownloadProtected = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .isManualDownloadProtected
+        ) ?? false
     }
 }
 

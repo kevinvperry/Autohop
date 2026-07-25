@@ -21,6 +21,22 @@ git). This pass CONFIRMS the bulk of that report against code and adds hard
 quantification, verified file:line evidence, one near-divergence that verification
 resolved (host circuit breaker DOES exist), and a single unifying frame: the
 logs 15–17 background remediation is CODE-COMPLETE but DEVICE-UNVERIFIED.
+
+FINAL AUDIT 2026-07-25:
+- Claude's corrective response was independently checked against both repositories.
+- The required website icon is now tracked (`kevmarl-site` commit `51a7f5f`);
+  the website is clean, reproducible, deployed, and serves the corrected Web3Forms
+  CSP from commit `c380755`.
+- All 12 user-facing DESIGN.md references to the old Queue page name are now
+  "Up Next" (`0fc7a55`); internal `Queue*` symbols and the "Queued" state remain.
+- SettingsView.swift and SubscriptionSettingsView.swift received the previously
+  missing line-by-line copy audit. App, in-app Support, website Support, and
+  FEATURES now agree after the two verbatim Auto Archive footer quotations were
+  corrected (`0896d02`).
+- AI CONTEXT verification proves file-level Swift marker coverage and targeted
+  accuracy in recently changed subsystems. It does not prove that every comment
+  in every subsystem remains complete; context quality is a continuing review
+  obligation, not a one-time binary gate.
 -->
 
 ## 1. Executive summary
@@ -40,8 +56,9 @@ that the diagnostic logs 15–17 recommended is now implemented in the working t
 circuit breakers, generation-safe watchdog cancellation, per-item parse memory
 caps, and a parse-memory quarantine. **None of it has been verified on a physical
 device under battery.** The logs that motivated the work all predate the code that
-fixes it (log 17 export = build 4, 08:34 AEST; fixes are uncommitted-then-snapshotted
-work now at HEAD). The correct next action is a device matrix, not more code.
+implements it (log 17 export = build 4, 08:34 AEST; the remediation is now
+committed at and after `938163c`). The correct next action is a device matrix, not
+more speculative background-policy tuning.
 
 Remaining genuine risks are trade-offs and polish, not emergencies: a global ATS
 exception for legacy HTTP feeds, development APNs entitlements that must be
@@ -61,6 +78,13 @@ Findings are anchored to verified symbols/lines. This pass did **not** run the a
 or capture device traces; iOS owns background launch timing and no static review
 can measure real energy/scheduling. Every "landed" claim below means "present and
 read in source", explicitly **not** "validated in behaviour".
+
+The final audit additionally inspected the repository/commit state, rebuilt-source
+requirements, remaining visible Queue terminology, and all user-facing copy and
+bindings in `SettingsView.swift` and `SubscriptionSettingsView.swift`. Exact UI
+counts are scope-sensitive: the **219** fixed-font count below covers `Views/`;
+the current whole-project equivalent is **223** after including App, TV, Widgets,
+and CarPlay. Neither number is a substitute for runtime accessibility testing.
 
 ## 3. Logs 15–17 remediation — verification status (CODE-COMPLETE, DEVICE-UNVERIFIED)
 
@@ -276,35 +300,125 @@ smell found in the read sample.
 - **Added by this pass:** the unified CODE-COMPLETE / DEVICE-UNVERIFIED status
   table (§3); hard UI quantification (§9); the fairness-scope asymmetry and
   quarantine-redundancy nuances (§3.1).
+- **Final audit closures (2026-07-25):** the website's previously untracked,
+  build-required `icon.png` is committed and a tracked-source rebuild is
+  reproducible; the live CSP permits `api.web3forms.com`; all user-facing
+  DESIGN.md Queue-page references now say Up Next; and the complete global/
+  per-podcast Settings copy audit found no app-code defect. The only discovered
+  drift was two FEATURES quotations that claimed to reproduce the Auto Archive
+  footer verbatim; those quotations now match the app and Support mirrors.
+- **Important qualification retained:** every Swift file contains an AI CONTEXT
+  marker, but marker presence is only file-level coverage. It does not establish
+  that every algorithm, ownership boundary, configuration file, build script, or
+  future edit is adequately explained. Treat comment accuracy as a review
+  discipline and require context updates in the same change as behavioural edits.
 
-## 13. Prioritised next work
+## 13. Final recommendations
 
-1. **Device background/energy matrix** (§3 table is the checklist). Nothing else
-   in the background story should be tuned from another single anecdotal capture.
-2. **Release gating:** archive-time signed-entitlement check (S2); keep Pro/Relay
-   off until JWS verification is cryptographically complete (S3).
-3. **CI fixtures:** malformed/large-feed parser memory + watchdog-generation stress
-   tests, protecting the §3 fixes from regression.
-4. **Accessibility pass:** migrate the 219 fixed fonts to semantic/`@ScaledMetric`;
-   raise a11y-label coverage; VoiceOver + Dynamic Type + contrast audit; tvOS focus.
-5. **HTTP-feed hardening** (S1): explicit warning + private-network policy while
-   preserving legacy compatibility.
-6. **Sync:** decide whether whole-list order/Up Next needs concurrent-merge (R1);
-   keep the explicit sync matrix authoritative (R2).
-7. **Small tested extractions** from the largest files (P-A) — no architecture
-   rewrite.
-8. **Docs/website discipline:** never describe a ❌ (§3) row as fixed until device
-   verified; never promise fixed background intervals.
+### 13.1 Required before claiming the background remediation is verified
+
+1. **Run the physical-device background/energy matrix.** Use every ❌ row in §3
+   as an explicit assertion. Include long unplugged locked-screen audio, screen-off
+   periods with and without playback, Wi-Fi↔cellular changes, Low Power Mode,
+   thermal pressure, failing media hosts, a large backlog, malformed feeds, and a
+   charging overnight control. Compare feed age, fairness selections, selected/
+   deferred work, material updates, transfer attempts/completions, cancellation
+   generations, CPU, memory, jetsam/MetricKit evidence, and battery delta by
+   execution context.
+2. **Require more than one representative capture.** One successful night proves
+   only that session. Use at least a normal listening day and a deliberately
+   adverse session before changing a §3 row from ❌ to ✅.
+3. **Do not retune the four-minute background-audio policy from anecdotes.** First
+   verify that fairness, phase-aware deadlines, circuit breakers, parser bounds,
+   and BGTask ownership work together. Retune only from measured freshness,
+   battery, CPU, radio, and backlog-age evidence.
+
+### 13.2 Required before the next public release
+
+4. **Keep the new regression suite mandatory.** The 25 July suite now covers
+   pathological parser bounds, watchdog final-cancel races, cooldown escalation,
+   host/session circuit behavior, fairness thresholds, and BGTask ownership.
+   Preserve the shared SwiftPM execution and Xcode-only build-for-testing CI jobs.
+   Device suspension, delegate delivery after process relaunch, and physical-memory
+   peaks remain integration/device assertions rather than deterministic unit tests.
+5. **Use the new release security gate for every upload.**
+   `Scripts/validate-release.sh --configuration-only` now protects Pro/Relay/tvOS
+   source gates in CI. Before upload, run it with `--archive` against the exact
+   distribution `.xcarchive`; it fails unless the signed app has production APNs
+   and no tvOS app is embedded. Keep Pro/Relay disabled until the server performs
+   complete Apple JWS/certificate-chain, bundle, product, environment, date,
+   revocation, and transaction-state validation.
+6. **Complete an accessibility release pass.** The measured **219** fixed
+   `.font(.system(size:))` sites in `Views/` (**223** whole project) are the largest
+   UI risk. Prioritise Settings, Podcast Settings, Player metadata, Up Next,
+   Priority, Stats, widgets, CarPlay, and tvOS. Use semantic fonts or
+   `@ScaledMetric`, multiline text, ≥44 pt targets, VoiceOver order/labels, Bold
+   Text, Button Shapes, Increased Contrast, and the two largest Dynamic Type sizes.
+7. **Harden HTTP-feed handling without silently breaking legitimate legacy feeds.**
+   Prefer HTTPS, warn clearly before subscribing to HTTP, reject credential-bearing
+   URLs, never transmit secrets over clear text, and adopt an explicit policy for
+   loopback/link-local/private-network destinations. Retain the broad ATS exception
+   only while real compatibility evidence justifies it.
+8. **Keep source, app copy, Support, website, and generated Worker atomic.** Any
+   behavioural or naming change must update FEATURES/PAGES/DESIGN/SYNC_DESIGN/
+   VERSION_1.4 as applicable, both Settings surfaces, Support mirrors, website
+   pages, AI CONTEXT, and generated artifacts in the same change. Build the website
+   from tracked files and verify the live CSP/contact path after deployment.
+
+### 13.3 Planned engineering improvements, not release blockers
+
+9. **Decide whether concurrent list editing warrants a new sync model.** Preserve
+   current deterministic whole-record LWW for Priority and Up Next unless real
+   multi-device conflicts justify an operation log with tombstones and bounded
+   compaction. Keep the sync matrix explicit; do not sync the whole AppSettings
+   blob indiscriminately.
+10. **Extract large source units incrementally behind tests.** Separate rendering
+    subviews, model-domain extensions, audio route/graph helpers, and tvOS
+    CloudKit/materialisation responsibilities without creating parallel state
+    ownership or rebuilding AppState as a monolith.
+11. **Modernise the deprecated Accelerate call in an isolated audio change.** Move
+    from the deprecated `cblas_scopy` interface, then regression-test mono
+    duplication, route changes, Trim Silence, Vocal Boost, interruptions, and
+    resume on physical devices.
+12. **Treat AI CONTEXT as maintained architecture metadata.** File-level marker
+    coverage is complete; quality is not permanently “done.” Review ownership,
+    invariants, lifecycle, concurrency, persistence, security boundaries, and
+    failure behaviour whenever a subsystem changes. Extend the same standard to
+    project/configuration/build assets where comments are supported.
+
+### 13.4 Closed findings — do not reopen without new evidence
+
+- Website source reproducibility (`icon.png`) and the Web3Forms CSP regression.
+- Visible Queue-page naming in DESIGN.md; **Up Next** is canonical while internal
+  `Queue*` symbols and the `Queued` state remain valid.
+- Global and per-podcast Settings-copy consistency, including Auto Archive footer
+  quotations and the 30-minute Inactive Episodes option.
+- Moving-horizon scheduling replacement and the exercised BGProcessing path.
+- Presence/wiring of the logs 15–17 remediation. Its runtime status remains
+  device-unverified exactly as shown in §3.
+- Deterministic regression coverage for parser bounds, watchdog cancellation
+  races, retry cooldowns, circuit breakers, fairness thresholds, and BGTask
+  ownership; retain these tests as release gates.
+- Configuration and archive-time release validation for disabled Pro/Relay/tvOS
+  features and signed production APNs.
 
 ## 14. Release gate
 
 Before the next public build:
-- clean-generate the project (`xcodegen generate`), build iOS + tvOS schemes;
-- run the full test suite + website generator/syntax checks;
-- inspect **signed production** entitlements + privacy manifest;
+- confirm both repositories begin clean and all required/generated website assets
+  can be reproduced from tracked source;
+- clean-generate the project (`xcodegen generate`) and build iOS + tvOS schemes;
+- run the full test suite, the §13.2 regression fixtures, and website generator/
+  syntax checks;
+- inspect **signed production** entitlements and the privacy manifest;
+- run `Scripts/validate-release.sh --archive <exact-upload.xcarchive>`;
 - exercise: fresh install, existing-user upgrade, OPML import, first subscription,
   iCloud off→on, two-device order/Up-Next conflict, HTTP + HTTPS feed, locked-screen
   audio, **unplugged background refresh (§3 matrix)**, large malformed feed,
   interruption→resume, CarPlay, widget actions;
-- reconcile website/support/privacy claims against the exact release feature gates;
+- verify Dynamic Type/VoiceOver/contrast and tvOS focus/empty/error states;
+- reconcile app copy, website, Support, privacy, AI CONTEXT, and canonical documents
+  against the exact release feature gates;
+- deploy the website only from its committed reproducible source, then verify live
+  headers, `/llms.txt`, icon routes, and a Web3Forms contact submission;
 - bump MARKETING_VERSION/build only once release scope is fixed.
