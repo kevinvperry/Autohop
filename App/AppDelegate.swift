@@ -611,7 +611,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         let startMetadata = [
             "identifier": task.identifier,
             "backgroundRefreshStatus": refreshStatus,
-            "taskKind": "BGProcessingTask"
+            "taskKind": "BGProcessingTask",
+            "wakeID": wakeID.uuidString,
+            "processSessionID": processSessionID
         ]
         // alwaysPersist: same reasoning as background.launch — a cold BGProcessingTask
         // wake logs this before diagnostics is enabled, so it must bypass the toggle.
@@ -633,7 +635,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             }
             state.logResourceSnapshot(reason: "background.processing.workStart", extra: startMetadata, force: true)
             let didRun = await state.refreshSubscriptionsForProcessing(taskIdentifier: task.identifier)
-            guard completionGate.claim() else { return }
+            guard completionGate.claim() else {
+                AppLogger.shared.info(
+                    "background.processingCompletionLostRace",
+                    "BGProcessing work returned after another terminal path won",
+                    metadata: [
+                        "identifier": task.identifier,
+                        "wakeID": wakeID.uuidString,
+                        "elapsedMs": elapsedMilliseconds(since: startedAt),
+                        "terminalCandidate": "workCompleted"
+                    ],
+                    alwaysPersist: true
+                )
+                return
+            }
             // Unawaited for the same reason as the refresh handler: never hold
             // setTaskCompleted on media transfers. BGProcessing runs are long
             // (charging + Wi-Fi), so this usually drains everything.
@@ -644,7 +659,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             AppLogger.shared.info("background.processingComplete", "Background processing completed", metadata: [
                 "identifier": task.identifier,
                 "didRun": "\(didRun)",
-                "elapsedMs": elapsedMs
+                "elapsedMs": elapsedMs,
+                "wakeID": wakeID.uuidString,
+                "terminalWinner": "workCompleted"
             ])
             state.logResourceSnapshot(reason: "background.processing.complete", extra: [
                 "identifier": task.identifier,
@@ -663,12 +680,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         }
 
         task.expirationHandler = {
-            guard completionGate.claim() else { return }
+            guard completionGate.claim() else {
+                AppLogger.shared.info(
+                    "background.processingExpirationLostRace",
+                    "BGProcessing expiration arrived after completion won",
+                    metadata: [
+                        "identifier": task.identifier,
+                        "wakeID": wakeID.uuidString,
+                        "elapsedMs": elapsedMilliseconds(since: startedAt),
+                        "terminalCandidate": "systemExpirationHandler"
+                    ],
+                    alwaysPersist: true
+                )
+                return
+            }
             let elapsedMs = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.warning("background.processingExpired", "Background processing expired before finishing", metadata: [
                 "identifier": task.identifier,
                 "elapsedMs": elapsedMs,
-                "taskKind": "BGProcessingTask"
+                "taskKind": "BGProcessingTask",
+                "wakeID": wakeID.uuidString,
+                "processSessionID": processSessionID,
+                "terminalWinner": "systemExpirationHandler",
+                "workCancelledBeforeHandler": "\(work.isCancelled)"
             ])
             work.cancel()
             Task { @MainActor in

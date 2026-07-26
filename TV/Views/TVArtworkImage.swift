@@ -100,11 +100,23 @@ final class TVArtworkLoader {
 
     private let cache = NSCache<NSString, UIImage>()
     private var inFlight: [NSString: Task<UIImage?, Never>] = [:]
+    private let session: URLSession
+    private let diskDirectory: URL
+    private var lastDiskPruneAt = Date.distantPast
 
     private init() {
-        // ~150 MB of decoded artwork (cost = bytes). Generous for a shelf UI;
-        // NSCache still evicts under system memory pressure regardless.
-        cache.totalCostLimit = 150 * 1024 * 1024
+        // Phase 0 tvOS memory budget: shelves must not retain a phone-sized
+        // artwork working set. Keep enough for the visible rails plus a small
+        // focus-navigation buffer, and bound object count as a second guard.
+        cache.totalCostLimit = 48 * 1024 * 1024
+        cache.countLimit = 80
+        let configuration = URLSessionConfiguration.default
+        configuration.httpMaximumConnectionsPerHost = 3
+        configuration.urlCache = URLCache(memoryCapacity: 8 * 1024 * 1024, diskCapacity: 64 * 1024 * 1024)
+        session = URLSession(configuration: configuration)
+        diskDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Autohop/TVArtwork", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
     }
 
     private static func key(_ url: URL, _ targetPixels: Int) -> NSString {
@@ -116,18 +128,38 @@ final class TVArtworkLoader {
         cache.object(forKey: Self.key(url, targetPixels))
     }
 
+    func trimForMemoryPressure() {
+        cache.removeAllObjects()
+        inFlight.values.forEach { $0.cancel() }
+        inFlight.removeAll()
+        AppLogger.shared.info("tv.perf", "Artwork cache trimmed", metadata: [
+            "reason": "memoryPressureOrBackground"
+        ], alwaysPersist: true)
+    }
+
     func image(url: URL, targetPixels: Int) async -> UIImage? {
         let key = Self.key(url, targetPixels)
         if let cached = cache.object(forKey: key) { return cached }
         if let existing = inFlight[key] { return await existing.value }
 
+        let session = session
+        let diskURL = diskURL(for: url)
         let task = Task.detached(priority: .userInitiated) { () -> UIImage? in
             // tv.perf probe (2026-07-11 diagnostics): fetch+decode run OFF-main,
             // so they can't hang the focus engine directly — but a flood of
             // these lines during navigation means cache misses are churning
             // (view identity or key problem), which is its own smoking gun.
             let startedAt = CFAbsoluteTimeGetCurrent()
-            guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+            let data: Data
+            if let cachedData = try? Data(contentsOf: diskURL, options: .mappedIfSafe) {
+                data = cachedData
+            } else {
+                guard let (received, response) = try? await session.data(from: url),
+                      (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
+                else { return nil }
+                data = received
+                try? received.write(to: diskURL, options: .atomic)
+            }
             let image = Self.downsampledImage(data: data, maxPixels: targetPixels)
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             if elapsedMs >= 400 {
@@ -146,7 +178,41 @@ final class TVArtworkLoader {
             let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
             cache.setObject(image, forKey: key, cost: cost)
         }
+        scheduleDiskPruneIfNeeded()
         return image
+    }
+
+    private func diskURL(for url: URL) -> URL {
+        // Stable FNV-1a filename: URL remains only the cache identity and is
+        // never exposed on disk or logged with credentials/query values.
+        let hash = url.absoluteString.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
+            ($0 ^ UInt64($1)) &* 1_099_511_628_211
+        }
+        return diskDirectory.appendingPathComponent(String(hash, radix: 16) + ".img")
+    }
+
+    private func scheduleDiskPruneIfNeeded() {
+        guard Date().timeIntervalSince(lastDiskPruneAt) > 300 else { return }
+        lastDiskPruneAt = Date()
+        let directory = diskDirectory
+        Task.detached(priority: .utility) {
+            let manager = FileManager.default
+            guard let files = try? manager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+                options: .skipsHiddenFiles
+            ) else { return }
+            let measured = files.compactMap { url -> (URL, Date, Int)? in
+                guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
+                return (url, values.contentModificationDate ?? .distantPast, values.fileSize ?? 0)
+            }
+            var total = measured.reduce(0) { $0 + $1.2 }
+            let limit = 150 * 1024 * 1024
+            for entry in measured.sorted(by: { $0.1 < $1.1 }) where total > limit {
+                try? manager.removeItem(at: entry.0)
+                total -= entry.2
+            }
+        }
     }
 
     /// Area-averaged downsample via ImageIO — decodes directly to the target

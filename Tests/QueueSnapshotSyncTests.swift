@@ -207,4 +207,74 @@ final class QueueSnapshotSyncTests: XCTestCase {
         // resolvedQueue (episodes-only, for playback) still excludes placeholders.
         XCTAssertEqual(QueueModel.resolvedQueue(from: snapshot, subscriptions: [sub]).map(\.guid), ["playable"])
     }
+
+
+    func testVersionTwoProjectionResolvesWithoutLocalCatalog() throws {
+        let subID = UUID()
+        let entry = QueueSnapshotEntry(
+            episodeKey: "\(subID.uuidString)|guid:remote",
+            subscriptionID: subID,
+            episodeTitle: "Remote Episode",
+            podcastTitle: "Remote Show",
+            streamURL: URL(string: "https://example.com/remote.mp4")!,
+            mediaKind: .video,
+            artworkURL: URL(string: "https://example.com/art.jpg")!,
+            durationSeconds: 123
+        )
+        let snapshot = QueueSnapshot(
+            entries: [entry], updatedAt: Date(), sourceDeviceID: "phone",
+            generation: 7, authorityEpoch: "epoch"
+        )
+
+        let item = try XCTUnwrap(QueueModel.resolvedQueueItems(from: snapshot, subscriptions: []).first)
+        XCTAssertEqual(item.podcastTitle, "Remote Show")
+        XCTAssertEqual(item.episode?.audioURL, entry.streamURL)
+        XCTAssertEqual(item.episode?.mediaKind, .video)
+    }
+
+    func testLegacySnapshotDecodesWithVersionOneDefaults() throws {
+        let subID = UUID()
+        let json = """
+        {"entries":[{"episodeKey":"k","subscriptionID":"\(subID.uuidString)","episodeTitle":"Old"}],"updatedAt":0,"sourceDeviceID":"old-phone"}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let snapshot = try decoder.decode(QueueSnapshot.self, from: json)
+        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertEqual(snapshot.generation, 0)
+        XCTAssertNil(snapshot.entries.first?.streamURL)
+    }
+
+    func testLegacyTWiTStyleGUIDEnclosureBecomesPlayableVideoWithoutFeedFetch() throws {
+        let subID = UUID()
+        let enclosure = "https://pscrb.fm/rss/p/mgln.ai/e/294/cdn.twit.tv/video/ww/ww0993/ww0993_h264m_1920x1080.mp4"
+        let entry = QueueSnapshotEntry(
+            episodeKey: "\(subID.uuidString)|guid:\(enclosure)",
+            subscriptionID: subID,
+            episodeTitle: "WW 993: The Columnist Savant"
+        )
+        let episode = try XCTUnwrap(entry.projectedEpisode())
+        XCTAssertEqual(episode.audioURL.absoluteString, enclosure)
+        XCTAssertEqual(episode.mediaKind, .video)
+    }
+
+    func testLegacyWebPageGUIDIsNotMistakenForMedia() {
+        let subID = UUID()
+        let entry = QueueSnapshotEntry(
+            episodeKey: "\(subID.uuidString)|guid:https://example.com/episodes/993",
+            subscriptionID: subID,
+            episodeTitle: "Not an enclosure"
+        )
+        XCTAssertNil(entry.projectedEpisode())
+    }
+
+    func testGenerationWinsInsideSameAuthorityEpoch() throws {
+        let store = SubscriptionStore.inMemory()
+        let db = try XCTUnwrap(store.database)
+        let newer = QueueSnapshot(entries: [makeEntry(key: "new")], updatedAt: Date(timeIntervalSince1970: 100), sourceDeviceID: "phone", generation: 2, authorityEpoch: "A")
+        let olderGenerationWithLaterClock = QueueSnapshot(entries: [makeEntry(key: "old")], updatedAt: Date(timeIntervalSince1970: 200), sourceDeviceID: "phone", generation: 1, authorityEpoch: "A")
+        XCTAssertTrue(try db.saveSyncedQueueSnapshot(newer))
+        XCTAssertFalse(try db.saveSyncedQueueSnapshot(olderGenerationWithLaterClock))
+        XCTAssertEqual(try db.queueSnapshot()?.generation, 2)
+    }
 }

@@ -17,6 +17,7 @@ enum TVTab: String, CaseIterable, Identifiable {
     case queue
     case library
     case search
+    case diagnostics
 
     var id: String { rawValue }
 
@@ -26,6 +27,7 @@ enum TVTab: String, CaseIterable, Identifiable {
         case .queue: return "Up Next"
         case .library: return "Library"
         case .search: return "Search"
+        case .diagnostics: return "Settings"
         }
     }
 
@@ -35,6 +37,7 @@ enum TVTab: String, CaseIterable, Identifiable {
         case .queue: return "square.stack"
         case .library: return "books.vertical"
         case .search: return "magnifyingglass"
+        case .diagnostics: return "gearshape"
         }
     }
 }

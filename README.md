@@ -11,11 +11,15 @@ legacy `Queue*` type/property names in several places.
 Priority Stack reordering uses a stable active-subscription UUID draft and one
 atomic cross-device order generation; Inactive and hidden browse rows never share
 its move-index space.
-The checked-in production configuration is Version 1.3 build 4 and iPhone-only.
-VERSION_1.4.md tracks implemented post-1.3 work without claiming it is already
-published. The separate tvOS target,
+The checked-in production configuration is Version 1.4 build 5 and iPhone-only.
+VERSION_1.4.md is the closed ledger for the build submitted to Apple on 25 July
+2026; VERSION_1.5.md tracks improvements implemented after that submission. The separate tvOS target,
 Autohop Pro subscription, and Cloudflare Relay service remain development
-features and are not offered, advertised, or contacted by the 1.3 build.
+features and are not offered, advertised, or contacted by the submitted build.
+The post-1.4 tvOS rebuild is implemented through automated Phase 6 hardening:
+compact cached projections, targeted detail loading, truthful streaming states,
+native video and read-only sync authority. It remains unsubmitted until the
+physical Apple TV soak checklist passes.
 AppState decomposition Stages 0–14 are implementation-complete. Domain
 coordinators and named workflows exclusively own playback, queue, downloads,
 feed refresh/Release Radar, Auto Archive, history/Stats, onboarding, import,

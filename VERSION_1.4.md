@@ -1,15 +1,14 @@
 # Autohop Version 1.4 — Change Ledger
 
+**Release status:** Submitted to Apple for App Store review on 25 July 2026.
+
 <!--
 AI CONTEXT — VERSION_1.4.md
-Canonical running ledger for code, behaviour, diagnostics, and user-visible
-changes made after the Version 1.3 release tag. Add every accepted Version 1.4
-change here when implemented. Do not describe planned work as complete. Public
-release notes should be derived from completed entries and omit internal detail.
-Updating this ledger is part of the implementation definition of done: add or
-amend the relevant Completed entry in the same change before handoff, including
-small user-facing fixes and diagnostic/performance policy changes rather than
-waiting for a later documentation pass.
+Closed canonical ledger for code, behaviour, diagnostics, and user-visible
+changes included in the Version 1.4 submission sent to Apple on 25 July 2026.
+Do not add post-submission work to this file. Record improvements implemented
+after that submission in VERSION_1.5.md. Public Version 1.4 release notes should
+be derived only from completed entries in this ledger and omit internal detail.
 -->
 
 ## Completed
@@ -66,6 +65,9 @@ waiting for a later documentation pass.
 
 ### Background regression suite and release gates — 25 July 2026
 
+- Set the shipping iPhone application and bundled widget extension to Version
+  **1.4**, build **5**. The separate tvOS development target remains Version
+  0.1/build 1 and is not included in the iPhone App Store submission.
 - Added deterministic parser safeguards for pathological feeds: a generated
   200-item/large-description feed now proves that parsing stops at the configured
   50-episode limit, descriptions remain within 64 KiB, ordinary metadata remains
@@ -91,6 +93,58 @@ waiting for a later documentation pass.
   iOS application plus Xcode-only regression tests.
 - Excluded `.github`, `.swiftpm`, and `Scripts` from application resources so
   release tooling and workspace metadata cannot be bundled into Autohop.
+
+### Discover expansion and New & Notable — 25 July 2026
+
+- Expanded Discover from ten rails to all nineteen Apple top-level podcast
+  categories, ordered to blend popular categories with broader discovery rather
+  than presenting Apple's numeric genre order.
+- Added a derived **New & Notable** hero. Apple does not publish a working
+  podcast new-releases endpoint, so Autohop builds this section from a deeper
+  chart pool, verifies candidate age from each show's oldest available episode,
+  accepts only shows launched within ninety days, caps representation per genre,
+  and hides the section when fewer than three qualified shows are available.
+- Expanded the page to five hero sections interleaved through the nineteen
+  category rails: Top Episodes, New & Notable, Top Podcasts, and two
+  international recommendation groups.
+- Added staged rail loading: the first nine categories load eagerly and the
+  remaining ten begin when the user scrolls near them, avoiding nineteen
+  simultaneous cold-open requests.
+- Increased the category pool using Apple's deeper legacy RSS charts while
+  retaining Marketing Tools where its fifty-result limit is sufficient.
+- Replaced fixed English category labels with storefront-localised names from
+  Apple's genre tree, cached for thirty days with the verified English list as
+  an offline fallback. This handles storefront differences such as Australian
+  **Sport** versus US **Sports**.
+- Added permanent first-episode-date caching for New & Notable qualification;
+  unlike a show's latest episode date, its launch date does not change.
+- Updated `FEATURES.md` and `PAGES.md` to describe the implemented Discover
+  structure and the fact that New & Notable is derived rather than supplied by
+  Apple.
+
+### Documentation, terminology, and assessment reconciliation — 25 July 2026
+
+- Completed a code-backed Version 1.4 assessment covering iOS and tvOS
+  architecture, background execution, downloads, feed parsing, playback,
+  accessibility, sync, security, release controls, website accuracy, and
+  remaining physical-device validation.
+- Reworked the assessment's recommendations to distinguish implemented code
+  from device-verified behaviour. Background/energy, AirPods, physical-memory,
+  suspension, and BGTask claims remain explicitly pending representative device
+  testing rather than being presented as proven.
+- Updated the remaining user-facing **Queue** page references in `DESIGN.md` to
+  the canonical **Up Next** name. Internal `Queue*` implementation symbols and
+  the user-visible **Queued** episode state remain intentionally unchanged.
+- Reconciled Auto Archive wording across Settings, Individual Podcast Settings,
+  in-app Support, and `FEATURES.md`, including the 30-minute Inactive Episodes
+  option and the exact Episode Limit behaviour.
+- Audited `README.md`, `FEATURES.md`, `DESIGN.md`, `PAGES.md`,
+  `SYNC_DESIGN.md`, onboarding documentation, and `project_autohop.md` against
+  current source rather than prior planning assumptions.
+- Recorded the remaining release work without presenting it as complete:
+  physical-device background and energy testing, Dynamic Type and VoiceOver
+  validation, legacy HTTP-feed policy hardening, signed archive inspection, and
+  continued AI CONTEXT maintenance.
 
 ### Unplugged background-refresh and playback resilience — 24 July 2026
 

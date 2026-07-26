@@ -94,12 +94,20 @@ public enum QueueModel {
     public struct ResolvedQueueItem: Equatable, Identifiable {
         public let episodeKey: String
         public let title: String
+        public let podcastTitle: String?
         public let subscriptionID: UUID
         public let episode: Episode?
         public var id: String { episodeKey }
-        public init(episodeKey: String, title: String, subscriptionID: UUID, episode: Episode?) {
+        public init(
+            episodeKey: String,
+            title: String,
+            podcastTitle: String? = nil,
+            subscriptionID: UUID,
+            episode: Episode?
+        ) {
             self.episodeKey = episodeKey
             self.title = title
+            self.podcastTitle = podcastTitle
             self.subscriptionID = subscriptionID
             self.episode = episode
         }
@@ -135,16 +143,20 @@ public enum QueueModel {
                 return ResolvedQueueItem(
                     episodeKey: entry.episodeKey,
                     title: episode.title,
+                    podcastTitle: entry.podcastTitle,
                     subscriptionID: entry.subscriptionID,
                     episode: episode
                 )
             }
-            // Not materialized yet — keep a placeholder so the row is stable.
+            // Version 2 can create a streamable episode directly. Legacy v1
+            // entries remain placeholders until local catalogue materializes.
+            let projectedEpisode = entry.projectedEpisode()
             return ResolvedQueueItem(
                 episodeKey: entry.episodeKey,
                 title: entry.episodeTitle,
+                podcastTitle: entry.podcastTitle,
                 subscriptionID: entry.subscriptionID,
-                episode: nil
+                episode: projectedEpisode
             )
         }
     }

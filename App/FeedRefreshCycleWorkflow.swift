@@ -570,9 +570,9 @@ final class FeedRefreshCycleWorkflow {
         let maximumSuccessfulCheckAge: TimeInterval? = {
             switch diagnostics.executionContext {
             case .backgroundAudioAlive:
-                return 90 * 60
-            case .backgroundRefreshTask:
-                return 4 * 60 * 60
+                return FeedFreshnessPolicy.backgroundAudioMaximumCheckAge
+            case .backgroundRefreshTask, .backgroundProcessingTask:
+                return FeedFreshnessPolicy.generalBackgroundMaximumCheckAge
             default:
                 return nil
             }
@@ -589,6 +589,25 @@ final class FeedRefreshCycleWorkflow {
             now: now,
             executionContext: diagnostics.executionContext
         )
+        // AI CONTEXT — Score is not capacity. Log 19 showed a +1000 freshness
+        // candidate deferred through six capped passes. Reserve up to two real
+        // slots, oldest successful check first, inside the existing cap for all
+        // constrained background contexts. This never adds network work.
+        let staleReservationIndices: [Int] = {
+            guard isConstrainedBackground, maxSubscriptions != nil else {
+                return []
+            }
+            return dueCandidates.enumerated()
+                .filter { $0.element.freshnessOverride }
+                .sorted {
+                    ($0.element.subscription.refreshStats.lastFetchedAt
+                        ?? .distantPast)
+                    < ($1.element.subscription.refreshStats.lastFetchedAt
+                        ?? .distantPast)
+                }
+                .prefix(2)
+                .map(\.offset)
+        }()
         let budget = FeedRefreshBudgeting.select(
             candidates: dueCandidates,
             policy: FeedRefreshBudgetPolicy(
@@ -597,6 +616,8 @@ final class FeedRefreshCycleWorkflow {
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
+                staleCandidateIndices: staleReservationIndices,
+                minimumStaleSelections: staleReservationIndices.count,
                 fairnessCandidateIndices: fairness.indices,
                 minimumFairnessSelections: fairness.count
             ),
@@ -604,6 +625,11 @@ final class FeedRefreshCycleWorkflow {
         )
         let selected = budget.selected
         let deferred = budget.deferred
+        let staleReservedIDs = Set(
+            staleReservationIndices.map {
+                dueCandidates[$0].subscription.id
+            }
+        )
         let fairnessReservedIDs = Set(
             fairness.indices.prefix(fairness.count).map {
                 dueCandidates[$0].subscription.id
@@ -641,6 +667,7 @@ final class FeedRefreshCycleWorkflow {
                 capBypassStates: capBypassStates,
                 protectedStates: protectedStates,
                 minimumProtectedSelections: minimumProtectedSelections,
+                staleReservedIDs: staleReservedIDs,
                 fairnessSelectedIDs: fairnessSelectedIDs,
                 diagnostics: diagnostics
             )
@@ -1126,6 +1153,7 @@ final class FeedRefreshCycleWorkflow {
         capBypassStates: Set<FeedRefreshWindowState>,
         protectedStates: Set<FeedRefreshWindowState>,
         minimumProtectedSelections: Int,
+        staleReservedIDs: Set<UUID>,
         fairnessSelectedIDs: Set<UUID>,
         diagnostics: RefreshCycleDiagnostics
     ) {
@@ -1134,6 +1162,11 @@ final class FeedRefreshCycleWorkflow {
         }.count
         let fairnessFeedHashes = selectedCandidates.filter {
             fairnessSelectedIDs.contains($0.subscription.id)
+        }.map {
+            releaseRadar.feedHash(for: $0.subscription.feedURL)
+        }.joined(separator: ",")
+        let staleFeedHashes = selectedCandidates.filter {
+            staleReservedIDs.contains($0.subscription.id)
         }.map {
             releaseRadar.feedHash(for: $0.subscription.feedURL)
         }.joined(separator: ",")
@@ -1155,6 +1188,8 @@ final class FeedRefreshCycleWorkflow {
             "protectedStates": stateList(protectedStates),
             "protectedMinimum": "\(minimumProtectedSelections)",
             "protectedSelected": "\(protectedSelectedCount)",
+            "staleReserved": "\(staleReservedIDs.count)",
+            "staleFeedHashes": staleFeedHashes,
             "fairnessReserved": "\(fairnessSelectedIDs.count)",
             "fairnessFeedHashes": fairnessFeedHashes,
             "selectedFeedHashes": selectedFeedHashes,
@@ -1248,6 +1283,11 @@ final class FeedRefreshCycleWorkflow {
                     ?? candidate.profile.confidence
             ),
             "freshnessOverride": "\(candidate.freshnessOverride)",
+            "freshnessCeilingSeconds": candidate
+                .freshnessCeilingSeconds.map {
+                    String(Int($0.rounded()))
+                } ?? "none",
+            "freshnessSensitiveBulletin": "\(FeedFreshnessPolicy.isFreshnessSensitiveBulletin(subscriptionTitle: candidate.subscription.title, profileKind: candidate.profile.kind))",
             "profileObservations":
                 "\(candidate.profile.observationCount)",
             "profileReliableDates":

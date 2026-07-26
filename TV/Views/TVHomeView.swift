@@ -31,13 +31,16 @@ struct TVHomeView: View {
                 // why nesting one under .sidebarAdaptable broke the sidebar).
                 Text("Home")
                     .font(.largeTitle.bold())
+                if case .updating = model.syncStatus {
+                    Text(model.syncStatus.label).font(.callout).foregroundStyle(.secondary)
+                }
                 if let continueItem = model.continueListening {
                     continueListeningSection(continueItem)
                 }
-                if !model.upNextEpisodes.isEmpty {
-                    shelf(title: "Up Next", episodes: model.upNextEpisodes)
+                if !model.queueRows.isEmpty {
+                    queueShelf(title: "Up Next", rows: model.queueRows)
                 }
-                if model.continueListening == nil && model.upNextEpisodes.isEmpty {
+                if model.continueListening == nil && model.queueRows.isEmpty {
                     ContentUnavailableView(
                         "Nothing to play yet",
                         systemImage: "play.slash",
@@ -45,8 +48,8 @@ struct TVHomeView: View {
                     )
                 }
             }
-            .padding(.horizontal, 64)
-            .padding(.vertical, 48)
+            .padding(.horizontal, 80)
+            .padding(.vertical, 60)
         }
     }
 
@@ -95,8 +98,8 @@ struct TVHomeView: View {
                         } else {
                             // Entry synced but its catalog hasn't materialized
                             // locally yet — same placeholder posture as the
-                            // queue snapshot's "Syncing…" rows.
-                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+                            // queue projection's bounded detail-recovery state.
+                            Label("Loading episode details…", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline)
                                 .foregroundStyle(.tertiary)
                         }
@@ -147,6 +150,48 @@ struct TVHomeView: View {
         }
     }
 
+    /// Queue rows, rather than only resolved Episode values, keep legacy phone
+    /// snapshots visible on Home while targeted detail recovery runs. This
+    /// prevents video/unresolved entries disappearing from Home even though
+    /// their authoritative position is already visible in Up Next.
+    private func queueShelf(title: String, rows: [TVQueueRowModel]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(title)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 32) {
+                    ForEach(rows.prefix(25)) { row in
+                        Button {
+                            if let episode = row.episode { onPlay(episode) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                TVArtworkImage(url: row.artworkURL, targetPixels: 520)
+                                    .frame(width: 280, height: 280)
+                                Text(row.title).font(.headline).lineLimit(2)
+                                    .frame(width: 280, alignment: .leading)
+                                Text(row.podcastTitle).font(.subheadline)
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                                    .frame(width: 280, alignment: .leading)
+                                if !row.isPlayable {
+                                    Label(
+                                        model.queueEnrichmentFailed(for: row) ? "Details unavailable" : "Loading details…",
+                                        systemImage: model.queueEnrichmentFailed(for: row) ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.card)
+                        .disabled(!row.isPlayable)
+                        .task { model.enrichQueueRowIfNeeded(row) }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .focusSection()
+        }
+    }
+
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.title2.weight(.semibold))
@@ -164,7 +209,7 @@ struct TVEpisodeCard: View {
     var body: some View {
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 8) {
-                TVArtworkImage(url: episode.artworkURL)
+                    TVArtworkImage(url: episode.artworkURL, targetPixels: 520)
                     .frame(width: 280, height: 280)
                 Text(episode.title)
                     .font(.headline)

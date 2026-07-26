@@ -12,7 +12,7 @@ import AutohopCore
 // page was open) — shown as a plain "not found" state rather than crashing.
 struct TVEpisodeListView: View {
     let model: TVAppModel
-    let subscription: Subscription?
+    let subscriptionID: UUID
     let onPlay: (Episode) -> Void
 
     var body: some View {
@@ -20,42 +20,37 @@ struct TVEpisodeListView: View {
         // overlapped scrolled content on tvOS) — the in-scroll header below
         // already shows the podcast title/artwork; Menu still pops the stack.
         Group {
-            if let subscription {
-                content(for: subscription)
+            if let podcast = model.libraryTiles.first(where: { $0.id == subscriptionID }) {
+                content(for: podcast)
             } else {
                 ContentUnavailableView("Podcast Not Found", systemImage: "questionmark.circle")
             }
         }
+        .task { await model.loadEpisodeDetails(subscriptionID: subscriptionID) }
     }
 
     @ViewBuilder
-    private func content(for subscription: Subscription) -> some View {
+    private func content(for podcast: TVPodcastTileModel) -> some View {
         ZStack(alignment: .top) {
-            TVArtworkImage(url: subscription.artworkURL, cornerRadius: 0)
-                .blur(radius: 60)
-                .opacity(0.35)
-                .ignoresSafeArea()
-                .frame(height: 500)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
-                    header(subscription)
-                    episodeList(subscription)
+                    header(podcast)
+                    episodeList
                 }
-                .padding(.horizontal, 64)
-                .padding(.vertical, 48)
+                .padding(.horizontal, 80)
+                .padding(.vertical, 60)
             }
         }
     }
 
-    private func header(_ subscription: Subscription) -> some View {
+    private func header(_ podcast: TVPodcastTileModel) -> some View {
         HStack(spacing: 24) {
-            TVArtworkImage(url: subscription.artworkURL, cornerRadius: 16)
+            TVArtworkImage(url: podcast.artworkURL, cornerRadius: 16, targetPixels: 440)
                 .frame(width: 200, height: 200)
             VStack(alignment: .leading, spacing: 8) {
-                Text(subscription.title)
+                Text(podcast.title)
                     .font(.title.bold())
-                if let author = subscription.author {
+                if let author = podcast.author {
                     Text(author)
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -65,14 +60,10 @@ struct TVEpisodeListView: View {
         }
     }
 
-    private func episodeList(_ subscription: Subscription) -> some View {
-        let episodes = subscription.episodes.isEmpty
-            ? subscription.latestEpisode.map { [$0] } ?? []
-            : subscription.episodes.sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
-
-        return LazyVStack(alignment: .leading, spacing: 20) {
-            ForEach(episodes) { episode in
-                TVEpisodeRow(episode: episode, onPlay: { onPlay(episode) })
+    private var episodeList: some View {
+        LazyVStack(alignment: .leading, spacing: 20) {
+            ForEach(model.episodeRows(subscriptionID: subscriptionID)) { row in
+                TVEpisodeRow(episode: row.episode, onPlay: { onPlay(row.episode) })
             }
         }
     }
@@ -104,7 +95,7 @@ struct TVEpisodeRow: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.card)
     }

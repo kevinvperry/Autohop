@@ -14,6 +14,9 @@ The checked-in Version 1.3 configuration exposes no Autohop Pro page: its retain
 behind ReleaseFeatures.autohopPro. The tvOS target and Relay are also excluded.
 Version 1.4 includes one adaptive Now Playing & Up Next system widget. It is an
 external WidgetKit surface, not a page in the app navigation stack.
+The unsubmitted Version 1.5 tvOS development target has Home, Up Next, Library,
+Search, Player and Settings/Diagnostics tabs. Search is browse/play-only and TV
+cannot change iPhone subscription settings or Priority order.
 Page names and routes were rechecked against current SwiftUI code on 2026-07-24.
 -->
 

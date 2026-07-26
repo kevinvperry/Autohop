@@ -204,7 +204,7 @@ public final class AppLogger: ObservableObject {
         return header + Self.redactSensitiveText(combinedContents())
     }
 
-    func redactedExportURL() -> URL {
+    public func redactedExportURL() -> URL {
         let exportURL = fileManager.temporaryDirectory.appendingPathComponent("autohop-diagnostic-redacted.log")
         let text = redactedContents()
         try? text.data(using: .utf8)?.write(to: exportURL, options: [.atomic])

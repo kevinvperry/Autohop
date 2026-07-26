@@ -37,12 +37,15 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     /// buffering spinner (Kevin's request 2026-07-04). KVO on
     /// `AVPlayer.timeControlStatus`.
     public var onBufferingChanged: ((Bool) -> Void)?
+    public var onStateChanged: ((StreamingPlaybackState) -> Void)?
+    /// Publishes the concrete player whenever it is installed or cleared.
+    /// UI adapters must not poll the computed `avPlayer` passthrough because
+    /// the engine itself is deliberately not Observation-coupled.
+    public var onPlayerChanged: ((AVPlayer?) -> Void)?
 
     public private(set) var currentEpisode: Episode?
-    public var isPlaying: Bool {
-        guard let player else { return false }
-        return player.rate != 0
-    }
+    public private(set) var state: StreamingPlaybackState = .idle
+    public var isPlaying: Bool { state.isPlaying }
     /// Exposed only for video episodes — matches PlaybackControlling's shared
     /// semantic (iPhone's PlaybackEngine hosts audio via AVAudioEngine, so
     /// `videoPlayer == nil` there means "no AVPlayerViewController surface
@@ -59,12 +62,21 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public var avPlayer: AVPlayer? { player }
     public let capabilities: PlaybackCapabilities
 
-    public private(set) var isBuffering = false
+    public var isBuffering: Bool { state.isBuffering }
 
-    private var player: AVPlayer?
+    private var player: AVPlayer? {
+        didSet {
+            guard oldValue !== player else { return }
+            onPlayerChanged?(player)
+        }
+    }
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
     private var timeControlObservation: NSKeyValueObservation?
+    private var itemStatusObservation: NSKeyValueObservation?
+    private var playerStatusObservation: NSKeyValueObservation?
+    private var failedObserver: NSObjectProtocol?
+    private var playbackGeneration: UInt64 = 0
     private var speed: Double = 1.0
     private var endSkipSeconds: TimeInterval = 0
     private var didFinishCurrent = false
@@ -116,6 +128,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     /// isn't permitted or the asset can't be resolved. Cheap to call on every
     /// Home render — a matching URL is left untouched.
     public func preload(_ episode: Episode) {
+        guard episode.mediaKind != .video else { return }
         guard let assetURL = Self.resolvedAssetURL(
             for: episode,
             capabilities: capabilities,
@@ -146,31 +159,48 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     // MARK: - PlaybackControlling
 
     public func play(_ episode: Episode, preference: PlaybackPreference, filter: ChapterFilter) async throws {
+        playbackGeneration &+= 1
+        let generation = playbackGeneration
+        stopCurrentPlayer(resetState: false)
+        transition(to: .resolvingSource)
         guard let assetURL = Self.resolvedAssetURL(
             for: episode,
             capabilities: capabilities,
             localFileResolver: localFileResolver
         ) else {
-            throw StreamingPlaybackError.noPlayableSource
+            transition(to: .failed(.noSource))
+            throw StreamingPlaybackFailure.noSource
         }
 
-        stop()
-        activateAudioSessionIfAvailable()
+        activateAudioSessionIfAvailable(for: episode.mediaKind)
+        transition(to: .loadingAsset)
+        let asset = AVURLAsset(url: assetURL)
+        do {
+            try await validate(asset: asset, mediaKind: episode.mediaKind)
+        } catch let failure as StreamingPlaybackFailure {
+            transition(to: .failed(failure))
+            throw failure
+        } catch {
+            let failure = classifyAssetError(error)
+            transition(to: .failed(failure))
+            throw failure
+        }
 
         // Adopt the warm pre-buffered player when it matches (near-instant
         // start); otherwise build a fresh one.
         let newPlayer: AVPlayer
-        if let preloadPlayer, preloadURL == assetURL {
+        if episode.mediaKind != .video, let preloadPlayer, preloadURL == assetURL {
             newPlayer = preloadPlayer
             newPlayer.isMuted = false
             self.preloadPlayer = nil
             self.preloadURL = nil
         } else {
             clearPreload()
-            newPlayer = AVPlayer(playerItem: AVPlayerItem(url: assetURL))
+            newPlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         }
         guard let item = newPlayer.currentItem else {
-            throw StreamingPlaybackError.noPlayableSource
+            transition(to: .failed(.noSource))
+            throw StreamingPlaybackFailure.noSource
         }
 
         player = newPlayer
@@ -181,7 +211,24 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         chapters = episode.chapters
         didFinishCurrent = false
 
-        installObservers(on: newPlayer, item: item, episode: episode)
+        transition(to: .preparingItem)
+        installObservers(on: newPlayer, item: item, episode: episode, generation: generation)
+
+        let deadline = Date().addingTimeInterval(20)
+        while item.status == .unknown, Date() < deadline {
+            try Task.checkCancellation()
+            guard generation == playbackGeneration else { throw StreamingPlaybackFailure.cancelled }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard generation == playbackGeneration else { throw StreamingPlaybackFailure.cancelled }
+        guard item.status == .readyToPlay else {
+            let failure: StreamingPlaybackFailure = item.status == .failed
+                ? .itemFailed(item.error?.localizedDescription ?? "unknown")
+                : .timedOut
+            transition(to: .failed(failure))
+            throw failure
+        }
+        transition(to: .ready)
 
         if preference.startSkipSeconds > 0 {
             // play() is async, so the un-awaited seek overload is unavailable
@@ -192,15 +239,18 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         }
         newPlayer.play()
         applyRate()
+        transition(to: newPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate ? .buffering : .playing)
     }
 
     public func pause() {
         player?.pause()
+        if currentEpisode != nil { transition(to: .paused) }
     }
 
     public func resume() {
         player?.play()
         applyRate()
+        transition(to: player?.timeControlStatus == .waitingToPlayAtSpecifiedRate ? .buffering : .playing)
         onPlaybackResumed?()
     }
 
@@ -218,6 +268,20 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public func seek(to seconds: TimeInterval) {
         let target = max(0, seconds.isFinite ? seconds : 0)
         player?.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+
+    /// Performs an exact seek and waits for AVPlayer to acknowledge it. tvOS
+    /// uses this for cross-device resume: a fire-and-forget seek issued just
+    /// after `play()` could lose a race with remote-item startup and leave the
+    /// episode playing from zero even though the Home card showed progress.
+    public func seekAndWait(to seconds: TimeInterval) async {
+        guard let player else { return }
+        let target = max(0, seconds.isFinite ? seconds : 0)
+        await player.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
@@ -264,13 +328,18 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public var currentChapters: [Chapter] { chapters }
 
     public func stop() {
+        playbackGeneration &+= 1
+        stopCurrentPlayer(resetState: true)
+    }
+
+    private func stopCurrentPlayer(resetState: Bool) {
         removeObservers()
         player?.pause()
         player = nil
         currentEpisode = nil
         chapters = []
         didFinishCurrent = false
-        setBuffering(false)
+        if resetState { transition(to: .idle) }
     }
 
     public func setVolume(_ volume: Float) {
@@ -284,6 +353,25 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         return max(0, time)
     }
 
+    private func validate(asset: AVURLAsset, mediaKind: EpisodeMediaKind) async throws {
+        let playable = try await asset.load(.isPlayable)
+        guard playable else { throw StreamingPlaybackFailure.notPlayable }
+        if mediaKind == .video {
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+            guard !videoTracks.isEmpty else { throw StreamingPlaybackFailure.noVideoTrack }
+        }
+    }
+
+    private func classifyAssetError(_ error: Error) -> StreamingPlaybackFailure {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain { return .network(nsError.localizedDescription) }
+        if nsError.domain == AVFoundationErrorDomain {
+            if nsError.code == AVError.contentIsProtected.rawValue { return .drm }
+            if nsError.code == AVError.fileFormatNotRecognized.rawValue { return .unsupportedMedia }
+        }
+        return .unknown(nsError.localizedDescription)
+    }
+
     private func applyRate() {
         guard let player else { return }
         let rate = Float(speed)
@@ -292,12 +380,12 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         }
     }
 
-    private func installObservers(on player: AVPlayer, item: AVPlayerItem, episode: Episode) {
+    private func installObservers(on player: AVPlayer, item: AVPlayerItem, episode: Episode, generation: UInt64) {
         timeObserverToken = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            guard let self, !self.didFinishCurrent else { return }
+            guard let self, generation == self.playbackGeneration, !self.didFinishCurrent else { return }
             let seconds = time.seconds
             guard seconds.isFinite else { return }
             self.onTimeUpdate?(seconds)
@@ -316,10 +404,27 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         // Buffering: `.waitingToPlayAtSpecifiedRate` = stalled waiting for
         // data. Report the transition so the UI can show/hide its spinner.
         // Seed the initial value immediately (KVO only fires on change).
-        setBuffering(player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
         timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] observedPlayer, _ in
             Task { @MainActor in
-                self?.setBuffering(observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+                guard let self, generation == self.playbackGeneration else { return }
+                switch observedPlayer.timeControlStatus {
+                case .playing: self.transition(to: .playing)
+                case .waitingToPlayAtSpecifiedRate: self.transition(to: .buffering)
+                case .paused where self.state.isPlaying || self.state.isBuffering: self.transition(to: .paused)
+                default: break
+                }
+            }
+        }
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            Task { @MainActor in
+                guard let self, generation == self.playbackGeneration, observedItem.status == .failed else { return }
+                self.transition(to: .failed(.itemFailed(observedItem.error?.localizedDescription ?? "unknown")))
+            }
+        }
+        playerStatusObservation = player.observe(\.status, options: [.new]) { [weak self] observedPlayer, _ in
+            Task { @MainActor in
+                guard let self, generation == self.playbackGeneration, observedPlayer.status == .failed else { return }
+                self.transition(to: .failed(.playerFailed(observedPlayer.error?.localizedDescription ?? "unknown")))
             }
         }
 
@@ -330,6 +435,14 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         ) { [weak self] _ in
             self?.finishCurrentEpisode(episode, autoSkipped: 0)
         }
+        failedObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, generation == self.playbackGeneration else { return }
+            self.transition(to: .failed(.itemFailed(item.error?.localizedDescription ?? "failedToPlayToEnd")))
+        }
     }
 
     private func finishCurrentEpisode(_ episode: Episode, autoSkipped: TimeInterval) {
@@ -337,6 +450,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         didFinishCurrent = true
         if autoSkipped > 0 { onAutoSkip?(autoSkipped) }
         player?.pause()
+        transition(to: .ended)
         onEpisodeFinished?(episode)
     }
 
@@ -357,10 +471,12 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         }
     }
 
-    private func setBuffering(_ value: Bool) {
-        guard value != isBuffering else { return }
-        isBuffering = value
-        onBufferingChanged?(value)
+    private func transition(to newState: StreamingPlaybackState) {
+        guard state != newState else { return }
+        let wasBuffering = state.isBuffering
+        state = newState
+        if wasBuffering != newState.isBuffering { onBufferingChanged?(newState.isBuffering) }
+        onStateChanged?(newState)
     }
 
     private func removeObservers() {
@@ -374,11 +490,18 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         endObserver = nil
         timeControlObservation?.invalidate()
         timeControlObservation = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        playerStatusObservation?.invalidate()
+        playerStatusObservation = nil
+        if let failedObserver { NotificationCenter.default.removeObserver(failedObserver) }
+        failedObserver = nil
     }
 
-    private func activateAudioSessionIfAvailable() {
+    private func activateAudioSessionIfAvailable(for mediaKind: EpisodeMediaKind) {
         #if os(iOS) || os(tvOS) || os(watchOS)
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+        let mode: AVAudioSession.Mode = mediaKind == .video ? .moviePlayback : .spokenAudio
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: mode)
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
     }

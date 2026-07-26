@@ -7,6 +7,8 @@
 		<string>com.autohop.feedrefresh</string>
 		<string>com.autohop.feedprocessing</string>
 	</array>
+	<key>BuildTimestampUTC</key>
+	<string>unavailable</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -38,6 +40,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>GitCommitSHA</key>
+	<string>unavailable</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>

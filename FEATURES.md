@@ -10,9 +10,9 @@ implementation behaviour changes. Section 17 documents the shared artwork cache
 and lazy image-loading system: source-byte disk cache, downsampled memory
 variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
-Verified against the current code during the 2026-07-24 whole-project audit;
-VERSION_1.4.md distinguishes implemented post-1.3 work from the checked-in
-Version 1.3 build number.
+Verified against the current code during the 2026-07-24 whole-project audit.
+VERSION_1.4.md is the closed ledger for the build submitted to Apple on 25 July
+2026; VERSION_1.5.md records changes implemented after that submission.
 Section 15.1 documents Release Radar's learned scheduling, including hourly,
 rolling-bulletin, burst, daily, weekly, multi-slot, learning, unreliable-date,
 and random profiles; foreground/background caps; protected background slots for
@@ -46,6 +46,12 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 > **Version 1.3 production scope:** iPhone only. Autohop Pro is hidden and its
 > StoreKit lifecycle is inactive; Relay registration, uploads, heartbeats, nudges,
 > and push handling are inactive. Apple TV is a separate unsubmitted target.
+
+> **Version 1.5 development note:** the separate, still-unsubmitted Apple TV
+> target now uses an iPhone-authored self-contained queue, native audio/video
+> streaming, compact purgeable projections, bounded podcast detail loading and
+> read-only subscription/order behaviour. Physical-device Phase 6 validation is
+> still required before this can become a public feature claim.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
@@ -874,7 +880,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to prioriti
 |---|---|---|---|---|
 | Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
 
-**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked, but at a lower surveillance cadence so random releases are not missed without turning every quiet feed into a minute-by-minute poll.
+**Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked at a lower surveillance cadence. Learned windows are an optimisation, never an indefinite gate: background-audio checks impose a 90-minute maximum successful-check age, BGAppRefresh/BGProcessing use a two-hour general ceiling, and recognised hourly/news-bulletin feeds use a 75-minute ceiling even when a synthetic latest-item-only feed learns under another schedule kind.
 
 **Data captured from RSS:** Every feed refresh records per-episode release observations in `RefreshStats.releaseObservations` (capped at 200). Each observation stores the episode key, GUID, title, audio URL, RSS `publishedAt`, first/last seen times, whether it was new when first seen, and a publish-date quality marker (`missing`, `plausible`, `futureDated`, `implausiblyOld`). This history is stored on the subscription so schedule learning survives app launches and works even when the current RSS feed only exposes one item.
 
@@ -905,15 +911,15 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to prioriti
 | `weekly` | 20 minutes before the learned window start. | The learned `releaseWindow` — a window hugging the densest publish-time cluster (recency-weighted, +20 min margin, 1-hour floor), widened when the observed spread is broad; stragglers outside it are caught by missed-release and safety-sweep checks. Falls back to typical − 10 min … + 120 min if unwindowed. Closes early the moment that week's episode arrives. |
 | `multiSlot` | 10 minutes before the learned window start, on each active day. | The learned `releaseWindow` (densest mode, adaptively widened for messy feeds), repeated on each active day; falls back to typical − 5 min … + 60 min if unwindowed. |
 
-If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop normally checks every 5–10 minutes shortly after the miss, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. Learned non-news profiles also get broad low-priority safety sweeps outside their main window (about twice daily for daily/multi/burst feeds and once daily for weekly feeds). This prevents one late or out-of-window episode from being missed while avoiding indefinite high-frequency polling.
+If the expected episode has not appeared by the end of its learned window, the feed enters `missedRelease`: Autohop normally checks every 5–10 minutes shortly after the miss, then backs off to a 10–30 minute cadence. Missed-release urgency expires after 10 post-window empty checks or 8 hours of window age; after that the feed drops back to low-priority fallback surveillance until the next learned window. Learned daily/multi/burst profiles also get a four-hour broad safety sweep and weekly feeds a daily sweep. When a learned release window's confidence is below 0.50, it no longer gates checks: daily/multi/burst feeds use two-hour broad surveillance and weekly feeds four-hour surveillance. This prevents one late or out-of-window episode from being missed while avoiding indefinite high-frequency polling.
 
 **One-item hourly and rolling bulletin feeds:** Feeds that publish frequently but only expose the latest item are supported. Each newly seen item is recorded into release observations even after it disappears from the RSS feed. Once enough observations exist, a stable single-minute feed can be profiled as `hourly`, while mixed-cadence bulletin feeds can be profiled as `rollingBulletin` when they repeatedly use predictable minute marks such as `:00` and `:30`. This covers feeds that publish hourly most of the day but every half hour during a morning news block, so they receive real release windows instead of being ranked as random surveillance. The legacy `recentPublishDates` history remains capped at 10 and is still used by the fallback cadence model while the richer observation learner is unavailable or incomplete.
 
 **Priority selection:** Timed/background cycles first filter to feeds that are actually due, then `FeedRefreshPrioritizer` ranks due feeds before any cap is applied. Priority favours missed releases, active/pre-release windows, high-confidence hourly, rolling-bulletin, burst, and daily-weekday feeds, feeds still learning, random feeds needing surveillance, the user's podcast priority rank, feeds not fetched recently, and feeds overdue beyond their expected due time. Foreground timed cycles attempt up to 12 due feeds, while background cycles attempt up to 8. Active and pre-window feeds bypass the foreground cap so a current release window is not missed. Background cycles protect 6 of their 8 slots for `preWindow`, `activeWindow`, and `missedRelease` candidates before filling remaining slots with ordinary due/backlog work; this is specifically intended to help daily one-episode shows that publish around a known time and rolling bulletin feeds that move between hourly and half-hourly slots.
 
-**Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. During **background-audio** cycles there is also a hard fairness reservation: once a due feed has waited roughly 8 minutes in the backlog it is guaranteed one selection slot **within the same energy ceiling** (two slots after roughly 20 minutes), *replacing* a monopolising selection rather than enlarging the batch. This stops high-frequency active-window feeds (e.g. hourly news) from taking every slot of every four-minute cycle and starving a weekly show that has just become due. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
+**Backlog draining:** When more feeds are due than a timed/background cycle can attempt, the unselected feeds are checkpointed in an in-memory deferred backlog. Deferred feeds receive a bounded fairness boost on later cycles, so a device waking after many hours processes the strongest candidates first and drains the rest over future runs instead of hammering every overdue feed immediately. Every capped background context first reserves up to two ordinary slots for feeds whose maximum successful-check age has elapsed, oldest check first. During **background-audio** cycles there is an additional backlog-fairness reservation: once a due feed has waited roughly 8 minutes it is guaranteed one selection slot **within the same energy ceiling** (two slots after roughly 20 minutes), *replacing* monopolising work rather than enlarging the batch. This stops scoring or active-window feeds from starving stale and ordinary due work. If iOS expires a background task, selected-but-unfinished feeds are checkpointed back into that backlog before the cycle stops.
 
-**HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change.
+**HTTP efficiency:** Feed requests use HTTP conditional validators (`ETag` and `Last-Modified`) whenever available. A check is often a cheap 304 Not Modified response; the feed body is only downloaded when the server reports a change. Large or memory-amplifying responses also record URLSession transaction evidence—wire/materialised sizes, content encoding, redirects, protocol, fetch source, duration, and process-memory deltas—so response buffering can be distinguished from parser/model retention.
 
 **Feed parse memory safety:** `RSSParser` limits retained work to at most 50 episodes per automatic refresh, caps retained text per element, drains per-item transient allocations, and repairs bare ampersands with a low-copy byte pass. These controls bound Autohop-owned model/text retention, but they do **not** guarantee that Foundation networking or `XMLParser` cannot transiently amplify physical memory: a diagnostic capture still observed a roughly 443 MB parse-stage increase from a 3.68 MB feed after the caps landed. Autohop therefore records memory separately at network-data, XML-parser, and model-materialisation boundaries and retains a **persistent parse-memory circuit breaker**. A feed that demonstrates extreme parse growth is quarantined, and constrained background contexts continue excluding it after the timed quarantine until a foreground or manual refresh validates a safe parse. Skips and stage measurements are logged (`feed.parseMemoryQuarantine`, `feed.parseMemoryQuarantineSkipped`, and `feed.parseMemoryStage`). Manual refresh remains available for explicit recovery and validation.
 
@@ -1296,6 +1302,10 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | foregroundRefreshFeedLimit | 12 due feeds |
 | backgroundRefreshFeedLimit | 8 due feeds |
 | backgroundReleaseRadarReservedSlots | 6 protected slots for pre-window / active-window / missed-release feeds |
+| backgroundStaleReservedSlots | up to 2 slots, oldest hard-ceiling candidate first |
+| backgroundAudioMaximumSuccessfulCheckAge | 90 minutes |
+| backgroundTaskMaximumSuccessfulCheckAge | 2 hours |
+| bulletinMaximumSuccessfulCheckAge | 75 minutes |
 | refreshDeferralMaxScoreBoost | 40 points |
 
 ### `Subscription.init` defaults

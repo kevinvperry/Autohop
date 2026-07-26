@@ -76,13 +76,13 @@ public final class SubscriptionStore: ObservableObject {
     /// Stage 4 narrow invalidation stream. QueueCoordinator observes this
     /// instead of broad objectWillChange, so metadata/settings-only saves cannot
     /// trigger queue recomputation or QueueSnapshot publication.
-    let queueDidChange = PassthroughSubject<Void, Never>()
+    public let queueDidChange = PassthroughSubject<Void, Never>()
     /// Stage 5 narrow membership stream. OnboardingCoordinator observes only
     /// real/browse subscription membership changes, never episode merges.
-    let membershipDidChange = PassthroughSubject<Void, Never>()
+    public let membershipDidChange = PassthroughSubject<Void, Never>()
     /// Narrow display invalidation for downloaded episode projections. This is
     /// intentionally distinct from queue identity/order and broad UI changes.
-    let presentationDidChange = PassthroughSubject<Void, Never>()
+    public let presentationDidChange = PassthroughSubject<Void, Never>()
     private var lastQueueAffectingSignature: [String] = []
     private var lastMembershipSignature: [String] = []
     private var lastPresentationSignature: [String] = []
@@ -1121,10 +1121,11 @@ public final class SubscriptionStore: ObservableObject {
         artworkURL: URL?,
         listenedSecondsDelta: TimeInterval,
         positionSeconds: TimeInterval,
-        durationSeconds: TimeInterval?
+        durationSeconds: TimeInterval?,
+        historyEntryID: String? = nil
     ) {
         guard let database else { return }
-        let key = PlaybackPositionStore.key(for: episode)
+        let key = historyEntryID ?? PlaybackPositionStore.key(for: episode)
         let now = Date()
         var entry = (try? database.historyEntry(id: key)) ?? ListeningHistoryEntry(
             id: key,
@@ -1133,6 +1134,8 @@ public final class SubscriptionStore: ObservableObject {
             episodeTitle: episode.title,
             podcastTitle: podcastTitle,
             artworkURL: artworkURL,
+            streamURL: episode.audioURL,
+            mediaKind: episode.mediaKind,
             publishedAt: episode.publishedAt,
             durationSeconds: durationSeconds ?? episode.durationSeconds,
             listenedSeconds: 0,
@@ -1144,6 +1147,8 @@ public final class SubscriptionStore: ObservableObject {
         entry.episodeTitle = episode.title
         entry.podcastTitle = podcastTitle
         entry.artworkURL = artworkURL
+        entry.streamURL = episode.audioURL
+        entry.mediaKind = episode.mediaKind
         entry.publishedAt = episode.publishedAt
         entry.durationSeconds = durationSeconds ?? episode.durationSeconds
         entry.listenedSeconds += max(0, listenedSecondsDelta)
@@ -1161,10 +1166,11 @@ public final class SubscriptionStore: ObservableObject {
         episode: Episode,
         podcastTitle: String,
         artworkURL: URL?,
-        finishedPositionSeconds: TimeInterval
+        finishedPositionSeconds: TimeInterval,
+        historyEntryID: String? = nil
     ) {
         guard let database else { return }
-        let key = PlaybackPositionStore.key(for: episode)
+        let key = historyEntryID ?? PlaybackPositionStore.key(for: episode)
         let now = Date()
         var entry = (try? database.historyEntry(id: key)) ?? ListeningHistoryEntry(
             id: key,
@@ -1173,6 +1179,8 @@ public final class SubscriptionStore: ObservableObject {
             episodeTitle: episode.title,
             podcastTitle: podcastTitle,
             artworkURL: artworkURL,
+            streamURL: episode.audioURL,
+            mediaKind: episode.mediaKind,
             publishedAt: episode.publishedAt,
             durationSeconds: episode.durationSeconds,
             listenedSeconds: 0,
@@ -1181,6 +1189,8 @@ public final class SubscriptionStore: ObservableObject {
             status: .listened
         )
         entry.status = .played
+        entry.streamURL = episode.audioURL
+        entry.mediaKind = episode.mediaKind
         entry.completionKind = .finishedNaturally
         entry.lastPositionSeconds = finishedPositionSeconds
         entry.listenedDurationSeconds = finishedPositionSeconds
@@ -1256,10 +1266,18 @@ public final class SubscriptionStore: ObservableObject {
         if let existing = try? database.queueSnapshot(), existing.entries == entries {
             return
         }
+        let epoch = QueueProjectionAuthority.currentEpoch
+        let existing = try? database.queueSnapshot()
+        let nextGeneration: Int64 = {
+            guard let existing, existing.authorityEpoch == epoch else { return 1 }
+            return existing.generation == Int64.max ? Int64.max : existing.generation + 1
+        }()
         let snapshot = QueueSnapshot(
             entries: entries,
             updatedAt: Date(),
-            sourceDeviceID: DeviceIdentity.current
+            sourceDeviceID: DeviceIdentity.current,
+            generation: nextGeneration,
+            authorityEpoch: epoch
         )
         do {
             try database.recordLocalQueueSnapshot(snapshot)

@@ -144,6 +144,8 @@ final class ListeningHistoryStore: ObservableObject {
                 entries[index].episodeTitle = episode.title
                 entries[index].podcastTitle = progress.podcastTitle
                 entries[index].artworkURL = progress.artworkURL
+                entries[index].streamURL = episode.audioURL
+                entries[index].mediaKind = episode.mediaKind
                 entries[index].publishedAt = episode.publishedAt
                 entries[index].durationSeconds = progress.durationSeconds
                 entries[index].listenedSeconds += progress.listenedSeconds
@@ -158,6 +160,8 @@ final class ListeningHistoryStore: ObservableObject {
                     episodeTitle: episode.title,
                     podcastTitle: progress.podcastTitle,
                     artworkURL: progress.artworkURL,
+                    streamURL: episode.audioURL,
+                    mediaKind: episode.mediaKind,
                     publishedAt: episode.publishedAt,
                     durationSeconds: progress.durationSeconds,
                     listenedSeconds: progress.listenedSeconds,
@@ -225,6 +229,8 @@ final class ListeningHistoryStore: ObservableObject {
             entries[index].status = status
             entries[index].podcastTitle = podcastTitle
             entries[index].artworkURL = artworkURL
+            entries[index].streamURL = episode.audioURL
+            entries[index].mediaKind = episode.mediaKind
             entries[index].lastListenedAt = now
             entries[index].completionKind = completionKind
             if let pos = positionSeconds {
@@ -244,6 +250,8 @@ final class ListeningHistoryStore: ObservableObject {
                 episodeTitle: episode.title,
                 podcastTitle: podcastTitle,
                 artworkURL: artworkURL,
+                streamURL: episode.audioURL,
+                mediaKind: episode.mediaKind,
                 publishedAt: episode.publishedAt,
                 durationSeconds: epDuration,
                 listenedSeconds: 0,

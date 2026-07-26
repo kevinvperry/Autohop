@@ -31,8 +31,6 @@ struct TVPlayerView: View {
     let playbackModel: TVPlaybackModel
     let onExit: () -> Void
 
-    @State private var isVideoFullscreen = false
-
     var body: some View {
         ZStack {
             // Opaque base — REQUIRED (fix 2026-07-04): tvOS `.fullScreenCover`
@@ -59,18 +57,23 @@ struct TVPlayerView: View {
                 onRetry: { Task { await playbackModel.retry() } },
                 onExit: onExit
             )
-        } else if isVideoFullscreen, let player = playbackModel.avPlayer {
-            TVAVPlayerRepresentable(player: player, playbackModel: playbackModel)
-                .ignoresSafeArea()
-                .onExitCommand {
-                    // Menu in fullscreen returns to the windowed page.
-                    isVideoFullscreen = false
-                }
+        } else if playbackModel.currentEpisode?.mediaKind == .video {
+            // Never render a video episode through the audio/artwork player
+            // during the brief interval before AVPlayer is published. That
+            // branch became sticky on physical tvOS and hid the video surface.
+            if let player = playbackModel.avPlayer {
+                TVAVPlayerRepresentable(player: player, playbackModel: playbackModel)
+                    .ignoresSafeArea()
+                    .onExitCommand {
+                        playbackModel.dismissedCover()
+                        onExit()
+                    }
+            } else {
+                ProgressView("Preparing video…")
+                    .controlSize(.large)
+            }
         } else if playbackModel.currentEpisode != nil {
-            TVPlayerPage(
-                playbackModel: playbackModel,
-                onEnterFullscreen: { isVideoFullscreen = true }
-            )
+            TVPlayerPage(playbackModel: playbackModel)
             .onExitCommand {
                 playbackModel.dismissedCover()
                 onExit()
@@ -85,10 +88,8 @@ struct TVPlayerView: View {
 
 private struct TVPlayerPage: View {
     let playbackModel: TVPlaybackModel
-    let onEnterFullscreen: () -> Void
 
     private var episode: Episode? { playbackModel.currentEpisode }
-    private var isVideo: Bool { episode?.mediaKind == .video }
     private var duration: TimeInterval? { episode?.durationSeconds }
 
     var body: some View {
@@ -131,13 +132,7 @@ private struct TVPlayerPage: View {
     @ViewBuilder
     private var mediaSurface: some View {
         Group {
-            if isVideo, let player = playbackModel.avPlayer {
-                TVVideoSurface(player: player)
-                    .frame(width: 832, height: 468)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 1))
-                    .overlay { bufferingOverlay(cornerRadius: 16) }
-            } else {
+            if episode != nil {
                 // 1200 px decoded for the 440 pt player hero — ~2.5× density
                 // on the 4K composite (see TVArtworkImage's targetPixels note).
                 // Purple radial glow behind the artwork = the phone's
@@ -264,13 +259,6 @@ private struct TVPlayerPage: View {
                 Label("Speed", systemImage: "gauge.with.needle")
             }
 
-            if isVideo {
-                Button {
-                    onEnterFullscreen()
-                } label: {
-                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                }
-            }
         }
         .buttonStyle(.bordered)
         .focusSection()
@@ -287,31 +275,7 @@ private struct TVPlayerPage: View {
     }
 }
 
-// MARK: - Plain video surface (no system chrome — our page provides controls)
-
-private struct TVVideoSurface: UIViewRepresentable {
-    let player: AVPlayer
-
-    final class PlayerLayerView: UIView {
-        override static var layerClass: AnyClass { AVPlayerLayer.self }
-        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    }
-
-    func makeUIView(context: Context) -> PlayerLayerView {
-        let view = PlayerLayerView()
-        view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
-        return view
-    }
-
-    func updateUIView(_ view: PlayerLayerView, context: Context) {
-        if view.playerLayer.player !== player {
-            view.playerLayer.player = player
-        }
-    }
-}
-
-// MARK: - Fullscreen system player (video)
+// MARK: - Native system video player
 
 private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
     let player: AVPlayer

@@ -6,6 +6,9 @@ Canonical design/status note for Autohop's opt-in CloudKit sync layer. Verified
 again during the 2026-07-24 whole-project audit. Keep this
 aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
 App/SyncCoordinator.swift, App/RelayCoordinator.swift,
+TV reader note (26 July 2026): the iPhone remains queue/subscription authority.
+TV persists only compact purgeable GRDB render projections and cannot push
+subscription, order or queue authorship.
 Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
 Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
@@ -328,6 +331,12 @@ shows correct settings immediately. Guarded by
        title/podcast/artwork/position immediately, with a "Syncing…"
        placeholder (non-playable) until the catalog materializes — same
        pattern as the queue-snapshot churn fix.
+       **Version 1.5 update (2026-07-26):** history entries now also denormalize
+       the stream URL and `EpisodeMediaKind`. A current phone-authored entry is
+       therefore directly playable on TV even when subscription UUIDs drifted
+       after reinstall/remove-and-readd or a private-feed migration. Both
+       fields decode as nil for legacy records, which continue through bounded
+       catalog/enrichment recovery.
     3. **TV listening stats now sync** — TV creates its own
        `ListeningStatsStore` (Caches JSON; new public
        `attachSyncDatabase(from:)` since AutohopDatabase is internal to the

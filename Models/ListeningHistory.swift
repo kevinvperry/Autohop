@@ -50,6 +50,12 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
     public var episodeTitle: String
     public var podcastTitle: String
     public var artworkURL: URL?
+    /// Denormalized playable media identity. Older history rows omit these
+    /// fields; tvOS then falls back to its local catalog or legacy enrichment.
+    /// Keeping them on the history row lets Continue Listening remain playable
+    /// even when subscription UUIDs differ after a reinstall or feed migration.
+    public var streamURL: URL?
+    public var mediaKind: EpisodeMediaKind?
     public var publishedAt: Date?
     public var durationSeconds: TimeInterval?
     public var listenedSeconds: TimeInterval
@@ -75,6 +81,7 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, subscriptionID, episodeID, episodeTitle, podcastTitle, artworkURL
+        case streamURL, mediaKind
         case publishedAt, durationSeconds, listenedSeconds, lastPositionSeconds
         case lastListenedAt, status
         case completionKind, completionPercent, listenedDurationSeconds, episodeDurationSeconds
@@ -87,6 +94,8 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         episodeTitle: String,
         podcastTitle: String,
         artworkURL: URL?,
+        streamURL: URL? = nil,
+        mediaKind: EpisodeMediaKind? = nil,
         publishedAt: Date?,
         durationSeconds: TimeInterval?,
         listenedSeconds: TimeInterval,
@@ -104,6 +113,8 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         self.episodeTitle = episodeTitle
         self.podcastTitle = podcastTitle
         self.artworkURL = artworkURL
+        self.streamURL = streamURL
+        self.mediaKind = mediaKind
         self.publishedAt = publishedAt
         self.durationSeconds = durationSeconds
         self.listenedSeconds = listenedSeconds
@@ -124,6 +135,8 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         episodeTitle = try c.decode(String.self, forKey: .episodeTitle)
         podcastTitle = try c.decode(String.self, forKey: .podcastTitle)
         artworkURL = try c.decodeIfPresent(URL.self, forKey: .artworkURL)
+        streamURL = try c.decodeIfPresent(URL.self, forKey: .streamURL)
+        mediaKind = try c.decodeIfPresent(EpisodeMediaKind.self, forKey: .mediaKind)
         publishedAt = try c.decodeIfPresent(Date.self, forKey: .publishedAt)
         durationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .durationSeconds)
         listenedSeconds = try c.decode(TimeInterval.self, forKey: .listenedSeconds)

@@ -48,6 +48,11 @@ final class TVPlaybackModel {
     /// True while the stream is buffering (start-up or a mid-stream stall) —
     /// drives the player page's buffering spinner.
     private(set) var isBuffering = false
+    private(set) var playbackState: StreamingPlaybackState = .idle
+    /// Stored Observation-tracked bridge to the engine's player. A computed
+    /// passthrough did not invalidate SwiftUI when AVPlayer was installed,
+    /// leaving physical Apple TV permanently on “Preparing video…”.
+    private(set) var avPlayer: AVPlayer?
     /// Non-nil after a failed `play()`/mid-stream stall — see file header.
     private(set) var errorMessage: String?
 
@@ -65,6 +70,11 @@ final class TVPlaybackModel {
     var onPlaybackCheckpoint: (() -> Void)?
 
     private var currentSubscriptionID: UUID?
+    private var currentSubscription: Subscription?
+    /// Authoritative phone-authored history key for an orphan/recovered row.
+    /// Without this override, playback would create a second history record
+    /// under the compatibility feed's GUID and future resume would split.
+    private var currentHistoryEntryID: String?
     private var lastHistoryWriteAt: Date?
     private var sessionListenedSeconds: TimeInterval = 0
     private let historyWriteInterval: TimeInterval = 20
@@ -75,7 +85,6 @@ final class TVPlaybackModel {
     /// The underlying AVPlayer for ANY media kind (audio included) — see
     /// StreamingPlaybackEngine.avPlayer's header for why this differs from
     /// the shared protocol's video-only `videoPlayer`.
-    var avPlayer: AVPlayer? { engine.avPlayer }
     var currentChapters: [Chapter] { engine.currentChapters }
     var capabilities: PlaybackCapabilities { engine.capabilities }
 
@@ -91,6 +100,23 @@ final class TVPlaybackModel {
         engine.onBufferingChanged = { [weak self] buffering in
             self?.isBuffering = buffering
         }
+        engine.onPlayerChanged = { [weak self] player in
+            self?.avPlayer = player
+        }
+        engine.onStateChanged = { [weak self] state in
+            guard let self else { return }
+            self.playbackState = state
+            self.isPlaying = state.isPlaying
+            self.isBuffering = state.isBuffering
+            if case .failed(let failure) = state {
+                self.errorMessage = failure.userMessage
+            }
+            AppLogger.shared.info("tv.playback", "Playback lifecycle changed", metadata: [
+                "state": String(describing: state),
+                "episodeID": self.currentEpisode?.id.uuidString ?? "none",
+                "mediaKind": self.currentEpisode.map { String(describing: $0.mediaKind) } ?? "none"
+            ], alwaysPersist: true)
+        }
         configureRemoteCommands()
     }
 
@@ -101,11 +127,28 @@ final class TVPlaybackModel {
         engine.preload(episode)
     }
 
-    func play(episode: Episode, subscription: Subscription) async {
+    func play(
+        episode: Episode,
+        subscription: Subscription,
+        resumePositionOverride: TimeInterval? = nil,
+        historyEntryID: String? = nil,
+        displayPodcastTitle: String? = nil
+    ) async {
+        AppLogger.shared.info("tv.playback", "Playback requested", metadata: [
+            "episodeID": episode.id.uuidString,
+            "host": episode.audioURL.host ?? "unknown",
+            "mediaKind": String(describing: episode.mediaKind),
+            "podcast": displayPodcastTitle ?? subscription.title,
+            "speed": String(format: "%.2f", subscription.playbackPreference.speed),
+            "resumeOverride": resumePositionOverride.map { String(format: "%.1f", $0) } ?? "none",
+            "assetExtension": episode.audioURL.pathExtension.lowercased()
+        ], alwaysPersist: true)
         flushProgress()
         currentEpisode = episode
         currentSubscriptionID = subscription.id
-        currentSubscriptionTitle = subscription.title
+        currentSubscription = subscription
+        currentHistoryEntryID = historyEntryID
+        currentSubscriptionTitle = displayPodcastTitle ?? subscription.title
         currentTime = 0
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
@@ -121,43 +164,56 @@ final class TVPlaybackModel {
             // resume-vs-start-skip rule as iPhone (PlaybackSessionPolicy):
             // a resume beyond the start-skip wins and seeks; the engine has
             // already applied the start-skip itself otherwise.
-            let resumePosition = subscriptionStore.savedListeningPosition(for: episode) ?? 0
+            let resumePosition = resumePositionOverride
+                ?? subscriptionStore.savedListeningPosition(for: episode)
+                ?? 0
             let start = PlaybackSessionPolicy.startResolution(
                 resumeTime: resumePosition,
                 startSkipSeconds: subscription.playbackPreference.startSkipSeconds
             )
             if let seekTarget = start.seekTarget {
-                engine.seek(to: seekTarget)
+                await engine.seekAndWait(to: seekTarget)
             }
+            AppLogger.shared.info("tv.playbackStartResolved", "Playback settings and resume applied", metadata: [
+                "mediaKind": String(describing: episode.mediaKind),
+                "speed": String(format: "%.2f", subscription.playbackPreference.speed),
+                "resumeInput": String(format: "%.1f", resumePosition),
+                "resolvedStart": String(format: "%.1f", start.reportedStartTime)
+            ], alwaysPersist: true)
             currentTime = start.reportedStartTime
-            isPlaying = true
             updateNowPlayingInfo()
         } catch {
             // currentEpisode/currentSubscriptionID stay set on purpose — see
             // file header's Failure UX note.
-            errorMessage = "Couldn't play \"\(episode.title)\". Check your connection and try again."
-            isPlaying = false
+            if let failure = error as? StreamingPlaybackFailure {
+                errorMessage = failure.userMessage
+            } else {
+                errorMessage = "Couldn't play \"\(episode.title)\". Check your connection and try again."
+            }
         }
     }
 
     /// Re-attempts the episode/subscription currently loaded, after a failure.
     func retry() async {
         guard let episode = currentEpisode,
-              let subscriptionID = currentSubscriptionID,
-              let subscription = subscriptionProvider?(subscriptionID)
+              let subscription = currentSubscription
         else { return }
-        await play(episode: episode, subscription: subscription)
+        await play(
+            episode: episode,
+            subscription: subscription,
+            resumePositionOverride: currentTime,
+            historyEntryID: currentHistoryEntryID,
+            displayPodcastTitle: currentSubscriptionTitle
+        )
     }
 
     func togglePlayPause() {
         guard errorMessage == nil else { return }
         if isPlaying {
             engine.pause()
-            isPlaying = false
             checkpoint()
         } else {
             engine.resume()
-            isPlaying = true
         }
         updateNowPlayingInfo()
     }
@@ -233,7 +289,10 @@ final class TVPlaybackModel {
         engine.stop()
         currentEpisode = nil
         currentSubscriptionID = nil
+        currentSubscription = nil
+        currentHistoryEntryID = nil
         isPlaying = false
+        playbackState = .idle
         errorMessage = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
@@ -266,30 +325,30 @@ final class TVPlaybackModel {
 
     private func flushProgress() {
         guard let episode = currentEpisode,
-              let subscriptionID = currentSubscriptionID,
-              let subscription = subscriptionProvider?(subscriptionID)
+              let subscription = currentSubscription
         else { return }
         subscriptionStore.recordListeningProgress(
             episode: episode,
-            podcastTitle: subscription.title,
+            podcastTitle: currentSubscriptionTitle,
             artworkURL: episode.artworkURL ?? subscription.artworkURL,
             listenedSecondsDelta: sessionListenedSeconds,
             positionSeconds: currentTime,
-            durationSeconds: episode.durationSeconds
+            durationSeconds: episode.durationSeconds,
+            historyEntryID: currentHistoryEntryID
         )
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
     }
 
     private func handleFinished(_ episode: Episode) {
-        guard let subscriptionID = currentSubscriptionID,
-              let subscription = subscriptionProvider?(subscriptionID)
+        guard let subscription = currentSubscription
         else { return }
         subscriptionStore.markListeningHistoryFinished(
             episode: episode,
-            podcastTitle: subscription.title,
+            podcastTitle: currentSubscriptionTitle,
             artworkURL: episode.artworkURL ?? subscription.artworkURL,
-            finishedPositionSeconds: episode.durationSeconds ?? currentTime
+            finishedPositionSeconds: episode.durationSeconds ?? currentTime,
+            historyEntryID: currentHistoryEntryID
         )
         sessionListenedSeconds = 0
         subscriptionStore.markEpisodePlayed(subscriptionID: subscription.id, episodeID: episode.id)

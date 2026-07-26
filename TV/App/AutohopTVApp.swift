@@ -54,9 +54,8 @@ import AutohopCore
 // They're now cached: recomputed ONCE per refreshLibrary() call (real data
 // changes) via recomputeDerivedState(), read back as plain O(1) stored state —
 // same pattern as the iPhone's cachedDownloadedQueue, this file just didn't need
-// it until the library grew. refreshFeeds() (per-foreground RSS re-fetch of every
-// subscription) is now also throttled (minimumFeedsRefreshInterval) for the same
-// underlying reason — see its own header for specifics.
+// it until the library grew. The former per-foreground all-library RSS sweep
+// has now been deleted; only bounded row/detail recovery may fetch feeds.
 
 @main
 struct AutohopTVApp: App {
@@ -115,6 +114,7 @@ struct AutohopTVApp: App {
                     // Leaving the foreground: persist + force-push the
                     // current position so it reaches the phone promptly.
                     model.handleBackgrounded()
+                    TVArtworkLoader.shared.trimForMemoryPressure()
                 }
             }
         }
@@ -132,12 +132,16 @@ final class TVAppModel {
 
     private(set) var rootState: RootState = .loading
     private(set) var statusText = "Loading your library…"
+    private(set) var syncStatus: TVSyncStatus = .updating
     /// Observation-tracked mirror of the store's real (non-browse) library,
     /// priority order. TV views read THIS, never the store directly.
     // `AutohopCore.Subscription` qualified — Combine also declares a
     // `Subscription` protocol, and both are visible here (this file imports
     // Combine for AnyCancellable/debounce), which is otherwise ambiguous.
     private(set) var librarySubscriptions: [AutohopCore.Subscription] = []
+    private(set) var libraryTiles: [TVPodcastTileModel] = []
+    private(set) var episodeRowsBySubscription: [UUID: [TVEpisodeRowModel]] = [:]
+    private(set) var loadingEpisodeSubscriptions: Set<UUID> = []
 
     let subscriptionStore: SubscriptionStore
     /// Phase 3 (§8): the tvOS playback composition. Its upNextProvider/
@@ -155,9 +159,18 @@ final class TVAppModel {
     /// onRemoteStatsChanged stays unwired here.
     let listeningStatsStore: ListeningStatsStore
     private let survivalKitStore = SurvivalKitStore()
+    private let projectionStore: TVProjectionStore?
     private var cloudSyncEngine: CloudSyncEngine?
     private var cancellables = Set<AnyCancellable>()
     private var didBootstrap = false
+    private var queueEnrichmentTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingQueueEnrichmentIDs: [UUID] = []
+    private var failedQueueEnrichmentIDs: Set<UUID> = []
+    private var queueEnrichmentAttempts: [UUID: Int] = [:]
+    private var legacyQueueEpisodes: [String: Episode] = [:]
+    private var legacyQueuePodcastTitles: [String: String] = [:]
+    private let episodeFeedLoader = EpisodeFeedLoader()
+    private var lastHistoryPrimeAt = Date.distantPast
 
     /// TVAppDelegate has no other path to the running model (tvOS has no
     /// AppState.sharedOrBootstrap()-style composition root) — mirrors that
@@ -179,6 +192,15 @@ final class TVAppModel {
         // the tv.perf.* stage timings scattered through this file.
         AppLogger.shared.setEnabled(true)
         TVHangWatchdog.shared.start()
+        let info = Bundle.main.infoDictionary ?? [:]
+        AppLogger.shared.info("tv.lifecycle", "TV app launched", metadata: [
+            "version": info["CFBundleShortVersionString"] as? String ?? "unknown",
+            "build": info["CFBundleVersion"] as? String ?? "unknown",
+            "gitCommit": info["GitCommitSHA"] as? String ?? "unknown",
+            "buildTimestampUTC": info["BuildTimestampUTC"] as? String ?? "unknown",
+            "container": FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "unknown",
+            "session": UUID().uuidString
+        ], alwaysPersist: true)
 
         // T2: the database is a rebuildable cache — it belongs in Caches so the
         // system may purge it; durable truth is the survival kit + CloudKit.
@@ -196,6 +218,9 @@ final class TVAppModel {
             deferredLoadDatabasePath: databaseDirectory?.appendingPathComponent("autohop-tv.sqlite").path
         )
         subscriptionStore = store
+        projectionStore = databaseDirectory.flatMap {
+            try? TVProjectionStore(path: $0.appendingPathComponent("autohop-tv-projections.sqlite").path)
+        }
         let statsStore = ListeningStatsStore(
             fileURL: databaseDirectory?.appendingPathComponent("listening-stats.json"),
             legacyFileURL: nil
@@ -211,6 +236,14 @@ final class TVAppModel {
         // the engine's ~60 s slow-lane debounce.
         playbackModel.onPlaybackCheckpoint = { [weak self] in
             self?.cloudSyncEngine?.flushDeferredPushes(reason: "tv.playbackCheckpoint")
+        }
+
+        if let cached = try? projectionStore?.loadLibrary(), !cached.isEmpty {
+            libraryTiles = cached.map {
+                TVPodcastTileModel(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank)
+            }
+            rootState = .ready
+            syncStatus = .cached(Date(), generation: 0)
         }
 
         Self.shared = self
@@ -233,21 +266,55 @@ final class TVAppModel {
     /// playback preference/chapter filter/history metadata. No-op if the
     /// subscription can no longer be resolved (e.g. unsubscribed elsewhere).
     func beginPlayback(_ episode: Episode) {
-        guard let subscription = subscription(for: episode) else { return }
-        Task { await playbackModel.play(episode: episode, subscription: subscription) }
+        let matchingHistory = cachedContinueEntry.flatMap { entry in
+            normalizedEpisodeTitle(entry.episodeTitle) == normalizedEpisodeTitle(episode.title)
+                ? entry : nil
+        }
+        let subscription = subscriptionForPlayback(episode, history: matchingHistory)
+        Task {
+            await playbackModel.play(
+                episode: episode,
+                subscription: subscription,
+                resumePositionOverride: matchingHistory?.lastPositionSeconds,
+                historyEntryID: matchingHistory?.id,
+                displayPodcastTitle: matchingHistory?.podcastTitle
+            )
+        }
     }
 
-    /// Subscribes to a podcast found via TV Search (§9 item 1). Fetches the
-    /// full feed, adds it as a new subscription (mints a fresh id — this is
-    /// not a rebuild), and refreshes immediately for snappy UI feedback.
-    /// T7: this always writes to the local store + survival kit regardless of
-    /// whether iCloud sync is working, so subscribing on TV never depends on
-    /// or blocks behind sync — CloudSyncEngine picks the change up if/when it
-    /// can, and the survival kit alone is enough to survive a purge.
-    func subscribe(to result: PodcastSearchResult) async throws {
-        let feed = try await EpisodeFeedLoader().fetch(feedURL: result.feedURL)
-        _ = try subscriptionStore.add(parsedFeed: feed, feedURL: result.feedURL)
-        refreshLibrary()
+    /// Resolves the real synced subscription even when an old queue/history
+    /// record carries a pre-reinstall UUID. Falling straight to a transient
+    /// projection discarded the podcast's playback speed and other settings.
+    private func subscriptionForPlayback(
+        _ episode: Episode,
+        history: ListeningHistoryEntry?
+    ) -> AutohopCore.Subscription {
+        if let exact = subscription(for: episode) { return exact }
+        let projectedTitle = upNextItems.first {
+            $0.episode?.id == episode.id
+        }?.podcastTitle
+        let wantedTitle = history?.podcastTitle ?? projectedTitle
+        if let wantedTitle {
+            let wanted = normalizedPodcastIdentity(wantedTitle)
+            let candidates = librarySubscriptions.filter {
+                normalizedPodcastIdentity($0.title) == wanted
+            }
+            if candidates.count == 1 { return candidates[0] }
+        }
+        return projectionSubscription(for: episode)
+    }
+
+    /// Queue v2 is intentionally playable before RSS/catalog materialization.
+    /// This transient metadata carrier is never persisted as a TV subscription.
+    private func projectionSubscription(for episode: Episode) -> AutohopCore.Subscription {
+        let item = upNextItems.first { $0.episode?.id == episode.id }
+        return AutohopCore.Subscription(
+            id: episode.subscriptionID,
+            feedURL: episode.audioURL,
+            title: item?.podcastTitle ?? "Podcast",
+            artworkURL: episode.artworkURL,
+            priorityRank: Int.max
+        )
     }
 
     func bootstrap() async {
@@ -303,26 +370,14 @@ final class TVAppModel {
         // survived from a previous launch) may already have real content —
         // don't make a returning device sit through the first-sync wait.
         refreshLibrary()
+        // Never hold the focus UI behind a multi-minute carousel. A compact
+        // cached projection renders immediately; a true first install gets a
+        // short connection grace, then an actionable empty/offline state while
+        // CloudKit continues progressively in the background.
         guard rootState != .ready else { return }
-
-        // BUG FIXED HERE (found via Kevin's real Apple TV, 2026-07-04): the
-        // refreshLibrary() call above already flips rootState to `.empty`
-        // when there's nothing yet — so the OLD code's follow-up 6 s wait
-        // (with a statusText update) was invisible: the screen had ALREADY
-        // switched to the static "No Library Yet" view before the wait even
-        // started. A first-ever CloudKit sync legitimately does a full
-        // historical fetch of the whole private zone (no prior change
-        // token) and can take MINUTES — Kevin's cold start took ~4 min, and
-        // that speed is Apple's infrastructure, not something we control.
-        // So: explicitly stay in `.loading` (spinner + rotating reassuring
-        // text) for a long grace window instead. `observeStoreForKitWrites`'s
-        // debounced sink calls refreshLibrary() independently the instant
-        // CloudKit actually delivers something, flipping rootState to
-        // `.ready` — the wait loop below just checks for that and exits
-        // early; it isn't what makes sync succeed, only what's on screen
-        // while waiting.
         rootState = .loading
-        await waitForFirstSyncWithAnimatedStatus()
+        statusText = "Connecting to your iCloud library…"
+        try? await Task.sleep(for: .seconds(8))
         refreshLibrary()
     }
 
@@ -381,9 +436,8 @@ final class TVAppModel {
         "Almost done — your library is nearly all here…"
     ]
 
-    /// Up to ~5 minutes (one full pass of the 42 messages), rotating status
-    /// text every 7 s, exiting immediately once `observeStoreForKitWrites`'s
-    /// debounced sink resolves `rootState` to `.ready` on its own.
+    /// Legacy compatibility helper. Bootstrap no longer calls this carousel;
+    /// first launch gets an eight-second grace and then remains interactive.
     private func waitForFirstSyncWithAnimatedStatus() async {
         var messageIndex = 0
         for _ in 0..<Self.firstSyncWaitMessages.count {
@@ -453,7 +507,7 @@ final class TVAppModel {
         let engine = CloudSyncEngine(
             containerIdentifier: "iCloud.com.kevinperry.autohop",
             subscriptionStore: subscriptionStore,
-            pushesSubscriptionState: false
+            capabilities: .tvCompanion
         )
         engine.onSubscriptionNeedsMaterialization = { [weak self] state in
             await self?.materializeRemoteSubscription(state)
@@ -565,87 +619,76 @@ final class TVAppModel {
             // within a couple of seconds; the subscription sweep then fills in
             // catalogs behind it (each landing record re-renders via the store
             // observer).
-            _ = await engine.fetchQueueSnapshotNow(reason: reason)
-            await engine.fetchAllHistoryNow(reason: reason)
+            syncStatus = .updating
+            let fetched = await engine.fetchQueueSnapshotNow(reason: reason)
             refreshLibrary()
-            await engine.fetchAllSubscriptionsNow(reason: reason)
+            // Queue truth is independent of the much larger first-time Library
+            // and history queries. Report Up Next current as soon as its
+            // singleton lands instead of showing “Updating” for the entire
+            // ten-minute cold-zone materialization.
+            if let snapshot = subscriptionStore.syncedQueueSnapshot() {
+                syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
+            } else if !fetched {
+                syncStatus = .unavailable
+            }
+
+            let shouldFetchHistory = Date().timeIntervalSince(lastHistoryPrimeAt) >= 15 * 60 || reason == "launch"
+            let shouldFetchSubscriptions = reason == "bootstrap" || librarySubscriptions.isEmpty
+            let historyTask = shouldFetchHistory ? Task { [weak self] in
+                await engine.fetchAllHistoryNow(reason: reason)
+                self?.lastHistoryPrimeAt = Date()
+            } : nil
+            let subscriptionTask = shouldFetchSubscriptions ? Task { [weak self] in
+                await engine.fetchAllSubscriptionsNow(reason: reason)
+                self?.refreshLibrary()
+            } : nil
+            // A foreground queue/history recovery must not re-download and
+            // reapply the complete subscription zone. Bootstrap owns the full
+            // library prime; later activations use compact projections only.
+            if let subscriptionTask { await subscriptionTask.value }
+            if let historyTask { await historyTask.value }
             refreshLibrary()
-            // Then bring each feed's episodes up to date (see refreshFeeds).
-            await refreshFeeds(reason: reason)
+            // Phase 2: projection-first TV does not sweep the entire RSS
+            // library. Queue v2 is self-contained; targeted detail enrichment
+            // may fetch one feed in a later phase, but sync never triggers an
+            // all-subscription network/parse pass.
             return
         }
+        syncStatus = subscriptionStore.syncedQueueSnapshot().map {
+            .cached($0.updatedAt, generation: $0.generation)
+        } ?? .unavailable
     }
 
-    /// Re-fetches each subscription's feed and merges the latest episodes, so
-    /// "Latest" and the episode lists match the phone. The TV otherwise only
-    /// fetches a feed at materialize time and never refreshes, leaving those
-    /// surfaces frozen at first-sighting. Sequential + best-effort: a failed
-    /// feed is skipped (the next launch/foreground retries), and the merge
-    /// preserves local + synced played/download state by guid. Runs in the
-    /// background after the cloud prime so it never blocks launch.
-    /// THROTTLED (2026-07-10, found investigating a reported memory/CPU bug):
-    /// this was called unconditionally from EVERY primeLibraryFromCloudSoon —
-    /// which fires on launch AND every foreground — so switching away from the
-    /// TV app and back within seconds re-fetched and re-parsed all 113 of
-    /// Kevin's subscriptions' RSS feeds sequentially, every single time. Real
-    /// per-episode freshness for cross-device state (played/queue/history)
-    /// already flows through CloudSyncEngine independently and near-real-time;
-    /// this function's only job is catching a genuinely NEW episode the phone
-    /// hasn't synced yet, which doesn't need faster than a few minutes'
-    /// cadence. `minimumFeedsRefreshInterval` skips the refetch entirely (no
-    /// network calls, no parsing, no store writes) when called again too soon
-    /// — cold launch always runs it (lastFeedsRefreshAt starts nil).
-    private var lastFeedsRefreshAt: Date?
-    private let minimumFeedsRefreshInterval: TimeInterval = 5 * 60
-
-    func refreshFeeds(reason: String) async {
-        if let lastFeedsRefreshAt, Date().timeIntervalSince(lastFeedsRefreshAt) < minimumFeedsRefreshInterval {
-            AppLogger.shared.info("tv.feedRefreshThrottled", "Feed refresh skipped — too soon since the last one", metadata: [
-                "reason": reason,
-                "secondsSinceLast": "\(Int(Date().timeIntervalSince(lastFeedsRefreshAt)))"
-            ])
+    /// Phase 3 bounded generation recovery. Relay is a wake hint, not proof
+    /// that CloudKit has committed the new record; retry the targeted singleton
+    /// with bounded backoff and never launch a full library prime.
+    func receiveSyncNudge(announcedGeneration: Int64? = nil, announcedEpoch: String? = nil) async {
+        guard let engine = cloudSyncEngine, engine.isActivated else {
+            syncStatus = .unavailable
             return
         }
-        lastFeedsRefreshAt = Date()
-        // NAV-STALL FIX (2026-07-11, Kevin's round 7 "extremely slow to
-        // navigate; focus feels stuck, then jumps"): during this sweep every
-        // updateEpisodes store write fired the observeStoreForKitWrites sink
-        // (debounced 2 s), which re-captured the survival kit AND re-ran
-        // refreshLibrary — a full derived-state recompute + whole-view-tree
-        // re-render every ~2 s for the sweep's whole duration, fighting the
-        // focus engine the entire time the user was browsing. Two fixes:
-        // 1. Suppress the sink for the sweep's duration (one kit capture +
-        //    one refreshLibrary at the end instead of dozens).
-        // 2. Skip the store WRITE entirely when a feed's newest episode is
-        //    unchanged (the overwhelmingly common case) — the write, its
-        //    payload re-encodes, and its objectWillChange all happen on the
-        //    main actor, and 113 of them serially was the other half of the
-        //    remote lag.
-        suppressStoreObserver = true
-        var updated = 0
-        let feeds = subscriptionStore.subscriptions
-            .filter { $0.browseDate == nil }
-            .map { ($0.id, $0.feedURL) }
-        for (subscriptionID, feedURL) in feeds {
-            guard let parsed = try? await EpisodeFeedLoader().fetch(feedURL: feedURL) else { continue }
-            if let newestGuid = parsed.episodes.first?.guid,
-               let existing = subscription(id: subscriptionID),
-               existing.episodes.first?.guid == newestGuid {
-                continue // newest episode already known — no write needed
+        syncStatus = .updating
+        let prior = subscriptionStore.syncedQueueSnapshot()
+        for delay in [0.0, 1.0, 3.0, 7.0] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled else { return }
+            _ = await engine.fetchQueueSnapshotNow(reason: "relay.syncNudge")
+            guard let current = subscriptionStore.syncedQueueSnapshot() else { continue }
+            refreshLibrary()
+            let reachedAnnouncement: Bool = {
+                guard let announcedGeneration else { return false }
+                return (announcedEpoch == nil || current.authorityEpoch == announcedEpoch)
+                    && current.generation >= announcedGeneration
+            }()
+            if reachedAnnouncement || prior == nil
+                || current.authorityEpoch != prior?.authorityEpoch
+                || current.generation > (prior?.generation ?? -1)
+                || current.updatedAt > (prior?.updatedAt ?? .distantPast) {
+                syncStatus = .upToDate(current.updatedAt, generation: current.generation)
+                return
             }
-            timed("updateEpisodes") {
-                subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
-            }
-            updated += 1
         }
-        suppressStoreObserver = false
-        saveSurvivalKit()
-        AppLogger.shared.info("tv.feedRefreshFinished", "Feed sweep finished", metadata: [
-            "reason": reason,
-            "feeds": "\(feeds.count)",
-            "updated": "\(updated)"
-        ])
-        refreshLibrary()
+        syncStatus = prior.map { .cached($0.updatedAt, generation: $0.generation) } ?? .failed(nil)
     }
 
     // MARK: - Library state + kit write-back
@@ -667,12 +710,17 @@ final class TVAppModel {
     private func startForegroundFreshnessPolling() {
         Task { [weak self] in
             while true {
-                try? await Task.sleep(for: .seconds(45))
+                try? await Task.sleep(for: .seconds(5 * 60))
                 guard let self else { return }
                 guard self.isSceneActive, let engine = self.cloudSyncEngine, engine.isActivated else { continue }
+                if let snapshot = self.subscriptionStore.syncedQueueSnapshot(),
+                   Date().timeIntervalSince(snapshot.updatedAt) < 5 * 60 { continue }
+                self.syncStatus = .updating
                 _ = await engine.fetchQueueSnapshotNow(reason: "tv.freshnessPoll")
-                await engine.fetchAllHistoryNow(reason: "tv.freshnessPoll")
                 self.refreshLibrary()
+                if let snapshot = self.subscriptionStore.syncedQueueSnapshot() {
+                    self.syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
+                }
             }
         }
     }
@@ -696,11 +744,6 @@ final class TVAppModel {
         return result
     }
 
-    /// True while refreshFeeds' sweep runs — see its NAV-STALL FIX note. The
-    /// sink below is a no-op during the sweep; the sweep does its own single
-    /// kit save + refreshLibrary at the end.
-    private var suppressStoreObserver = false
-
     private func saveSurvivalKit() {
         timed("kitCapture") {
             survivalKitStore.save(SubscriptionSurvivalKit.capture(
@@ -711,14 +754,22 @@ final class TVAppModel {
     }
 
     private func observeStoreForKitWrites() {
-        subscriptionStore.objectWillChange
+        subscriptionStore.membershipDidChange
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self, !self.suppressStoreObserver else { return }
+                guard let self else { return }
                 self.saveSurvivalKit()
-                // A store change may include this device's own history writes
-                // (TVPlaybackModel progress flushes) — invalidate the cache.
-                self.historyNeedsReload = true
+                self.scheduleLibraryRefresh()
+            }
+            .store(in: &cancellables)
+
+        Publishers.Merge(
+            subscriptionStore.queueDidChange,
+            subscriptionStore.presentationDidChange
+        )
+            .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
                 self.scheduleLibraryRefresh()
             }
             .store(in: &cancellables)
@@ -773,8 +824,19 @@ final class TVAppModel {
         let newLibrary = subscriptionStore.subscriptions
             .filter { $0.browseDate == nil }
             .sorted { $0.priorityRank < $1.priorityRank }
-        if newLibrary != librarySubscriptions {
+        let libraryChanged = newLibrary != librarySubscriptions
+        if libraryChanged {
             librarySubscriptions = newLibrary
+            rebuildOrphanRecoveryIndexes()
+            libraryTiles = newLibrary.map {
+                TVPodcastTileModel(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank)
+            }
+            let compact = newLibrary.map {
+                TVLibraryProjectionEntry(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank)
+            }
+            Task.detached(priority: .utility) { [projectionStore] in
+                try? projectionStore?.saveLibrary(compact)
+            }
         }
         let newRootState: RootState = newLibrary.isEmpty ? .empty : .ready
         if newRootState != rootState { rootState = newRootState }
@@ -794,7 +856,17 @@ final class TVAppModel {
         // during ordinary remote-navigation, not just at sync/launch time.
         // Fixed by computing all of this ONCE here — whenever the library
         // actually changes — and reading it back as plain O(1) stored state.
-        recomputeDerivedState()
+        let queueSnapshot = subscriptionStore.syncedQueueSnapshot()
+        let queueChanged = queueSnapshot != lastRenderedQueueSnapshot
+        let projectionsChanged = libraryChanged || queueChanged || historyNeedsReload
+        if projectionsChanged {
+            lastRenderedQueueSnapshot = queueSnapshot
+            recomputeDerivedState()
+        }
+        // A synced history row can itself unlock an orphan compatibility feed
+        // even when neither the library nor queue changed. This is the exact
+        // old-phone case where Continue Listening arrives during playback.
+        if projectionsChanged { retryLegacyRowsWhoseSourcesArrived() }
 
         // Pre-buffer the Continue Listening episode (the one most likely to be
         // played next) so resuming it starts near-instantly. Idempotent per
@@ -809,10 +881,55 @@ final class TVAppModel {
         subscriptionsByID = Dictionary(uniqueKeysWithValues: librarySubscriptions.map { ($0.id, $0) })
         // Same equality-guard rule as refreshLibrary: only assign on change so
         // no-op refreshes never invalidate the view tree.
-        let newUpNextItems = computeUpNextItems()
+        let newUpNextItems = computeUpNextItems().map { item in
+            let recovered = legacyQueueEpisodes[item.episodeKey] ?? recoveredLocalEpisode(for: item)
+            if needsLegacyVideoUpgrade(item) {
+                guard let recovered, recovered.mediaKind == .video else {
+                    // Keep the row visible but non-playable until the bounded
+                    // official-feed lookup supplies the actual video asset.
+                    return QueueModel.ResolvedQueueItem(
+                        episodeKey: item.episodeKey,
+                        title: item.title,
+                        podcastTitle: item.podcastTitle,
+                        subscriptionID: item.subscriptionID,
+                        episode: nil
+                    )
+                }
+                return QueueModel.ResolvedQueueItem(
+                    episodeKey: item.episodeKey,
+                    title: recovered.title,
+                    podcastTitle: item.podcastTitle ?? legacyQueuePodcastTitles[item.episodeKey],
+                    subscriptionID: item.subscriptionID,
+                    episode: recovered
+                )
+            }
+            guard item.episode == nil, let recovered else { return item }
+            return QueueModel.ResolvedQueueItem(
+                episodeKey: item.episodeKey,
+                title: recovered.title,
+                podcastTitle: item.podcastTitle ?? legacyQueuePodcastTitles[item.episodeKey],
+                subscriptionID: item.subscriptionID,
+                episode: recovered
+            )
+        }
         if newUpNextItems != upNextItems {
             upNextItems = newUpNextItems
             upNextEpisodes = newUpNextItems.compactMap(\.episode)
+            queueRows = newUpNextItems.enumerated().map { index, item in
+                TVQueueRowModel(
+                    id: item.episodeKey,
+                    position: index + 1,
+                    title: item.title,
+                    podcastTitle: item.podcastTitle
+                        ?? item.episode.flatMap { subscriptionsByID[$0.subscriptionID]?.title }
+                        ?? subscriptionsByID[item.subscriptionID]?.title
+                        ?? "Podcast",
+                    artworkURL: item.episode?.artworkURL ?? subscriptionsByID[item.subscriptionID]?.artworkURL,
+                    durationSeconds: item.episode?.durationSeconds,
+                    mediaKind: item.episode?.mediaKind ?? .audio,
+                    episode: item.episode
+                )
+            }
         }
         let newContinueListening = computeContinueListening()
         if newContinueListening != continueListening { continueListening = newContinueListening }
@@ -824,6 +941,7 @@ final class TVAppModel {
 
     private(set) var upNextItems: [QueueModel.ResolvedQueueItem] = []
     private(set) var upNextEpisodes: [Episode] = []
+    private(set) var queueRows: [TVQueueRowModel] = []
     private(set) var continueListening: TVContinueListening?
     /// O(1) id → subscription lookup, replacing the old `librarySubscriptions
     /// .first { $0.id == id }` linear scan that subscription(id:) used to run —
@@ -831,6 +949,272 @@ final class TVAppModel {
     /// PER RENDER, which at 113 subscriptions was a real O(rows × shows) tax on
     /// every Up Next / Latest re-render.
     private var subscriptionsByID: [UUID: AutohopCore.Subscription] = [:]
+    private var lastRenderedQueueSnapshot: QueueSnapshot?
+    private var uniqueEpisodesByGUID: [String: Episode] = [:]
+    private var uniqueEpisodesByNormalizedTitle: [String: Episode] = [:]
+
+    /// Reconciles queue/history records authored before a subscription was
+    /// removed and re-added. Their subscription-scoped keys legitimately no
+    /// longer match, while the same RSS GUID/title exists under the replacement
+    /// subscription UUID. Index only globally unique values so recovery can
+    /// never guess between two shows or similarly named episodes.
+    private func rebuildOrphanRecoveryIndexes() {
+        var guidCandidates: [String: [Episode]] = [:]
+        var titleCandidates: [String: [Episode]] = [:]
+        for subscription in librarySubscriptions {
+            let episodes = subscription.episodes.isEmpty
+                ? subscription.latestEpisode.map { [$0] } ?? []
+                : subscription.episodes
+            for episode in episodes where episode.playedState != .archived {
+                let guid = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !guid.isEmpty { guidCandidates[guid, default: []].append(episode) }
+                titleCandidates[normalizedEpisodeTitle(episode.title), default: []].append(episode)
+            }
+        }
+        uniqueEpisodesByGUID = guidCandidates.compactMapValues { $0.count == 1 ? $0[0] : nil }
+        uniqueEpisodesByNormalizedTitle = titleCandidates.compactMapValues { $0.count == 1 ? $0[0] : nil }
+    }
+
+    private func recoveredLocalEpisode(for item: QueueModel.ResolvedQueueItem) -> Episode? {
+        if let marker = item.episodeKey.range(of: "|guid:") {
+            let guid = String(item.episodeKey[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let episode = uniqueEpisodesByGUID[guid] { return episode }
+        }
+        return uniqueEpisodesByNormalizedTitle[normalizedEpisodeTitle(item.title)]
+    }
+
+    private func normalizedEpisodeTitle(_ title: String) -> String {
+        title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .unicodeScalars
+            .map { CharacterSet.alphanumerics.contains($0) ? Character(String($0)) : " " }
+            .reduce(into: "") { $0.append($1) }
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    private func normalizedPodcastIdentity(_ title: String) -> String {
+        var value = normalizedEpisodeTitle(title)
+        if value.hasSuffix(" video") { value.removeLast(" video".count) }
+        return value
+    }
+
+    /// The submitted iPhone build can still publish the historical audio-only
+    /// Windows Weekly projection. For this explicitly identified orphan, an
+    /// audio enclosure is not a successful resolution when the requested
+    /// compatibility source is the official video feed.
+    private func needsLegacyVideoUpgrade(_ item: QueueModel.ResolvedQueueItem) -> Bool {
+        guard let history = cachedContinueEntry,
+              normalizedEpisodeTitle(history.episodeTitle) == normalizedEpisodeTitle(item.title),
+              normalizedPodcastIdentity(history.podcastTitle) == "windows weekly"
+        else { return false }
+        return item.episode?.mediaKind != .video
+    }
+
+    /// Old-phone/new-TV migration fallback. Fetch only the unresolved row's
+    /// podcast, at most once concurrently per subscription; never sweep the
+    /// library. Version 2 projections bypass this path entirely.
+    func enrichQueueRowIfNeeded(_ row: TVQueueRowModel) {
+        guard let item = upNextItems.first(where: { $0.episodeKey == row.id }),
+              (!row.isPlayable || needsLegacyVideoUpgrade(item)),
+              queueEnrichmentTasks[item.subscriptionID] == nil,
+              !pendingQueueEnrichmentIDs.contains(item.subscriptionID),
+              !failedQueueEnrichmentIDs.contains(item.subscriptionID)
+        else { return }
+        pendingQueueEnrichmentIDs.append(item.subscriptionID)
+        pumpQueueEnrichment()
+    }
+
+    private func pumpQueueEnrichment() {
+        while queueEnrichmentTasks.count < 2, !pendingQueueEnrichmentIDs.isEmpty {
+            let subscriptionID = pendingQueueEnrichmentIDs.removeFirst()
+            let existing = subscriptionsByID[subscriptionID]
+            let kitEntry = survivalKitStore.load()?.entries.first { $0.subscriptionID == subscriptionID }
+            let recoveryItem = upNextItems.first {
+                $0.subscriptionID == subscriptionID && ($0.episode == nil || needsLegacyVideoUpgrade($0))
+            }
+            let compatibilityFeed = recoveryItem.flatMap(legacyCompatibilityFeedURL(for:))
+            // For the explicit video migration, prefer the official video feed
+            // over an old materialized audio subscription; otherwise the row
+            // simply resolves back to the same audio enclosure forever.
+            guard let feedURL = compatibilityFeed ?? existing?.feedURL ?? kitEntry?.feedURL else {
+                // The queue singleton commonly arrives before the larger
+                // Subscription zone on first install. Absence of a feed source
+                // is therefore a waiting state, not a failed request. A later
+                // membership projection calls retryLegacyRowsWhoseSourcesArrived.
+                AppLogger.shared.info("tv.queueEnrichmentWaitingForSource", "Legacy queue row is waiting for its subscription projection", metadata: [
+                    "subscriptionID": subscriptionID.uuidString
+                ], alwaysPersist: true)
+                continue
+            }
+            queueEnrichmentTasks[subscriptionID] = Task { [weak self] in
+                guard let self else { return }
+                defer { self.finishQueueEnrichment(subscriptionID: subscriptionID) }
+                do {
+                    let parsed = try await self.episodeFeedLoader.fetch(feedURL: feedURL, limit: 50)
+                    try Task.checkCancellation()
+                    let unresolvedKeys = Set(self.upNextItems.filter {
+                        $0.subscriptionID == subscriptionID && ($0.episode == nil || self.needsLegacyVideoUpgrade($0))
+                    }.map(\.episodeKey))
+                    var matchedProjection = false
+                    let unresolvedTitles = Dictionary(uniqueKeysWithValues: self.upNextItems.filter {
+                        $0.subscriptionID == subscriptionID && ($0.episode == nil || self.needsLegacyVideoUpgrade($0))
+                    }.map { (self.normalizedEpisodeTitle($0.title), $0) })
+                    for parsedEpisode in parsed.episodes {
+                        guard let projected = parsedEpisode.projectedEpisode(
+                            subscriptionID: subscriptionID,
+                            feedArtworkURL: parsed.artworkURL
+                        ) else { continue }
+                        let key = PlaybackPositionStore.key(for: projected)
+                        if unresolvedKeys.contains(key) {
+                            self.legacyQueueEpisodes[key] = projected
+                            self.legacyQueuePodcastTitles[key] = parsed.title
+                            matchedProjection = true
+                        } else if let orphanItem = unresolvedTitles[self.normalizedEpisodeTitle(parsedEpisode.title)] {
+                            // Compatibility feeds are accepted only on an exact
+                            // normalized title within the explicitly identified
+                            // podcast. Preserve the authoritative queue key.
+                            self.legacyQueueEpisodes[orphanItem.episodeKey] = projected
+                            self.legacyQueuePodcastTitles[orphanItem.episodeKey] = parsed.title
+                            matchedProjection = true
+                        }
+                    }
+                    // If this targeted read could not match the legacy key,
+                    // materialize as a compatibility fallback so older identity
+                    // variants still get the established store merge semantics.
+                    if !matchedProjection {
+                        if self.subscriptionStore.subscription(id: subscriptionID) == nil {
+                            _ = self.subscriptionStore.materialize(
+                                parsedFeed: parsed, feedURL: feedURL,
+                                subscriptionID: subscriptionID,
+                                priorityRank: kitEntry?.priorityRank
+                            )
+                        } else {
+                            self.subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
+                        }
+                    }
+                    self.failedQueueEnrichmentIDs.remove(subscriptionID)
+                    if matchedProjection {
+                        self.recomputeDerivedState()
+                    } else {
+                        self.refreshLibrary()
+                    }
+                    AppLogger.shared.info("tv.queueEnrichmentCompleted", "Legacy queue podcast materialized", metadata: [
+                        "subscriptionID": subscriptionID.uuidString,
+                        "episodes": "\(parsed.episodes.count)"
+                    ], alwaysPersist: true)
+                } catch {
+                    let attempt = (self.queueEnrichmentAttempts[subscriptionID] ?? 0) + 1
+                    self.queueEnrichmentAttempts[subscriptionID] = attempt
+                    AppLogger.shared.warning("tv.queueEnrichmentFailed", "Legacy queue podcast could not be materialized", metadata: [
+                        "subscriptionID": subscriptionID.uuidString,
+                        "url": feedURL.absoluteString,
+                        "error": String(describing: error)
+                    ], alwaysPersist: true)
+                    if attempt < 3 {
+                        Task { [weak self] in
+                            try? await Task.sleep(for: .seconds(attempt == 1 ? 2 : 6))
+                            guard let self, !Task.isCancelled else { return }
+                            self.pendingQueueEnrichmentIDs.append(subscriptionID)
+                            self.pumpQueueEnrichment()
+                        }
+                    } else {
+                        self.failedQueueEnrichmentIDs.insert(subscriptionID)
+                    }
+                }
+            }
+        }
+    }
+
+    private func finishQueueEnrichment(subscriptionID: UUID) {
+        queueEnrichmentTasks[subscriptionID] = nil
+        pumpQueueEnrichment()
+    }
+
+    func queueEnrichmentFailed(for row: TVQueueRowModel) -> Bool {
+        guard let item = upNextItems.first(where: { $0.episodeKey == row.id }) else { return false }
+        return failedQueueEnrichmentIDs.contains(item.subscriptionID)
+    }
+
+    var unresolvedQueueDiagnostics: [String] {
+        queueRows.filter { !$0.isPlayable }.map { row in
+            guard let item = upNextItems.first(where: { $0.episodeKey == row.id }) else {
+                return "\(row.title): projection missing"
+            }
+            let source = subscriptionsByID[item.subscriptionID] != nil ? "source yes" : "source no"
+            let title = uniqueEpisodesByNormalizedTitle[normalizedEpisodeTitle(item.title)] != nil ? "title yes" : "title no"
+            let keyKind = item.episodeKey.contains("|guid:") ? "GUID" : "legacy key"
+            return "\(row.title): \(keyKind), \(source), \(title)"
+        }
+    }
+
+    private func retryLegacyRowsWhoseSourcesArrived() {
+        let availableIDs = Set(subscriptionsByID.keys)
+        failedQueueEnrichmentIDs.subtract(availableIDs)
+        for item in upNextItems where item.episode == nil || needsLegacyVideoUpgrade(item) {
+            let canResolve = availableIDs.contains(item.subscriptionID)
+                || legacyCompatibilityFeedURL(for: item) != nil
+            guard canResolve else { continue }
+            failedQueueEnrichmentIDs.remove(item.subscriptionID)
+            queueEnrichmentAttempts[item.subscriptionID] = 0
+            if queueEnrichmentTasks[item.subscriptionID] == nil,
+               !pendingQueueEnrichmentIDs.contains(item.subscriptionID) {
+                pendingQueueEnrichmentIDs.append(item.subscriptionID)
+            }
+        }
+        pumpQueueEnrichment()
+    }
+
+    /// Explicit provider compatibility for a legacy orphan that contains no
+    /// feed/stream URL. Do not broaden this into fuzzy search: the history and
+    /// queue titles must identify the same episode, and only an official public
+    /// publisher feed is returned. This lets an old private/re-added Windows
+    /// Weekly identity play the equivalent public HD video without exposing or
+    /// reconstructing Club TWiT credentials.
+    private func legacyCompatibilityFeedURL(for item: QueueModel.ResolvedQueueItem) -> URL? {
+        guard let history = cachedContinueEntry,
+              normalizedEpisodeTitle(history.episodeTitle) == normalizedEpisodeTitle(item.title),
+              normalizedPodcastIdentity(history.podcastTitle) == "windows weekly"
+        else { return nil }
+        AppLogger.shared.info("tv.legacyCompatibilityFeed", "Using official Windows Weekly video compatibility feed", metadata: [
+            "episodeTitle": item.title
+        ], alwaysPersist: true)
+        return URL(string: "https://feeds.twit.tv/ww_video_hd.xml")
+    }
+
+    func episodeRows(subscriptionID: UUID) -> [TVEpisodeRowModel] {
+        episodeRowsBySubscription[subscriptionID] ?? []
+    }
+
+    /// Phase 4 bounded detail loading. The view first receives at most 25
+    /// cached episodes, then one targeted conditional-cache network request.
+    /// Leaving the page cancels the request; no library-wide feed sweep exists.
+    func loadEpisodeDetails(subscriptionID: UUID) async {
+        guard let tile = libraryTiles.first(where: { $0.id == subscriptionID }),
+              !loadingEpisodeSubscriptions.contains(subscriptionID) else { return }
+        loadingEpisodeSubscriptions.insert(subscriptionID)
+        defer { loadingEpisodeSubscriptions.remove(subscriptionID) }
+        if let cached = try? projectionStore?.loadEpisodes(subscriptionID: subscriptionID) {
+            episodeRowsBySubscription[subscriptionID] = cached.episodes.map(TVEpisodeRowModel.init)
+        }
+        do {
+            let parsed = try await episodeFeedLoader.fetch(feedURL: tile.feedURL, limit: 25)
+            try Task.checkCancellation()
+            subscriptionStore.updateEpisodes(subscriptionID: subscriptionID, from: parsed)
+            let episodes = Array((subscriptionStore.subscription(id: subscriptionID)?.episodes ?? []).prefix(25))
+            episodeRowsBySubscription[subscriptionID] = episodes.map(TVEpisodeRowModel.init)
+            let projection = TVEpisodeProjection(subscriptionID: subscriptionID, episodes: episodes)
+            Task.detached(priority: .utility) { [projectionStore] in
+                try? projectionStore?.saveEpisodes(projection)
+            }
+        } catch is CancellationError {
+            // Expected when focus/navigation abandons the detail screen.
+        } catch {
+            AppLogger.shared.warning("tv.detailLoadFailed", "Targeted episode detail load failed", metadata: [
+                "subscriptionID": subscriptionID.uuidString,
+                "error": String(describing: error)
+            ])
+        }
+    }
 
     /// Up Next display items (2026-07-05 churn fix): renders the SYNCED QUEUE
     /// SNAPSHOT — the iPhone's authored queue order, exactly (including multiple
@@ -848,7 +1232,22 @@ final class TVAppModel {
     /// with sync still cold, or sync disabled — T7's standalone mode).
     private func computeUpNextItems() -> [QueueModel.ResolvedQueueItem] {
         if let snapshot = subscriptionStore.syncedQueueSnapshot(), !snapshot.entries.isEmpty {
-            return QueueModel.resolvedQueueItems(from: snapshot, subscriptions: librarySubscriptions)
+            Task.detached(priority: .utility) { [projectionStore] in
+                try? projectionStore?.saveQueue(snapshot)
+            }
+            let items = QueueModel.resolvedQueueItems(from: snapshot, subscriptions: librarySubscriptions)
+            AppLogger.shared.info("tv.queueProjection", "Queue projection rendered", metadata: [
+                "schema": "\(snapshot.schemaVersion)",
+                "generation": "\(snapshot.generation)",
+                "epoch": snapshot.authorityEpoch,
+                "entries": "\(snapshot.entries.count)",
+                "unresolved": "\(items.filter { $0.episode == nil }.count)",
+                "ageSeconds": "\(Int(Date().timeIntervalSince(snapshot.updatedAt)))"
+            ], alwaysPersist: true)
+            return items
+        }
+        if let cached = try? projectionStore?.loadQueue(), !cached.entries.isEmpty {
+            return QueueModel.resolvedQueueItems(from: cached, subscriptions: librarySubscriptions)
         }
         return QueueModel.streamableQueue(from: librarySubscriptions).map { episode in
             QueueModel.ResolvedQueueItem(
@@ -904,9 +1303,50 @@ final class TVAppModel {
     /// PlaybackPositionStore.key == the entry id). Fallback: episodeID, for
     /// entries written by a device sharing our local UUIDs.
     private func episodeMatching(historyEntry entry: ListeningHistoryEntry) -> Episode? {
-        guard let subscription = subscription(id: entry.subscriptionID) else { return nil }
-        return subscription.episodes.first { PlaybackPositionStore.key(for: $0) == entry.id }
-            ?? subscription.episodes.first { $0.id == entry.episodeID }
+        if normalizedPodcastIdentity(entry.podcastTitle) == "windows weekly" {
+            if let recovered = legacyQueueEpisodes.values.first(where: {
+                $0.mediaKind == .video
+                    && normalizedEpisodeTitle($0.title) == normalizedEpisodeTitle(entry.episodeTitle)
+            }) {
+                return recovered
+            }
+            // A new self-contained history row may already carry the correct
+            // video. Older rows/local catalogs often carry the audio feed; do
+            // not expose that as a completed video recovery.
+            if entry.mediaKind != .video { return nil }
+        }
+        // Current history rows are self-contained playback projections. This is
+        // the permanent fix for cross-install subscription UUID drift: tvOS no
+        // longer needs the phone's subscription/catalog row merely to resume.
+        if let streamURL = entry.streamURL {
+            var projected = Episode(
+                id: entry.episodeID,
+                subscriptionID: entry.subscriptionID,
+                guid: entry.id,
+                title: entry.episodeTitle,
+                audioURL: streamURL
+            )
+            projected.artworkURL = entry.artworkURL
+            projected.publishedAt = entry.publishedAt
+            projected.durationSeconds = entry.durationSeconds ?? entry.episodeDurationSeconds
+            projected.mediaKind = entry.mediaKind ?? .audio
+            return projected
+        }
+        if let subscription = subscription(id: entry.subscriptionID) {
+            if let exact = subscription.episodes.first(where: { PlaybackPositionStore.key(for: $0) == entry.id })
+                ?? subscription.episodes.first(where: { $0.id == entry.episodeID }) {
+                return exact
+            }
+        }
+        if let marker = entry.id.range(of: "|guid:") {
+            let guid = String(entry.id[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let recovered = uniqueEpisodesByGUID[guid] { return recovered }
+        }
+        if let recovered = legacyQueueEpisodes[entry.id] { return recovered }
+        if let recovered = legacyQueueEpisodes.values.first(where: {
+            normalizedEpisodeTitle($0.title) == normalizedEpisodeTitle(entry.episodeTitle)
+        }) { return recovered }
+        return uniqueEpisodesByNormalizedTitle[normalizedEpisodeTitle(entry.episodeTitle)]
     }
 
     /// Resolves an episode's owning subscription (for podcast title display).

@@ -72,7 +72,10 @@ final class TVAppDelegate: NSObject, UIApplicationDelegate {
                 completionHandler(.noData)
                 return
             }
-            await model.primeLibraryFromCloudSoon(reason: "relay.syncNudge")
+            let announcedGeneration = (userInfo["queueGeneration"] as? NSNumber)?.int64Value
+                ?? Int64(userInfo["queueGeneration"] as? String ?? "")
+            let announcedEpoch = userInfo["queueEpoch"] as? String
+            await model.receiveSyncNudge(announcedGeneration: announcedGeneration, announcedEpoch: announcedEpoch)
             completionHandler(.newData)
         }
     }

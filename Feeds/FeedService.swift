@@ -1,4 +1,31 @@
 import Foundation
+
+// AI CONTEXT — Per-request URLSession metrics collector. FeedService's process
+// memory samples bracket an `await` and therefore cannot attribute every byte to
+// the request. These transaction metrics provide the missing wire/protocol/
+// redirect evidence without changing the production fetch path. The lock is
+// required because URLSession chooses the delegate callback queue.
+private final class FeedTaskMetricsCollector: NSObject,
+    URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var collected: URLSessionTaskMetrics?
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didFinishCollecting metrics: URLSessionTaskMetrics
+    ) {
+        lock.lock()
+        collected = metrics
+        lock.unlock()
+    }
+
+    func snapshot() -> URLSessionTaskMetrics? {
+        lock.lock()
+        defer { lock.unlock() }
+        return collected
+    }
+}
 import Darwin.Mach
 
 // AI CONTEXT — Feeds/FeedService.swift
@@ -127,6 +154,58 @@ final class FeedService: FeedServicing {
             alwaysPersist: abs(footprintDelta) >= 100
         )
     }
+
+    private static func logNetworkMetrics(
+        _ metrics: URLSessionTaskMetrics?,
+        response: URLResponse,
+        dataBytes: Int,
+        feedURL: URL,
+        memoryBefore: ParseMemorySample,
+        memoryAfter: ParseMemorySample
+    ) {
+        let transactions = metrics?.transactionMetrics ?? []
+        let wireResponseBytes = transactions.reduce(Int64(0)) {
+            $0 + $1.countOfResponseBodyBytesReceived
+        }
+        let protocols = Array(Set(transactions.compactMap {
+            $0.networkProtocolName
+        })).sorted().joined(separator: ",")
+        let fetchTypes = Array(Set(transactions.map {
+            String($0.resourceFetchType.rawValue)
+        })).sorted().joined(separator: ",")
+        let footprintDelta = memoryAfter.footprintMB - memoryBefore.footprintMB
+        let residentDelta = memoryAfter.residentMB - memoryBefore.residentMB
+        guard dataBytes >= 1_024 * 1_024
+                || abs(footprintDelta) >= 25
+                || abs(residentDelta) >= 25 else { return }
+        let http = response as? HTTPURLResponse
+        AppLogger.shared.info(
+            "feed.networkResponseMetrics",
+            "Measured feed response materialisation and URL transaction",
+            metadata: [
+                "host": feedURL.host ?? "unknown",
+                "dataBytes": "\(dataBytes)",
+                "wireResponseBytes": "\(wireResponseBytes)",
+                "expectedContentLength": "\(response.expectedContentLength)",
+                "contentEncoding": http?.value(
+                    forHTTPHeaderField: "Content-Encoding"
+                ) ?? "none",
+                "contentType": response.mimeType ?? "unknown",
+                "redirectCount": "\(metrics?.redirectCount ?? 0)",
+                "transactionCount": "\(transactions.count)",
+                "networkProtocols": protocols.isEmpty ? "unknown" : protocols,
+                "resourceFetchTypes": fetchTypes.isEmpty ? "unknown" : fetchTypes,
+                "taskDurationMs": String(
+                    format: "%.1f",
+                    (metrics?.taskInterval.duration ?? 0) * 1_000
+                ),
+                "footprintDeltaMB": "\(footprintDelta)",
+                "residentDeltaMB": "\(residentDelta)"
+            ],
+            alwaysPersist: abs(footprintDelta) >= 100
+                || abs(residentDelta) >= 100
+        )
+    }
     private let chapterService: ChapterServicing
     private let parser: RSSParser
     private let session: URLSession
@@ -187,8 +266,12 @@ final class FeedService: FeedServicing {
         }
 
         let beforeNetwork = Self.memorySample()
+        let metricsCollector = FeedTaskMetricsCollector()
         let (data, response) = try await withTimeout(seconds: requestTimeoutSeconds) {
-            try await self.session.data(for: request)
+            try await self.session.data(
+                for: request,
+                delegate: metricsCollector
+            )
         }
         let afterNetwork = Self.memorySample()
         Self.logMemoryStage(
@@ -197,6 +280,14 @@ final class FeedService: FeedServicing {
             after: afterNetwork,
             feedURL: feedURL,
             sourceBytes: data.count
+        )
+        Self.logNetworkMetrics(
+            metricsCollector.snapshot(),
+            response: response,
+            dataBytes: data.count,
+            feedURL: feedURL,
+            memoryBefore: beforeNetwork,
+            memoryAfter: afterNetwork
         )
 
         var newValidators = FeedValidators()

@@ -15,6 +15,11 @@ not a set of independently authoritative `priorityRank` fields. Reorder UI draft
 active real IDs locally and commits once.
 Version 1.3 production scope is iPhone-only. Autohop Pro, Cloudflare Relay, and
 the separate tvOS target are retained for development but excluded from release.
+The tvOS rebuild now renders compact purgeable Library/queue projections,
+streams self-contained phone-authored queue entries, loads podcast details in
+bounded targeted requests, and exposes diagnostics. Automated Phase 6 gates are
+present; physical-device soak approval remains incomplete, so submission stays
+disabled.
 AppState decomposition Stages 0–14 are implementation-complete as of
 2026-07-19. Domain coordinators and named workflows exclusively own
 history/Stats, queue, onboarding, typed routing, downloads, feed refresh/Release

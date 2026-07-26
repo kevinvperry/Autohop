@@ -44,6 +44,8 @@ struct RefreshCycleCandidate: Sendable {
     /// True when the candidate is selected because its last successful check
     /// exceeded the context's hard freshness ceiling, irrespective of prediction.
     var freshnessOverride = false
+    /// Effective per-feed ceiling after bulletin/freshness classification.
+    var freshnessCeilingSeconds: TimeInterval? = nil
 }
 
 struct RefreshPlanningDeferredSnapshot: Sendable {
@@ -86,7 +88,14 @@ enum ReleaseRadarCyclePlanner {
             let successfulCheckAge = subscription.refreshStats.lastFetchedAt
                 .map { max(0, now.timeIntervalSince($0)) }
                 ?? .greatestFiniteMagnitude
-            let freshnessOverride = maximumSuccessfulCheckAge.map {
+            let effectiveMaximumCheckAge = maximumSuccessfulCheckAge.map {
+                FeedFreshnessPolicy.maximumSuccessfulCheckAge(
+                    subscriptionTitle: subscription.title,
+                    profileKind: profile.kind,
+                    defaultAge: $0
+                )
+            }
+            let freshnessOverride = effectiveMaximumCheckAge.map {
                 successfulCheckAge >= $0
             } ?? false
             guard prediction.nextDueAt <= now || freshnessOverride else {
@@ -118,6 +127,7 @@ enum ReleaseRadarCyclePlanner {
                 priority: priority
             )
             candidate.freshnessOverride = freshnessOverride
+            candidate.freshnessCeilingSeconds = effectiveMaximumCheckAge
             if freshnessOverride {
                 priority.score += 1_000 + min(
                     500,

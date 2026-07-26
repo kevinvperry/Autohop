@@ -15,6 +15,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project_file="$repo_root/project.yml"
 feature_file="$repo_root/Store/AutohopProStore.swift"
+commit_script="$repo_root/Scripts/embed-git-commit.sh"
 mode="${1:---configuration-only}"
 
 fail() {
@@ -33,6 +34,8 @@ require_literal() {
 
 [[ -f "$project_file" ]] || fail "Missing project.yml"
 [[ -f "$feature_file" ]] || fail "Missing Store/AutohopProStore.swift"
+[[ -x "$commit_script" ]] \
+  || fail "Git commit identity embed script is missing or not executable"
 
 # The shipping Release configuration must not define either development-only
 # compilation condition. Comments may describe them, so inspect only the actual
@@ -70,6 +73,14 @@ require_literal \
   "$feature_file" \
   '^[[:space:]]*static let submitTVApp = false[[:space:]]*$' \
   "The iPhone-only release gate submitTVApp=false is missing"
+require_literal \
+  "$project_file" \
+  '^[[:space:]]*GitCommitSHA:[[:space:]]+unavailable[[:space:]]*$' \
+  "The generated app Info.plist lacks the explicit GitCommitSHA fallback"
+require_literal \
+  "$project_file" \
+  '^[[:space:]]*script:[[:space:]]+Scripts/embed-git-commit\.sh[[:space:]]*$' \
+  "The app target no longer embeds its Git commit identity"
 
 if [[ "$mode" == "--configuration-only" ]]; then
   echo "Release configuration checks passed (Pro off, Relay off, tvOS submission off)."

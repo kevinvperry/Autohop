@@ -17,7 +17,7 @@ struct TVLibraryView: View {
     var body: some View {
         NavigationStack(path: $router.libraryPath) {
             Group {
-                if model.librarySubscriptions.isEmpty {
+                if model.libraryTiles.isEmpty {
                     ContentUnavailableView(
                         "No library yet",
                         systemImage: "square.stack",
@@ -34,23 +34,23 @@ struct TVLibraryView: View {
                             Text("Library")
                                 .font(.largeTitle.bold())
                             LazyVGrid(columns: columns, spacing: 40) {
-                                ForEach(model.librarySubscriptions) { subscription in
-                                    NavigationLink(value: subscription.id) {
-                                        TVSubscriptionCard(subscription: subscription)
+                                ForEach(model.libraryTiles) { podcast in
+                                    NavigationLink(value: podcast.id) {
+                                        TVSubscriptionCard(podcast: podcast)
                                     }
                                     .buttonStyle(.card)
                                 }
                             }
                         }
-                        .padding(.horizontal, 64)
-                        .padding(.vertical, 48)
+                        .padding(.horizontal, 80)
+                        .padding(.vertical, 60)
                     }
                 }
             }
             .navigationDestination(for: UUID.self) { subscriptionID in
                 TVEpisodeListView(
                     model: model,
-                    subscription: model.subscription(id: subscriptionID),
+                    subscriptionID: subscriptionID,
                     onPlay: onPlay
                 )
             }
@@ -64,13 +64,13 @@ struct TVLibraryView: View {
 /// since pushes go by UUID (Subscription itself isn't Hashable — see
 /// TVRouter's header).
 struct TVSubscriptionCard: View {
-    let subscription: Subscription
+    let podcast: TVPodcastTileModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TVArtworkImage(url: subscription.artworkURL)
+            TVArtworkImage(url: podcast.artworkURL, targetPixels: 520)
                 .aspectRatio(1, contentMode: .fit)
-            Text(subscription.title)
+            Text(podcast.title)
                 .font(.headline)
                 .lineLimit(2)
         }

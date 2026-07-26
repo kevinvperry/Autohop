@@ -1026,9 +1026,18 @@ final class AutohopDatabase: @unchecked Sendable {
     @discardableResult
     func saveSyncedQueueSnapshot(_ snapshot: QueueSnapshot) throws -> Bool {
         let adopted: Bool = try dbQueue.write { db in
-            if let existingRow = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID),
-               existingRow.updatedAt >= snapshot.updatedAt.timeIntervalSince1970 {
-                return false
+            if let existingRow = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) {
+                let existing = try? decoder.decode(QueueSnapshot.self, from: existingRow.payload)
+                if let existing,
+                   existing.authorityEpoch == snapshot.authorityEpoch,
+                   existing.generation > 0,
+                   snapshot.generation > 0 {
+                    guard snapshot.generation > existing.generation else { return false }
+                } else if existingRow.updatedAt >= snapshot.updatedAt.timeIntervalSince1970 {
+                    // Legacy payloads and authority-epoch changes retain the
+                    // timestamp fallback for backwards compatibility.
+                    return false
+                }
             }
             let existingSystemFields = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID)?.systemFields
             let row = QueueSnapshotRow(

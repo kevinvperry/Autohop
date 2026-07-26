@@ -67,6 +67,20 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertEqual(reloaded.first?.episodeTitle, "Legacy Episode")
         XCTAssertNil(reloaded.first?.completionKind)
         XCTAssertNil(reloaded.first?.completionPercent)
+        XCTAssertNil(reloaded.first?.streamURL)
+        XCTAssertNil(reloaded.first?.mediaKind)
+    }
+
+    func testPlayableHistoryFieldsRoundTrip() throws {
+        var value = entry()
+        value.streamURL = URL(string: "https://cdn.example.com/video.mp4")
+        value.mediaKind = .video
+
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(ListeningHistoryEntry.self, from: data)
+
+        XCTAssertEqual(decoded.streamURL, value.streamURL)
+        XCTAssertEqual(decoded.mediaKind, .video)
     }
 
     func testHistoryRecordRoundTrip() {

@@ -119,7 +119,34 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     /// must have ZERO ability to alter subscription settings on the phone);
     /// consequence: subscribe-on-TV stays local to the TV and does not roam.
     /// iOS keeps the default true — the phone is the settings author.
-    public let pushesSubscriptionState: Bool
+    public struct Capabilities: Equatable, Sendable {
+        public var pushSubscriptionState: Bool
+        public var pushSubscriptionOrder: Bool
+        public var pushQueueSnapshot: Bool
+        public var pushEpisodeState: Bool
+        public var pushListeningHistory: Bool
+        public var pushListeningStats: Bool
+
+        public static let iPhoneAuthority = Capabilities(
+            pushSubscriptionState: true,
+            pushSubscriptionOrder: true,
+            pushQueueSnapshot: true,
+            pushEpisodeState: true,
+            pushListeningHistory: true,
+            pushListeningStats: true
+        )
+        public static let tvCompanion = Capabilities(
+            pushSubscriptionState: false,
+            pushSubscriptionOrder: false,
+            pushQueueSnapshot: false,
+            pushEpisodeState: true,
+            pushListeningHistory: true,
+            pushListeningStats: true
+        )
+    }
+
+    public let capabilities: Capabilities
+    public var pushesSubscriptionState: Bool { capabilities.pushSubscriptionState }
 
     private var engine: CKSyncEngine?
     private var isStarting = false
@@ -197,13 +224,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         containerIdentifier: String,
         subscriptionStore: SubscriptionStore,
         database: AutohopDatabase?,
-        pushesSubscriptionState: Bool = true
+        capabilities: Capabilities = .iPhoneAuthority
     ) {
         self.container = CKContainer(identifier: containerIdentifier)
         self.subscriptionStore = subscriptionStore
         self.database = database
         self.stateURL = Self.defaultStateURL()
-        self.pushesSubscriptionState = pushesSubscriptionState
+        self.capabilities = capabilities
         super.init()
     }
 
@@ -215,13 +242,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     public convenience init(
         containerIdentifier: String,
         subscriptionStore: SubscriptionStore,
-        pushesSubscriptionState: Bool = true
+        capabilities: Capabilities = .iPhoneAuthority
     ) {
         self.init(
             containerIdentifier: containerIdentifier,
             subscriptionStore: subscriptionStore,
             database: subscriptionStore.database,
-            pushesSubscriptionState: pushesSubscriptionState
+            capabilities: capabilities
         )
     }
 
@@ -269,6 +296,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         )
         let engine = CKSyncEngine(configuration)
         self.engine = engine
+
+        // Capability enforcement is structural, not a caller convention. A TV
+        // database from an older build must not upload a stale authoritative
+        // queue/order/subscription projection after activation.
+        if !capabilities.pushQueueSnapshot {
+            try? database?.markQueueSnapshotSynced()
+        }
 
         // Ensure our custom zone exists, then queue any already-dirty state.
         engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudKitSync.zoneID))])
@@ -537,16 +571,24 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 return []
             }
         }
-        let episodes = read("episode sync states", database.pendingEpisodeSyncStates)
+        let episodes = capabilities.pushEpisodeState
+            ? read("episode sync states", database.pendingEpisodeSyncStates)
+            : []
         // Read-only subscription-state mode (see pushesSubscriptionState):
         // dirty subscription rows are simply never queued.
         let subscriptions = pushesSubscriptionState
             ? read("subscription sync states", database.pendingSubscriptionSyncStates)
             : []
-        let history = read("history entries", database.pendingHistoryEntries)
-        let stats = read("stats days", database.pendingStatsDays)
-        let pendingQueue = (try? database.pendingQueueSnapshot()) ?? nil
-        let pendingSubscriptionOrder = pushesSubscriptionState
+        let history = capabilities.pushListeningHistory
+            ? read("history entries", database.pendingHistoryEntries)
+            : []
+        let stats = capabilities.pushListeningStats
+            ? read("stats days", database.pendingStatsDays)
+            : []
+        let pendingQueue = capabilities.pushQueueSnapshot
+            ? ((try? database.pendingQueueSnapshot()) ?? nil)
+            : nil
+        let pendingSubscriptionOrder = capabilities.pushSubscriptionOrder
             ? ((try? database.pendingSubscriptionOrder()) ?? nil)
             : nil
         let deviceID = DeviceIdentity.current

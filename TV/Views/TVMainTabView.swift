@@ -69,6 +69,8 @@ struct TVMainTabView: View {
             // Never reached — `.search` is built directly in `body` with the
             // dedicated search-role Tab initializer, not via this switch.
             TVSearchView(model: model)
+        case .diagnostics:
+            TVDiagnosticsView(model: model)
         }
     }
 

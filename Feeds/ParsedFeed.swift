@@ -83,6 +83,39 @@ public struct ParsedEpisode: Equatable {
     }
 }
 
+public extension ParsedEpisode {
+    /// Creates a lightweight playable episode for read-only projection clients
+    /// such as tvOS legacy-queue recovery. This avoids materialising and
+    /// persisting an entire feed merely to resolve one queued enclosure.
+    func projectedEpisode(subscriptionID: UUID, feedArtworkURL: URL?) -> Episode? {
+        guard let audioURL else { return nil }
+        let episodeID = UUID()
+        let projectedChapters = chapters.map {
+            Chapter(
+                id: UUID(), episodeID: episodeID, position: $0.position,
+                title: $0.title, startSeconds: $0.startSeconds,
+                durationSeconds: $0.durationSeconds, source: $0.source
+            )
+        }
+        var episode = Episode(
+            id: episodeID, subscriptionID: subscriptionID, guid: guid,
+            title: title, audioURL: audioURL, mediaKind: mediaKind,
+            chapters: projectedChapters
+        )
+        episode.description = description
+        episode.subtitle = subtitle
+        episode.author = author
+        episode.publishedAt = publishedAt
+        episode.durationSeconds = durationSeconds
+        episode.episodeLink = episodeLink
+        episode.artworkURL = artworkURL ?? feedArtworkURL
+        episode.fileSizeBytes = fileSizeBytes
+        episode.isExplicit = isExplicit
+        episode.externalChaptersURL = externalChaptersURL
+        return episode
+    }
+}
+
 public struct ParsedChapter: Equatable {
     public var position: Int
     public var title: String

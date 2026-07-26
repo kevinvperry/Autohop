@@ -541,6 +541,46 @@ public enum FeedScheduleKind: String, Codable, Sendable {
     case random
 }
 
+// AI CONTEXT — Freshness is intentionally independent of schedule kind. A
+// synthetic feed may expose only its latest hourly bulletin and consequently
+// learn as `dailyWeekdays`; it must still receive a bulletin-grade check ceiling.
+// This policy uses strong cadence signals first and conservative title signals
+// second. It controls how long Autohop may go without a successful check, not
+// whether a feed is eligible for automatic downloading.
+public enum FeedFreshnessPolicy {
+    public static let bulletinMaximumCheckAge: TimeInterval = 75 * 60
+    public static let generalBackgroundMaximumCheckAge: TimeInterval = 2 * 60 * 60
+    public static let backgroundAudioMaximumCheckAge: TimeInterval = 90 * 60
+
+    public static func maximumSuccessfulCheckAge(
+        subscriptionTitle: String,
+        profileKind: FeedScheduleKind,
+        defaultAge: TimeInterval
+    ) -> TimeInterval {
+        isFreshnessSensitiveBulletin(
+            subscriptionTitle: subscriptionTitle,
+            profileKind: profileKind
+        ) ? min(defaultAge, bulletinMaximumCheckAge) : defaultAge
+    }
+
+    public static func isFreshnessSensitiveBulletin(
+        subscriptionTitle: String,
+        profileKind: FeedScheduleKind
+    ) -> Bool {
+        if profileKind == .hourly || profileKind == .rollingBulletin {
+            return true
+        }
+        let normalized = subscriptionTitle
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+        let markers = [
+            "news now", "news bulletin", "world news", "sports news",
+            "local news", "news update", "finance report"
+        ]
+        return markers.contains { normalized.contains($0) }
+    }
+}
+
 public struct FeedScheduleWindow: Equatable, Codable, Sendable {
     /// Swift Calendar weekday numbers: 1 = Sunday, 2 = Monday, ... 7 = Saturday.
     public var activeWeekdays: [Int]
@@ -1670,6 +1710,13 @@ public enum FeedRefreshScheduling {
     /// force the user into manual refresh.
     private static let dailySafetySweepInterval: TimeInterval = 4 * 60 * 60
     private static let weeklySafetySweepInterval: TimeInterval = 24 * 60 * 60
+    /// A broad observed release-time spread collapses window confidence. Such a
+    /// window remains useful diagnostic history but must stop gating freshness.
+    private static let usableWindowConfidence = 0.50
+    private static let lowConfidenceDailySurveillanceInterval: TimeInterval =
+        2 * 60 * 60
+    private static let lowConfidenceWeeklySurveillanceInterval: TimeInterval =
+        4 * 60 * 60
 
     /// The watch tier a weekday gets for a given per-week publish probability. The single
     /// source of truth for the tier thresholds (used by scheduling and the diagnostics).
@@ -1799,6 +1846,17 @@ public enum FeedRefreshScheduling {
             )
 
         case .burst:
+            if let windowConfidence = profile.windowConfidence,
+               windowConfidence < usableWindowConfidence {
+                return regularPrediction(
+                    profile: profile,
+                    state: .fallback,
+                    stats: stats,
+                    recheckInterval: lowConfidenceDailySurveillanceInterval,
+                    now: now,
+                    reason: "Release-time confidence is low; use broad surveillance instead of gating on the learned burst window."
+                )
+            }
             guard let burstWindow = profile.burstWindow else {
                 return fallbackPrediction(
                     profile: profile,
@@ -1831,6 +1889,17 @@ public enum FeedRefreshScheduling {
             )
 
         case .dailyWeekdays:
+            if let windowConfidence = profile.windowConfidence,
+               windowConfidence < usableWindowConfidence {
+                return regularPrediction(
+                    profile: profile,
+                    state: .fallback,
+                    stats: stats,
+                    recheckInterval: lowConfidenceDailySurveillanceInterval,
+                    now: now,
+                    reason: "Release-time confidence is low; use broad surveillance instead of gating on the learned weekday window."
+                )
+            }
             guard let minute = profile.typicalMinuteOfDay else {
                 return fallbackPrediction(
                     profile: profile,
@@ -1863,6 +1932,17 @@ public enum FeedRefreshScheduling {
             )
 
         case .weekly:
+            if let windowConfidence = profile.windowConfidence,
+               windowConfidence < usableWindowConfidence {
+                return regularPrediction(
+                    profile: profile,
+                    state: .fallback,
+                    stats: stats,
+                    recheckInterval: lowConfidenceWeeklySurveillanceInterval,
+                    now: now,
+                    reason: "Release-time confidence is low; use broad surveillance instead of gating on the learned weekly window."
+                )
+            }
             guard let minute = profile.typicalMinuteOfDay else {
                 return fallbackPrediction(
                     profile: profile,
@@ -1895,6 +1975,17 @@ public enum FeedRefreshScheduling {
             )
 
         case .multiSlot:
+            if let windowConfidence = profile.windowConfidence,
+               windowConfidence < usableWindowConfidence {
+                return regularPrediction(
+                    profile: profile,
+                    state: .fallback,
+                    stats: stats,
+                    recheckInterval: lowConfidenceDailySurveillanceInterval,
+                    now: now,
+                    reason: "Release-time confidence is low; use broad surveillance instead of gating on the learned multi-slot window."
+                )
+            }
             guard let minute = profile.typicalMinuteOfDay else {
                 return fallbackPrediction(
                     profile: profile,
@@ -2572,6 +2663,12 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
     /// still consume budget, but they are tried before ordinary backlog work.
     public var protectedStates: Set<FeedRefreshWindowState>
     public var minimumProtectedSelections: Int
+    /// Candidate indices, oldest-successful-check first, whose hard freshness
+    /// ceiling has elapsed. These reservations are stronger than score: a stale
+    /// feed keeps a real slot even when many release-window candidates fill the
+    /// same capped wake. They replace ordinary work and never expand the cap.
+    public var staleCandidateIndices: [Int]
+    public var minimumStaleSelections: Int
     /// Candidate indices, in oldest-first order, that have already waited long
     /// enough to receive a bounded fairness reservation. They consume ordinary
     /// budget slots and therefore replace lower-priority repeated selections
@@ -2585,6 +2682,8 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
         capBypassStates: Set<FeedRefreshWindowState> = [],
         protectedStates: Set<FeedRefreshWindowState> = [],
         minimumProtectedSelections: Int = 0,
+        staleCandidateIndices: [Int] = [],
+        minimumStaleSelections: Int = 0,
         fairnessCandidateIndices: [Int] = [],
         minimumFairnessSelections: Int = 0
     ) {
@@ -2593,6 +2692,8 @@ public struct FeedRefreshBudgetPolicy: Equatable, Sendable {
         self.capBypassStates = capBypassStates
         self.protectedStates = protectedStates
         self.minimumProtectedSelections = minimumProtectedSelections
+        self.staleCandidateIndices = staleCandidateIndices
+        self.minimumStaleSelections = minimumStaleSelections
         self.fairnessCandidateIndices = fairnessCandidateIndices
         self.minimumFairnessSelections = minimumFairnessSelections
     }
@@ -2720,7 +2821,8 @@ public enum FeedRefreshBudgeting {
             return FeedRefreshBudgetSelection(selected: candidates, deferred: [])
         }
 
-        if policy.minimumFairnessSelections > 0
+        if policy.minimumStaleSelections > 0
+            || policy.minimumFairnessSelections > 0
             || (!policy.protectedStates.isEmpty
                 && policy.minimumProtectedSelections > 0) {
             return selectWithProtectedStates(
@@ -2763,17 +2865,32 @@ public enum FeedRefreshBudgeting {
         let totalLimit = policy.maxTotalSelections
             .flatMap { $0 > 0 ? $0 : nil }
             ?? Int.max
-        let fairnessLimit = min(
+        let staleLimit = min(
             maxSelections,
             totalLimit,
+            max(0, policy.minimumStaleSelections)
+        )
+        let staleIndices = policy.staleCandidateIndices
+            .filter { candidates.indices.contains($0) }
+            .prefix(staleLimit)
+        let staleIndexSet = Set(staleIndices)
+        let fairnessLimit = min(
+            max(0, maxSelections - staleIndices.count),
+            max(0, totalLimit - staleIndices.count),
             max(0, policy.minimumFairnessSelections)
         )
         let fairnessIndices = policy.fairnessCandidateIndices
-            .filter { candidates.indices.contains($0) }
+            .filter {
+                candidates.indices.contains($0)
+                    && !staleIndexSet.contains($0)
+            }
             .prefix(fairnessLimit)
-        let fairnessIndexSet = Set(fairnessIndices)
+        let fairnessIndexSet = Set(fairnessIndices).union(staleIndexSet)
         let protectedLimit = min(
-            max(0, maxSelections - fairnessIndices.count),
+            max(
+                0,
+                maxSelections - staleIndices.count - fairnessIndices.count
+            ),
             max(0, policy.minimumProtectedSelections)
         )
         let protectedIndices = indexedCandidates
@@ -2785,9 +2902,13 @@ public enum FeedRefreshBudgeting {
             .map { $0.offset }
         let protectedIndexSet = Set(protectedIndices).union(fairnessIndexSet)
 
-        var remainingBudget =
-            maxSelections - fairnessIndices.count - protectedIndices.count
-        var selectedIndices = Array(fairnessIndices) + protectedIndices
+        var remainingBudget = maxSelections
+            - staleIndices.count
+            - fairnessIndices.count
+            - protectedIndices.count
+        var selectedIndices = Array(staleIndices)
+            + Array(fairnessIndices)
+            + protectedIndices
         var reservedIndexSet = protectedIndexSet
 
         // A fairness reservation may replace a repeatedly selected pre/active

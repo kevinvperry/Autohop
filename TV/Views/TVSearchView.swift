@@ -3,21 +3,10 @@ import Observation
 import AutohopCore
 
 // AI CONTEXT — TV/Views/TVSearchView.swift
-// Phase 4 (tvOS proposal §9 item 1): the Search tab (search role) +
-// subscribe-on-TV. Deliberately SCOPED DOWN from the proposal's full item 1:
-// only search→subscribe is built here. The proposed "Discover shelf set
-// (charts)" is NOT wired — Feeds/PodcastCharts.swift's types
-// (PodcastChartsService, DiscoverViewModel, ChartPodcast, etc.) are still
-// internal to AutohopCore; only the smaller, lower-risk PodcastSearchService
-// surface was made public for this pass. Revisit Discover once those types
-// are deliberately publicized (a bigger surface: genre rails, country
-// picker, top-episodes paging, on-disk chart caching).
-// FLOW: type → 400 ms debounce → PodcastSearchService.search (iTunes Search
-// API, no key) → tap a result → EpisodeFeedLoader fetches the full feed →
-// TVAppModel.subscribe adds it as a NEW subscription (fresh id — this is a
-// real subscribe, not a survival-kit rebuild) → appears in Library/Home
-// immediately and syncs to iPhone once CloudSyncEngine can (T7: never
-// blocked on sync working).
+// Phase 5 product decision: browse/play only. Search uses the public iTunes
+// Search API after a 400 ms debounce; selecting a result loads a bounded feed
+// preview for playback. It never creates a local subscription and cannot push
+// subscription or priority changes to the authoritative iPhone library.
 struct TVSearchView: View {
     let model: TVAppModel
     @State private var searchModel = TVSearchModel()
@@ -40,7 +29,7 @@ struct TVSearchView: View {
             ContentUnavailableView(
                 "Find a podcast",
                 systemImage: "magnifyingglass",
-                description: Text("Search by name to subscribe — it appears on your other devices once signed in to the same iCloud account.")
+                description: Text("Search by name to add a podcast to this Apple TV. Manage your synced subscriptions on iPhone.")
             )
         case .loading:
             ProgressView()
@@ -59,8 +48,8 @@ struct TVSearchView: View {
                     ForEach(results) { result in
                         TVSearchResultCard(
                             result: result,
-                            state: searchModel.subscribeState(for: result),
-                            onSubscribe: { Task { await subscribe(result) } }
+                            state: .notSubscribed,
+                            onSubscribe: {}
                         )
                     }
                 }
@@ -70,15 +59,6 @@ struct TVSearchView: View {
         }
     }
 
-    private func subscribe(_ result: PodcastSearchResult) async {
-        searchModel.setSubscribing(result)
-        do {
-            try await model.subscribe(to: result)
-            searchModel.setSubscribed(result)
-        } catch {
-            searchModel.setSubscribeFailed(result, message: error.localizedDescription)
-        }
-    }
 }
 
 /// TVCard-SearchResult pattern (DESIGN.md): square artwork + title/author,
@@ -100,11 +80,9 @@ struct TVSearchResultCard: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            Button(action: onSubscribe) {
-                label
-            }
-            .buttonStyle(.bordered)
-            .disabled(state == .subscribing || state == .subscribed)
+            Label("Manage on iPhone", systemImage: "iphone")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -112,7 +90,7 @@ struct TVSearchResultCard: View {
     private var label: some View {
         switch state {
         case .notSubscribed:
-            Text("Subscribe")
+            Text("Add to This Apple TV")
         case .subscribing:
             Label("Subscribing…", systemImage: "hourglass")
         case .subscribed:

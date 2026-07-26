@@ -130,7 +130,10 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
             now: now
         )
 
-        XCTAssertTrue(withoutCeiling.isEmpty)
+        XCTAssertFalse(
+            withoutCeiling.contains { $0.freshnessOverride },
+            "Ordinary prediction must not manufacture a hard-age override"
+        )
         XCTAssertEqual(withCeiling.count, 1)
         XCTAssertTrue(withCeiling[0].freshnessOverride)
         XCTAssertTrue(
@@ -138,6 +141,68 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
                 "hard freshness ceiling"
             )
         )
+    }
+
+    func testFreshnessPolicyRecognizesSyntheticBulletinWithoutHourlyProfile() {
+        XCTAssertTrue(
+            FeedFreshnessPolicy.isFreshnessSensitiveBulletin(
+                subscriptionTitle: "NPR News Now",
+                profileKind: .dailyWeekdays
+            )
+        )
+        XCTAssertEqual(
+            FeedFreshnessPolicy.maximumSuccessfulCheckAge(
+                subscriptionTitle: "NPR News Now",
+                profileKind: .dailyWeekdays,
+                defaultAge: 2 * 60 * 60
+            ),
+            75 * 60
+        )
+        XCTAssertEqual(
+            FeedFreshnessPolicy.maximumSuccessfulCheckAge(
+                subscriptionTitle: "A weekly conversation",
+                profileKind: .weekly,
+                defaultAge: 2 * 60 * 60
+            ),
+            2 * 60 * 60
+        )
+    }
+
+    func testLowWindowConfidenceUsesBroadSurveillance() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let profile = FeedScheduleProfile(
+            kind: .dailyWeekdays,
+            confidence: 0.94,
+            cadenceConfidence: 0.94,
+            windowConfidence: 0.36,
+            observationCount: 80,
+            reliableDateCount: 80,
+            activeWeekdays: [2, 3, 4, 5, 6],
+            typicalMinuteOfDay: 8 * 60,
+            releaseWindow: FeedScheduleWindow(
+                activeWeekdays: [2, 3, 4, 5, 6],
+                startMinuteOfDay: 7 * 60,
+                endMinuteOfDay: 9 * 60,
+                typicalMinuteOfDay: 8 * 60,
+                observedEpisodeCount: 80,
+                observedSpreadMinutes: 1_140
+            ),
+            reason: "Regular cadence, unreliable time"
+        )
+        let prediction = FeedRefreshScheduling.prediction(
+            profile: profile,
+            latestPublishedAt: nil,
+            publishDates: [],
+            stats: RefreshStats(
+                lastFetchedAt: now.addingTimeInterval(-3 * 60 * 60)
+            ),
+            now: now
+        )
+
+        XCTAssertEqual(prediction.state, .fallback)
+        XCTAssertEqual(prediction.recheckInterval, 2 * 60 * 60)
+        XCTAssertLessThanOrEqual(prediction.nextDueAt, now)
+        XCTAssertTrue(prediction.reason.contains("confidence is low"))
     }
 
     func testBackgroundBudgetProtectsReleaseRadarCandidatesFirst() {
@@ -167,6 +232,37 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         XCTAssertEqual(
             selection.deferred.map(\.id),
             ["random-backlog", "daily-missed-release", "fallback"]
+        )
+    }
+
+    func testStaleReservationCannotBeDisplacedByHigherScoredWindows() {
+        let candidates = [
+            Candidate(id: "urgent-1", state: .activeWindow),
+            Candidate(id: "urgent-2", state: .activeWindow),
+            Candidate(id: "oldest-stale", state: .fallback),
+            Candidate(id: "second-stale", state: .quiet),
+            Candidate(id: "ordinary", state: .randomSurveillance)
+        ]
+
+        let selection = FeedRefreshBudgeting.select(
+            candidates: candidates,
+            policy: FeedRefreshBudgetPolicy(
+                maxSelections: 3,
+                maxTotalSelections: 3,
+                capBypassStates: [.activeWindow],
+                staleCandidateIndices: [2, 3],
+                minimumStaleSelections: 2
+            ),
+            state: { $0.state }
+        )
+
+        XCTAssertEqual(
+            selection.selected.map(\.id),
+            ["oldest-stale", "second-stale", "urgent-1"]
+        )
+        XCTAssertEqual(
+            selection.deferred.map(\.id),
+            ["urgent-2", "ordinary"]
         )
     }
 
@@ -611,7 +707,16 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(window.observedSpreadMinutes ?? 0, 8 * 60)
         XCTAssertGreaterThanOrEqual(window.endMinuteOfDay - window.startMinuteOfDay, 4 * 60)
-        XCTAssertLessThan(profile.confidence, 0.9)
+        XCTAssertGreaterThan(
+            profile.cadenceConfidence ?? 0,
+            0.9,
+            "A regular daily cadence can remain highly reliable"
+        )
+        XCTAssertLessThan(
+            profile.windowConfidence ?? 1,
+            0.5,
+            "A broad time spread must independently collapse window confidence"
+        )
     }
 
     /// After the learned window has already produced an episode, a daily/weekly/multi
@@ -655,7 +760,7 @@ final class ReleaseRadarSchedulingTests: XCTestCase {
 
         XCTAssertEqual(prediction.state, .fallback)
         XCTAssertLessThanOrEqual(prediction.nextDueAt, now)
-        XCTAssertEqual(prediction.recheckInterval, TimeInterval(12 * 60 * 60))
+        XCTAssertEqual(prediction.recheckInterval, TimeInterval(4 * 60 * 60))
         XCTAssertTrue(prediction.reason.localizedCaseInsensitiveContains("safety"))
     }
 

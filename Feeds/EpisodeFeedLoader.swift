@@ -12,6 +12,9 @@ import Foundation
 // the full feed of a chosen search result before subscribing.
 public actor EpisodeFeedLoader {
     private let session: URLSession
+    private struct Validator: Sendable { let etag: String?; let lastModified: String?; let data: Data }
+    private var validators: [URL: Validator] = [:]
+    private var validatorRecency: [URL] = []
 
     public init() {
         let config = URLSessionConfiguration.ephemeral
@@ -22,8 +25,29 @@ public actor EpisodeFeedLoader {
 
     /// Fetches and parses the feed at `url`.  Pass `limit: nil` to load all episodes.
     public func fetch(feedURL: URL, limit: Int? = 50) async throws -> ParsedFeed {
-        let (data, response) = try await session.data(from: feedURL)
+        var request = URLRequest(url: feedURL)
+        if let validator = validators[feedURL] {
+            if let etag = validator.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+            if let modified = validator.lastModified { request.setValue(modified, forHTTPHeaderField: "If-Modified-Since") }
+        }
+        let (receivedData, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 304,
+           let cached = validators[feedURL]?.data {
+            return try RSSParser().parse(data: cached, maxEpisodes: limit)
+        }
         try HTTPResponseValidation.validate(response)
+        let data = receivedData
+        if let http = response as? HTTPURLResponse {
+            validators[feedURL] = Validator(
+                etag: http.value(forHTTPHeaderField: "ETag"),
+                lastModified: http.value(forHTTPHeaderField: "Last-Modified"),
+                data: data
+            )
+            validatorRecency.removeAll { $0 == feedURL }
+            validatorRecency.insert(feedURL, at: 0)
+            for expired in validatorRecency.dropFirst(12) { validators[expired] = nil }
+            validatorRecency = Array(validatorRecency.prefix(12))
+        }
         return try RSSParser().parse(data: data, maxEpisodes: limit)
     }
 }

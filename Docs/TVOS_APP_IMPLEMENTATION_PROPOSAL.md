@@ -1,7 +1,17 @@
 # Autohop tvOS App — Implementation Proposal
 
+> **Historical document:** This records the original tvOS implementation and
+> repair rounds. For all new tvOS work, use
+> `Docs/TVOS_REBUILD_PROPOSAL.md`, which supersedes this document where the two
+> conflict.
+
 <!--
 AI CONTEXT — Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md
+
+SUPERSEDED FOR FUTURE WORK: Read Docs/TVOS_REBUILD_PROPOSAL.md first. This file
+remains the historical record of the original tvOS implementation. Do not use
+its completed-phase labels as evidence that current device behaviour passes the
+rebuild proposal's performance, sync, playback, focus, or release gates.
 
 PURPOSE: Full implementation proposal for an Autohop tvOS app (audio + video
 playback on modern Apple TV), derived from (a) a file-level review of the

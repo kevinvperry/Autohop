@@ -240,11 +240,15 @@ final class QueueCoordinator: ObservableObject {
         if compositionChanged {
             episodes = computed
             lastPublishedIDs = computedIDs
-            subscriptionStore.updateLocalQueueSnapshot(entries: computed.map {
-                QueueSnapshotEntry(
-                    episodeKey: PlaybackPositionStore.key(for: $0),
-                    subscriptionID: $0.subscriptionID,
-                    episodeTitle: $0.title
+            let subscriptionsByID = Dictionary(
+                uniqueKeysWithValues: subscriptionStore.subscriptions.map { ($0.id, $0) }
+            )
+            subscriptionStore.updateLocalQueueSnapshot(entries: computed.map { episode in
+                let subscription = subscriptionsByID[episode.subscriptionID]
+                return QueueSnapshotEntry(
+                    episode: episode,
+                    podcastTitle: subscription?.title,
+                    podcastArtworkURL: subscription?.artworkURL
                 )
             })
             publishBadge()

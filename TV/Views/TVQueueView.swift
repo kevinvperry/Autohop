@@ -12,6 +12,7 @@ import AutohopCore
 struct TVQueueView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
+    @FocusState private var focusedRowID: String?
 
     var body: some View {
         // Heading lives INSIDE the ScrollView (display-bug fix 2026-07-04:
@@ -20,7 +21,7 @@ struct TVQueueView: View {
         // with the content, like Home's. Plain Text, not `.navigationTitle` —
         // this tab has no NavigationStack (see TVMainTabView's header).
         Group {
-            if model.upNextItems.isEmpty {
+            if model.queueRows.isEmpty {
                 ContentUnavailableView(
                     "Up Next is empty",
                     systemImage: "square.stack",
@@ -36,16 +37,21 @@ struct TVQueueView: View {
                         // stable during a cold sync; an item whose catalog hasn't
                         // materialized yet (episode == nil) shows a not-yet-
                         // playable placeholder row (churn fix 2026-07-05).
-                        ForEach(model.upNextItems) { item in
+                        Text(model.syncStatus.label)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        ForEach(model.queueRows) { row in
                             TVQueueRow(
-                                item: item,
-                                podcastTitle: model.subscription(id: item.subscriptionID)?.title,
-                                onPlay: { if let episode = item.episode { onPlay(episode) } }
+                                row: row,
+                                detailLoadFailed: model.queueEnrichmentFailed(for: row),
+                                onPlay: { if let episode = row.episode { onPlay(episode) } }
                             )
+                            .focused($focusedRowID, equals: row.id)
+                            .task { model.enrichQueueRowIfNeeded(row) }
                         }
                     }
-                    .padding(.horizontal, 64)
-                    .padding(.vertical, 48)
+                    .padding(.horizontal, 80)
+                    .padding(.vertical, 60)
                 }
             }
         }
@@ -56,26 +62,34 @@ struct TVQueueView: View {
 /// full-width focusable row — the tvOS analog of the iPhone's
 /// "ListRow-Up Next Episode Row" pattern.
 struct TVQueueRow: View {
-    let item: QueueModel.ResolvedQueueItem
-    let podcastTitle: String?
+    let row: TVQueueRowModel
+    let detailLoadFailed: Bool
     let onPlay: () -> Void
 
     /// nil until this item's catalog has materialized locally — until then the
     /// row is a non-playable placeholder showing the synced title + order.
-    private var episode: Episode? { item.episode }
+    private var episode: Episode? { row.episode }
 
     var body: some View {
         Button(action: onPlay) {
             HStack(spacing: 24) {
-                TVArtworkImage(url: episode?.artworkURL, cornerRadius: 12)
+                TVArtworkImage(url: row.artworkURL, cornerRadius: 12, targetPixels: 360)
                     .frame(width: 140, height: 140)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title)
+                    HStack {
+                        Text("\(row.position)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                        Text(row.title)
+                    }
                         .font(.headline)
                         .lineLimit(2)
-                    if let podcastTitle {
-                        Text(podcastTitle)
-                            .font(.subheadline)
+                    Text(row.podcastTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if row.mediaKind == .video {
+                        Label("Video", systemImage: "play.rectangle.fill")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     if let episode, let duration = episode.durationSeconds {
@@ -83,7 +97,10 @@ struct TVQueueRow: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     } else if episode == nil {
-                        Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+                        Label(
+                            modelLabel,
+                            systemImage: modelLabel == "Episode details unavailable" ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath"
+                        )
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -92,10 +109,14 @@ struct TVQueueRow: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.card)
         .disabled(episode == nil)
+    }
+
+    private var modelLabel: String {
+        detailLoadFailed ? "Episode details unavailable" : "Loading episode details…"
     }
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {

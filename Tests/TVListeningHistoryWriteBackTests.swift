@@ -45,6 +45,8 @@ final class TVListeningHistoryWriteBackTests: XCTestCase {
         let stored = try XCTUnwrap(db.historyEntry(id: expectedKey))
         XCTAssertEqual(stored.lastPositionSeconds, 120)
         XCTAssertEqual(stored.listenedSeconds, 120)
+        XCTAssertEqual(stored.streamURL, episode.audioURL)
+        XCTAssertEqual(stored.mediaKind, episode.mediaKind)
     }
 
     func testRecordListeningProgressAccumulatesOntoExistingEntry() throws {
@@ -67,6 +69,27 @@ final class TVListeningHistoryWriteBackTests: XCTestCase {
         let stored = try XCTUnwrap(db.historyEntry(id: PlaybackPositionStore.key(for: episode)))
         XCTAssertEqual(stored.listenedSeconds, 360, "Sessions accumulate rather than overwrite")
         XCTAssertEqual(stored.lastPositionSeconds, 360, "Position reflects the latest write")
+    }
+
+    func testRecoveredEpisodeCanWriteBackToAuthoritativeHistoryIdentity() throws {
+        let store = SubscriptionStore.inMemory()
+        let episode = makeEpisode(subscriptionID: UUID(), guid: "public-video-guid")
+        let phoneHistoryID = "orphan-phone-sub|guid:private-feed-guid"
+
+        store.recordListeningProgress(
+            episode: episode,
+            podcastTitle: "Windows Weekly",
+            artworkURL: nil,
+            listenedSecondsDelta: 20,
+            positionSeconds: 420,
+            durationSeconds: 1800,
+            historyEntryID: phoneHistoryID
+        )
+
+        let db = try XCTUnwrap(store.database)
+        let stored = try XCTUnwrap(db.historyEntry(id: phoneHistoryID))
+        XCTAssertEqual(stored.lastPositionSeconds, 420)
+        XCTAssertNil(try db.historyEntry(id: PlaybackPositionStore.key(for: episode)))
     }
 
     func testMarkListeningHistoryFinishedSetsPlayedStatusAndCompletionKind() throws {
