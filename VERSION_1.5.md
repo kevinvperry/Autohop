@@ -13,6 +13,53 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### 28 July 2026 — storefront-aware Shows and Episodes search
+
+- Replaced the modal flat podcast search list with a dedicated Search page
+  pushed from Discover.
+- Added independent Apple catalog providers for shows (`podcast`) and episodes
+  (`podcastEpisode`), with separate loading, empty and failure boundaries.
+- Every request now includes the country selected in Discover. Invalid or old
+  persisted values safely fall back to the device storefront instead of
+  silently receiving Apple's default US results.
+- Results render in clearly labelled **Shows** and **Episodes** sections.
+  Episode rows show their parent show, release date and duration; selection
+  opens the parent show until exact RSS episode identity reconciliation ships
+  in a later search phase.
+- Preserved Recently Viewed, manual RSS entry, existing-subscription routing,
+  browse-preview lifecycle, artwork caching and the mini-player contract.
+- Added request-contract tests preventing storefront loss or accidental
+  collapse of episode search back into the show endpoint.
+- Follow-up physical-device refinement: Shows now use a compact, leading-aligned
+  horizontal rail so their full result set no longer pushes Episodes behind the
+  software keyboard. Episode rows begin immediately below the rail, and the
+  results page supports interactive keyboard dismissal.
+- Episode results now use deterministic relevance tiers (exact/prefix/phrase
+  matches across episode title, show and publisher) and then newest publication
+  date inside each tier, retaining Apple's original order only as the final tie
+  breaker. Regression tests cover both ordering rules.
+- Added an explicit **All / My Library** scope. My Library searches subscribed
+  shows and their locally known episodes immediately, cancels remote catalog
+  work while selected, and excludes temporary browse previews.
+- Show-result cards now size themselves from the available viewport rather than
+  a single fixed phone width. Titles use up to two lines, improving readability
+  across compact phones, large phones and iPad without losing the horizontal
+  rail's keyboard-friendly layout.
+- Added **Publishers & Creators** groupings derived conservatively from exact
+  show-author metadata. Empty/generic placeholders, URLs and email-like values
+  are excluded, and no host/guest identity is inferred from prose or titles.
+- Added regression coverage for local episode discovery, browse-preview
+  exclusion and conservative creator grouping.
+- Fixed Search result navigation being swallowed by a lazily nested typed
+  destination. Show cards now link directly to the existing Podcast Detail
+  page, and publisher/creator cards open their associated show list before the
+  selected show proceeds to Podcast Detail.
+- Episode cards now open the existing Episode Detail page. Apple catalog hits
+  are reconciled safely to RSS using episode GUID first and exact normalized
+  title only as a fallback; track IDs and fuzzy prose are never treated as RSS
+  identity. A clear fallback offers the parent podcast when no safe match is
+  possible. Regression tests cover GUID priority and fuzzy-match rejection.
+
 ### 28 July 2026 — Episode Trim duration alignment
 
 - Fixed the duration line ("Off", "1 min 30 secs") sitting left of its row title

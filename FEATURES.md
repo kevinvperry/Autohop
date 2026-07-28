@@ -165,7 +165,7 @@ rank.
 
 ## 2. Find Podcasts (Search)
 
-**What it is:** A full-screen sheet for finding and subscribing to podcasts. The primary way to add new podcasts to Autohop.
+**What it is:** A dedicated page for finding shows and episodes in the selected Discover storefront. The primary way to add new podcasts to Autohop.
 
 **Access:** Tap the search shortcut at the top of the **Discover** page (the only entry point to Search).
 
@@ -175,15 +175,17 @@ rank.
 
 **How it works:**
 1. User types a search term. Results appear automatically after a short debounce (400ms).
-2. Results are fetched from the iTunes podcast catalog — no account or API key required.
-3. Tapping a result opens the **Podcast Detail** page.
+2. An **All / My Library** scope chooses the source. All uses independent show and episode providers against Apple's catalog in the country selected in Discover. My Library searches locally known subscribed shows and episodes immediately, makes no Apple request, and excludes temporary browse previews.
+3. Results are clearly separated into a compact horizontal **Shows** rail and a vertical **Episodes** list, keeping both result types visible while the keyboard is open. Show cards adapt between compact phone, large phone and iPad widths and permit two title lines. Tapping a show opens its existing Podcast Detail page. Tapping an episode opens the existing Episode Detail page: Apple results are reconciled to RSS by episode GUID, with exact normalized title as the narrow fallback; local results already carry their RSS episode UUID.
+4. Episode results are ordered by explicit match quality first, then newest publication date within the same relevance tier.
+5. **Publishers & Creators** are conservatively grouped from exact, non-empty show-author metadata. Obvious placeholders, web addresses and email-like values are rejected. This section does not infer hosts, guests or people from titles/descriptions.
+6. Tapping a publisher/creator opens a dedicated list of the shows carrying that exact author value; selecting a show then opens its Podcast Detail page.
 
 **Search states:**
 - **Idle** — prompt to search + Recently Viewed history list (if any) + "Enter RSS URL" button
-- **Loading** — spinner while results are fetching
-- **Results** — list of matching podcasts; "Enter RSS URL" link at the bottom of the list
-- **Empty** — `ContentUnavailableView` when the search returns no matches
-- **Failed** — error message if the network request fails
+- **Loading** — each section displays its own progress state
+- **Results** — separate Shows and Episodes cards, followed by Publishers & Creators when trustworthy author metadata is available; "Enter RSS URL" link at the bottom
+- **Empty / Failed** — section-local messages, so a successful provider remains usable if the other request is empty or unavailable
 
 **RSS URL entry:** Available from both the idle state and the results list footer. Navigates to the Add RSS Feed screen for users who have a direct feed URL.
 
@@ -272,7 +274,7 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 
 **Page structure (top to bottom):** five hero carousels separated by 19 category rails in a 4 / 5 / 5 / 5 cadence — Top Episodes (fixed, above the feed) · rails 1–4 · **New & Notable** · rails 5–9 · Top Podcasts · rails 10–14 · International A · rails 15–19 · International B (closes the feed).
 
-- **Search shortcut** — a search-field-shaped button that opens the unchanged Podcast Search sheet
+- **Search shortcut** — a search-field-shaped button that pushes the dedicated Search Results page, preserving the selected storefront
 - **Top Episodes hero** — the storefront's Top 8 *episodes* (not shows) as big paging cards at the very top of the page. The header's **See All** button pushes the **Top Episodes** page (`TopEpisodesView`) — an editorial Top-50 episode list where a large feature card appears every 7th entry (ranks 1/8/15/22/29/36/43) and the rest are compact ranked rows, each showing episode artwork (placeholder fallback), episode title, show name, and relative publish time ("4 hours ago"). Tapping resolves the parent podcast and opens Podcast Detail (§2.2). Data: the Marketing Tools `podcast-episodes.json` feed (limit 50), release dates enriched per parent podcast via the iTunes Lookup API, cached per country.
 - **Top Podcasts hero** — the storefront's Top 8 as big sideways-paging cards (purple gradient, oversized ghosted rank numeral, artwork, rank pill, title/artist/genre). The header's **See All** button pushes the **Top Podcasts** page (`TopPodcastsView`) — an editorial Top-50 *show* list with the same layout as Top Episodes (a large feature card every 7th entry, the rest compact ranked rows), each entry showing the show's artwork, title, author/publisher, and category. Tapping resolves the show's feed and opens Podcast Detail (§2.2). Data: `topPodcasts` (limit 50), cached per country. **Only this first hero (the selected-country one) has a See All — the two fixed-country spotlight heroes don't.**
 - **New & Notable hero** — recently launched shows that are already charting, shown as the same paging hero cards. **Apple publishes no new-releases endpoint for podcasts** (verified 2026-07-25: every legacy `new*`/`noteworthy` feed type returns HTTP 400, and Marketing Tools serves only `top`), so Autohop derives the list: it takes a 200-deep overall chart, keeps shows with 30 or fewer episodes, then confirms genuine newness by reading each candidate's **oldest** indexed episode date and requiring it within 90 days. That last step is essential — the Lookup API's `releaseDate` is the *latest* episode, so a 1995 show reports today's date, and episode count alone admits long-running feeds that merely trim their episode list. The 8 newest qualifying shows are shown newest-first, capped at 3 per genre so one hot category cannot claim the shelf, and a show whose episodes are densely and evenly spaced (a rolling feed exposing only a recent window) is rejected. Episode-1 dates are cached permanently because they never change, so in steady state only new chart entrants cost a lookup. **No See All** — the qualifying pool is only a handful of shows. Hidden entirely when fewer than 3 qualify.

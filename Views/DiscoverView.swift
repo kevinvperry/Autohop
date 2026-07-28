@@ -17,8 +17,8 @@ import SwiftUI
 // they never duplicate the user's selected country or each other). A storefront
 // country picker (defaults to Locale.current.region, falls back to US,
 // persisted in @AppStorage and shared by every Discover chart child page), and
-// a search-field-shaped shortcut that presents
-// the unchanged PodcastSearchView sheet. Tapping any chart entry resolves the
+// a search-field-shaped shortcut that pushes the dedicated storefront-aware
+// Search page. Tapping any chart entry resolves the
 // RSS feed URL via the iTunes Lookup API, then routes exactly like search
 // results: every entry routes to PodcastDetailView, which renders both the
 // preview (invisible 30-day browse subscription) and subscribed states. Inactive
@@ -66,7 +66,6 @@ struct DiscoverView: View {
     /// async feed resolve completes (Discover is a pushed page, not a sheet, so
     /// it no longer owns a NavigationStack/path of its own).
     @State private var pendingRoute: Route?
-    @State private var showSearch = false
     @State private var showStarterPacks = false
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
@@ -82,6 +81,7 @@ struct DiscoverView: View {
 
     private enum Route: Hashable {
         case preview(PodcastSearchResult)
+        case search
         case episodes(UUID)
         case topEpisodes
         case topPodcasts
@@ -223,6 +223,8 @@ struct DiscoverView: View {
             switch route {
             case .preview(let result):
                 PodcastDetailView(result: result)
+            case .search:
+                PodcastSearchView(countryCode: country.code)
             case .episodes(let subscriptionID):
                 PodcastDetailView(subscriptionID: subscriptionID)
             case .topEpisodes:
@@ -238,7 +240,6 @@ struct DiscoverView: View {
         .task(id: country.code) {
             await viewModel.load(country: country.code)
         }
-        .sheet(isPresented: $showSearch) { PodcastSearchView() }
         .sheet(isPresented: $showStarterPacks) { StarterPacksView() }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
@@ -348,7 +349,7 @@ struct DiscoverView: View {
 
     private var searchShortcut: some View {
         Button {
-            showSearch = true
+            pendingRoute = .search
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
