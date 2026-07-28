@@ -1572,6 +1572,14 @@ public final class SubscriptionStore: ObservableObject {
         case needsMaterialization(SubscriptionSyncState)
     }
 
+    /// Read-only membership projection used by tvOS's durable materialisation
+    /// retry worker. `nil` means no remote state has arrived; `false` prevents
+    /// an old survival-kit entry from resurrecting a show unsubscribed on the
+    /// phone while its RSS fetch was failing.
+    public func syncedSubscriptionWantsMembership(id: UUID) -> Bool? {
+        try? database?.subscriptionSyncState(id: id)?.subscribed
+    }
+
     /// Applies a remote subscription-settings record with field-level LWW.
     /// Updates an existing subscription's settings, processes an unsubscribe, or
     /// reports that a new subscribed podcast must be materialised from its feed.

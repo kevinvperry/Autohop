@@ -4,16 +4,23 @@ import SwiftUI
 // Discover, reached via the "See All" button on the FIRST "Top Podcasts ·
 // <selected country>" hero header, i.e. the mid-feed podcastHero, NOT the
 // fixed-country spotlight heroes), OR by tapping any category chip. An expanded,
-// editorial Top-50 list of Apple Podcasts chart shows for the selected Discover
+// editorial chart list of Apple Podcasts shows for the selected Discover
 // country, optionally filtered to one ChartGenre. The shared toolbar country
 // picker writes Discover's AppStorage selection and reloads this visible chart.
+// DEPTH IS ASYMMETRIC BY DESIGN: a CATEGORY page is Top 100 (legacy genre
+// endpoint, verified to serve 100/200), while the OVERALL page stays Top 50
+// because Marketing Tools v2 hard-caps that feed at 50. Titles reflect this —
+// "Top 100 - <Category>" vs plain "Top Podcasts". Do not unify the two without
+// first moving the overall chart off Marketing Tools.
 // Overall and category data use
-// separate lazy DiscoverViewModel slots; genre charts call the existing legacy
-// endpoint at limit 50 and inherit its 12-hour country+genre cache. A category
+// separate lazy DiscoverViewModel slots; genre charts inherit the 12-hour
+// country/genre cache, and a larger cached chart is an ordered superset that can
+// satisfy the 15-entry rails. A category
 // page renders the parent Discover rail's Top 15 immediately when available,
-// then replaces/extends it with the canonical Top 50 result. LAYOUT
-// mirrors TopEpisodesView — a large feature card every 7th entry (ranks 1, 8, 15,
-// 22, 29, 36, 43 — (rank - 1) % 7 == 0) and the rest compact ranked rows. Each
+// then replaces/extends it with the canonical Top 100 result. LAYOUT
+// mirrors TopEpisodesView — a large feature card every 7th entry
+// ((rank - 1) % 7 == 0; depth-independent, so at 100 it runs 1, 8 … 92, 99)
+// and the rest compact ranked rows. Each
 // entry shows ChartPodcast artwork, title, author (artist) and genre (genreName)
 // — the podcast analogue of TopEpisodesView's title/show/release-date. Tapping
 // resolves the show's RSS feed (viewModel.resolve) and pushes PodcastDetailView
@@ -71,8 +78,11 @@ struct TopPodcastsView: View {
     /// Discover rail the user tapped ("Sport" in the AU store, "Sports" in the
     /// US store); falls back to the English name until the cached name map
     /// arrives. See ChartGenre.localizedName(from:).
+    /// Category pages are Top 100; the overall chart stays "Top Podcasts"
+    /// (Marketing Tools caps that feed at 50 — see
+    /// `DiscoverViewModel.categoryChartLimit`).
     private var pageTitle: String {
-        genre.map { "Top 50 - \($0.localizedName(from: viewModel.genreNames))" }
+        genre.map { "Top 100 - \($0.localizedName(from: viewModel.genreNames))" }
             ?? "Top Podcasts"
     }
 
@@ -152,7 +162,10 @@ struct TopPodcastsView: View {
                     .padding(.top, 4)
 
                 ForEach(podcasts) { podcast in
-                    // Large feature card every 7th entry (ranks 1, 8, 15, 22, 29, 36, 43).
+                    // Large feature card every 7th entry. The formula is
+                    // depth-independent and continues unchanged now that
+                    // category pages run to 100: ranks 1, 8, 15, 22, 29, 36,
+                    // 43, 50, 57, 64, 71, 78, 85, 92, 99.
                     if (podcast.rank - 1) % 7 == 0 {
                         featureCard(podcast)
                             .padding(.horizontal, 20)
@@ -167,7 +180,7 @@ struct TopPodcastsView: View {
                 if isLoadingBeyondPreview {
                     HStack(spacing: 10) {
                         ProgressView()
-                        Text("Loading the full Top 50…")
+                        Text("Loading the full Top 100…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

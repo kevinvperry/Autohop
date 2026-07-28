@@ -138,6 +138,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     private let fileManager: FileManager
     private let downloadDirectoryOverride: URL?
+    private let resumeDataDirectory: URL?
 
     public var backgroundEventsCompletionHandler: (() -> Void)?
     public var onBackgroundDownloadCompleted: ((UUID, UUID, URL) -> Void)?
@@ -149,11 +150,20 @@ public final class DownloadManager: NSObject, DownloadManaging {
     public init(fileManager: FileManager = .default, downloadDirectory: URL? = nil) {
         self.fileManager = fileManager
         self.downloadDirectoryOverride = downloadDirectory
+        self.resumeDataDirectory = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ))?.appendingPathComponent("Autohop/download-resume-data", isDirectory: true)
         super.init()
         let config = URLSessionConfiguration.background(
             withIdentifier: Self.backgroundSessionIdentifier
         )
         config.isDiscretionary = false
+        config.waitsForConnectivity = true
+        config.allowsExpensiveNetworkAccess = true
+        config.allowsConstrainedNetworkAccess = true
         #if os(iOS) || os(watchOS)
         config.sessionSendsLaunchEvents = true
         #endif
@@ -256,7 +266,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         let startedAt = Date()
         let firstByteThreshold = effectiveFirstByteWaitThreshold
         let task: URLSessionDownloadTask
-        if let resumeData = resumeDataByEpisodeID.removeValue(forKey: episode.id) {
+        if let resumeData = takeResumeData(for: episode.id) {
             task = session.downloadTask(withResumeData: resumeData)
             logger.info("download.taskResumeData", "Resuming download from stored resume data", metadata: [
                 "episode": episode.title,
@@ -265,6 +275,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         } else {
             var request = URLRequest(url: episode.audioURL)
             request.allowsCellularAccess = allowsCellular
+            request.networkServiceType = episode.mediaKind == .video ? .video : .responsiveData
             task = session.downloadTask(with: request)
         }
         task.taskDescription = encodeTaskMeta(
@@ -338,7 +349,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                     DispatchQueue.main.async {
                         guard let self else { return }
                         if let resumeData {
-                            self.resumeDataByEpisodeID[episodeID] = resumeData
+                            self.storeResumeData(resumeData, for: episodeID)
                         }
                         self.logger.info("download.pause", "Download paused", metadata: [
                             "episodeID": episodeID.uuidString,
@@ -364,7 +375,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             if let url = self.mediaURLByEpisodeID.removeValue(forKey: episodeID), let removedTaskID {
                 self.removeMediaURLTask(removedTaskID, for: url)
             }
-            self.resumeDataByEpisodeID.removeValue(forKey: episodeID)
+            self.deleteResumeData(for: episodeID)
             self.lastLoggedProgressBucketByEpisodeID.removeValue(forKey: episodeID)
             // A watchdog-cancelled task may already have disappeared from the
             // URLSession maps while its progress clock remains. Retire all
@@ -401,7 +412,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     public func clearResumeData(episodeID: UUID) {
         DispatchQueue.main.async { [weak self] in
-            self?.resumeDataByEpisodeID.removeValue(forKey: episodeID)
+            self?.deleteResumeData(for: episodeID)
         }
     }
 
@@ -1164,7 +1175,7 @@ extension DownloadManager {
                     task.cancel(byProducingResumeData: { [weak self] resumeData in
                         DispatchQueue.main.async {
                             guard let self, let resumeData else { return }
-                            self.resumeDataByEpisodeID[episodeID] = resumeData
+                            self.storeResumeData(resumeData, for: episodeID)
                         }
                     })
                 }
@@ -1235,10 +1246,50 @@ extension DownloadManager {
             task.cancel(byProducingResumeData: { [weak self] resumeData in
                 DispatchQueue.main.async {
                     guard let self, let resumeData else { return }
-                    self.resumeDataByEpisodeID[episodeID] = resumeData
+                    self.storeResumeData(resumeData, for: episodeID)
                 }
             })
         }
+    }
+
+    // MARK: - Durable resume data
+
+    /// Background URLSession preserves live tasks itself. These small files
+    /// cover the different case where a user explicitly pauses a multi-GB
+    /// transfer and the app is then terminated before Resume is tapped.
+    private func resumeDataURL(for episodeID: UUID) -> URL? {
+        resumeDataDirectory?.appendingPathComponent("\(episodeID.uuidString).resume")
+    }
+
+    private func storeResumeData(_ data: Data, for episodeID: UUID) {
+        resumeDataByEpisodeID[episodeID] = data
+        guard let directory = resumeDataDirectory,
+              let url = resumeDataURL(for: episodeID) else { return }
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            logger.warning("download.resumeDataPersistFailed", "Could not persist resumable transfer state", metadata: [
+                "episodeID": episodeID.uuidString,
+                "error": String(describing: error)
+            ])
+        }
+    }
+
+    private func takeResumeData(for episodeID: UUID) -> Data? {
+        if let inMemory = resumeDataByEpisodeID.removeValue(forKey: episodeID) {
+            if let url = resumeDataURL(for: episodeID) { try? fileManager.removeItem(at: url) }
+            return inMemory
+        }
+        guard let url = resumeDataURL(for: episodeID),
+              let data = try? Data(contentsOf: url) else { return nil }
+        try? fileManager.removeItem(at: url)
+        return data
+    }
+
+    private func deleteResumeData(for episodeID: UUID) {
+        resumeDataByEpisodeID.removeValue(forKey: episodeID)
+        if let url = resumeDataURL(for: episodeID) { try? fileManager.removeItem(at: url) }
     }
 
     static func taskStateLabel(_ state: URLSessionTask.State) -> String {

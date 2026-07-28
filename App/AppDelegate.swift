@@ -428,6 +428,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
 
     private static func handleFeedRefresh(_ task: BGAppRefreshTask) {
         let startedAt = Date()
+        let wakeGeneration = UUID().uuidString
         let completionGate = BackgroundTaskCompletionGate()
         let cooperativeDeadline: TimeInterval = 20
         // Registered with `using: DispatchQueue.main` (see registerBackgroundTasks), so
@@ -448,7 +449,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         let startMetadata = [
             "identifier": task.identifier,
             "backgroundRefreshStatus": refreshStatus,
-            "taskKind": "BGAppRefreshTask"
+            "taskKind": "BGAppRefreshTask",
+            "wakeGeneration": wakeGeneration
         ]
         // alwaysPersist: logged before AppState bootstraps enables diagnostics, and on a
         // cold BGTask wake that ordering would otherwise drop the one marker that proves
@@ -560,7 +562,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
             AppLogger.shared.warning("background.expired", "Background app refresh expired before finishing", metadata: [
                 "identifier": task.identifier,
                 "elapsedMs": elapsedMs,
-                "taskKind": "BGAppRefreshTask"
+                "taskKind": "BGAppRefreshTask",
+                "wakeGeneration": wakeGeneration,
+                "backgroundTimeRemainingSecs": String(
+                    format: "%.1f",
+                    UIApplication.shared.backgroundTimeRemaining
+                ),
+                "completionClaimedByExpiration": "true"
             ])
             work.cancel()
             Task { @MainActor in
@@ -572,7 +580,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
                     extra: [
                         "identifier": task.identifier,
                         "elapsedMs": elapsedMs,
-                        "taskKind": "BGAppRefreshTask"
+                        "taskKind": "BGAppRefreshTask",
+                        "wakeGeneration": wakeGeneration
                     ]
                 )
                 state.cancelRefreshCycleIfOwnedByBackgroundTask(

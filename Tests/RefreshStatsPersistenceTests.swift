@@ -12,6 +12,20 @@ import XCTest
 // count. Keep these tests whenever RefreshStats gains non-optional persisted
 // fields: old subscription rows remain valid upgrade inputs.
 final class RefreshStatsPersistenceTests: XCTestCase {
+    func testCycleMemoryCeilingStopsOnEitherProcessMeasure() {
+        XCTAssertFalse(FeedParseMemorySafety.shouldStopCycle(
+            footprintMB: 449,
+            residentMB: 599
+        ))
+        XCTAssertTrue(FeedParseMemorySafety.shouldStopCycle(
+            footprintMB: 450,
+            residentMB: 100
+        ))
+        XCTAssertTrue(FeedParseMemorySafety.shouldStopCycle(
+            footprintMB: 100,
+            residentMB: 600
+        ))
+    }
     func testParseMemorySafetyUsesEitherMetricAtInclusiveBoundary() {
         XCTAssertNil(
             FeedParseMemorySafety.quarantineDecision(

@@ -31,7 +31,7 @@ enum OnboardingTip: String, CaseIterable {
     var message: String {
         switch self {
         case .priorityStack:
-            return "Autohop plays the newest episode from each show, top to bottom. Tap Reorder and drag to set what comes first."
+            return "Autohop plays the newest episode from each show, top to bottom. Tap Priority and drag to set what comes first."
         case .swipeActions:
             return "Swipe any episode to Play Next or Play Last, or to Archive it. No menus needed."
         case .playerPanels:

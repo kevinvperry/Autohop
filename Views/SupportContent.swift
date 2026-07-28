@@ -140,7 +140,7 @@ enum SupportGuide {
             .callout(.tip, "**How it works:** You rank shows once. Autohop plays every ready episode of show #1 before moving to show #2, and refills the queue automatically as new episodes download."),
             .heading("Reordering subscriptions"),
             .steps([
-                "Tap **Reorder** in the top toolbar to enter edit mode.",
+                "Tap **Priority** in the top toolbar to enter edit mode.",
                 "Drag the handle on the right side of any row to move it up or down.",
                 "Tap **Done** when finished. The queue updates immediately.",
             ]),

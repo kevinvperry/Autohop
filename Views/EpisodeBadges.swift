@@ -7,7 +7,9 @@ import SwiftUI
 //   • EpisodeStatusKind + EpisodeStatusPill (colour-coded state capsule; each
 //     page supplies its own statusKind(for:) resolver; includes Skipped for
 //     not-downloaded episodes currently excluded by Download Feed Filters)
-//   • glassCard(cornerRadius:) View modifier (glass content-card surface)
+//   • glassCard(cornerRadius:highlighted:) View modifier (glass content-card
+//     surface; `highlighted` applies the same purple tint as glassCapsule for
+//     accent-action surfaces such as Discover's rail-trailing "See All" tile)
 // Pure presentation; shared across episode lists, preview, queue, and detail pages.
 
 // MARK: - Video Pill (small)
@@ -164,14 +166,30 @@ struct EpisodeStatusPill: View {
 // iOS 26+ uses real glass; iOS 17–25 falls back to `.ultraThinMaterial`.
 
 extension View {
+    /// `highlighted: true` adds the same purple tint `glassCapsule` uses, for a
+    /// rounded-rect surface that must read as an accent action rather than a
+    /// neutral content card (Discover's rail-trailing "See All" tile).
     @ViewBuilder
-    func glassCard(cornerRadius: CGFloat) -> some View {
+    func glassCard(cornerRadius: CGFloat, highlighted: Bool = false) -> some View {
         if #available(iOS 26, *) {
-            self.glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius))
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            if highlighted {
+                self.glassEffect(.regular.tint(.purple), in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            } else {
+                self.glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            }
         } else {
-            self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            if highlighted {
+                // Matches glassCapsule's fallback exactly. No clipShape here —
+                // it would shave the 1 pt stroke in half at the edge.
+                self
+                    .background(Color.purple.opacity(0.22), in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.purple.opacity(0.35), lineWidth: 1))
+            } else {
+                self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            }
         }
     }
 

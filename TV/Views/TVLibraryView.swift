@@ -35,10 +35,22 @@ struct TVLibraryView: View {
                                 .font(.largeTitle.bold())
                             LazyVGrid(columns: columns, spacing: 40) {
                                 ForEach(model.libraryTiles) { podcast in
-                                    NavigationLink(value: podcast.id) {
+                                    if podcast.isMaterializing {
                                         TVSubscriptionCard(podcast: podcast)
+                                            .overlay(alignment: .bottomLeading) {
+                                                Label("Syncing details…", systemImage: "arrow.triangle.2.circlepath")
+                                                    .font(.caption.weight(.semibold))
+                                                    .padding(10)
+                                                    .background(.black.opacity(0.72), in: Capsule())
+                                                    .padding(10)
+                                            }
+                                            .opacity(0.8)
+                                    } else {
+                                        NavigationLink(value: podcast.id) {
+                                            TVSubscriptionCard(podcast: podcast)
+                                        }
+                                        .buttonStyle(.card)
                                     }
-                                    .buttonStyle(.card)
                                 }
                             }
                         }

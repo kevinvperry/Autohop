@@ -2718,6 +2718,12 @@ public enum FeedParseMemorySafety {
     public static let highGrowthThresholdMB = 200
     public static let initialQuarantine: TimeInterval = 6 * 60 * 60
     public static let repeatedQuarantine: TimeInterval = 12 * 60 * 60
+    /// A refresh cycle stops admitting feeds after either live process measure
+    /// reaches this boundary. This is deliberately independent of per-feed
+    /// growth: several feeds from one publisher can retain allocations between
+    /// items even when no single later item crosses `highGrowthThresholdMB`.
+    public static let cycleFootprintCeilingMB = 450
+    public static let cycleResidentCeilingMB = 600
 
     public struct Decision: Equatable {
         public let consecutiveHighMemoryParses: Int
@@ -2739,6 +2745,14 @@ public enum FeedParseMemorySafety {
             quarantineDuration:
                 consecutive > 1 ? repeatedQuarantine : initialQuarantine
         )
+    }
+
+    public static func shouldStopCycle(
+        footprintMB: Int,
+        residentMB: Int
+    ) -> Bool {
+        footprintMB >= cycleFootprintCeilingMB
+            || residentMB >= cycleResidentCeilingMB
     }
 }
 

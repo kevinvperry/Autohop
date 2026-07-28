@@ -13,6 +13,122 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### 28 July 2026 — Episode Trim duration alignment
+
+- Fixed the duration line ("Off", "1 min 30 secs") sitting left of its row title
+  on the **Default Episode Trim** rows in App Settings and the **Episode Trim**
+  rows in Podcast Settings. The text now aligns flush beneath "Start skip" /
+  "End skip".
+- Cause: the duration was a sibling of the row `Label` in a shared `VStack`, and
+  its indent was approximated with a hard-coded `.padding(.leading, 28)` that did
+  not match the real `Label` icon-column width. It is now rendered *inside* the
+  `Label`'s title slot, so SwiftUI owns the icon column and both lines share one
+  leading edge — correct at every Dynamic Type size rather than at one font size.
+- Fixed once in the shared `EpisodeTrimControlRow`, so both settings pages are
+  corrected by the same change. `SettingsRowLabel` was deliberately left
+  untouched: 24 other settings rows use it and none needed to change.
+- Documentation: DESIGN.md `ControlRow-EpisodeTrim` now states the alignment
+  contract, and the `PlaybackControlsCard.swift` AI CONTEXT header warns against
+  reintroducing the fixed leading pad.
+
+### 27 July 2026 — Discover category depth, rail "See All" tile, Priority label
+
+- **Category pages expanded from Top 50 to Top 100.** All 19 Discover category
+  pages now request 100 entries. Verified against Apple's legacy genre endpoint,
+  which serves 100 (and 200) per genre. The editorial layout is unchanged and
+  needs no change: the feature-card rule `(rank - 1) % 7 == 0` is
+  depth-independent, so hero cards simply continue past 50 at ranks 57, 64, 71,
+  78, 85, 92 and 99.
+- **Depth is deliberately asymmetric.** The OVERALL Top Podcasts page and the
+  Top Episodes page remain at 50 because both are served by Apple's Marketing
+  Tools v2 feed, which hard-caps at 50 (`top/100` and `top/200` both error —
+  verified 2026-07-25). Only the legacy-endpoint category charts can go deeper.
+  Page titles now reflect this: "Top 100 - &lt;Category&gt;" vs plain
+  "Top Podcasts". Depth lives in `DiscoverViewModel.categoryChartLimit`.
+- **Chart cache reuse generalised.** A cached larger chart is an ordered
+  superset of a smaller request, so the 15-entry Discover rails can be served
+  from an already-downloaded category page. Supersets are now checked
+  largest-first (100, then 50) so caches written before this change stay usable.
+- **Every Discover category rail now ends with a "See All" tile** in the 16th
+  position — the same 124 pt geometry as the artwork tiles, purple-tinted glass
+  with a forward arrow — opening that category's chart page. Always present,
+  including on rails that returned fewer than 15 podcasts, so the affordance
+  never silently disappears. Wording matches the existing hero "See All"
+  buttons. The shared `glassCard(cornerRadius:)` modifier gained a
+  `highlighted:` parameter (defaulted, so all 40+ existing call sites are
+  unchanged) applying the same purple tint as `glassCapsule`.
+- **Subscriptions page: the drag-to-reorder toggle is now labelled "Priority"**
+  (was "Reorder"). In-app Support, the first-run coach mark, and the website
+  Support page were updated in the same pass so no instruction references a
+  button name that no longer exists. Internal symbols (`finishReorderSession`,
+  `beginPriorityReorderSession`, `Button-ReorderToggle`) intentionally keep
+  their existing names.
+- Documentation: FEATURES.md, PAGES.md, DESIGN.md (new `Tile-RailSeeAll`
+  pattern) and the affected AI CONTEXT headers updated. Website rebuilt and
+  deployed (`kevmarl-site` commit `e287993`).
+- Validation: `swift build --target AutohopCore` passes. `DiscoverView`,
+  `TopPodcastsView`, `PodcastsView` and `EpisodeBadges` are app-target only and
+  were verified by inspection — **Xcode build still required**.
+
+### 27 July 2026 — durable tvOS library recovery and large-download visibility
+
+- Fixed a tvOS subscription materialisation failure being treated as terminal.
+  Phone-authored subscription identity, feed URL, title and priority now enter
+  the durable survival kit before the RSS request begins; failed requests retry
+  with capped backoff, survive relaunch, and can be retried immediately with
+  **Check for Updates**.
+- Added a one-time authoritative iCloud membership sweep so subscriptions that
+  disappeared before this repair can be recovered even when the former survival
+  kit no longer contains them. Manual **Check for Updates** also performs the
+  complete membership sweep.
+- Library no longer silently drops a podcast while its RSS details are pending.
+  It retains a non-navigable **Syncing details…** card and Settings & Diagnostics
+  lists the affected subscriptions and feed hosts.
+- Unified legacy Up Next recovery with the real Library materialisation path.
+  A recovered queue episode now materialises its phone-authored subscription
+  instead of existing only in a transient in-memory queue cache.
+- Removed the Windows Weekly-specific feed and identity override. Audio and video
+  subscriptions remain distinct and recovery uses only synced subscription or
+  survival-kit feed identity, preventing old prototype metadata from overriding
+  current phone-authored titles, media kinds and playback settings.
+- Protected recovery against stale survival-kit resurrection: a synced remote
+  unsubscribe cancels pending materialisation and removes its placeholder.
+- Improved multi-gigabyte download handling. Explicitly paused downloads now
+  persist resume data across app termination; live transfers request the video
+  network service class, remain non-discretionary, wait for connectivity and
+  allow constrained or expensive paths under the existing user network policy.
+- Downloads now display smoothed transfer speed and estimated time remaining in
+  addition to percentage and byte counts, making a slow publisher/CDN route
+  distinguishable from a stalled transfer.
+- Verified the complete 330-test package suite plus unsigned iOS and tvOS
+  Simulator application builds.
+
+### 27 July 2026 — background cancellation and feed-memory containment
+
+- Removed the structured timeout race around feed requests. Feed fetches now
+  inherit cancellation directly from their owning refresh task, preventing an
+  uncooperative request from keeping the shared refresh coordinator occupied
+  after a BGAppRefresh cooperative deadline.
+- Added a file-backed, memory-mapped response path for the repeatedly
+  pathological `twit.memberfulcontent.com` feed family. Its diagnostics retain
+  the existing network-stage measurements so a physical-device capture can
+  compare the new path with the former in-memory response materialisation.
+- Added host-level parse-memory quarantine. Once one feed produces extreme
+  memory growth, sibling feeds from that host are deferred instead of stacking
+  several retained allocations in the same manual or automatic cycle.
+- Added hard refresh-cycle ceilings at 450 MB physical footprint or 600 MB
+  resident memory. Both automatic and manual refresh stop admitting feeds at
+  the boundary, preserve due-work backlog where applicable, and emit an
+  explicit `memoryStopped` diagnostic outcome.
+- Added BGAppRefresh wake-generation and remaining-time diagnostics so an
+  anomalous early expiration callback can be distinguished from the current
+  task generation and an ordinary system deadline.
+- Deferred listening-history progress bookkeeping until after the
+  latency-sensitive playback tick, removing the observed 288 ms history write
+  from clock, controls and Now Playing updates.
+- Added regression coverage for both process-memory ceiling measures. The full
+  330-test package suite and an unsigned iOS Simulator application build pass.
+
 ### 26 July 2026 — playable cross-device Continue Listening
 
 - Extended listening-history sync with the episode stream URL and audio/video

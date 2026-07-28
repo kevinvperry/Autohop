@@ -103,7 +103,7 @@ struct PodcastsView: View {
                             }
                         } label: {
                             let reorderLabel = Label(
-                                editMode == .active ? "Done" : "Reorder",
+                                editMode == .active ? "Done" : "Priority",
                                 systemImage: editMode == .active ? "checkmark" : "arrow.up.arrow.down"
                             )
                             .font(.system(size: 13, weight: .semibold))

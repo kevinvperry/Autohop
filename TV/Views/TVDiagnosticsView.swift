@@ -21,6 +21,13 @@ struct TVDiagnosticsView: View {
                         .padding(.horizontal, 20)
                 }
                 diagnosticRow("Library podcasts", value: "\(model.libraryTiles.count)")
+                diagnosticRow("Subscriptions awaiting details", value: "\(model.pendingMaterializationDiagnostics.count)")
+                ForEach(model.pendingMaterializationDiagnostics, id: \.self) { detail in
+                    Text(detail)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                }
                 diagnosticRow("Version", value: versionIdentity)
                 Button {
                     Task { await model.primeLibraryFromCloudSoon(reason: "tv.manualRetry") }

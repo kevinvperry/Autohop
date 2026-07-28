@@ -710,6 +710,7 @@ struct DiscoverView: View {
                     ForEach(rail.podcasts) { podcast in
                         railTile(podcast)
                     }
+                    seeAllTile(rail.genre)
                 }
                 .padding(.horizontal, 20)
             }
@@ -753,6 +754,41 @@ struct DiscoverView: View {
             .frame(width: 124)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Trailing tile that closes every category rail, sitting exactly where a
+    /// 16th podcast would be. Deliberately reuses railTile's 124 pt geometry and
+    /// caption slot so the row reads as one continuous shelf rather than a card
+    /// with an appended button. Routes to the SAME Top-50 category page as the
+    /// rail heading, so that destination has an affordance at both ends of the
+    /// row — the heading for users who scan vertically, this for users who swipe
+    /// to the end of a rail.
+    ///
+    /// ALWAYS rendered, even when a rail returned fewer than 15 podcasts: the
+    /// category page holds up to 50 entries regardless, and a rail that silently
+    /// lost its affordance would be worse than one that occasionally offers a
+    /// short list. Wording is "See All" to match the Top Episodes / Top Podcasts
+    /// hero buttons — one phrase for one action across the whole page.
+    private func seeAllTile(_ genre: ChartGenre) -> some View {
+        Button {
+            pendingRoute = .category(genre)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: "arrow.forward")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.purple)
+                    .frame(width: 124, height: 124)
+                    .glassCard(cornerRadius: 14, highlighted: true)
+
+                Text("See All")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .frame(width: 124)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("See all \(genre.localizedName(from: viewModel.genreNames)) podcasts")
     }
 
     // MARK: - Shared pieces

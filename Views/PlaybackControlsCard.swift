@@ -13,7 +13,12 @@ import SwiftUI
 // EpisodeTrimControlRow, the stable replacement for SwiftUI's Form Stepper on
 // both trim pages. That row keeps taps in local @State and coalesces persistence
 // after 350 ms, preventing active-playback publications and synchronous settings
-// writes from rebuilding the control once per tap. Its solid capsule intentionally
+// writes from rebuilding the control once per tap. ALIGNMENT CONTRACT: its
+// duration line ("Off" / "1 min 30 secs") is rendered INSIDE the Label's title
+// slot so SwiftUI owns the icon column and both lines share one leading edge at
+// every Dynamic Type size. Never restore the old sibling-VStack +
+// `.padding(.leading, 28)` approximation — it under-indented the duration text.
+// Its solid capsule intentionally
 // avoids the iOS 26 scrolling/glass compositing flicker seen in native Stepper.
 struct PlaybackControlsCard: View {
     let preference: PlaybackPreference
@@ -339,19 +344,33 @@ struct EpisodeTrimControlRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                SettingsRowLabel(title: title, systemImage: systemImage)
+            // The duration line lives INSIDE the Label's title slot, not in a
+            // sibling VStack. That is what keeps it flush under the title:
+            // SwiftUI owns the icon column width, so both lines share one
+            // leading edge automatically and stay aligned at every Dynamic Type
+            // size. The previous layout put the duration in a sibling VStack and
+            // approximated the icon column with `.padding(.leading, 28)`, which
+            // did not match the real Label metrics — the duration sat visibly
+            // left of the title. Do not reintroduce a hard-coded leading pad here.
+            //
+            // Keeping the longer minute/second text BELOW the title (rather than
+            // between the title and the 44 pt tap targets) is still deliberate —
+            // it protects narrow phones, and both settings pages share the layout.
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
 
-                // Keep the longer minute/second text below the title instead of
-                // squeezing it between the title and 44 pt tap targets on narrow
-                // phones. Both settings pages therefore retain the same layout.
-                Text(EpisodeTrimDurationText.string(for: draftSeconds))
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.leading, 28)
+                    Text(EpisodeTrimDurationText.string(for: draftSeconds))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            } icon: {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.purple)
             }
             .layoutPriority(1)
 

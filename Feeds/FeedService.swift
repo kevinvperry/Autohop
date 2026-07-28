@@ -267,12 +267,12 @@ final class FeedService: FeedServicing {
 
         let beforeNetwork = Self.memorySample()
         let metricsCollector = FeedTaskMetricsCollector()
-        let (data, response) = try await withTimeout(seconds: requestTimeoutSeconds) {
-            try await self.session.data(
-                for: request,
-                delegate: metricsCollector
-            )
-        }
+        try Task.checkCancellation()
+        let (data, response) = try await fetchResponse(
+            for: request,
+            metricsCollector: metricsCollector
+        )
+        try Task.checkCancellation()
         let afterNetwork = Self.memorySample()
         Self.logMemoryStage(
             "networkData",
@@ -340,6 +340,48 @@ final class FeedService: FeedServicing {
             feedURL: feedURL
         )
         return .updated(result, newValidators)
+    }
+
+    /// TWiT feeds repeatedly retained hundreds of megabytes across the
+    /// `URLSession.data(for:)` boundary despite 3–4 MB response bodies. The
+    /// mechanism is inside the networking/materialisation boundary and is not
+    /// explained by MIME type, gzip, redirects, or XML parsing. Downloading to
+    /// a temporary file and mapping that file provides a production A/B path
+    /// that avoids returning an in-memory response buffer. Other hosts retain
+    /// the established data-task path until diagnostics prove a wider benefit.
+    /// Both URLSession async APIs inherit parent cancellation directly; do not
+    /// wrap them in a throwing task group, because structured-group teardown can
+    /// wait for an uncooperative child after a BGTask has already cancelled.
+    private func fetchResponse(
+        for request: URLRequest,
+        metricsCollector: FeedTaskMetricsCollector
+    ) async throws -> (Data, URLResponse) {
+        if request.url?.host?.lowercased() == "twit.memberfulcontent.com" {
+            let (temporaryURL, response) = try await session.download(
+                for: request,
+                delegate: metricsCollector
+            )
+            try Task.checkCancellation()
+            let data = try Data(
+                contentsOf: temporaryURL,
+                options: [.mappedIfSafe, .uncached]
+            )
+            AppLogger.shared.info(
+                "feed.fileBackedResponse",
+                "Mapped host-protected feed response from URLSession download file",
+                metadata: [
+                    "host": request.url?.host ?? "unknown",
+                    "dataBytes": "\(data.count)",
+                    "storage": "downloadTask.mappedIfSafe"
+                ],
+                alwaysPersist: true
+            )
+            return (data, response)
+        }
+        return try await session.data(
+            for: request,
+            delegate: metricsCollector
+        )
     }
 
     private func parseResult(
@@ -476,26 +518,6 @@ final class FeedService: FeedServicing {
         return episode
     }
 
-    private func withTimeout<T>(
-        seconds: TimeInterval,
-        operation: @escaping () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(seconds))
-                throw FeedServiceError.timedOut
-            }
-
-            guard let result = try await group.next() else {
-                throw FeedServiceError.timedOut
-            }
-            group.cancelAll()
-            return result
-        }
-    }
 }
 
 enum FeedServiceError: Error {

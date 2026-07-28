@@ -83,6 +83,10 @@ final class FeedRefreshCoordinator: ObservableObject {
     var activeCycleDiagnostics: RefreshCycleDiagnostics?
     var deferredBacklog: [UUID: DeferredRefreshBacklogEntry] = [:]
     var failureBackoffUntil: [UUID: Date] = [:]
+    /// Runtime host-level protection complements persisted per-subscription
+    /// quarantine. Once one feed causes extreme growth, sibling feeds from the
+    /// same host cannot compound memory within this process or refresh cycle.
+    var parseMemoryHostQuarantineUntil: [String: Date] = [:]
     var profileCache: [UUID: ReleaseRadarProfileCacheEntry] = [:]
     var lastBackgroundAudioRefreshAt: Date?
     /// Last completed due-feed cycle across foreground, BGAppRefresh and active

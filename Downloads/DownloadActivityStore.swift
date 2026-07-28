@@ -32,6 +32,10 @@ public struct DownloadActivity: Identifiable, Codable, Equatable {
     public var completedAt: Date?
     public var errorMessage: String?
     public var localFileName: String?
+    /// Smoothed presentation telemetry. Optional fields preserve decoding of
+    /// activity files written by older app versions.
+    public var bytesPerSecond: Double?
+    public var estimatedRemainingSeconds: TimeInterval?
 
     public init(
         id: UUID = UUID(),
@@ -50,7 +54,9 @@ public struct DownloadActivity: Identifiable, Codable, Equatable {
         updatedAt: Date = Date(),
         completedAt: Date? = nil,
         errorMessage: String? = nil,
-        localFileName: String? = nil
+        localFileName: String? = nil,
+        bytesPerSecond: Double? = nil,
+        estimatedRemainingSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.episodeID = episodeID
@@ -69,6 +75,8 @@ public struct DownloadActivity: Identifiable, Codable, Equatable {
         self.completedAt = completedAt
         self.errorMessage = errorMessage
         self.localFileName = localFileName
+        self.bytesPerSecond = bytesPerSecond
+        self.estimatedRemainingSeconds = estimatedRemainingSeconds
     }
 }
 
@@ -151,13 +159,27 @@ public final class DownloadActivityStore: ObservableObject {
         expectedBytes: Int64?
     ) {
         guard let index = activities.firstIndex(where: { $0.episodeID == episodeID }) else { return }
+        let now = Date()
+        let priorBytes = activities[index].writtenBytes
+        let elapsed = now.timeIntervalSince(activities[index].updatedAt)
+        let instantaneous = elapsed > 0.2 && writtenBytes >= priorBytes
+            ? Double(writtenBytes - priorBytes) / elapsed
+            : nil
+        if let instantaneous, instantaneous.isFinite, instantaneous > 0 {
+            let previous = activities[index].bytesPerSecond
+            let smoothed = previous.map { ($0 * 0.7) + (instantaneous * 0.3) } ?? instantaneous
+            activities[index].bytesPerSecond = smoothed
+            if let expectedBytes, expectedBytes > writtenBytes {
+                activities[index].estimatedRemainingSeconds = Double(expectedBytes - writtenBytes) / smoothed
+            }
+        }
         activities[index].status = .downloading
         activities[index].progress = max(0, min(1, fraction))
         activities[index].writtenBytes = writtenBytes
         if let expectedBytes, expectedBytes > 0 {
             activities[index].expectedBytes = expectedBytes
         }
-        activities[index].updatedAt = Date()
+        activities[index].updatedAt = now
     }
 
     /// Removes all activity records for the given episode (active, failed, and completed).

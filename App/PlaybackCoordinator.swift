@@ -553,10 +553,15 @@ final class PlaybackCoordinator: ObservableObject {
                         )
                     }
                 }
-                measure("historyProgress") {
+                // History persistence can occasionally take hundreds of
+                // milliseconds. Queue it behind the latency-sensitive playback
+                // tick so clock/Now Playing updates and audio controls are not
+                // held hostage by storage or CloudKit bookkeeping.
+                let historyIsPlaying = self.isPlaying
+                Task { @MainActor in
                     historyStatsCoordinator.recordPlaybackProgress(
                         at: time,
-                        isPlaying: self.isPlaying,
+                        isPlaying: historyIsPlaying,
                         episode: tickEpisode,
                         subscription: tickSubscription
                     )

@@ -21,10 +21,12 @@ import Foundation
 // which is the bridge into the existing browse-subscription flow.
 // Responses are cached to Caches/discover-charts with a 12 h TTL (2 h for
 // episodes) so Discover opens instantly and survives offline.
-// DiscoverViewModel also exposes lazy Top-50 child-page loaders for episodes,
-// overall podcasts, and each current Discover category. Category pages reuse
-// the legacy genre endpoint at limit 50 and the same 12-hour country/genre cache
-// rather than inflating the main Discover page's Top-15 rails.
+// DiscoverViewModel also exposes lazy child-page loaders for episodes, overall
+// podcasts, and each current Discover category. Category pages reuse the legacy
+// genre endpoint at `categoryChartLimit` (100) and the same 12-hour
+// country/genre cache rather than inflating the main Discover page's Top-15
+// rails. Episodes and the OVERALL podcast chart remain at 50 — Marketing Tools
+// v2 caps at 50, so only the legacy-endpoint category charts can go deeper.
 // PERFORMANCE INVARIANTS: (1) Discover enters its usable loaded phase before
 // network completion and publishes each hero/rail independently; one slow
 // endpoint must not block unrelated content. (2) A category child page may seed
@@ -242,9 +244,16 @@ actor PodcastChartsService {
     func topPodcasts(country: String, genre: ChartGenre, limit: Int) async throws -> [ChartPodcast] {
         let key = "\(country)-genre\(genre.id)-\(limit)"
         if let cached: [ChartPodcast] = cachedCharts(key: key) { return cached }
-        if limit < 50,
-           let cached: [ChartPodcast] = cachedCharts(key: "\(country)-genre\(genre.id)-50") {
-            return Array(cached.prefix(limit))
+        // A fresher, larger cached chart is an ordered superset of a smaller
+        // request, so a 15-entry rail can be served from an already-downloaded
+        // category page. Checked largest-first; 50 stays in the list so caches
+        // written before the category page moved to 100 remain usable.
+        for supersetLimit in [100, 50] where limit < supersetLimit {
+            if let cached: [ChartPodcast] = cachedCharts(
+                key: "\(country)-genre\(genre.id)-\(supersetLimit)"
+            ) {
+                return Array(cached.prefix(limit))
+            }
         }
 
         let url = URL(string: "https://itunes.apple.com/\(country)/rss/toppodcasts/limit=\(limit)/genre=\(genre.id)/json")!
@@ -1139,16 +1148,30 @@ final class DiscoverViewModel: ObservableObject {
         await loadTop50Podcasts(country: country)
     }
 
-    /// Loads a category-specific Top 50 only after its Discover chip is opened.
-    /// This deliberately does not reuse the 15-entry rail array: requesting the
-    /// real 50-entry chart preserves Apple's rank order and keeps Discover light.
+    /// Depth of a category chart page. 100 (raised from 50, 2026-07-27) —
+    /// VERIFIED against the legacy genre endpoint, which serves 100 (and 200)
+    /// per genre. NOTE the asymmetry with the OVERALL Top Podcasts page, which
+    /// stays at 50 because it is served by Marketing Tools v2, and that feed
+    /// hard-caps at 50 (top/100 and top/200 both error — verified 2026-07-25).
+    /// Do not "make them consistent" by raising the overall page without first
+    /// moving it to the legacy endpoint.
+    static let categoryChartLimit = 100
+
+    /// Loads a category-specific Top 100 only after its Discover chip, rail
+    /// heading, or rail-trailing "See All" tile is opened. This deliberately
+    /// does not reuse the 15-entry rail array: requesting the real chart
+    /// preserves Apple's rank order and keeps Discover light.
     func loadTop50Category(country: String, genre: ChartGenre) async {
         let key = "\(country)-\(genre.id)"
         if loaded50CategoryKey == key, !top50CategoryPodcasts.isEmpty { return }
         requested50CategoryKey = key
         top50CategoryPhase = .loading
         top50CategoryPodcasts = []
-        let podcasts = (try? await service.topPodcasts(country: country, genre: genre, limit: 50)) ?? []
+        let podcasts = (try? await service.topPodcasts(
+            country: country,
+            genre: genre,
+            limit: Self.categoryChartLimit
+        )) ?? []
         guard requested50CategoryKey == key else { return }
         guard !podcasts.isEmpty else {
             top50CategoryPhase = .failed("Couldn't load \(genre.name) podcasts. Check your connection and try again.")

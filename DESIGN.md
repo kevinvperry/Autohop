@@ -37,7 +37,8 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `List-Plain` | Lists use `.plain` style; row backgrounds do the visual separating |
 | `Section-Heading` | Bold `title3` section label above each card group |
 | `Section-CardList` | A `List` or `VStack` wrapped in a `white.opacity(0.08)` rounded-rect card |
-| `Glass-Card` | Shared `glassCard(cornerRadius:)` View modifier (`Views/EpisodeBadges.swift`) — iOS 26 glass surface, `.ultraThinMaterial` fallback. Used by Podcast Detail episode list + Episode Detail description card |
+| `Glass-Card` | Shared `glassCard(cornerRadius:highlighted:)` View modifier (`Views/EpisodeBadges.swift`) — iOS 26 glass surface, `.ultraThinMaterial` fallback. `highlighted: true` applies the same purple tint as `Glass-Capsule` for accent-action surfaces. Used by Podcast Detail episode list, Episode Detail description card, and `Tile-RailSeeAll` |
+| `Tile-RailSeeAll` | Trailing tile closing every Discover category rail (`Views/DiscoverView.swift`) — 124×124 `glassCard(cornerRadius: 14, highlighted: true)` with a centred purple `arrow.forward`, "See All" caption beneath. Occupies the 16th slot so it matches `railTile` geometry exactly; routes to the same `Top 100 - <Category>` page as the rail heading. Always rendered, even on short rails |
 | `Glass-Capsule` | Shared `glassCapsule(highlighted:)` View modifier (`Views/EpisodeBadges.swift`) — iOS 26 glass capsule pill; `highlighted: true` adds purple tint. Used by Discover chips, rank badges, Subscriptions reorder toggle |
 | `Section-CardRows` | Inside a card: `VStack(spacing: 0)` rows separated by `Divider` with `white.opacity(0.08)` tint |
 | `ListRow-Standard` | Up Next episode row: position · artwork · text stack · spacer · trailing metadata |
@@ -71,7 +72,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Toolbar-SheetStandard` | Up Next sheet toolbar: shortcut left · bordered action centre · Done right |
 | `Button-ReturnToPlayer` | `play.circle.fill` — always first leading button, returns to player from anywhere |
 | `Button-MenuHamburger` | `line.3.horizontal` — opens `MenuSheetView` |
-| `Button-ReorderToggle` | Plain text "Reorder"/"Done" — toggles drag-to-reorder mode |
+| `Button-ReorderToggle` | Plain text "Priority"/"Done" — toggles drag-to-reorder mode (pattern name is an internal symbol; the visible label is "Priority") |
 | `Button-RefreshAll` | `arrow.clockwise` trailing button — shows spinner while loading, hidden when list empty |
 | `Button-AddFeed` | `plus` trailing button — opens the Find Podcasts search sheet |
 | `Button-ToolbarAction` | Bordered, regular size, icon-only, shows `ProgressView` while async work runs |
@@ -97,7 +98,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `MetaCard-Details` | Two-column grid of key/value cards on the Details panel |
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
 | `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost / optional Volume Adjustment / Mono Audio card (`Views/PlaybackControlsCard.swift`). Per-podcast settings enable the −3…+3 dB adjustment between Vocal Boost and Mono; global Default Playback deliberately omits it. iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background. The `usesHostBackground` flag lets App Settings inherit its Form surface; Podcast Settings retains the self-contained glass card. |
-| `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
+| `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. **The duration line sits inside the `Label`'s title slot**, so it aligns flush under the title at every Dynamic Type size — never approximate the icon column with a fixed leading pad. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
 | `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
 | `Diagnostics-Tiered` | Hidden App Settings diagnostics section. `Enable Diagnostic Log` is the normal, outcome-focused tier. While enabled, `Detailed Refresh Trace` appears directly beneath it using `SettingsRowLabel` and the same native Form row/card background. The detailed tier is off by default and is described as a short-term Release Radar investigation tool; it must not be styled as a warning or primary action. `View Diagnostic Log` remains the final NavigationLink in the section. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
@@ -574,7 +575,7 @@ HStack(spacing: 12) {
 
 **Labels: `Card-TopEpisodeFeature`, `ListRow-TopEpisode`** (`Views/TopEpisodesView.swift`)
 
-The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets). **`Views/TopPodcastsView.swift` (the "Top Podcasts" page) reuses this exact layout and styling** — same `Card-TopEpisodeFeature` / `ListRow-TopEpisode` structure — but for chart *shows*: each entry shows the podcast's artwork, title, author (artist), and category (genreName) in place of the episode's title/show/relative-time, and is reached via the "See All" on the first "Top Podcasts" hero.
+The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. (Category pages built on this same layout run to Top 100; the feature-card formula is depth-independent.) A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets). **`Views/TopPodcastsView.swift` (the "Top Podcasts" page) reuses this exact layout and styling** — same `Card-TopEpisodeFeature` / `ListRow-TopEpisode` structure — but for chart *shows*: each entry shows the podcast's artwork, title, author (artist), and category (genreName) in place of the episode's title/show/relative-time, and is reached via the "See All" on the first "Top Podcasts" hero.
 
 **Feature card (`Card-TopEpisodeFeature`)** — mirrors the Discover episode-hero card, sized as a static full-width tile:
 - 232 pt tall, `cornerRadius 22`, `white.opacity(0.08)` hairline stroke
@@ -1355,7 +1356,7 @@ Used on full navigation stack pages (Priority page). No "Done" dismiss button �
         HStack(spacing: 8) {
             ReturnToPlayerButton()
             Button { showMenu = true } label: { Image(systemName: "line.3.horizontal") }
-            Button(editMode == .active ? "Done" : "Reorder") {
+            Button(editMode == .active ? "Done" : "Priority") {
                 withAnimation { editMode = editMode == .active ? .inactive : .active }
             }
         }
@@ -1640,10 +1641,10 @@ Button { showMenu = true } label: {
 
 **Label: `Button-ReorderToggle`**
 
-Third leading button on pages with reorderable lists. Switches between "Reorder" and "Done".
+Third leading button on pages with reorderable lists. Switches between "Priority" and "Done".
 
 ```swift
-Button(editMode == .active ? "Done" : "Reorder") {
+Button(editMode == .active ? "Done" : "Priority") {
     withAnimation { editMode = editMode == .active ? .inactive : .active }
 }
 .environment(\.editMode, $editMode)  // passed to the List
@@ -2702,7 +2703,7 @@ A single `ScrollView` with a lazy `VStack(alignment: .leading, spacing: 60)` sep
 
 **Four hero carousel sections** interspersed with category rails. The purple
 category chips above the feed are navigation controls: each pushes a dedicated
-`Top 50 - <Category>` child page for the selected storefront. Each category row
+`Top 100 - <Category>` child page for the selected storefront. Each category row
 also has a linked heading composed of its purple SF Symbol, bold category name,
 and trailing chevron. The Top-15 rails remain on Discover as quick previews.
 
@@ -2768,7 +2769,7 @@ struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
 
 `TopPodcastsView` serves both the overall Top Podcasts chart and category charts.
 Category pages are reached from both Discover chips and rail headings and use the
-title `Top 50 - <Category>`, followed by
+title `Top 100 - <Category>`, followed by
 `Apple Podcasts · <Category> · <Country>`.
 They deliberately mirror the established Top Podcasts editorial rhythm: full-width
 feature cards at ranks 1/8/15/22/29/36/43, compact 84pt-artwork rows elsewhere,
@@ -2778,7 +2779,7 @@ the standard subscribed-or-preview Podcast Detail route.
 
 When the matching country/category Top-15 rail already exists, `TopPodcastsView`
 uses those same ranked models as its immediate list and shows a small
-“Loading the full Top 50…” footer. The canonical 50-entry result replaces that
+“Loading the full Top 100…” footer. The canonical 100-entry result replaces that
 preview when ready; preview data is storefront-keyed so a country change cannot
 flash the previous country's chart.
 

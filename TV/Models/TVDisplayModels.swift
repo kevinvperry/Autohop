@@ -25,6 +25,10 @@ struct TVPodcastTileModel: Identifiable, Equatable {
     let artworkURL: URL?
     let feedURL: URL
     let priorityRank: Int
+    /// True when iCloud supplied the subscription identity but tvOS has not
+    /// yet completed its RSS materialisation. The Library keeps this durable
+    /// placeholder visible instead of silently dropping the podcast.
+    let isMaterializing: Bool
 }
 
 struct TVEpisodeRowModel: Identifiable, Equatable {

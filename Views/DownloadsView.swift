@@ -467,7 +467,25 @@ private struct DownloadActivityRow: View {
         let written = byteText(activity.writtenBytes)
         let expected = byteText(activity.expectedBytes)
         let percent = Int((activity.progress * 100).rounded())
-        return "\(percent)% • \(written) of \(expected)"
+        var components = ["\(percent)%", "\(written) of \(expected)"]
+        if activity.status == .downloading,
+           let speed = activity.bytesPerSecond, speed > 0 {
+            components.append("\(ByteCountFormatter.string(fromByteCount: Int64(speed), countStyle: .file))/s")
+        }
+        if activity.status == .downloading,
+           let remaining = activity.estimatedRemainingSeconds,
+           remaining.isFinite, remaining > 0 {
+            components.append("about \(remainingText(remaining)) left")
+        }
+        return components.joined(separator: " • ")
+    }
+
+    private func remainingText(_ seconds: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: max(60, seconds)) ?? "calculating"
     }
 
     private func byteText(_ value: Int64?) -> String {

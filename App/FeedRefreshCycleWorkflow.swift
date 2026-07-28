@@ -720,6 +720,8 @@ final class FeedRefreshCycleWorkflow {
 
         var completedIDs = Set<UUID>()
         var wasCancelled = false
+        var stoppedForMemorySafety = false
+        var memoryDeferredIDs = Set<UUID>()
         let coalescesBackgroundMutations =
             diagnostics.executionContext == .backgroundRefreshTask
             || diagnostics.executionContext == .backgroundProcessingTask
@@ -738,6 +740,26 @@ final class FeedRefreshCycleWorkflow {
             if Task.isCancelled {
                 wasCancelled = true
                 break
+            }
+            let host = subscription.feedURL.host?.lowercased() ?? "unknown"
+            if let quarantineUntil = coordinator
+                .parseMemoryHostQuarantineUntil[host],
+               quarantineUntil > runtimeWorkflow.now {
+                logger.warning(
+                    "feed.parseMemoryHostQuarantineSkipped",
+                    "Skipped feed because a sibling feed from this host caused extreme memory growth",
+                    metadata: releaseRadar.feedMetadata(
+                        for: subscription,
+                        includeURL: false,
+                        extra: [
+                            "host": host,
+                            "quarantineUntil": quarantineUntil.ISO8601Format(),
+                            "executionContext": diagnostics.executionContext.rawValue
+                        ]
+                    )
+                )
+                memoryDeferredIDs.insert(subscription.id)
+                continue
             }
             var startMetadata = releaseRadar.feedMetadata(
                 for: subscription,
@@ -765,6 +787,7 @@ final class FeedRefreshCycleWorkflow {
                 metadata: startMetadata
             )
             BackgroundWakeMonitor.shared.recordFeedAttempt()
+            let itemMemoryBefore = ResourceMonitor.shared.memoryFootprintSample()
             await itemWorkflow.refresh(
                 subscription,
                 episodeLimit: policy.defaultEpisodeLimit,
@@ -776,6 +799,54 @@ final class FeedRefreshCycleWorkflow {
             }
             completedIDs.insert(subscription.id)
             BackgroundWakeMonitor.shared.recordFeedCompletion()
+            let itemMemoryAfter = ResourceMonitor.shared.memoryFootprintSample()
+            let itemFootprintDelta = itemMemoryAfter.footprintMB
+                - itemMemoryBefore.footprintMB
+            let itemResidentDelta = itemMemoryAfter.residentMemoryMB
+                - itemMemoryBefore.residentMemoryMB
+            if FeedParseMemorySafety.quarantineDecision(
+                footprintDeltaMB: itemFootprintDelta,
+                residentDeltaMB: itemResidentDelta,
+                previousConsecutiveHighMemoryParses: 0
+            ) != nil {
+                let quarantineUntil = runtimeWorkflow.now.addingTimeInterval(
+                    FeedParseMemorySafety.initialQuarantine
+                )
+                coordinator.parseMemoryHostQuarantineUntil[host] = quarantineUntil
+                logger.warning(
+                    "feed.parseMemoryHostQuarantine",
+                    "Paused sibling feeds from a host after extreme refresh memory growth",
+                    metadata: releaseRadar.feedMetadata(
+                        for: subscription,
+                        includeURL: false,
+                        extra: [
+                            "host": host,
+                            "footprintDeltaMB": "\(itemFootprintDelta)",
+                            "residentDeltaMB": "\(itemResidentDelta)",
+                            "quarantineUntil": quarantineUntil.ISO8601Format(),
+                            "executionContext": diagnostics.executionContext.rawValue
+                        ]
+                    )
+                )
+            }
+            if FeedParseMemorySafety.shouldStopCycle(
+                footprintMB: itemMemoryAfter.footprintMB,
+                residentMB: itemMemoryAfter.residentMemoryMB
+            ) {
+                stoppedForMemorySafety = true
+                logger.warning(
+                    "feed.refreshAll.memoryCircuitBreak",
+                    "Stopped admitting feeds because the process reached the refresh-cycle memory ceiling",
+                    metadata: refreshContext.merging([
+                        "host": host,
+                        "footprintMB": "\(itemMemoryAfter.footprintMB)",
+                        "residentMemoryMB": "\(itemMemoryAfter.residentMemoryMB)",
+                        "completedFeeds": "\(completedIDs.count)",
+                        "totalFeeds": "\(subscriptions.count)"
+                    ]) { _, new in new }
+                )
+                break
+            }
             logger.verbose(
                 "feed.refreshAll.itemFinished",
                 "Finished subscription in timed cycle",
@@ -816,19 +887,25 @@ final class FeedRefreshCycleWorkflow {
             }
         }
 
-        if wasCancelled {
+        if wasCancelled || stoppedForMemorySafety {
             let unfinished = selected.filter {
                 !completedIDs.contains($0.subscription.id)
             }
-            restoreUnfinishedBacklog(
-                candidates: unfinished,
-                now: runtimeWorkflow.now,
-                diagnostics: diagnostics
-            )
+            if onlyDueFeeds {
+                restoreUnfinishedBacklog(
+                    candidates: unfinished,
+                    now: runtimeWorkflow.now,
+                    diagnostics: diagnostics
+                )
+            }
             releaseRadar.scheduleNextBackgroundRefresh()
+            let terminalEvent = stoppedForMemorySafety
+                ? "feed.refreshAll.memoryStopped" : "feed.refreshAll.cancelled"
             logger.warning(
-                "feed.refreshAll.cancelled",
-                "Refresh cycle stopped before all selected feeds completed",
+                terminalEvent,
+                stoppedForMemorySafety
+                    ? "Refresh cycle stopped at the process memory safety ceiling"
+                    : "Refresh cycle stopped before all selected feeds completed",
                 metadata: [
                     "attempted": "\(completedIDs.count)",
                     "unfinished": "\(unfinished.count)",
@@ -843,7 +920,7 @@ final class FeedRefreshCycleWorkflow {
                 force: true
             )
             logCycleSummary(
-                outcome: "cancelled",
+                outcome: stoppedForMemorySafety ? "memoryStopped" : "cancelled",
                 attempted: completedIDs.count + 1,
                 completed: completedIDs.count,
                 eligible: eligible.count,
@@ -859,6 +936,16 @@ final class FeedRefreshCycleWorkflow {
             return !completedIDs.isEmpty
         }
 
+        if onlyDueFeeds, !memoryDeferredIDs.isEmpty {
+            restoreUnfinishedBacklog(
+                candidates: selected.filter {
+                    memoryDeferredIDs.contains($0.subscription.id)
+                },
+                now: runtimeWorkflow.now,
+                diagnostics: diagnostics
+            )
+        }
+
         releaseRadar.scheduleNextBackgroundRefresh()
         queueCoordinator.recompute(reason: "feed.refreshAll.finished")
         await autoArchiveCoordinator.runIfNeeded(
@@ -866,7 +953,8 @@ final class FeedRefreshCycleWorkflow {
             force: false
         )
         logCycleSummary(
-            outcome: "completed",
+            outcome: memoryDeferredIDs.isEmpty
+                ? "completed" : "completedWithMemoryDeferrals",
             attempted: subscriptions.count,
             completed: completedIDs.count,
             eligible: eligible.count,
