@@ -202,6 +202,8 @@ final class AutoDownloadIntentWorkflow {
         guard !pending.isEmpty else { return }
         await state.withExclusiveDrain { [weak self] in
             guard let self else { return }
+            var liveEpisodeIDs = await self.downloadCoordinator
+                .liveDownloadEpisodeIDs()
             self.logger.info(
                 "download.intentDrain",
                 "Draining persisted auto-download intents",
@@ -224,9 +226,73 @@ final class AutoDownloadIntentWorkflow {
                       ) else {
                     continue
                 }
-                if episode.downloadState == .downloading
-                    || episode.downloadState == .queued {
+
+                let disposition = DownloadRecoveryPolicy.disposition(
+                    storedState: episode.downloadState,
+                    hasScheduledRetry: self.downloadCoordinator
+                        .hasScheduledWatchdogRecovery(for: episode.id),
+                    hasLiveTask: liveEpisodeIDs.contains(episode.id),
+                    isLocallyQueued: self.downloadCoordinator
+                        .hasPendingQueueEntry(for: episode.id)
+                )
+                switch disposition {
+                case .scheduledRetry:
+                    self.logger.info(
+                        "download.intentDisposition",
+                        "Persisted intent retained for a scheduled watchdog retry",
+                        metadata: [
+                            "episodeID": episode.id.uuidString,
+                            "disposition": "scheduledRetry",
+                            "reason": reason,
+                            "nextRetryAt": self.downloadCoordinator
+                                .watchdogNextRetryDate(for: episode.id)?
+                                .ISO8601Format() ?? "pending"
+                        ]
+                    )
                     continue
+                case .liveURLSessionTask, .localPendingQueue:
+                    self.logger.info(
+                        "download.intentDisposition",
+                        "Persisted intent already has transfer ownership",
+                        metadata: [
+                            "episodeID": episode.id.uuidString,
+                            "disposition": disposition.rawValue,
+                            "storedState": episode.downloadState.rawValue,
+                            "reason": reason
+                        ]
+                    )
+                    continue
+                case .orphanedStoredTransfer:
+                    // A persisted `.downloading`/`.queued` flag is not proof of
+                    // an in-flight transfer. Watchdog cancellation can outlive
+                    // the URLSession task while leaving this model projection
+                    // behind. Normalize the orphan before eligibility is
+                    // re-evaluated so foreground/network recovery can self-heal.
+                    self.logger.warning(
+                        "download.intentOrphanRecovered",
+                        "Restarting an automatic intent with no live transfer owner",
+                        metadata: [
+                            "episodeID": episode.id.uuidString,
+                            "storedState": episode.downloadState.rawValue,
+                            "reason": reason,
+                            "liveTaskCount": "\(liveEpisodeIDs.count)"
+                        ]
+                    )
+                    self.subscriptionStore.markEpisodeDownloadFailed(
+                        subscriptionID: intent.subscriptionID,
+                        episodeID: episode.id
+                    )
+                case .eligibleForRecovery:
+                    self.logger.info(
+                        "download.intentDisposition",
+                        "Persisted intent is eligible for automatic recovery",
+                        metadata: [
+                            "episodeID": episode.id.uuidString,
+                            "disposition": disposition.rawValue,
+                            "storedState": episode.downloadState.rawValue,
+                            "reason": reason
+                        ]
+                    )
                 }
                 if let failure = self.state.intentStore.activeFailure(
                     episodeID: episode.id,
@@ -252,6 +318,8 @@ final class AutoDownloadIntentWorkflow {
                     podcastTitle: intent.podcastTitle,
                     refreshUpNextAfterMerge: true
                 )
+                liveEpisodeIDs = await self.downloadCoordinator
+                    .liveDownloadEpisodeIDs()
                 self.resolveIfSettled(
                     episodeID: intent.episodeID,
                     subscriptionID: intent.subscriptionID

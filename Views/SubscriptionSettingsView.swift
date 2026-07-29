@@ -132,7 +132,7 @@ struct SubscriptionSettingsView: View {
     @State private var showPriorityEditor = false
     @State private var draftTitle = ""
     @State private var draftPriorityRank = 1
-    @State private var episodeToShare: Episode?
+    @State private var showPodcastShare = false
     @State private var copiedFeedURL: URL?
     @Environment(\.dismiss) private var dismiss
 
@@ -225,16 +225,19 @@ struct SubscriptionSettingsView: View {
 
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.newestEpisode
+                    showPodcastShare = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.newestEpisode == nil)
+                .disabled(subscription == nil)
+                .accessibilityLabel("Share Podcast")
             }
         }
         .miniPlayerBar()
-        .sheet(item: $episodeToShare) { ep in
-            EpisodeShareSheet(episode: ep, subscription: subscription)
+        .sheet(isPresented: $showPodcastShare) {
+            if let subscription {
+                PodcastShareSheet(subscription: subscription)
+            }
         }
         .confirmationDialog(
             "Unsubscribe from \(subscription?.title ?? "this podcast")?",

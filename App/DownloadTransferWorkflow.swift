@@ -373,7 +373,8 @@ final class DownloadTransferWorkflow {
                 error,
                 episode: episode,
                 subscriptionID: subscriptionID,
-                podcastTitle: podcastTitle
+                podcastTitle: podcastTitle,
+                isAutomatic: isAutomatic
             )
         }
     }
@@ -440,7 +441,8 @@ final class DownloadTransferWorkflow {
         _ error: Error,
         episode: Episode,
         subscriptionID: UUID,
-        podcastTitle: String
+        podcastTitle: String,
+        isAutomatic: Bool
     ) {
         if let downloadError = error as? DownloadError,
            downloadError == .paused {
@@ -453,12 +455,31 @@ final class DownloadTransferWorkflow {
                 )
                 return
             }
-            coordinator.activityStore.pause(episodeID: episode.id)
-            coordinator.message = "Paused \(episode.title)."
-            logger.info("download.paused", "Episode download paused", metadata: [
+            if isAutomatic {
+                coordinator.activityStore.waitForRetry(
+                    episodeID: episode.id,
+                    retryAt: coordinator.watchdogNextRetryDate(
+                        for: episode.id
+                    )
+                )
+                coordinator.message = nil
+            } else {
+                coordinator.activityStore.pause(episodeID: episode.id)
+                coordinator.message = "Paused \(episode.title)."
+            }
+            logger.info(
+                isAutomatic ? "download.waitingToRetry" : "download.paused",
+                isAutomatic
+                    ? "Automatic download is waiting for watchdog recovery"
+                    : "Episode download paused",
+                metadata: [
                 "episode": episode.title,
                 "podcast": podcastTitle,
-                "mediaKind": episode.mediaKind.rawValue
+                "mediaKind": episode.mediaKind.rawValue,
+                "automatic": "\(isAutomatic)",
+                "nextRetryAt": coordinator.watchdogNextRetryDate(
+                    for: episode.id
+                )?.ISO8601Format() ?? "pending"
             ])
             return
         }

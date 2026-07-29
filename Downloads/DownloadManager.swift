@@ -66,6 +66,10 @@ public protocol DownloadManaging: AnyObject {
     /// Returns the set of episode IDs that are tracked as actively downloading in URLSession.
     /// Used at startup to reconcile persisted `.downloading` state against live tasks.
     func activeDownloadEpisodeIDs() async -> Set<UUID>
+    /// Clears shared URLSession cache/credential state after Autohop observes
+    /// zero-byte stalls across several unrelated hosts. This deliberately does
+    /// not invalidate the background session or cancel healthy live tasks.
+    func recoverFromSharedStall(reason: String)
     /// Requests an immediate absolute-deadline check. Default protocol behavior is
     /// a no-op so lightweight test doubles do not need watchdog machinery.
     func reevaluateWatchdog(reason: String)
@@ -73,6 +77,7 @@ public protocol DownloadManaging: AnyObject {
 
 public extension DownloadManaging {
     func reevaluateWatchdog(reason: String) {}
+    func recoverFromSharedStall(reason: String) {}
 }
 
 public final class DownloadManager: NSObject, DownloadManaging {
@@ -834,6 +839,21 @@ extension DownloadManager {
                     continuation.resume(returning: ids)
                 }
             }
+        }
+    }
+
+    public func recoverFromSharedStall(reason: String) {
+        logger.warning(
+            "download.sessionRecoveryRequested",
+            "Resetting shared URLSession state after cross-host zero-byte stalls",
+            metadata: ["reason": reason]
+        )
+        session.reset { [weak self] in
+            self?.logger.info(
+                "download.sessionRecoveryCompleted",
+                "Shared URLSession cache and credential state reset",
+                metadata: ["reason": reason]
+            )
         }
     }
 }

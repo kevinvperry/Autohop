@@ -296,7 +296,9 @@ private struct DownloadActivityRow: View {
             }
 
             // Progress / error row — indented past artwork (14 padding + 44 artwork + 12 spacing)
-            if activity.status == .downloading || activity.status == .paused {
+            if activity.status == .downloading
+                || activity.status == .waitingToRetry
+                || activity.status == .paused {
                 VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: activity.progress, total: 1)
                         .tint(.purple)
@@ -408,6 +410,12 @@ private struct DownloadActivityRow: View {
 
                 archiveButton
 
+            case .waitingToRetry:
+                ProgressView()
+                    .controlSize(.small)
+
+                archiveButton
+
             case .paused, .failed:
                 Button {
                     Task { await appState.resumeDownload(activity) }
@@ -442,6 +450,7 @@ private struct DownloadActivityRow: View {
     private var statusText: String {
         switch activity.status {
         case .downloading: return "Downloading"
+        case .waitingToRetry: return "Waiting to retry"
         case .paused: return "Paused"
         case .failed: return "Failed"
         case .completed: return "Complete"
@@ -451,6 +460,7 @@ private struct DownloadActivityRow: View {
     private var statusColor: Color {
         switch activity.status {
         case .downloading: return .purple
+        case .waitingToRetry: return .orange
         case .paused: return .orange
         case .failed: return .red
         case .completed: return .green

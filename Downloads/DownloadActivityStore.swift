@@ -9,6 +9,10 @@ import Foundation
 // at launch by AppState.reconcileOrphanedDownloads).
 public enum DownloadActivityStatus: String, Codable {
     case downloading
+    /// An automatic transfer was interrupted by the first-byte watchdog and
+    /// remains owned by Autohop's retry policy. Unlike `paused`, this state is
+    /// never interpreted as a user request to stop future attempts.
+    case waitingToRetry
     case paused
     case failed
     case completed
@@ -107,7 +111,11 @@ public final class DownloadActivityStore: ObservableObject {
 
     public var activeActivities: [DownloadActivity] {
         activities
-            .filter { $0.status == .downloading || $0.status == .paused }
+            .filter {
+                $0.status == .downloading
+                    || $0.status == .waitingToRetry
+                    || $0.status == .paused
+            }
             .sorted { $0.startedAt < $1.startedAt }
     }
 
@@ -194,6 +202,22 @@ public final class DownloadActivityStore: ObservableObject {
         activities[index].updatedAt = Date()
     }
 
+    public func waitForRetry(
+        episodeID: UUID,
+        retryAt: Date?,
+        message: String = "Waiting for automatic retry"
+    ) {
+        guard let index = activities.firstIndex(where: {
+            $0.episodeID == episodeID
+        }) else { return }
+        activities[index].status = .waitingToRetry
+        activities[index].updatedAt = Date()
+        activities[index].errorMessage = message
+        activities[index].estimatedRemainingSeconds = retryAt.map {
+            max(0, $0.timeIntervalSinceNow)
+        }
+    }
+
     public func fail(episode: Episode, podcastTitle: String, error: String) {
         upsertTerminal(
             episode: episode,
@@ -259,7 +283,11 @@ public final class DownloadActivityStore: ObservableObject {
 
     private func trim() {
         let active = activities
-            .filter { $0.status == .downloading || $0.status == .paused }
+            .filter {
+                $0.status == .downloading
+                    || $0.status == .waitingToRetry
+                    || $0.status == .paused
+            }
             .sorted { $0.startedAt < $1.startedAt }
         let failed = activities.filter { $0.status == .failed }.sorted { $0.updatedAt > $1.updatedAt }
         let completed = activities.filter { $0.status == .completed }

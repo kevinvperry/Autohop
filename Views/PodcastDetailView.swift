@@ -66,6 +66,7 @@ struct PodcastDetailView: View {
     @State private var isRefreshing = false
     @State private var isLoadingOlderEpisodes = false
     @State private var episodeToShare: Episode?
+    @State private var showPodcastShare = false
     @State private var showExpandedArtwork = false
     @State private var showUnsubscribeConfirm = false
     /// Whether the header show-description is expanded to its full untruncated text.
@@ -203,6 +204,11 @@ struct PodcastDetailView: View {
         .sheet(item: $episodeToShare) { ep in
             EpisodeShareSheet(episode: ep, subscription: subscription)
         }
+        .sheet(isPresented: $showPodcastShare) {
+            if let subscription {
+                PodcastShareSheet(subscription: subscription)
+            }
+        }
         .confirmationDialog(
             "Unsubscribe from \(subscription?.title ?? "this podcast")?",
             isPresented: $showUnsubscribeConfirm,
@@ -230,11 +236,12 @@ struct PodcastDetailView: View {
             // match the Subscriptions page. The toolbar keeps Share + Settings.
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.newestEpisode
+                    showPodcastShare = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.newestEpisode == nil)
+                .disabled(subscription == nil)
+                .accessibilityLabel("Share Podcast")
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -249,11 +256,12 @@ struct PodcastDetailView: View {
         } else {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    episodeToShare = subscription?.newestEpisode
+                    showPodcastShare = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(subscription?.newestEpisode == nil)
+                .disabled(subscription == nil)
+                .accessibilityLabel("Share Podcast")
             }
         }
     }

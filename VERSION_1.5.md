@@ -13,6 +13,54 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### 30 July 2026 — safer, honest sharing foundations
+
+- Podcast Detail and Podcast Settings now share the podcast itself instead of
+  silently sharing its newest episode.
+- Episode sharing no longer falls back to the raw media enclosure. Autohop now
+  shares only a validated publisher-facing episode page or HTTP(S) permalink;
+  when none exists it safely shares the branded card and episode details.
+- Added **Copy Link** when a safe episode page is available, with explicit copy
+  confirmation and accessibility guidance.
+- Added a pure `ShareURLResolver` that rejects credentials, sensitive query
+  fields, local/private-network addresses, non-web schemes and oversized URLs.
+- Replaced the fixed 580-point share sheet with adaptive, scrollable medium and
+  large presentations for small phones, landscape and larger text sizes.
+- Added a dedicated podcast share sheet that exports podcast artwork, title,
+  creator and description without exposing the RSS feed address.
+- Added resolver regression tests and updated the authoritative staged sharing
+  proposal. Universal Links, inbound sharing, expanded card formats and tvOS QR
+  sharing remain later Version 1.5 work.
+
+### 29 July 2026 — automatic-download watchdog self-recovery
+
+- Fixed automatic downloads becoming permanently stranded at 0% after two
+  first-byte watchdog cancellations. Retry-task ownership now ends when the
+  replacement transfer is handed off, so a later genuine timeout advances the
+  bounded retry policy instead of being misclassified as a duplicate callback.
+- Added generation-safe cleanup and explicit retry dates. Diagnostics now
+  identify retry generation, handoff, next attempt and the owner responsible
+  when a decision is coalesced.
+- Separated watchdog recovery from a deliberate user pause in the Downloads
+  page. Automatic stalls display **Waiting to retry** and remain recoverable;
+  only a user-requested pause remains terminal until Resume is selected.
+- Persisted intent draining now verifies concrete URLSession and local FIFO
+  ownership. A stored `downloading` or `queued` flag with no corresponding live
+  task is treated as an orphan, normalized and restarted automatically on
+  foreground, launch, background-task completion or restored connectivity.
+- Added explicit disposition diagnostics for every retained intent: scheduled
+  retry, live URLSession task, local pending queue, recoverable orphan,
+  exhaustion cooldown or eligible recovery.
+- Added cross-host first-byte incident detection. Stalls affecting three or
+  more unrelated hosts within ten minutes open a five-minute shared-session
+  circuit, safely reset URLSession cache/credential state without invalidating
+  healthy tasks, and automatically re-drain pending work when the circuit
+  closes.
+- Added a pure recovery-ownership policy and regression tests covering
+  scheduled retries, live tasks, queued work, orphaned stored transfers and
+  recoverable failed/not-downloaded intents.
+
+
 ### 28 July 2026 — storefront-aware Shows and Episodes search
 
 - Replaced the modal flat podcast search list with a dedicated Search page

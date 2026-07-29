@@ -1,0 +1,135 @@
+import SwiftUI
+import UIKit
+
+// AI CONTEXT — Views/PodcastShareSheet.swift
+// Honest podcast-level share surface used by Podcast Detail and Podcast
+// Settings. The first safe-sharing increment deliberately exports a branded
+// podcast card plus descriptive text only: Subscription currently has no
+// separately parsed publisher homepage and its feedURL may be private. Never
+// substitute newestEpisode and never expose feedURL. A later sharing stage can
+// add a validated channel webpage without changing these call sites.
+
+struct PodcastShareSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let subscription: Subscription
+
+    @State private var artworkImage: UIImage?
+    @State private var isSharing = false
+    @State private var shareItems: [Any] = []
+    @State private var showActivitySheet = false
+
+    private var subtitle: String {
+        let author = subscription.author?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return author?.isEmpty == false ? author! : "Podcast"
+    }
+
+    private var details: String {
+        var lines = [subscription.title]
+        if subtitle != "Podcast" { lines.append(subtitle) }
+        if let description = subscription.description?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty {
+            lines.append(String(description.prefix(500)))
+        }
+        lines.append("Shared from Autohop")
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Capsule()
+                    .fill(Color(white: 0.3))
+                    .frame(width: 36, height: 4)
+                    .padding(.top, 12)
+
+                EpisodeShareCardView(
+                    episodeTitle: subscription.title,
+                    podcastName: subtitle,
+                    artworkImage: artworkImage,
+                    publishedDate: nil
+                )
+                .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
+
+                Label(
+                    "This shares the podcast itself—not its newest episode. A public publisher link will be added when the feed supplies one that Autohop can verify safely.",
+                    systemImage: "dot.radiowaves.left.and.right"
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 20)
+
+                Button {
+                    Task { await prepareAndShare() }
+                } label: {
+                    HStack(spacing: 9) {
+                        if isSharing {
+                            ProgressView().tint(.white).scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        Text(isSharing ? "Preparing…" : "Share Podcast")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.purple.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSharing)
+                .padding(.horizontal, 20)
+
+                Button("Cancel") { dismiss() }
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.55))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(white: 0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+            }
+        }
+        .presentationBackground(.regularMaterial)
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(20)
+        .task { await loadArtwork() }
+        .sheet(isPresented: $showActivitySheet) {
+            ActivitySheet(items: shareItems).ignoresSafeArea()
+        }
+    }
+
+    private func loadArtwork() async {
+        guard let url = subscription.artworkURL else { return }
+        artworkImage = await ArtworkImageCache.shared.image(
+            for: url,
+            targetSize: CGSize(width: 176, height: 176),
+            scale: 3
+        )
+    }
+
+    @MainActor
+    private func prepareAndShare() async {
+        isSharing = true
+        defer { isSharing = false }
+
+        let renderer = ImageRenderer(content: EpisodeShareCardView(
+            episodeTitle: subscription.title,
+            podcastName: subtitle,
+            artworkImage: artworkImage,
+            publishedDate: nil
+        ))
+        renderer.scale = 3
+        var items: [Any] = []
+        if let image = renderer.uiImage { items.append(image) }
+        items.append(details)
+        shareItems = items
+        showActivitySheet = true
+    }
+}

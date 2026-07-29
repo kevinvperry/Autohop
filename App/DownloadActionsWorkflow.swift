@@ -506,7 +506,9 @@ final class DownloadActionsWorkflow {
         if downloadCoordinator.activityStore.activeActivities.contains(where: {
             $0.subscriptionID == subscriptionID
                 && $0.episodeID == episodeID
-                && ($0.status == .downloading || $0.status == .paused)
+                && ($0.status == .downloading
+                    || $0.status == .waitingToRetry
+                    || $0.status == .paused)
         }) {
             return true
         }

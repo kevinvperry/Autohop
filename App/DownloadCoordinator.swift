@@ -55,6 +55,8 @@ final class DownloadCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var watchdogRetryTasks: [UUID: Task<Void, Never>] = [:]
     private var watchdogRetryGeneration: [UUID: Int] = [:]
+    private var watchdogRetryDates: [UUID: Date] = [:]
+    private var automaticRecoveryHandler: ((String) -> Void)?
     private weak var autoDownloadIntentStore: AutoDownloadIntentStore?
     private struct HostCircuit {
         var terminalFailures: [Date] = []
@@ -62,6 +64,9 @@ final class DownloadCoordinator: ObservableObject {
     }
     private var hostCircuits: [String: HostCircuit] = [:]
     private var globalCircuitOpenUntil: Date?
+    private var recentWatchdogStallsByHost: [String: [Date]] = [:]
+    private var sharedSessionRecoveryGeneration = 0
+    private var sharedSessionRecoveryTask: Task<Void, Never>?
     private var episodeDetections: [UUID: EpisodeDetection] = [:]
 
     // Internal access is limited to typed download/runtime workflows. These
@@ -94,6 +99,9 @@ final class DownloadCoordinator: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.latestNetworkPath = path
                 self?.reevaluateWatchdog(reason: "networkPathChanged")
+                if path.status == .satisfied {
+                    self?.automaticRecoveryHandler?("networkPathSatisfied")
+                }
             }
         }
         networkMonitor.start(
@@ -180,15 +188,31 @@ final class DownloadCoordinator: ObservableObject {
                       let autoDownloadIntentStore else {
                     return
                 }
+                if let mediaURL = self.activityStore.activeActivities.first(
+                    where: { $0.episodeID == episodeID }
+                )?.mediaURL {
+                    self.recordWatchdogStall(
+                        mediaURL: mediaURL,
+                        manager: downloadManager,
+                        logger: logger,
+                        now: Date()
+                    )
+                }
                 // Two watchdog evaluators can observe the same URLSession task
                 // generation before either callback reaches MainActor. The first
                 // callback owns retry advancement; later callbacks are coalesced
                 // instead of consuming attempts 2 and 3 for one timeout.
                 guard self.watchdogRetryTasks[episodeID] == nil else {
+                    let generation = self.watchdogRetryGeneration[episodeID] ?? 0
                     logger.info(
                         "download.watchdogRetryCoalesced",
                         "Ignored duplicate watchdog retry decision",
-                        metadata: ["episodeID": episodeID.uuidString]
+                        metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "retryGeneration": "\(generation)",
+                            "nextRetryAt": self.watchdogRetryDates[episodeID]?
+                                .ISO8601Format() ?? "handoffInProgress"
+                        ]
                     )
                     return
                 }
@@ -255,25 +279,59 @@ final class DownloadCoordinator: ObservableObject {
                 }
 
                 let delay = TimeInterval(30 * (1 << (attempt - 1)))
+                let retryAt = Date().addingTimeInterval(delay)
+                self.watchdogRetryDates[episodeID] = retryAt
+                self.activityStore.waitForRetry(
+                    episodeID: episodeID,
+                    retryAt: retryAt
+                )
                 logger.info(
                     "download.watchdogRetryScheduled",
                     "Scheduled bounded watchdog retry",
                     metadata: [
                         "episodeID": episodeID.uuidString,
                         "attempt": "\(attempt)",
-                        "delaySeconds": "\(Int(delay))"
+                        "delaySeconds": "\(Int(delay))",
+                        "retryGeneration": "\(generation)",
+                        "nextRetryAt": retryAt.ISO8601Format()
                     ]
                 )
                 self.watchdogRetryTasks[episodeID] = Task {
                     @MainActor [weak self, weak actions] in
+                    defer {
+                        if let self,
+                           self.watchdogRetryGeneration[episodeID]
+                            == generation {
+                            self.watchdogRetryTasks.removeValue(
+                                forKey: episodeID
+                            )
+                            self.watchdogRetryDates.removeValue(
+                                forKey: episodeID
+                            )
+                        }
+                    }
                     try? await Task.sleep(for: .seconds(delay))
                     guard !Task.isCancelled,
                           self?.watchdogRetryGeneration[episodeID] == generation
                     else { return }
+                    // Retry-task ownership covers only the delay and handoff.
+                    // Retaining this entry while awaiting the replacement
+                    // transfer made its later genuine timeout look like a
+                    // duplicate callback from the previous URLSession task.
+                    self?.watchdogRetryTasks.removeValue(forKey: episodeID)
+                    self?.watchdogRetryDates.removeValue(forKey: episodeID)
+                    logger.info(
+                        "download.watchdogRetryHandoff",
+                        "Retry delay completed; transfer ownership handed off",
+                        metadata: [
+                            "episodeID": episodeID.uuidString,
+                            "retryGeneration": "\(generation)",
+                            "attempt": "\(attempt)"
+                        ]
+                    )
                     await actions?.retryWatchdogCancelledDownload(
                         episodeID: episodeID
                     )
-                    self?.watchdogRetryTasks.removeValue(forKey: episodeID)
                 }
             }
         }
@@ -282,7 +340,30 @@ final class DownloadCoordinator: ObservableObject {
     func clearWatchdogRetryState(for episodeID: UUID) {
         watchdogRetryCounts.removeValue(forKey: episodeID)
         watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
+        watchdogRetryDates.removeValue(forKey: episodeID)
         watchdogRetryGeneration[episodeID, default: 0] += 1
+    }
+
+    func watchdogNextRetryDate(for episodeID: UUID) -> Date? {
+        watchdogRetryDates[episodeID]
+    }
+
+    func hasScheduledWatchdogRecovery(for episodeID: UUID) -> Bool {
+        watchdogRetryTasks[episodeID] != nil
+    }
+
+    func liveDownloadEpisodeIDs() async -> Set<UUID> {
+        await watchdogDownloadManager?.activeDownloadEpisodeIDs() ?? []
+    }
+
+    func hasPendingQueueEntry(for episodeID: UUID) -> Bool {
+        pendingQueue.contains { $0.episode.id == episodeID }
+    }
+
+    func installAutomaticRecoveryHandler(
+        _ handler: @escaping (String) -> Void
+    ) {
+        automaticRecoveryHandler = handler
     }
 
     func isAutomaticDownload(episodeID: UUID) -> Bool {
@@ -349,7 +430,8 @@ final class DownloadCoordinator: ObservableObject {
         autoDownloadIntentStore?.clearFailure(episodeID: episodeID)
         guard let host = mediaURL.host?.lowercased() else { return }
         hostCircuits.removeValue(forKey: host)
-        if hostCircuits.values.allSatisfy({ $0.openUntil == nil }) {
+        if hostCircuits.values.allSatisfy({ $0.openUntil == nil }),
+           globalCircuitOpenUntil.map({ $0 <= Date() }) ?? true {
             globalCircuitOpenUntil = nil
         }
     }
@@ -370,6 +452,62 @@ final class DownloadCoordinator: ObservableObject {
         }.count
         if failingHosts >= 3 {
             globalCircuitOpenUntil = now.addingTimeInterval(5 * 60)
+        }
+    }
+
+    private func recordWatchdogStall(
+        mediaURL: URL,
+        manager: any DownloadManaging,
+        logger: AppLogger,
+        now: Date
+    ) {
+        guard let host = mediaURL.host?.lowercased() else { return }
+        let windowStart = now.addingTimeInterval(-10 * 60)
+        for key in Array(recentWatchdogStallsByHost.keys) {
+            recentWatchdogStallsByHost[key]?.removeAll { $0 < windowStart }
+            if recentWatchdogStallsByHost[key]?.isEmpty == true {
+                recentWatchdogStallsByHost.removeValue(forKey: key)
+            }
+        }
+        recentWatchdogStallsByHost[host, default: []].append(now)
+        let affectedHosts = recentWatchdogStallsByHost.count
+        guard affectedHosts >= 3,
+              globalCircuitOpenUntil == nil || globalCircuitOpenUntil! <= now
+        else { return }
+
+        sharedSessionRecoveryGeneration += 1
+        globalCircuitOpenUntil = now.addingTimeInterval(5 * 60)
+        let reason = "crossHostFirstByteStalls"
+        logger.warning(
+            "download.sessionIncident",
+            "Cross-host first-byte stalls opened the shared session circuit",
+            metadata: [
+                "affectedHosts": "\(affectedHosts)",
+                "hosts": recentWatchdogStallsByHost.keys.sorted()
+                    .joined(separator: ","),
+                "recoveryGeneration": "\(sharedSessionRecoveryGeneration)",
+                "circuitSeconds": "300"
+            ]
+        )
+        manager.recoverFromSharedStall(reason: reason)
+        let recoveryGeneration = sharedSessionRecoveryGeneration
+        sharedSessionRecoveryTask?.cancel()
+        sharedSessionRecoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5 * 60))
+            guard !Task.isCancelled,
+                  let self,
+                  self.sharedSessionRecoveryGeneration == recoveryGeneration
+            else { return }
+            self.globalCircuitOpenUntil = nil
+            self.recentWatchdogStallsByHost.removeAll()
+            logger.info(
+                "download.sessionCircuitClosed",
+                "Shared download circuit closed; persisted work will recover",
+                metadata: [
+                    "recoveryGeneration": "\(recoveryGeneration)"
+                ]
+            )
+            self.automaticRecoveryHandler?("sessionCircuitClosed")
         }
     }
 

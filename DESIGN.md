@@ -1965,7 +1965,14 @@ A five-button `HStack` below the controls, providing access to audio settings, o
 
 **AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the current audio output name from `AVAudioSession.currentRoute.outputs.first`. Route-change stability is handled below the UI in `PlaybackEngine`: brief AirPods/Speaker route storms should not visually change this control except for the route label itself, while confirmed device removal still leaves playback paused until the user resumes. iOS may report real AirPods transitions as `unknown` or `categoryChange`, so the engine treats settled output changes as restart candidates even when the route reason is not tidy.
 
-**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens `EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): a fixed-height bottom sheet (`presentationDetents([.height(580)])`, sized to the 280×360 share card + Share/Cancel buttons so it sits proportionally with the other audio-row sheets — not full-screen) that previews the rendered episode share card (`EpisodeShareCardView` — artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL. Disabled when no episode is loaded.
+**Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens
+`EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): an adaptive, internally
+scrollable medium/large sheet that previews the 280×360 rendered episode card.
+The system share payload includes a validated publisher-facing episode page
+when available and otherwise falls back to card + details; the media enclosure
+and RSS feed URL are never automatic share fallbacks. A separate **Copy Link**
+button appears only when the resolver provides a safe page. Disabled when no
+episode is loaded.
 
 **Archive button** (`archivebox`) — `Button-PlayerAction` style. Opens `ArchiveConfirmationSheet` (a bottom sheet). On confirm, calls `archiveEpisodeAndPlayNext` to archive the currently playing episode and advance to the next. Icon matches `SwipeActions-EpisodeRow` (`archivebox`).
 

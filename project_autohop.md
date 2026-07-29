@@ -116,7 +116,8 @@ compilation conditions are provided. The iPhone target remains device family 1;
 - Listening: download-first playback, Trim Silence, Vocal Boost, per-podcast speed
   and −3…+3 dB volume adjustment,
   start/end skip, shared debounced trim-control rows in both Podcast Settings and
-  Default Playback, chapter filtering, audio/video playback, share cards, sleep
+  Default Playback, chapter filtering, audio/video playback, privacy-safe
+  episode and podcast share cards, sleep
   timer, sleep schedule, Now Playing, and lock-screen/Control Centre commands.
 - Player resume polish: the scrubber now synchronises to the restored playback
   clock on first render, so partially played episodes open with the correct thumb

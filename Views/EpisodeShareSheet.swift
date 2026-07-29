@@ -4,18 +4,18 @@ import LinkPresentation
 
 // AI CONTEXT — Views/EpisodeShareSheet.swift ("Episode Share" sheet, from the
 // Player's audio row). Previews the rendered EpisodeShareCardView image, then
-// exports the card image plus a shareable link through UIActivityViewController.
-// The link prefers the episode's web page (Episode.episodeLink, RSS <item><link>)
-// → an http(s) permalink guid → the raw enclosure as last resort, and is wrapped
-// in an LPLinkMetadata item source so recipients get a rich, branded preview
-// (card image + episode title) instead of a bare URL. Share-card artwork is
+// exports the card image plus a SAFE publisher-facing link through
+// UIActivityViewController. ShareURLResolver prefers Episode.episodeLink then a
+// validated HTTP(S) GUID; it deliberately cannot accept the media enclosure or
+// feed URL. When no safe page exists the sheet explains that clearly and shares
+// card + episode details only. Share-card artwork is
 // fetched through ArtworkImageCache at the rendered card-art size so sharing
 // reuses validated disk source bytes and avoids full-size cover decodes.
 
 // MARK: - Episode share sheet
 
 /// Bottom sheet that previews the share card, then exports it via the
-/// system share sheet together with the episode's audio URL.
+/// system share sheet together with a safe publisher page when available.
 ///
 /// Usage:
 /// ```swift
@@ -38,15 +38,22 @@ struct EpisodeShareSheet: View {
     private var artworkURL: URL? {
         subscription?.artworkURL ?? episode.artworkURL
     }
-    /// Best shareable link for a recipient: prefer the episode's web page,
-    /// then an http(s) permalink guid, then the raw enclosure as a last resort.
-    private var shareURL: URL {
-        if let link = episode.episodeLink { return link }
-        if let url = URL(string: episode.guid),
-           url.scheme == "http" || url.scheme == "https" {
-            return url
+    private var resolvedLink: ResolvedShareLink? {
+        ShareURLResolver.episodeLink(
+            episodePage: episode.episodeLink,
+            guid: episode.guid
+        )
+    }
+    private var episodeDetails: String {
+        var lines = [episode.title, podcastName]
+        if let publishedAt = episode.publishedAt {
+            lines.append(publishedAt.formatted(date: .long, time: .omitted))
         }
-        return episode.audioURL
+        if let url = resolvedLink?.url {
+            lines.append(url.absoluteString)
+        }
+        lines.append("Shared from Autohop")
+        return lines.joined(separator: "\n")
     }
 
     // State
@@ -54,9 +61,11 @@ struct EpisodeShareSheet: View {
     @State private var isSharing = false
     @State private var shareItems: [Any] = []
     @State private var showActivitySheet = false
+    @State private var didCopyLink = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        ScrollView {
+            VStack(spacing: 0) {
             // Drag handle
             Capsule()
                 .fill(Color(white: 0.3))
@@ -73,7 +82,19 @@ struct EpisodeShareSheet: View {
             )
             .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
 
-            Spacer(minLength: 24)
+                Spacer(minLength: 24)
+
+                if resolvedLink == nil {
+                    Label(
+                        "No safe public episode link is available. Autohop will share the card and episode details without exposing the media download.",
+                        systemImage: "lock.shield"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                }
 
             // Share button
             Button {
@@ -102,6 +123,24 @@ struct EpisodeShareSheet: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
 
+                if let url = resolvedLink?.url {
+                    Button {
+                        UIPasteboard.general.url = url
+                        didCopyLink = true
+                    } label: {
+                        Label(didCopyLink ? "Link Copied" : "Copy Link", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .glassCard(cornerRadius: 14)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+                    .accessibilityHint("Copies the public episode page, not the media download")
+                }
+
             // Cancel
             Button { dismiss() } label: {
                 let inner = Text("Cancel")
@@ -121,11 +160,12 @@ struct EpisodeShareSheet: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
 
-            Spacer(minLength: 20)
+                Spacer(minLength: 20)
+            }
         }
         .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(580)])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(20)
         .task { await loadArtwork() }
@@ -167,16 +207,19 @@ struct EpisodeShareSheet: View {
         if let cardImage {
             items.append(cardImage)
         }
-        // Shareable link wrapped in LPLinkMetadata so recipients get a rich,
-        // branded preview (card image + episode title) pointing at a real,
-        // openable page — instead of a bare enclosure URL.
-        items.append(
-            EpisodeLinkItemSource(
-                url: shareURL,
-                title: "\(episode.title) — \(podcastName)",
-                image: cardImage
+        if let url = resolvedLink?.url {
+            // A safe page is wrapped in Link Presentation metadata. The media
+            // enclosure never reaches this path.
+            items.append(
+                EpisodeLinkItemSource(
+                    url: url,
+                    title: "\(episode.title) — \(podcastName)",
+                    image: cardImage
+                )
             )
-        )
+        } else {
+            items.append(episodeDetails)
+        }
 
         shareItems = items
         showActivitySheet = true
@@ -234,7 +277,9 @@ private final class EpisodeLinkItemSource: NSObject, UIActivityItemSource {
 
 // MARK: - UIActivityViewController wrapper
 
-private struct ActivitySheet: UIViewControllerRepresentable {
+/// Shared UIKit destination picker used by episode and podcast share surfaces.
+/// Keep `[Any]` confined to this final adapter boundary.
+struct ActivitySheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

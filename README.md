@@ -96,7 +96,9 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Stats page: time listened, time saved, episodes finished, and streaks over 7 Days / displayed month / displayed year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; stats are computed locally and sync only through the user's private iCloud when optional iCloud Sync is enabled
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
-- Episode share cards: rendered artwork card exported through the system share sheet
+- Safe sharing: adaptive episode and podcast cards, validated publisher-page
+  links, conditional Copy Link, and no automatic media-enclosure or RSS-address
+  exposure
 - Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned; it uses the same trim-control UI as per-podcast settings
 - Optional iCloud sync (off by default) — keeps played/archived state,
   per-podcast settings, subscribe/unsubscribe, the atomic Priority Stack order,

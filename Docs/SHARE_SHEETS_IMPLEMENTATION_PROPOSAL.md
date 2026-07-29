@@ -17,8 +17,13 @@ The private TWiT and generic NPR-link observations are user-library evidence
 verified during the cross-review; this document deliberately records no
 credential, private URL, token, or members-only enclosure.
 
-STATUS: PROPOSAL — NOT STARTED.
-No application or website code was changed while creating this document.
+STATUS: IMPLEMENTATION IN PROGRESS — EASY-WINS INCREMENT SHIPPED TO SOURCE
+2026-07-30. The first increment adds a pure safe episode-page resolver, removes
+automatic enclosure sharing, makes Podcast Detail and Podcast Settings share
+the podcast rather than newestEpisode, adds episode Copy Link when safe, and
+makes both share sheets adaptive. Feed privacy persistence, channel-page
+parsing, Universal Links, advanced modes, inbound sharing, card formats,
+context menus and tvOS QR remain staged work.
 Kevin authorises each implementation stage separately. An executing model must
 complete one stage, run that stage's tests, update the execution ledger, then
 stop at its gate unless Kevin explicitly authorises multiple stages.
@@ -1006,11 +1011,11 @@ Final convergence:
 
 | Stage | Status | Date | Notes |
 |---|---|---|---|
-| 0 | Not started | — | — |
-| 1 | Not started | — | — |
+| 0 | In progress | 2026-07-30 | Added pure subject/link-quality vocabulary and synthetic resolver fixtures. Persisted feed privacy classification and sync policy remain outstanding. |
+| 1 | Partially complete | 2026-07-30 | Safe episode-page/GUID resolver shipped; enclosure fallback removed; private-network, credential and sensitive-query candidates rejected; card/details fallback added. Full feed-level privacy policy remains dependent on Stage 0 persistence. |
 | 2 | Not started | — | — |
-| 3 | Not started | — | — |
-| 4 | Not started | — | — |
+| 3 | Partially complete | 2026-07-30 | Episode Copy Link and adaptive scrollable medium/large presentation shipped. Selectable payload modes and Player position/chapter controls remain outstanding. |
+| 4 | Partially complete | 2026-07-30 | Podcast toolbars now share an honest podcast card + details and never substitute newestEpisode or expose feedURL. RSS channel webpage parsing and link-enabled podcast modes remain outstanding. |
 | 5 | Not started | — | — |
 | 6 | Not started | — | — |
 | 7 | Not started | — | — |

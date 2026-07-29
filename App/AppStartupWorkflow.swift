@@ -262,6 +262,12 @@ final class AppStartupWorkflow {
             logger: logger,
             actions: downloadActionsWorkflow
         )
+        downloadCoordinator.installAutomaticRecoveryHandler {
+            [weak autoDownloadIntentWorkflow] reason in
+            Task { @MainActor in
+                await autoDownloadIntentWorkflow?.drain(reason: reason)
+            }
+        }
         downloadCoordinator.installBackgroundCompletionCallback(
             on: downloadManager,
             subscriptionStore: subscriptionStore,

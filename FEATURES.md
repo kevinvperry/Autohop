@@ -344,7 +344,13 @@ Both use the same "replace the queue" pattern: the subscriptionID is staged, the
 
 **Audio route changes:** Removing AirPods/headphones still pauses playback and requires deliberate user action to resume, but Autohop waits briefly to confirm the route loss before pausing so AirPods/Speaker transition storms do not immediately stop playback. If a new or non-built-in output appears during that confirmation window, the pending pause is cancelled. Active output transitions on the AVAudioEngine path schedule a delayed buffer-loop restart from the current playback position, including messy iOS `unknown` / `categoryChange` AirPods notifications. Route-loss confirmation cancels stale restart timers, and a replacement route reschedules the restart only after the route has settled, so the render watchdog is less likely to be the first recovery path.
 
-**Share:** Opens `EpisodeShareSheet` — previews a rendered share card (episode artwork, episode title, podcast name, Autohop branding) and exports it through the system share sheet together with the episode's audio URL.
+**Share:** Opens an adaptive `EpisodeShareSheet` that previews a rendered share
+card and exports it with a validated publisher-facing episode page when one is
+available. It never automatically shares the media enclosure or RSS feed URL.
+When no safe public page exists, it shares the card and descriptive text only.
+**Copy Link** appears only for a safe resolved page. Podcast Detail and Podcast
+Settings use `PodcastShareSheet`, which shares the podcast's own artwork, title,
+creator and description rather than silently substituting its newest episode.
 
 **Archive:** Opens a confirmation sheet; on confirm, archives the currently playing episode, deletes its downloaded file, and advances to the next queued episode.
 

@@ -90,6 +90,7 @@ let package = Package(
                 "Models/TVProjection.swift",
                 "Models/SubscriptionOrder.swift",
                 "Models/ArtworkURL.swift",
+                "Models/ShareContent.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Models/SilenceGapAccounting.swift",
@@ -129,6 +130,7 @@ let package = Package(
                 "PlaybackCore/StreamingPlaybackEngine.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift",
+                "Downloads/DownloadRecoveryPolicy.swift",
                 // Autohop Relay client (2026-07-10): zero UIKit dependency
                 // (pure Foundation/URLSession/Security), shared so tvOS can
                 // register/receive push without duplicating this networking
