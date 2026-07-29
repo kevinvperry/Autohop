@@ -12,7 +12,10 @@ official framing (WWDC26, June 2026) is the **iOS 27 app resizability push**:
 design for "a dynamic range of sizes and aspect ratios", fluid reflow — not
 letterboxing — as the default. This doc uses "resizability" throughout.
 
-STATUS: PROPOSAL — not started. Phase status lines below track progress.
+STATUS: PHASE 0 AUDIT COMPLETE (2026-07-30); implementation not started.
+`Docs/RESIZABILITY_AUDIT_2026-07-30.md` contains the current full visual
+inventory and ranked easy-win implementation package. Phase status lines below
+track code progress.
 
 RELATED:
 - Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md — its Phase 5 (iPad enablement)
@@ -50,7 +53,9 @@ Source inputs:
   "Make SwiftUI Toolbars Work In Resizable iPhone Apps"; MacRumors/9to5Mac
   reporting on iOS 27 resizability push and `foldState` / `angleDegrees`
   framework strings.
-- Autohop codebase audit performed 2026-07-03 (§2).
+- Initial Autohop codebase audit performed 2026-07-03 (§2), followed by the
+  complete all-view viewport audit on 2026-07-30
+  (`Docs/RESIZABILITY_AUDIT_2026-07-30.md`).
 - Autohop docs: `FEATURES.md`, `DESIGN.md`, `PAGES.md`, `project.yml`,
   `Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md`.
 
@@ -152,7 +157,7 @@ Phase 3 addition once real APIs + hardware exist.
 
 ### 2.2 The three real hazards
 
-1. **Orientation machinery** — `App/AppDelegate.swift:100`
+1. **Orientation machinery** — `App/AppDelegate.swift:272`
    (`supportedInterfaceOrientationsFor`) + `Views/NativeVideoPlayerView.swift`
    (static `supportedOrientations` mask + programmatic orientation requests;
    app is portrait except video, which rotates to landscape). Resizable hosts
@@ -161,18 +166,22 @@ Phase 3 addition once real APIs + hardware exist.
    on iPhone-shaped hosts, unconstrained elsewhere, video fills whatever
    window it gets* (R3).
 2. **`Views/PlayerView.swift`** — permanently mounted NavigationStack root
-   with three horizontally swipeable panels and a scrubber; the swipe-panel
-   geometry (`GeometryReader` at line 594) and transport layout assume
-   phone-portrait proportions. This is the flagship screen and the flagship
-   reflow risk: at wide/short sizes it should become side-by-side
+   with three horizontally swipeable panels and a scrubber. The artwork
+   `GeometryReader` at line 647 already constrains against both available width
+   and height and is not itself a hazard. The macro panel and transport layout
+   still assumes phone-portrait proportions. This is the flagship reflow risk:
+   at wide/short sizes it should become side-by-side
    (artwork+transport | details/chapters); at very narrow widths the
    transport row must not clip (§5).
 3. **No adaptive vocabulary exists** — every screen was designed at one
    width. Most list-based screens (Queue, Subscriptions, Settings, Downloads)
-   will reflow acceptably for free, but grid/chart/card screens
-   (`PodcastsView` grid, `StatsView` charts + `GeometryReader`s,
-   `DiscoverView` shelves, onboarding cards, coach-mark positioning) each
-   embed one-width assumptions that need explicit breakpoints (§5).
+   will reflow acceptably at narrow widths, but need readable-width constraints
+   when wide. Grid/chart/card screens (`StatsView` charts and fixed-count grid,
+   Player/Episode metadata, `DiscoverView`'s 19 shelves and in-feed heroes,
+   onboarding cards, coach-mark positioning) embed one-width assumptions that
+   need explicit reflow behaviour (§5). `SupportView` is the existing good
+   `.adaptive(minimum:)` grid example; `PodcastSearchView` is the existing good
+   `containerRelativeFrame` example.
 
 ### 2.3 UIKit islands to check against "Modernize your UIKit app"
 
@@ -255,15 +264,18 @@ the iOS 27 SDK rebuild becomes safe.
 
 1. Create `Views/AdaptiveLayout.swift` (R2): width bands, per-band grid
    columns / artwork sizes / spacing scale; document as DESIGN.md pattern
-   `AdaptiveLayout-Bands`.
+   `AdaptiveLayout-Bands`. **Complete 2026-07-30**, including boundary/helper
+   regression tests.
 2. Orientation rework (R3): `project.yml` orientations + AppDelegate mask +
    `NativeVideoPlayerView` behaviour, per the "Modernize your UIKit app"
    recipe. This is the one Phase 0 item with user-visible risk — regression
    test video enter/exit thoroughly on hardware.
 3. `UIScreen.main.scale` → per-context `displayScale` in
    `CarPlay/CarPlayArtworkProvider.swift` (audit-driven cleanup).
-4. Evaluate Apple's resizability agent skill (R9) against the codebase;
-   record findings as `Docs/RESIZABILITY_AUDIT_<date>.md`.
+4. Complete the source-level all-view resizability audit and record findings
+   as `Docs/RESIZABILITY_AUDIT_<date>.md`. **Complete 2026-07-30.** The audit
+   was performed directly against the current codebase; implementation and
+   visual device/simulator verification remain outstanding.
 5. Xcode 27 SDK rebuild smoke pass (Kevin): app runs, no layout explosions at
    default sizes.
 
@@ -335,16 +347,17 @@ telemetry-free sanity checklist added to release QA; revisit R8 floor.
 
 | View | Assumption today | Reflow behaviour required | Status |
 |---|---|---|---|
-| `Views/PlayerView.swift` | 3 swipe panels sized to portrait phone; GeometryReader L594; crowded top bar | `wide`: artwork+transport beside details/chapters; `narrow`: compact transport, pills → icons, toolbar priorities (R4) | Not started |
-| `Views/RootView.swift` | GeometryReader L86 (mini-player/nav chrome) | Mini player bar full-width at all bands; safe-area correctness in floating windows | Not started |
-| `Views/QueueSheetView.swift` | Phone-width rows/detents | Detents + row layout at `wide`/`expansive`; sheet vs popover choice on iPad (Phase 2) | Not started |
-| `Views/PodcastsView.swift` | Fixed 104 pt artwork grid at phone width | Band-driven column count; artwork size per band token | Not started |
-| `Views/DiscoverView.swift` | Shelf cells 124 pt, phone-width shelves | Shelf item counts/insets per band | Not started |
-| `Views/StatsView.swift` | GeometryReaders L1002/L1245 (charts) | Charts scale to width; two-up chart layout at `expansive` | Not started |
-| `Views/PodcastDetailView.swift` | Nested GeometryReaders L486/491 (header) | Header art/text ratio per band | Not started |
-| `Views/WelcomeView.swift`, `FirstSubscribeCard`, `StarterPacksView`, `CoachMark.swift` | Onboarding cards + coach-mark anchors at phone width | Cards cap max width, center at `wide`+; coach-mark anchor math window-relative | Not started |
-| `Views/NativeVideoPlayerView.swift` | Orientation-request model | Fill any window; R3 rework (Phase 0) | Not started |
-| Settings / Downloads / Support / lists | Plain lists | Expected free; verify at matrix sizes only | Not started |
+| `Views/PlayerView.swift` | 3 portrait-oriented panels; crowded top/audio rows; fixed 2-column metadata; fixed sheet sizes | Easy wins landed: route-control fallback, adaptive metadata, safe scrollable sheets and compact selected-tab label. Later: side-by-side wide player and toolbar priorities (R4) | Easy wins complete 2026-07-30; macro layout pending |
+| `Views/RootView.swift` | Mini-player chrome spans the viewport; secondary labels compete at narrow widths | Full-width background/progress with capped centred content; title-priority fallback | Complete 2026-07-30 |
+| `Views/QueueSheetView.swift` | Rows mostly flex; fixed rank/art/trailing metadata and sheet presentation | Readable list width, touch-target verification and adaptive presentation; sheet vs popover later | Audited; implementation not started |
+| `Views/PodcastsView.swift` | Flexible list rows; empty state uses fixed 104 pt artwork and broad padding | Readable list width, adaptive empty state and title priority; no grid conversion required | Audited; implementation not started |
+| `Views/DiscoverView.swift` | Heroes fixed around 320/284 pt; shelf cells 124 pt | Hero sizes now aspect-driven and clamped; shelf item expansion remains visual-QA work | Partially complete 2026-07-30 |
+| `Views/PodcastSearchView.swift` | Container-relative show rail already adapts well; result lists unbounded at wide widths | Preserve rail pattern; cap result widths; expansive columns only after review | Readable width complete 2026-07-30 |
+| `Views/StatsView.swift` | Forced 3-across hero; fixed chart heights; broad single column | Hero now falls back to adaptive grid and page width is capped; chart/dashboard restructure remains later | Partially complete 2026-07-30 |
+| `Views/PodcastDetailView.swift` | Forced 128 pt-art horizontal header; nested geometry probes | Stack when cramped; cap content; simplify probes | Audited; implementation not started |
+| `Views/WelcomeView.swift`, `FirstSubscribeCard`, `StarterPacksView`, `CoachMark.swift` | Fixed hero/sheet heights and phone-oriented anchor/card composition | Scroll-safe onboarding, adaptive sheets/max widths and centred coach card landed; anchor-specific coach marks do not currently exist | Complete 2026-07-30 |
+| `Views/NativeVideoPlayerView.swift` | Orientation-request model | Fill any window without player recreation; R3 rework remains separate | Audited; implementation not started |
+| Settings / Downloads / Support / lists | Native lists/forms compress well but stretch without a readable maximum | Shared max-width pattern landed on custom scrolling pages; native Form/List wide-window styling awaits iPad enablement and matrix verification | Partially complete 2026-07-30 |
 | `Views/EpisodeShareCardView.swift` | Fixed 176 pt render | None — fixed export artifact by design | N/A |
 
 ---

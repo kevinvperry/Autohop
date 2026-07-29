@@ -159,7 +159,7 @@ struct SettingsView: View {
                 onCancel: { editingSkipControl = nil },
                 onSave: { saveSkipControl(control) }
             )
-            .presentationDetents([.height(300)])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }

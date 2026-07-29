@@ -256,7 +256,7 @@ struct SubscriptionSettingsView: View {
                 subscriptionStore.updateTitle(subscriptionID: subscriptionID, title: draftTitle)
                 showTitleEditor = false
             }
-            .presentationDetents([.height(220)])
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showPriorityEditor) {
             EditPrioritySheet(
@@ -274,7 +274,7 @@ struct SubscriptionSettingsView: View {
                 )
                 showPriorityEditor = false
             }
-            .presentationDetents([.height(230)])
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -1165,6 +1165,7 @@ struct EpisodeDetailView: View {
 
                 metaGrid(sub: sub, ep: ep)
             }
+            .adaptiveContentWidth(.list)
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 30)
@@ -1176,7 +1177,7 @@ struct EpisodeDetailView: View {
         let isDownloading = ep.downloadState == .downloading
 
         VStack(spacing: 10) {
-            HStack(spacing: 0) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 8)], spacing: 10) {
                 swipeStyleButton(
                     label: "Play", icon: "play.fill", color: .green,
                     disabled: isDownloading
@@ -1316,7 +1317,7 @@ struct EpisodeDetailView: View {
 
     @ViewBuilder
     private func metaGridContent(sub: Subscription, ep: Episode) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
             if let date = ep.publishedAt {
                 metaCard("Published", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))

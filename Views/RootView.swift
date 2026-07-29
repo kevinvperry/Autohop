@@ -128,24 +128,30 @@ struct MiniPlayerBar: View {
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(episode.title)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
-                        HStack(spacing: 5) {
-                            if let showTitle = subscription?.title {
-                                Text(showTitle)
-                                    .lineLimit(1)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 5) {
+                                if let showTitle = subscription?.title {
+                                    Text(showTitle).lineLimit(1)
+                                }
+                                if duration > 0 {
+                                    if subscription?.title != nil { Text("•") }
+                                    remainingTime(duration)
+                                }
                             }
                             if duration > 0 {
-                                if subscription?.title != nil { Text("•") }
-                                Text("-\(formatRemaining(max(0, duration - playbackClock.time)))")
-                                    .monospacedDigit()
+                                remainingTime(duration)
+                            } else if let showTitle = subscription?.title {
+                                Text(showTitle).lineLimit(1)
                             }
                         }
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(Color(white: 0.55))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
 
                     Button {
                         Task { await appState.togglePlayPause() }
@@ -187,6 +193,8 @@ struct MiniPlayerBar: View {
                             : "Double-tap to resume playback"
                     )
                 }
+                .frame(maxWidth: AdaptiveContentStyle.list.maximumWidth)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
             }
@@ -201,6 +209,12 @@ struct MiniPlayerBar: View {
             .accessibilityLabel("Return to Player")
             .accessibilityAddTraits(.isButton)
         }
+    }
+
+    private func remainingTime(_ duration: TimeInterval) -> some View {
+        Text("-\(formatRemaining(max(0, duration - playbackClock.time)))")
+            .monospacedDigit()
+            .fixedSize(horizontal: true, vertical: false)
     }
 
     private func formatRemaining(_ seconds: TimeInterval) -> String {

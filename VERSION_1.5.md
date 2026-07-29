@@ -13,6 +13,28 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### 30 July 2026 — responsive viewport foundations and easy-win layout pass
+
+- Added one central adaptive-layout vocabulary for narrow, standard, wide and
+  expansive container widths, readable content measures, gutters and adaptive
+  grids, with regression tests for its boundaries.
+- Replaced fixed-height onboarding, sleep, editing, archive and audio-control
+  sheets with scroll-safe medium/large presentations.
+- Added compact fallbacks for crowded Player, Mini Player, Sleep Timer and
+  Stats controls; the AirPlay route control can now collapse without forcing
+  the Player row beyond the available width.
+- Converted Player/Episode metadata and Stats detail grids to adaptive columns,
+  and converted Episode Detail actions to a wrapping grid.
+- Added readable maximum widths to major custom scrolling pages including
+  Search, Downloads, Support, Stats, podcast details and onboarding.
+- Made Welcome and first-subscription onboarding scroll-safe for short
+  landscape viewports and larger text, enlarged small onboarding touch targets,
+  and began replacing fixed typography with semantic Dynamic Type styles.
+- Changed Discover and Top chart feature cards from unconditional fixed heights
+  to aspect-driven, clamped sizing.
+- This phase deliberately does not enable iPad/Mac targets or change navigation;
+  it establishes the fluid view foundation required before those later stages.
+
 ### 30 July 2026 — safer, honest sharing foundations
 
 - Podcast Detail and Podcast Settings now share the podcast itself instead of

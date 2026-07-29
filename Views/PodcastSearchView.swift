@@ -196,6 +196,7 @@ struct PodcastSearchView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
             }
+            .adaptiveContentWidth(.list)
             .padding(.vertical, 12)
         }
         .scrollDismissesKeyboard(.interactively)

@@ -139,6 +139,7 @@ struct StarterPacksView: View {
                     packCard(pack)
                 }
             }
+            .adaptiveContentWidth(.list)
             .padding(20)
         }
     }

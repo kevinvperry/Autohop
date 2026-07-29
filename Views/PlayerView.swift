@@ -415,9 +415,13 @@ struct PlayerView: View {
                             Image(systemName: panel.icon)
                                 .font(.system(size: 13, weight: .semibold))
                             if isSelected {
-                                Text(panel.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .transition(.opacity)
+                                ViewThatFits(in: .horizontal) {
+                                    Text(panel.title)
+                                        .font(.caption.weight(.semibold))
+                                        .lineLimit(1)
+                                    EmptyView()
+                                }
+                                .transition(.opacity)
                             }
                         }
                         .foregroundStyle(isSelected ? .white : Color(white: 0.4))
@@ -1119,16 +1123,21 @@ struct PlayerView: View {
 
     private var audioSourceButton: some View {
         ZStack {
-            HStack(spacing: 7) {
-                Image(systemName: "airplayaudio")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.purple.opacity(0.9))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 7) {
+                    Image(systemName: "airplayaudio")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(Color.purple.opacity(0.9))
 
-                Text(audioRouteName)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color(white: 0.55))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+                    Text(audioRouteName)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color(white: 0.55))
+                        .lineLimit(1)
+                }
+                Image(systemName: "airplayaudio")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.purple.opacity(0.9))
+                    .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -1138,7 +1147,7 @@ struct PlayerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(0.02)
         }
-        .frame(minWidth: 180, maxWidth: .infinity, minHeight: 30)
+        .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
         .contentShape(Rectangle())
     }
 
@@ -1263,7 +1272,7 @@ struct PlayerView: View {
 
     @ViewBuilder
     private func detailsMetaGrid(ep: Episode, sub: Subscription?) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
             if let date = ep.publishedAt {
                 metaCard("Distributed", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
@@ -2083,6 +2092,7 @@ private struct ArchiveConfirmationSheet: View {
     let onConfirm: () -> Void
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 0) {
             Capsule()
                 .fill(Color(white: 0.3))
@@ -2140,9 +2150,11 @@ private struct ArchiveConfirmationSheet: View {
 
             Spacer(minLength: 16)
         }
+        .adaptiveContentWidth(.form)
+        }
         .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(320)])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(20)
     }
@@ -2171,6 +2183,7 @@ struct AudioControlsSheetView: View {
     }
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 0) {
             // Drag handle
             Capsule()
@@ -2199,24 +2212,16 @@ struct AudioControlsSheetView: View {
 
             Spacer(minLength: 24)
         }
+        .adaptiveContentWidth(.form)
+        }
         .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(sheetHeight)])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(20)
     }
 
-    private var trimSilenceOn: Bool { subscription?.playbackPreference.trimSilence != .off }
-    private var vocalBoostOn: Bool { subscription?.playbackPreference.vocalBoostLevel != .off }
     private var sharedListeningActive: Bool { appState.sharedListeningActive }
-
-    private var sheetHeight: CGFloat {
-        var height: CGFloat = 382                    // base: shared listening + speed + trim header + vocal header
-        if sharedListeningActive { height += 68 }    // shared listening speed picker
-        if trimSilenceOn { height += 68 }            // trim silence segmented picker
-        if vocalBoostOn  { height += 68 }            // vocal boost segmented picker
-        return height
-    }
 
     // MARK: - Shared Listening Row
 

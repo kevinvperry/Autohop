@@ -299,6 +299,7 @@ struct PodcastDetailView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 18)
         }
+        .adaptiveContentWidth(.list)
     }
 
     /// Small purple circular refresh button shown on the Episodes heading row,

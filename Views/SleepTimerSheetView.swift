@@ -18,33 +18,27 @@ struct SleepTimerSheetView: View {
     @State private var episodeCount: Int = 1
 
     var body: some View {
-        VStack(spacing: 0) {
-            dragHandle
+        ScrollView {
+            VStack(spacing: 0) {
+                dragHandle
 
-            if sleepTimer.isDurationMode {
-                activeTimerView
-            } else if sleepTimer.isEpisodeMode {
-                activeEpisodeView
-            } else {
-                inactiveView
+                if sleepTimer.isDurationMode {
+                    activeTimerView
+                } else if sleepTimer.isEpisodeMode {
+                    activeEpisodeView
+                } else {
+                    inactiveView
+                }
+
+                Spacer(minLength: 20)
             }
-
-            Spacer(minLength: 20)
+            .adaptiveContentWidth(.form)
         }
         .presentationBackground(.regularMaterial)
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(sheetHeight)])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(20)
-    }
-
-    // MARK: - Sheet height
-
-    private var sheetHeight: CGFloat {
-        if sleepTimer.isDurationMode || sleepTimer.isEpisodeMode {
-            return 240
-        }
-        return 380
     }
 
     // MARK: - Drag handle
@@ -63,15 +57,17 @@ struct SleepTimerSheetView: View {
         VStack(spacing: 0) {
             sectionHeader("Sleep Timer")
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()),
-                                GridItem(.flexible())], spacing: 10) {
-                presetButton(label: "5 min",  seconds: 5 * 60)
-                presetButton(label: "10 min", seconds: 10 * 60)
-                presetButton(label: "15 min", seconds: 15 * 60)
-                presetButton(label: "30 min", seconds: 30 * 60)
-                presetButton(label: "45 min", seconds: 45 * 60)
-                presetButton(label: "1 hour", seconds: 60 * 60)
+            GeometryReader { proxy in
+                LazyVGrid(columns: AdaptiveLayoutMetrics.choiceColumns(for: proxy.size.width), spacing: 10) {
+                    presetButton(label: "5 min",  seconds: 5 * 60)
+                    presetButton(label: "10 min", seconds: 10 * 60)
+                    presetButton(label: "15 min", seconds: 15 * 60)
+                    presetButton(label: "30 min", seconds: 30 * 60)
+                    presetButton(label: "45 min", seconds: 45 * 60)
+                    presetButton(label: "1 hour", seconds: 60 * 60)
+                }
             }
+            .frame(minHeight: 126)
             .padding(.horizontal, 20)
             .padding(.bottom, 14)
 
@@ -104,15 +100,26 @@ struct SleepTimerSheetView: View {
     }
 
     private var endOfEpisodeRow: some View {
-        HStack(spacing: 14) {
+        ViewThatFits(in: .horizontal) {
+            endOfEpisodeControls(compact: false)
+            endOfEpisodeControls(compact: true)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private func endOfEpisodeControls(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 14) {
             Image(systemName: "moon.zzz.fill")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.headline.weight(.semibold))
                 .foregroundStyle(.purple)
-                .frame(width: 26)
+                .frame(width: compact ? 20 : 26)
 
             Text("End of Episode")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                .layoutPriority(compact ? 0 : 1)
 
             Spacer()
 
@@ -166,8 +173,6 @@ struct SleepTimerSheetView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
     }
 
     // MARK: - Active: duration countdown

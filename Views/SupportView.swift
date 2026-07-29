@@ -103,7 +103,7 @@ private struct SupportSectionView: View {
                     SupportBlockView(block: block)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .adaptiveContentWidth(.prose)
             .padding(20)
             .padding(.bottom, 24)
         }

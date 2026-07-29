@@ -18,6 +18,24 @@ Autohop Pro screens are development references and are not shipping surfaces.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
+## Adaptive viewport layout
+
+<!-- AI CONTEXT — AdaptiveLayout-Bands
+Responsive iOS views classify the width offered by their immediate container,
+never a device model or horizontal size class. All thresholds, readable-width
+maximums, gutters and adaptive grid helpers live in
+`Views/AdaptiveLayout.swift`. Use `.adaptiveContentWidth(...)` on inner scroll
+content so backgrounds and safe areas still fill the viewport. Dense rows use
+`ViewThatFits` with a semantic compact fallback. Fixed export canvases and
+intentional artwork targets are exempt. Do not introduce local breakpoints.
+-->
+
+Autohop uses four provisional available-width bands: narrow (below 340 pt),
+standard (340–499 pt), wide (500–699 pt), and expansive (700 pt and above).
+These are implementation tokens, not device categories. They support small
+iPhones and landscape today and prepare the same views for future iPad and Mac
+window sizes without changing navigation or enabling those targets yet.
+
 The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and **Individual Episode** pages are the canonical design references for Autohop. All other pages must match the patterns defined here. Each pattern has a **label** so it can be referenced directly in future instructions (e.g. "apply `EpisodeStatusPill` to the History page").
 
 ---

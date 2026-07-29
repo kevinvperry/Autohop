@@ -261,6 +261,7 @@ private struct StatsContentView: View {
 
                 privacyFooter
             }
+            .adaptiveContentWidth(.editorial)
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
         }
@@ -318,27 +319,36 @@ private struct StatsContentView: View {
 
             Divider().overlay(Color.white.opacity(0.08))
 
-            HStack(alignment: .top, spacing: 12) {
-                heroStat(
-                    value: formattedLongDuration(summary.totalTimeSaved),
-                    label: "saved by Autohop",
-                    tint: .teal
-                )
-                heroStat(
-                    value: "\(summary.episodesCompleted)",
-                    label: "episodes finished",
-                    tint: .primary
-                )
-                heroStat(
-                    value: streakLabel(store.currentStreakDays),
-                    label: "current streak",
-                    tint: .primary
-                )
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 95), spacing: 12, alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                heroStats(summary)
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(cornerRadius: 16)
+    }
+
+    @ViewBuilder
+    private func heroStats(_ summary: ListeningStatsSummary) -> some View {
+        heroStat(
+            value: formattedLongDuration(summary.totalTimeSaved),
+            label: "saved by Autohop",
+            tint: .teal
+        )
+        heroStat(
+            value: "\(summary.episodesCompleted)",
+            label: "episodes finished",
+            tint: .primary
+        )
+        heroStat(
+            value: streakLabel(store.currentStreakDays),
+            label: "current streak",
+            tint: .primary
+        )
     }
 
     private var heroSubtitle: String {
@@ -1184,7 +1194,7 @@ private struct ShowStatsExpandedCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             LazyVGrid(
-                columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                columns: [GridItem(.adaptive(minimum: 145), spacing: 12, alignment: .leading)],
                 alignment: .leading,
                 spacing: 12
             ) {

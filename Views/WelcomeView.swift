@@ -80,6 +80,7 @@ struct WelcomeView: View {
                     .buttonStyle(.plain)
                     .disabled(isImporting)
                 }
+                .adaptiveContentWidth(.form)
                 .padding(.horizontal, 28)
                 .padding(.bottom, 22)
             }
@@ -107,22 +108,24 @@ struct WelcomeView: View {
 
     /// One carousel panel: hero art, title, body — vertically centred.
     private func panelView(hero: AnyView, title: String, body: String) -> some View {
-        VStack(spacing: 0) {
-            Spacer()
-            hero
-                .padding(.bottom, 34)
-            Text(title)
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .padding(.bottom, 14)
-            Text(body)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.74))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 32)
-            Spacer()
+        ScrollView {
+            VStack(spacing: 0) {
+                hero
+                    .padding(.bottom, 24)
+                Text(title)
+                    .font(.largeTitle.weight(.bold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.bottom, 14)
+                Text(body)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.74))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 32)
+            }
+            .adaptiveContentWidth(.prose)
+            .padding(.vertical, 28)
         }
     }
 

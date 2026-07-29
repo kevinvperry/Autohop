@@ -69,6 +69,7 @@ struct CoachMarkOverlay: View {
             VStack {
                 Spacer()
                 card(tip)
+                    .adaptiveContentWidth(.prose)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 28)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -87,18 +88,18 @@ struct CoachMarkOverlay: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(tip.title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
                 Text(tip.message)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(Color(white: 0.7))
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button { onboardingCoordinator.dismissActiveTip() } label: {
                     Text("Got it")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.subheadline.weight(.bold))
                         .foregroundStyle(.purple)
-                        .padding(.top, 6)
+                        .frame(minWidth: 44, minHeight: 44, alignment: .leading)
                 }
                 .buttonStyle(.plain)
             }

@@ -39,7 +39,7 @@ struct GettingStartedChecklist: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color(white: 0.55))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss")
@@ -50,7 +50,7 @@ struct GettingStartedChecklist: View {
             row("Reorder your Priority Stack", done: reordered)
 
             Text("Autohop keeps the latest episode and tidies older ones to save space — change this per show in its settings.")
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Color(white: 0.45))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
@@ -75,7 +75,7 @@ struct GettingStartedChecklist: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(done ? .green : Color(white: 0.4))
             Text(title)
-                .font(.system(size: 14, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(done ? Color(white: 0.55) : .white)
                 .strikethrough(done, color: Color(white: 0.5))
             Spacer()

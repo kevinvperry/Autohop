@@ -178,7 +178,8 @@ struct TopEpisodesView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 232)
+            .aspectRatio(1.65, contentMode: .fit)
+            .frame(minHeight: 200, maxHeight: 260)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }

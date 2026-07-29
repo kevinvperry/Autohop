@@ -37,6 +37,7 @@ struct DownloadsView: View {
 
                 archivedSection
             }
+            .adaptiveContentWidth(.list)
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
         }

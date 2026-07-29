@@ -405,7 +405,8 @@ struct DiscoverView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .never))
-            .frame(height: 320)
+            .aspectRatio(1.28, contentMode: .fit)
+            .frame(minHeight: 250, maxHeight: 320)
             .onReceive(heroTimer) { _ in
                 let count = episodes.count
                 guard count > 1, resolvingEpisodeID == nil else { return }
@@ -474,7 +475,8 @@ struct DiscoverView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 284)
+            .aspectRatio(1.38, contentMode: .fit)
+            .frame(minHeight: 230, maxHeight: 300)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }
@@ -553,7 +555,8 @@ struct DiscoverView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .never))
-            .frame(height: 320)
+            .aspectRatio(1.28, contentMode: .fit)
+            .frame(minHeight: 250, maxHeight: 320)
             .onReceive(heroTimer) { _ in
                 let count = podcasts.count
                 guard count > 1, resolvingPodcastID == nil else { return }
@@ -674,7 +677,8 @@ struct DiscoverView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 284)
+            .aspectRatio(1.38, contentMode: .fit)
+            .frame(minHeight: 230, maxHeight: 300)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }

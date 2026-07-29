@@ -39,7 +39,8 @@ struct FirstSubscribeCard: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ScrollView {
+            VStack(spacing: 0) {
             Capsule()
                 .fill(Color(white: 0.35))
                 .frame(width: 38, height: 5)
@@ -60,12 +61,12 @@ struct FirstSubscribeCard: View {
             .padding(.bottom, 18)
 
             Text("You're all set 🎧")
-                .font(.system(size: 23, weight: .bold, design: .rounded))
+                .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
                 .padding(.bottom, 8)
 
             Text("Autohop is downloading the latest episode of \(subscription?.title ?? "your show"). When it's ready it'll start Up Next — no tapping play, episode after episode.")
-                .font(.system(size: 15, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(Color(white: 0.64))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -78,7 +79,7 @@ struct FirstSubscribeCard: View {
 
             if showDownloadNote && !isDownloaded {
                 Text("Autohop downloads episodes before playing, so they start instantly and work offline — even with no signal.")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(Color(white: 0.5))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -89,7 +90,7 @@ struct FirstSubscribeCard: View {
             VStack(spacing: 10) {
                 Button(action: playTapped) {
                     Text(playButtonTitle)
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
@@ -105,7 +106,7 @@ struct FirstSubscribeCard: View {
                     dismiss()
                 } label: {
                     Text("Add more shows")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.purple)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -115,11 +116,12 @@ struct FirstSubscribeCard: View {
             .padding(.horizontal, 24)
 
             Spacer(minLength: 12)
+            }
+            .adaptiveContentWidth(.form)
         }
-        .frame(maxWidth: .infinity)
         .background(pageBackground.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(showDownloadNote ? 540 : 470)])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .onAppear(perform: handleAppear)
         .onChange(of: isDownloaded) { _, downloaded in
@@ -146,7 +148,7 @@ struct FirstSubscribeCard: View {
             }
             Spacer()
         }
-        .font(.system(size: 14, weight: .semibold))
+        .font(.subheadline.weight(.semibold))
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
         if #available(iOS 26, *) {
