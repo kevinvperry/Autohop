@@ -44,6 +44,11 @@ import UIKit
 // grace because their delegate progress can be withheld while the process is frozen.
 // CONCURRENCY CAP (3) AND NETWORK POLICY (WiFi/cellular toggles) ARE NOT
 // ENFORCED HERE — AppState gates calls to download().
+public enum DownloadExecutionMode: Equatable {
+    case durableBackground
+    case activeRuntimeFallback
+}
+
 public protocol DownloadManaging: AnyObject {
     var backgroundEventsCompletionHandler: (() -> Void)? { get set }
     /// `(episodeID, subscriptionID, localFileURL)` — called when a download completes
@@ -55,6 +60,14 @@ public protocol DownloadManaging: AnyObject {
     /// schedule a retry. Resume data has already been saved; the next `download()` call will use it.
     var onWatchdogCancelled: ((UUID) -> Void)? { get set }
     func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL
+    /// Uses an ordinary in-process URLSession only for a bounded recovery attempt
+    /// while foreground UI or active audio keeps Autohop executable. Test doubles
+    /// inherit the default implementation and continue using the durable session.
+    func download(
+        _ episode: Episode,
+        allowsCellular: Bool,
+        executionMode: DownloadExecutionMode
+    ) async throws -> URL
     func pauseDownload(episodeID: UUID)
     func cancelDownload(episodeID: UUID)
     /// Discards any stored resume data for the episode so the next download call starts fresh.
@@ -76,6 +89,13 @@ public protocol DownloadManaging: AnyObject {
 }
 
 public extension DownloadManaging {
+    func download(
+        _ episode: Episode,
+        allowsCellular: Bool,
+        executionMode: DownloadExecutionMode
+    ) async throws -> URL {
+        try await download(episode, allowsCellular: allowsCellular)
+    }
     func reevaluateWatchdog(reason: String) {}
     func recoverFromSharedStall(reason: String) {}
 }
@@ -86,6 +106,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     private let logger = AppLogger.shared
     private var session: URLSession!
+    private var activeRuntimeSession: URLSession!
+    private var activeRuntimeTasks: [UUID: URLSessionDownloadTask] = [:]
     // Accessed only on the main queue — no separate lock needed.
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     // Map task → episode ID so progress callbacks know which episode to report.
@@ -173,6 +195,11 @@ public final class DownloadManager: NSObject, DownloadManaging {
         config.sessionSendsLaunchEvents = true
         #endif
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        let activeConfig = URLSessionConfiguration.default
+        activeConfig.waitsForConnectivity = true
+        activeConfig.allowsExpensiveNetworkAccess = true
+        activeConfig.allowsConstrainedNetworkAccess = true
+        activeRuntimeSession = URLSession(configuration: activeConfig)
         rebuildTaskMapsFromLiveSession()
         startDownloadWatchdog()
     }
@@ -267,6 +294,143 @@ public final class DownloadManager: NSObject, DownloadManaging {
         }
     }
 
+    public func download(
+        _ episode: Episode,
+        allowsCellular: Bool,
+        executionMode: DownloadExecutionMode
+    ) async throws -> URL {
+        guard executionMode == .activeRuntimeFallback else {
+            return try await download(episode, allowsCellular: allowsCellular)
+        }
+        return try await downloadUsingActiveRuntimeSession(
+            episode,
+            allowsCellular: allowsCellular
+        )
+    }
+
+    /// Recovery-only transfer path. It deliberately is not durable across process
+    /// suspension, so callers may select it only while foreground UI or active
+    /// audio supplies an execution window. The ordinary session avoids the
+    /// background-session first-byte failure pattern measured in Log 23.
+    private func downloadUsingActiveRuntimeSession(
+        _ episode: Episode,
+        allowsCellular: Bool
+    ) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: DownloadError.cancelled)
+                    return
+                }
+                guard self.activeRuntimeTasks[episode.id] == nil,
+                      self.taskIDByEpisodeID[episode.id] == nil else {
+                    continuation.resume(throwing: DownloadError.duplicateDownload)
+                    return
+                }
+
+                var request = URLRequest(url: episode.audioURL)
+                request.allowsCellularAccess = allowsCellular
+                request.timeoutInterval = 90
+                request.networkServiceType = episode.mediaKind == .video
+                    ? .video : .responsiveData
+                let startedAt = Date()
+                let task = self.activeRuntimeSession.downloadTask(with: request) {
+                    [weak self] temporaryURL, response, error in
+                    guard let self else { return }
+                    let result: Result<URL, Error>
+                    if let error {
+                        // Intentional pause/cancel sets are main-queue-owned and
+                        // are classified below after returning to that queue.
+                        result = .failure(error)
+                    } else if let status = Self.rejectableHTTPStatus(of: response) {
+                        result = .failure(DownloadError.httpStatus(status))
+                    } else if let mime = Self.rejectableMIMEType(of: response) {
+                        result = .failure(DownloadError.nonMediaContentType(mime))
+                    } else if let temporaryURL {
+                        do {
+                            let values = try temporaryURL.resourceValues(
+                                forKeys: [.fileSizeKey]
+                            )
+                            let bytes = Int64(values.fileSize ?? 0)
+                            guard !Self.isImplausiblySmallDownload(
+                                actualBytes: bytes,
+                                expectedBytes: episode.fileSizeBytes
+                            ) else {
+                                throw DownloadError.incompleteDownload(
+                                    actualBytes: bytes,
+                                    expectedBytes: episode.fileSizeBytes
+                                )
+                            }
+                            result = .success(
+                                try self.storeDownloadedFile(
+                                    from: temporaryURL,
+                                    episode: episode
+                                )
+                            )
+                        } catch {
+                            result = .failure(error)
+                        }
+                    } else {
+                        result = .failure(DownloadError.fileMoveFailed)
+                    }
+                    DispatchQueue.main.async {
+                        self.activeRuntimeTasks.removeValue(forKey: episode.id)
+                        let classifiedResult: Result<URL, Error>
+                        if case .failure = result,
+                           self.intentionallyCancelledEpisodeIDs.remove(
+                            episode.id
+                           ) != nil {
+                            classifiedResult = .failure(DownloadError.cancelled)
+                        } else if case .failure = result,
+                                  self.intentionallyPausedEpisodeIDs.remove(
+                                    episode.id
+                                  ) != nil {
+                            classifiedResult = .failure(DownloadError.paused)
+                        } else {
+                            classifiedResult = result
+                        }
+                        switch classifiedResult {
+                        case .success(let url):
+                            self.logger.info(
+                                "download.activeRuntimeFallbackComplete",
+                                "Active-runtime fallback download completed",
+                                metadata: [
+                                    "episodeID": episode.id.uuidString,
+                                    "elapsedSeconds": String(
+                                        format: "%.1f",
+                                        Date().timeIntervalSince(startedAt)
+                                    )
+                                ]
+                            )
+                            continuation.resume(returning: url)
+                        case .failure(let error):
+                            self.logger.warning(
+                                "download.activeRuntimeFallbackFailed",
+                                "Active-runtime fallback download failed",
+                                metadata: [
+                                    "episodeID": episode.id.uuidString,
+                                    "error": String(describing: error)
+                                ]
+                            )
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+                self.activeRuntimeTasks[episode.id] = task
+                self.logger.info(
+                    "download.activeRuntimeFallbackStart",
+                    "Starting recovery through the active-runtime URLSession",
+                    metadata: [
+                        "episode": episode.title,
+                        "episodeID": episode.id.uuidString,
+                        "mediaHost": episode.audioURL.host ?? "unknown"
+                    ]
+                )
+                task.resume()
+            }
+        }
+    }
+
     private func startDownloadTask(episode: Episode, allowsCellular: Bool, continuation: CheckedContinuation<URL, Error>) {
         let startedAt = Date()
         let firstByteThreshold = effectiveFirstByteWaitThreshold
@@ -346,7 +510,18 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
     public func pauseDownload(episodeID: UUID) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, let taskID = self.taskIDByEpisodeID[episodeID] else { return }
+            guard let self else { return }
+            if let task = self.activeRuntimeTasks.removeValue(forKey: episodeID) {
+                self.intentionallyPausedEpisodeIDs.insert(episodeID)
+                task.cancel()
+                self.logger.info(
+                    "download.activeRuntimeFallbackPaused",
+                    "Active-runtime fallback cancelled for a user pause",
+                    metadata: ["episodeID": episodeID.uuidString]
+                )
+                return
+            }
+            guard let taskID = self.taskIDByEpisodeID[episodeID] else { return }
             self.intentionallyPausedEpisodeIDs.insert(episodeID)
             self.session.getAllTasks { tasks in
                 guard let task = tasks.first(where: { $0.taskIdentifier == taskID }) as? URLSessionDownloadTask else { return }
@@ -370,6 +545,12 @@ public final class DownloadManager: NSObject, DownloadManaging {
     public func cancelDownload(episodeID: UUID) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            if let activeTask = self.activeRuntimeTasks.removeValue(
+                forKey: episodeID
+            ) {
+                self.intentionallyCancelledEpisodeIDs.insert(episodeID)
+                activeTask.cancel()
+            }
             // Always purge stale map entries so the episode can be re-downloaded regardless of
             // whether a live URLSession task exists (e.g. after a force-kill). Capture the task ID
             // first — we still need it to cancel the live task below.
@@ -835,7 +1016,10 @@ extension DownloadManager {
                     // (rebuildTaskMapsFromLiveSession), so at startup it may still be empty when
                     // AppState reconciles. taskDescription is set on the task itself and is always
                     // authoritative, avoiding a race that would mark live downloads as failed.
-                    let ids = Set(tasks.compactMap { self.decodeTaskMeta($0.taskDescription)?.episodeID })
+                    let durableIDs = Set(tasks.compactMap {
+                        self.decodeTaskMeta($0.taskDescription)?.episodeID
+                    })
+                    let ids = durableIDs.union(self.activeRuntimeTasks.keys)
                     continuation.resume(returning: ids)
                 }
             }

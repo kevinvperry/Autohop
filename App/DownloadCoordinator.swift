@@ -68,6 +68,7 @@ final class DownloadCoordinator: ObservableObject {
     private var sharedSessionRecoveryGeneration = 0
     private var sharedSessionRecoveryTask: Task<Void, Never>?
     private var episodeDetections: [UUID: EpisodeDetection] = [:]
+    private var activeRuntimeFallbackEpisodeIDs = Set<UUID>()
 
     // Internal access is limited to typed download/runtime workflows. These
     // values have one storage owner and are not published.
@@ -342,6 +343,35 @@ final class DownloadCoordinator: ObservableObject {
         watchdogRetryTasks.removeValue(forKey: episodeID)?.cancel()
         watchdogRetryDates.removeValue(forKey: episodeID)
         watchdogRetryGeneration[episodeID, default: 0] += 1
+        activeRuntimeFallbackEpisodeIDs.remove(episodeID)
+    }
+
+    func hasWatchdogRetryHistory(for episodeID: UUID) -> Bool {
+        (watchdogRetryCounts[episodeID] ?? 0) > 0
+    }
+
+    /// Starts a new bounded 30/60/120-second ladder after the durable cooldown
+    /// has ended. Durable consecutive-exhaustion history remains owned by
+    /// AutoDownloadIntentStore and is intentionally not cleared here.
+    func beginNewWatchdogRecoveryCycleIfNeeded(for episodeID: UUID) {
+        if hasWatchdogRetryHistory(for: episodeID) {
+            clearWatchdogRetryState(for: episodeID)
+        }
+        activeRuntimeFallbackEpisodeIDs.insert(episodeID)
+        AppLogger.shared.info(
+            "download.watchdogRetryCycleReset",
+            "Started a fresh short retry ladder after durable cooldown",
+            metadata: ["episodeID": episodeID.uuidString]
+        )
+    }
+
+    func markActiveRuntimeFallbackEligible(episodeID: UUID) {
+        activeRuntimeFallbackEpisodeIDs.insert(episodeID)
+    }
+
+    func shouldUseActiveRuntimeFallback(for episodeID: UUID) -> Bool {
+        activeRuntimeFallbackEpisodeIDs.contains(episodeID)
+            || hasWatchdogRetryHistory(for: episodeID)
     }
 
     func watchdogNextRetryDate(for episodeID: UUID) -> Date? {

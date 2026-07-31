@@ -134,6 +134,31 @@ final class AutoDownloadIntentStoreTests: XCTestCase {
         ))
     }
 
+    func testExpiredCooldownRetainsDurableExhaustionHistory() {
+        let store = AutoDownloadIntentStore(fileURL: temporaryFileURL())
+        let episodeID = UUID()
+        let mediaURL = URL(string: "https://media.example/recovery.mp3")!
+        let startedAt = Date()
+        let failure = store.recordExhaustion(
+            episodeID: episodeID,
+            subscriptionID: UUID(),
+            mediaURL: mediaURL,
+            host: mediaURL.host,
+            now: startedAt
+        )
+
+        XCTAssertNil(store.activeFailure(
+            episodeID: episodeID,
+            mediaURL: mediaURL,
+            now: failure.retryAfter.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(
+            store.failureRecord(episodeID: episodeID)?.consecutiveExhaustions,
+            1,
+            "Starting a fresh short ladder must not erase durable cooldown escalation"
+        )
+    }
+
     func testChangedEnclosureClearsTerminalCooldown() {
         let store = AutoDownloadIntentStore(fileURL: temporaryFileURL())
         let episodeID = UUID()

@@ -176,8 +176,14 @@ final class DownloadActionsWorkflow {
             return
         }
 
+        downloadCoordinator.clearWatchdogRetryState(for: episode.id)
+        downloadCoordinator.markActiveRuntimeFallbackEligible(
+            episodeID: episode.id
+        )
         logger.info("download.resumeAttempt", "Attempting download resume", metadata: [
-            "episode": episode.title
+            "episode": episode.title,
+            "previousStatus": activity.status.rawValue,
+            "manualCircuitBypass": "true"
         ])
         await transferWorkflow.download(
             episode,
@@ -261,6 +267,9 @@ final class DownloadActionsWorkflow {
             "episodeID": activity.episodeID.uuidString
         ])
         downloadManager.cancelDownload(episodeID: activity.episodeID)
+        downloadCoordinator.clearWatchdogRetryState(
+            for: activity.episodeID
+        )
         downloadCoordinator.progressModel.progress.removeValue(
             forKey: activity.episodeID
         )
@@ -295,6 +304,9 @@ final class DownloadActionsWorkflow {
             ]
         )
         downloadManager.cancelDownload(episodeID: activity.episodeID)
+        downloadCoordinator.clearWatchdogRetryState(
+            for: activity.episodeID
+        )
         downloadCoordinator.progressModel.progress.removeValue(
             forKey: activity.episodeID
         )

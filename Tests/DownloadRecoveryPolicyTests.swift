@@ -66,4 +66,28 @@ final class DownloadRecoveryPolicyTests: XCTestCase {
             )
         }
     }
+
+    func testRetryPresentationRequiresConcreteRetryOwnership() {
+        XCTAssertEqual(
+            DownloadRecoveryPolicy.retryPresentation(
+                hasScheduledRetry: true,
+                isTerminalFailure: false
+            ),
+            .waitingToRetry
+        )
+        XCTAssertEqual(
+            DownloadRecoveryPolicy.retryPresentation(
+                hasScheduledRetry: false,
+                isTerminalFailure: true
+            ),
+            .preserveTerminalFailure
+        )
+        XCTAssertEqual(
+            DownloadRecoveryPolicy.retryPresentation(
+                hasScheduledRetry: false,
+                isTerminalFailure: false
+            ),
+            .paused
+        )
+    }
 }

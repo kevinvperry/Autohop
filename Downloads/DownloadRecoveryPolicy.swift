@@ -15,6 +15,12 @@ public enum DownloadRecoveryDisposition: String, Sendable {
     case eligibleForRecovery
 }
 
+public enum DownloadRetryPresentation: String, Sendable {
+    case waitingToRetry
+    case preserveTerminalFailure
+    case paused
+}
+
 public enum DownloadRecoveryPolicy {
     public static func disposition(
         storedState: DownloadState,
@@ -29,5 +35,17 @@ public enum DownloadRecoveryPolicy {
             return .orphanedStoredTransfer
         }
         return .eligibleForRecovery
+    }
+
+    /// Converts concrete retry ownership into UI state. A cancelled transfer
+    /// must never claim it is waiting unless a retry task actually owns the
+    /// next attempt; terminal exhaustion remains visible and manually retryable.
+    public static func retryPresentation(
+        hasScheduledRetry: Bool,
+        isTerminalFailure: Bool
+    ) -> DownloadRetryPresentation {
+        if hasScheduledRetry { return .waitingToRetry }
+        if isTerminalFailure { return .preserveTerminalFailure }
+        return .paused
     }
 }

@@ -143,6 +143,13 @@ public final class AutoDownloadIntentStore {
         return record.retryAfter > now ? record : nil
     }
 
+    /// Returns durable exhaustion history regardless of whether its current
+    /// cooldown has elapsed. Recovery orchestration uses this to identify the
+    /// exact boundary where a fresh short retry ladder should begin.
+    public func failureRecord(episodeID: UUID) -> AutoDownloadFailureRecord? {
+        failures.first { $0.episodeID == episodeID }
+    }
+
     /// Persists terminal watchdog exhaustion across feed refreshes and process
     /// launches. Repeated exhaustion uses 15, 30, then 60 minute cooldowns.
     @discardableResult

@@ -126,6 +126,10 @@ final class AppRuntimeWorkflow {
         environment.applicationState() == .active
     }
 
+    var hasActiveDownloadExecutionWindow: Bool {
+        isAppForeground || playback.isPlaying || playback.engine.isPlaying
+    }
+
     var now: Date {
         environment.now()
     }

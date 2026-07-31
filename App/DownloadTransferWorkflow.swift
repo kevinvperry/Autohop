@@ -90,10 +90,13 @@ final class DownloadTransferWorkflow {
             coordinator.message = "Downloads are disabled on the current network."
             return
         }
+        let activeRuntimeFallback = runtimeWorkflow
+            .hasActiveDownloadExecutionWindow
+            && coordinator.shouldUseActiveRuntimeFallback(for: episode.id)
         if isAutomatic,
            let circuit = coordinator.automaticDownloadBlock(
             for: episode.audioURL
-           ) {
+           ), !activeRuntimeFallback {
             logger.info(
                 "download.circuitBreakerSkipped",
                 "Automatic download deferred by failure circuit breaker",
@@ -115,6 +118,20 @@ final class DownloadTransferWorkflow {
                 error: "Download host is cooling down after repeated stalls."
             )
             return
+        }
+        if isAutomatic, activeRuntimeFallback,
+           let circuit = coordinator.automaticDownloadBlock(
+            for: episode.audioURL
+           ) {
+            logger.info(
+                "download.circuitBreakerFallbackBypass",
+                "Active-runtime recovery bypassed an automatic circuit breaker",
+                metadata: [
+                    "episodeID": episode.id.uuidString,
+                    "scope": circuit,
+                    "mediaHost": episode.audioURL.host ?? "unknown"
+                ]
+            )
         }
 
         if let activeActivity = coordinator.activityStore.activeActivities.first(
@@ -240,7 +257,9 @@ final class DownloadTransferWorkflow {
         do {
             let localFileURL = try await downloadManager.download(
                 episode,
-                allowsCellular: settingsStore.appSettings.downloadOverCellular
+                allowsCellular: settingsStore.appSettings.downloadOverCellular,
+                executionMode: activeRuntimeFallback
+                    ? .activeRuntimeFallback : .durableBackground
             )
             let duration = await mediaWorkflow.localDuration(
                 from: localFileURL
@@ -456,21 +475,44 @@ final class DownloadTransferWorkflow {
                 return
             }
             if isAutomatic {
-                coordinator.activityStore.waitForRetry(
-                    episodeID: episode.id,
-                    retryAt: coordinator.watchdogNextRetryDate(
-                        for: episode.id
-                    )
+                let scheduledRecovery = coordinator.hasScheduledWatchdogRecovery(
+                    for: episode.id
                 )
+                let terminalFailure = coordinator.activityStore
+                    .activeActivities.first {
+                        $0.episodeID == episode.id
+                    }?.status == .failed
+                switch DownloadRecoveryPolicy.retryPresentation(
+                    hasScheduledRetry: scheduledRecovery,
+                    isTerminalFailure: terminalFailure
+                ) {
+                case .waitingToRetry:
+                    coordinator.activityStore.waitForRetry(
+                        episodeID: episode.id,
+                        retryAt: coordinator.watchdogNextRetryDate(
+                            for: episode.id
+                        )
+                    )
+                case .preserveTerminalFailure:
+                    break
+                case .paused:
+                    coordinator.activityStore.pause(episodeID: episode.id)
+                }
                 coordinator.message = nil
             } else {
                 coordinator.activityStore.pause(episodeID: episode.id)
                 coordinator.message = "Paused \(episode.title)."
             }
+            let scheduledRecovery = coordinator.hasScheduledWatchdogRecovery(
+                for: episode.id
+            )
             logger.info(
-                isAutomatic ? "download.waitingToRetry" : "download.paused",
+                isAutomatic && scheduledRecovery
+                    ? "download.waitingToRetry" : "download.paused",
                 isAutomatic
-                    ? "Automatic download is waiting for watchdog recovery"
+                    ? scheduledRecovery
+                        ? "Automatic download is waiting for watchdog recovery"
+                        : "Automatic retries are paused; manual retry is available"
                     : "Episode download paused",
                 metadata: [
                 "episode": episode.title,

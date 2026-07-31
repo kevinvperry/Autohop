@@ -52,6 +52,19 @@ struct DownloadsView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
+        .onAppear {
+            let activities = downloadActivityStore.activeActivities
+            AppLogger.shared.info(
+                "download.pageAppeared",
+                "Downloads page appeared",
+                metadata: [
+                    "activeRows": "\(activities.count)",
+                    "downloading": "\(activities.filter { $0.status == .downloading }.count)",
+                    "waitingToRetry": "\(activities.filter { $0.status == .waitingToRetry }.count)",
+                    "failed": "\(activities.filter { $0.status == .failed }.count)"
+                ]
+            )
+        }
     }
 
     // MARK: - Recently Archived
@@ -412,8 +425,14 @@ private struct DownloadActivityRow: View {
                 archiveButton
 
             case .waitingToRetry:
-                ProgressView()
-                    .controlSize(.small)
+                Button {
+                    Task { await appState.resumeDownload(activity) }
+                } label: {
+                    Label("Retry Now", systemImage: "arrow.clockwise")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
 
                 archiveButton
 
@@ -421,7 +440,11 @@ private struct DownloadActivityRow: View {
                 Button {
                     Task { await appState.resumeDownload(activity) }
                 } label: {
-                    Label("Resume", systemImage: "play.fill")
+                    Label(
+                        activity.status == .failed ? "Retry Now" : "Resume",
+                        systemImage: activity.status == .failed
+                            ? "arrow.clockwise" : "play.fill"
+                    )
                         .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.borderedProminent)

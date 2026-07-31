@@ -365,6 +365,9 @@ final class AutoDownloadIntentWorkflow {
             )
             return
         }
+        let previousFailure = state.intentStore.failureRecord(
+            episodeID: candidate.id
+        )
         if let failure = state.intentStore.activeFailure(
             episodeID: candidate.id,
             mediaURL: candidate.audioURL
@@ -383,6 +386,11 @@ final class AutoDownloadIntentWorkflow {
                 ]
             )
             return
+        }
+        if previousFailure != nil {
+            downloadCoordinator.beginNewWatchdogRecoveryCycleIfNeeded(
+                for: candidate.id
+            )
         }
 
         if let backoff = downloadCoordinator.failureBackoff[candidate.guid],
