@@ -13,6 +13,249 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### 1 August 2026 — Apple TV Home stability and episode archiving
+
+- Moved **Updating from iPhone** out of the Home content stack and into a
+  non-interactive top-right status badge. Sync-status changes no longer insert
+  or remove a row, so Home shelves and Siri Remote focus positions remain
+  stable while iCloud updates. A subsequent device review moved the badge
+  closer to the upper-right safe-area edge, separate from the content grid.
+- Restyled **Continue Listening/Watching** to use the same compact 150-point
+  artwork, typography, spacing, material and focus treatment as the active
+  **Now Playing/Watching** card.
+- Added Archive to every playable Apple TV episode surface through the native
+  long-press context menu: Home shelves, Continue Listening, Up Next and
+  podcast episode lists. The active Home hero also provides a visible Archive
+  button.
+- Added a directly focusable **Archive** button to every Up Next row after
+  device testing found that the destructive long-press menu could appear
+  without allowing its action to acquire Siri Remote focus.
+- Added Archive to both player designs: the audio player control row and the
+  native full-screen video transport menu.
+- Archiving the active episode now stops and clears playback, removes the local
+  row from Up Next, records durable companion EpisodeSyncState even for legacy
+  projection-only episodes, and requests an immediate iCloud send to iPhone.
+- Locally archived episodes are suppressed immediately from an older
+  phone-authored queue snapshot. Diagnostics confirmed that Archive had run
+  and synced three times, but the unchanged projection reconstructed the row
+  and misleadingly made the command appear unsuccessful.
+- Added regression coverage for catalogue-free archived-state authoring and
+  verified the Apple TV build.
+
+### 1 August 2026 — Apple TV responsiveness and authoritative playback sync
+
+- Separated Up Next projection invalidation from listening-history
+  invalidation. A playback checkpoint can now update Continue Listening
+  without rebuilding or logging the unchanged queue; only a changed library or
+  queue generation reconstructs Up Next.
+- Replaced overlapping full-history launch/foreground sweeps with one shared,
+  bounded recent-history prime. The Home surface requests at most the latest
+  100 CloudKit history records while the normal change stream remains the
+  durable full-history recovery path.
+- Added an immediate tvOS checkpoint send path. Pause, player exit, app
+  background and periodic playback checkpoints now queue the persisted history
+  row, request a CKSyncEngine send, and log send requested/completed/failed plus
+  the existing per-record acknowledgement.
+- Preserved the authoritative phone-authored history record when a legacy or
+  reinstalled tvOS episode has a different local UUID. Bounded enclosure/GUID
+  recovery prevents playback from creating a second generated history entry.
+- Allowed Apple TV to author playing/played EpisodeSyncState directly from
+  durable subscription ID + GUID when no local catalogue Episode row exists.
+  A self-contained Queue/History video can therefore update the iPhone instead
+  of reporting `catalogMatch=false` and silently skipping state sync.
+- Stopped resume seeks, scrubbing and other large AVPlayer position jumps from
+  increasing synced listening totals. Only short natural playback ticks count
+  as consumed time; every jump still updates the saved resume position.
+- Retained the existing bounded/downsampled tvOS artwork cache. Log review and
+  source audit confirmed it already loads off-main, deduplicates in-flight
+  requests, limits decoded memory and prunes its disk cache.
+- Added regression coverage for natural playback accounting, authoritative
+  history identity recovery and catalogue-free companion episode state.
+- Regenerated the Xcode project and verified the tvOS application build.
+
+Physical Apple TV validation remains required to confirm reduced focus latency,
+one queue projection per real generation, bounded recent-history priming,
+CloudKit acknowledgement on the phone, and repeated video resume at the saved
+position and selected speed.
+
+### 31 July 2026 — Apple TV playback diagnostics, speed and history sync
+
+- Removed the duplicate **Continue Watching** card while its episode is already
+  represented by the active **Now Watching** section. Stable enclosure identity
+  handles reconstructed episode UUIDs after feed migration or reinstall.
+- Stopped computing and publishing the Continue Watching history projection
+  while playback is active. Home now maintains one mutually exclusive hero,
+  avoiding repeated history-table decoding and view invalidation during
+  progress checkpoints.
+- Stopped rewriting MediaRemote Now Playing metadata on every half-second
+  playback tick. Apple TV now publishes it only at meaningful transport,
+  position and speed changes, preventing the timeout churn observed in Xcode.
+- Deferred the native AVKit speed menu until its player surface has appeared,
+  eliminating zero-width focus/menu constraint conflicts during presentation.
+- Hardened video pause/resume speed retention by keeping AVPlayer `defaultRate`
+  and active `rate` aligned, using an explicit preferred-rate resume, and
+  reasserting the selected subscription speed when playback resumes.
+- Fixed uninterrupted Apple TV playback progress remaining local indefinitely.
+  Direct history-database writes now request a bounded CloudKit slow-lane upload
+  once per minute; pause, player exit and app backgrounding still upload
+  immediately.
+- Added durable GUID/enclosure identity reconciliation before tvOS authors
+  playing or completed episode state. The synced mutation now targets the
+  phone's current catalogue identity after a remove/re-add or legacy migration,
+  rather than an Apple-TV-local UUID the phone cannot merge.
+- Expanded persistent tvOS diagnostics with video-surface attach/detach,
+  playback request generation, expected/default/actual rates, pause/resume,
+  local progress writes, periodic upload requests and iCloud acknowledgements.
+- Settings & Diagnostics now shows live playback state, position, selected
+  speed, actual AVPlayer rate and pending history uploads. It can prepare the
+  complete stitched redacted log inside the Apple TV app container for device
+  retrieval; no diagnostic information is uploaded automatically.
+- Promoted **Prepare Full Diagnostic Export** to the first control on Settings
+  & Diagnostics, enabled structured log mirroring in physical DEBUG builds,
+  and corrected rate formatting that previously generated runtime warnings.
+- Fixed first-launch video presentation ordering. Continue Watching now waits
+  for media classification, AVPlayer readiness and the resume seek before
+  presenting AVKit, rather than attaching a full-screen cover to the interim
+  audio-only state and requiring a second Now Watching tap.
+- Replaced the diagnostic export's silent temporary-file copy with a direct,
+  error-reporting atomic write. Physical tvOS denied the returned Documents
+  location. Inspection of a real `.xcappdata` container confirmed physical
+  tvOS had fallen back the live logger to temporary storage, which Xcode omits.
+  The tvOS-only logger and export now use the already-writable and
+  container-visible `Library/Caches/Autohop` directory; iPhone logging paths
+  are unchanged.
+- Added regression coverage for the periodic history-upload cadence.
+
+Physical Apple TV validation remains required for repeated video starts,
+pause/resume at non-1× speeds, and confirmation that a minute of TV playback
+updates the iPhone history after CloudKit delivery.
+
+### 31 July 2026 — Apple TV video return path, focus clarity and crash prevention
+
+- Added generation ownership for asynchronous tvOS playback requests. An older
+  AVAsset validation or media probe can no longer publish failure/player state
+  after the user selects a newer episode.
+- Reopening the currently playing episode now presents its existing AVPlayer
+  without restarting, rebuffering, resetting resume position or reapplying
+  default speed.
+- Added a persistent **Now Playing / Now Watching** section to the normal Home
+  layout after dismissing playback, including explicit **Return to video** and
+  play/pause actions. It replaces the floating player bar, participates in
+  predictable top-to-bottom focus order and never obscures other content.
+- Added a consistent, low-cost selected-tile treatment across Home, Up Next,
+  Library and podcast episode lists: a high-contrast magenta edge, restrained
+  purple fill and short focus transition. Native tvOS card behaviour remains
+  authoritative; no custom remote-command interception was introduced.
+- Made playback speed explicit in full-screen native video controls. The menu
+  title shows the active rate, the selected rate is checked, and changing it
+  refreshes the menu while preserving the engine-owned player.
+- Native AVPlayerViewController instances now detach from the engine-owned
+  player when their cover is dismantled, allowing a clean full-screen video
+  controller to attach when reopened.
+- Removed the duplicate dismissal checkpoint that synchronously flushed
+  progress/statistics twice and contributed to slow navigation back to Home.
+- Added regression tests for stale playback-request rejection, reconstructed
+  identity reopening the same enclosure, and genuinely different enclosures
+  starting a new request.
+
+Physical Apple TV validation remains required for repeated video dismiss/reopen,
+directional focus stability, remote repeat behaviour, switching directly from a
+playing video to another episode, long-buffering TWiT media, resume position and
+speed preservation.
+
+### 31 July 2026 — canonical Apple TV identity, video and sync resolution
+
+- Added one tvOS-only episode resolver for Queue, Continue Watching and
+  playback. Legacy history rows now infer video from recognised enclosure URLs
+  instead of silently defaulting missing `mediaKind` to audio.
+- Preserved the deliberate distinction between audio and video subscriptions
+  while allowing a stale pre-reinstall subscription UUID to inherit settings
+  from one exact current title. This restores the correct podcast title,
+  playback speed and resume position without changing iPhone behaviour.
+- Replaced title-only history association with stable history key, episode ID,
+  enclosure URL and guarded title-plus-podcast matching.
+- Added a bounded AVAsset video-track probe only for legacy, extensionless
+  media whose type cannot otherwise be established. Declared and recognised
+  media starts without the probe.
+- Replaced the contradictory five-minute foreground poll plus five-minute
+  freshness gate with a 60-second tvOS safety poll and 90-second maximum
+  snapshot age. Private CloudKit changes remain the primary path.
+- Added stable Up Next focus restoration when sync replaces or removes rows.
+- Added a dedicated tvOS unit-test target covering legacy video inference,
+  audio/video subscription separation, stale UUID settings inheritance,
+  guarded history matching and foreground freshness policy.
+- Regenerated the Xcode project from `project.yml`. These changes are confined
+  to the Apple TV target and its tests; no iPhone runtime path was modified.
+
+Physical Apple TV validation is still required for the legacy Windows Weekly
+record, 1.5x preference inheritance, exact resume position, full-screen video,
+foreground sync convergence and focus stability during a live queue update.
+
+### 31 July 2026 — download recovery field validation and hardening
+
+- Isolated the field-proven stalled-download recovery into a reproducible
+  source-control commit. In diagnostic log 24, all 32 episodes that encountered
+  stalls recovered and all 52 attempted episodes completed.
+- Preserved the four-minute first-byte allowance during genuine process
+  suspension, while shortening it to 60 seconds whenever foreground UI or
+  active audio provides a verified execution window. Generation ownership and
+  the final live-progress check remain mandatory before cancellation.
+- Added truthful build provenance to launch diagnostics: commit,
+  dirty-working-tree state, source fingerprint and UTC build timestamp.
+  Diagnostic captures made from local edits can no longer be mistaken for a
+  clean commit.
+- Added an absolute feed-response ownership check. A response delivered after
+  the request window—commonly after process suspension—is discarded instead of
+  allowing one stale feed to monopolise a resumed refresh cycle.
+- Removed synchronous statistics persistence from successful download
+  settlement. Download counters remain authoritative in memory and are
+  persisted at the next lifecycle/statistics checkpoint, preventing disk work
+  from delaying completion handling.
+- Added regression coverage for screen-closed active-audio rescue timing and
+  deferred download-statistics persistence.
+- Retained the existing retry ladder, circuit breakers, durable cooldowns,
+  truthful **Retry Now** presentation and active-runtime fallback because log
+  24 shows those mechanisms are effective.
+
+Device validation still required:
+
+- Deliberately exercise **Retry Now** on a genuinely stalled transfer.
+- Confirm a quiet, low-playback overnight capture still behaves safely when no
+  active execution window exists.
+
+### 30 July 2026 — truthful stalled-download recovery and Retry Now
+
+- Fixed exhausted automatic downloads being overwritten with **Waiting to
+  retry** even when no scheduled retry existed. That label now requires a real
+  retry owner; failed and ownerless paused rows expose **Retry Now**.
+- Fixed a spent in-memory 30/60/120-second watchdog ladder carrying into a later
+  post-cooldown attempt. Each genuine recovery cycle now gets a fresh short
+  ladder while the durable 15/30/60-minute consecutive-exhaustion history is
+  preserved across refreshes and launches.
+- Manual Retry Now clears stale short-retry ownership and bypasses automatic
+  cooldown/circuit gates. Cancel and Archive now clear retry tasks, dates,
+  generations and active recovery eligibility.
+- Added a recovery-only ordinary URLSession transfer while foreground UI or
+  active audio provides an execution window. This avoids repeatedly feeding
+  cross-host background-session first-byte stalls back into the same failing
+  transport; ordinary automatic work remains durable and circuit-protected.
+- Added circuit-bypass and active-runtime transfer diagnostics plus Downloads
+  page state snapshots, and regression coverage for truthful retry presentation
+  and durable cooldown history.
+
+### 30 July 2026 — route-safe Play Instant recovery
+
+- Fixed Play Instant losing an otherwise eligible automatic arrival when an
+  AirPods route disappeared or playback paused just before download completion.
+- Eligible arrivals now remain armed for up to 30 minutes and trigger, with the
+  existing warning, when safe playback resumes. They never start unexpectedly
+  through the phone speaker and simply retain their normal Up Next position if
+  the waiting period expires.
+- Added explicit diagnostics for armed, resumed, expired, manually satisfied
+  and ineligible Play Instant decisions, replacing the previous silent guard.
+- Preserved automatic-download and filter requirements, FIFO sequencing, exact
+  interrupted-position restoration and deliberate-user-action cancellation.
+
 ### 30 July 2026 — responsive viewport foundations and easy-win layout pass
 
 - Added one central adaptive-layout vocabulary for narrow, standard, wide and
@@ -349,8 +592,8 @@ and diagnostic or performance-policy changes.
 
 ### Apple TV rebuild — Phases 3, 4 and 5 — 26 July 2026
 
-- Added bounded queue-only recovery after Relay wake hints, honest Up Next sync
-  states, stale-cache recovery and a five-minute low-frequency fallback poll.
+- Added bounded queue-only recovery, honest Up Next sync states, stale-cache
+  recovery and a five-minute low-frequency fallback poll.
   Foreground recovery no longer re-fetches the entire subscription zone.
 - Added an old-phone/new-TV migration path: legacy queue rows now lazily fetch
   only their owning podcast (maximum two concurrent) instead of remaining stuck
@@ -429,6 +672,69 @@ complete or the tvOS app is promoted as shipping.
   phase or explicit non-git fallback disappears.
 - Added deterministic regression coverage for bulletin freshness
   classification, low-confidence surveillance, and stale-slot reservation.
+
+### Apple TV playback preference and archive sync identity — 1 August 2026
+
+- Persisted the playback speed selected on Apple TV into the existing synced
+  listening-history record. Projection-only video episodes now restore that
+  speed after an app rebuild or relaunch instead of reverting to 1×.
+- Canonicalised legacy nested episode GUIDs before Apple TV authors archive
+  state, preventing duplicated subscription/GUID wrappers from creating an
+  iCloud record that the iPhone cannot match to its local episode.
+- Added record-level diagnostics for listening-history and episode-state sends
+  and receives, including position, speed, archive state, identity and whether
+  a newer local version remains pending. A paired TV and iPhone diagnostic can
+  now distinguish upload, fetch and local-application failures precisely.
+- Bridged accepted remote listening-history updates into the iPhone's separate
+  authoritative playback-position store. Previously CloudKit and History could
+  receive the TV position while iPhone playback continued reading a stale local
+  resume cache, making successful sync appear to have had no effect.
+- Extended that bridge to an episode already open on the iPhone player: when
+  the phone is paused, an accepted newer TV position now moves the live scrubber
+  and resume point immediately. An actively playing iPhone remains authoritative
+  and is never interrupted by a remote seek.
+- Reworded tvOS startup and player buffering feedback from “Preparing video” to
+  the media-neutral “Preparing playback” for both audio and video episodes.
+- Added an overflow-aware tvOS player heading: long episode titles pause, scroll
+  at a steady reading speed until their ending is visible, pause again, and
+  return before repeating. Short titles remain still and Reduce Motion uses a
+  wrapped, non-animated presentation.
+- Verified from a physical Apple TV capture that natural playback is credited to
+  the TV's additive daily Stats partition and queued to iCloud alongside history.
+  The iPhone continues to merge that per-device partition into its Stats views.
+- Added regression tests for projection-only speed restoration, preservation of
+  a previously stored speed, and nested legacy GUID canonicalisation.
+
+### Apple TV Home presentation cleanup — 2 August 2026
+
+- Removed the duplicate large Home heading from the scrolling page. The
+  persistent system Home tab control is now the single page identity and its
+  tab chrome is explicitly kept visible while users move through shelves.
+- Renamed the transient Home sync badge from “Updating from iPhone” to the
+  accurate “Updating from iCloud”, aligned as fixed top-right chrome so status
+  changes never reflow Home content.
+- Removed the actively loaded episode from Home's rendered Up Next shelf while
+  retaining it in the authoritative phone-authored queue and dedicated Up Next
+  page. Now Playing is therefore the active episode's only Home appearance.
+
+### Private iCloud becomes the sole sync architecture — 2 August 2026
+
+- Retired the Autohop Pro subscription concept and removed its StoreKit product
+  configuration, entitlement owner, purchase/restore UI, settings route and
+  release feature gates.
+- Removed the complete Cloudflare Worker relay client and credentials model,
+  iPhone relay coordinator, APNs relay-token forwarding, silent-push dispatch,
+  heartbeat/feed-membership/sync-nudge logic, tvOS paired registration and relay
+  protocol tests.
+- Kept APNs registration on both platforms solely for CKSyncEngine's native
+  private CloudKit notifications. No token or user data is sent to an Autohop
+  server or third-party synchronization service.
+- Simplified iPhone startup and CloudKit callback ownership and retained tvOS's
+  bounded foreground freshness poll as protection against delayed CloudKit
+  delivery.
+- Updated generated-project inputs, package membership, release validation and
+  canonical product documentation to state that private iCloud is the only
+  cross-device synchronization method.
 
 ## Validation still required
 

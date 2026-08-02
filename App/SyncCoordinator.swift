@@ -5,8 +5,8 @@
 //  AI CONTEXT
 //  Stage 10 exclusive iOS owner of CloudSyncEngine construction, callback
 //  installation, opt-in lifecycle, remote subscription materialization,
-//  history/Stats routing, active-player identity protection, deferred pushes,
-//  and explicit Relay sync-nudge pulls.
+//  history/Stats routing, active-player identity protection, and deferred
+//  private-iCloud pushes.
 //
 //  This extraction does not change CloudKit containers, record types, keys,
 //  identity, merge policy, pending-row durability, or platform authorship.
@@ -26,7 +26,6 @@ final class SyncCoordinator {
     private let historyStatsCoordinator: HistoryStatsCoordinator
     private let logger: AppLogger
     private var currentEpisodeProvider: () -> Episode? = { nil }
-    private weak var relayCoordinator: RelayCoordinator?
     private var callbacksInstalled = false
 
     init(
@@ -59,12 +58,6 @@ final class SyncCoordinator {
         }
     }
 
-    /// Connects successful CloudKit pushes to the optional Relay nudge policy.
-    /// The CloudSyncEngine callback remains private to this domain owner.
-    func installRelayNudge(_ relayCoordinator: RelayCoordinator) {
-        self.relayCoordinator = relayCoordinator
-    }
-
     func startIfEnabled(_ enabled: Bool) {
         installCallbacksIfNeeded()
         if enabled { engine.start() }
@@ -95,11 +88,6 @@ final class SyncCoordinator {
         }
         engine.onRemoteStatsChanged = { [weak self] in
             self?.historyStatsCoordinator.reloadRemoteStats()
-        }
-        engine.onLocalChangesPushed = { [weak self] in
-            await MainActor.run {
-                self?.relayCoordinator?.localChangesPushed()
-            }
         }
     }
 

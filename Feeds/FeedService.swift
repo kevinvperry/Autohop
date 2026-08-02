@@ -258,6 +258,7 @@ final class FeedService: FeedServicing {
         validators: FeedValidators?
     ) async throws -> FeedRefreshOutcome {
         var request = URLRequest(url: feedURL)
+        request.timeoutInterval = 25
         if let etag = validators?.etag {
             request.setValue(etag, forHTTPHeaderField: "If-None-Match")
         }
@@ -266,6 +267,7 @@ final class FeedService: FeedServicing {
         }
 
         let beforeNetwork = Self.memorySample()
+        let requestStartedAt = Date()
         let metricsCollector = FeedTaskMetricsCollector()
         try Task.checkCancellation()
         let (data, response) = try await fetchResponse(
@@ -273,6 +275,21 @@ final class FeedService: FeedServicing {
             metricsCollector: metricsCollector
         )
         try Task.checkCancellation()
+        let requestWallClockSeconds = Date().timeIntervalSince(requestStartedAt)
+        if requestWallClockSeconds > 35 {
+            AppLogger.shared.warning(
+                "feed.requestDeadlineExceeded",
+                "Discarded a feed response delivered after its absolute ownership window",
+                metadata: [
+                    "host": feedURL.host ?? "unknown",
+                    "elapsedSeconds":
+                        String(format: "%.1f", requestWallClockSeconds),
+                    "deadlineSeconds": "35"
+                ],
+                alwaysPersist: true
+            )
+            throw FeedServiceError.timedOut
+        }
         let afterNetwork = Self.memorySample()
         Self.logMemoryStage(
             "networkData",

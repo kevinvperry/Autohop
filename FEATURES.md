@@ -30,8 +30,9 @@ classification, main-thread hang context, playback tick timing, and stats-sync
 flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
-Version 1.3 is iPhone-only: tvOS, Autohop Pro, and Cloudflare Relay are retained
-as development implementations but excluded from the production feature set.
+The iPhone and Apple TV targets use only the user's private iCloud account for
+cross-device sync. The abandoned Autohop Pro and Cloudflare relay prototypes
+have been removed from the project.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
 entitlement scope: Now Playing, downloaded-only Up Next, Subscriptions, explicit
 download-before-play confirmation for subscription episodes, Play Now, Play Next,
@@ -43,9 +44,9 @@ notifications, or other non-driving workflows.
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
 
-> **Version 1.3 production scope:** iPhone only. Autohop Pro is hidden and its
-> StoreKit lifecycle is inactive; Relay registration, uploads, heartbeats, nudges,
-> and push handling are inactive. Apple TV is a separate unsubmitted target.
+> **Cross-device architecture:** iPhone and Apple TV synchronize through the
+> user's private iCloud account. There is no Autohop account, subscription tier,
+> developer-operated sync service, or Cloudflare relay.
 
 > **Version 1.5 development note:** the separate, still-unsubmitted Apple TV
 > target now uses an iPhone-authored self-contained queue, native audio/video
@@ -470,10 +471,16 @@ transfers that have already received payload data receive suspension grace.
 Cancellation is generation-safe: exactly one terminal decision is allowed per
 task generation, and live task progress/completion is re-checked before a cancel
 is issued so a transfer that has finished out-of-process is not cancelled.
-Automatic retries are bounded; after exhaustion the durable automatic intent is
-retired (with a persisted cooldown) so no independent drain restarts a terminally
-failed transfer before the cooldown elapses. The Downloads page leaves the episode
-explicitly retryable, and a manual retry bypasses the cooldown.
+Automatic retries are bounded. After a 30/60/120-second short ladder exhausts,
+the durable intent enters a persisted 15/30/60-minute cooldown. When that
+cooldown ends, Autohop starts a fresh short ladder without erasing the durable
+consecutive-exhaustion history. While foreground UI or active audio supplies a
+real execution window, a recovery attempt can use an ordinary URLSession path
+to avoid the cross-host background-session first-byte failure mode measured in
+Log 23. That recovery path may bypass an open automatic circuit breaker, but
+normal automatic work remains protected. The Downloads page says **Waiting to
+retry** only while a concrete retry task owns the next attempt; otherwise it
+offers **Retry Now**, which safely bypasses cooldown and circuit gates.
 
 **Host circuit breakers (automatic downloads only):** Repeated *terminal* download
 failures are tracked per media host. Two terminal failures on one host within a
@@ -491,17 +498,9 @@ two to four deferred feeds may run when deadline, power, thermal, network, and
 large-download conditions are safe. Conditional requests, Release Radar priority,
 failure backoff, and oldest-deferred fairness apply to both batches.
 
-**Development-only after Version 1.3:** The following Relay behavior is retained
-for controlled future testing and is not enabled in the 1.3 production build.
-Feed-specific relay wakes race their targeted feed
-work against a 20-second completion deadline. The app reports to iOS exactly once,
-returns `.noData` if the deadline wins, and never waits for an episode media
-download. A late shared refresh may finish for another live owner, but cannot keep
-the silent-push completion handler open or cancel foreground/manual work.
-
 **Download states:** `notDownloaded` → `queued` → `downloading` → `downloaded` / `failed`
 
-**Downloads page rows:** three card sections — Downloading (progress bar + pause/resume + archive; controls are fixed-size so long progress text truncates rather than compressing buttons), Downloaded on Device, Recently Archived (re-download). Audio/Video and Explicit pills sit inline next to the podcast title. Progress publishes are coalesced to ≥1% steps so multiple concurrent downloads don't re-render whole pages every second.
+**Downloads page rows:** three card sections — Downloading (progress bar + Resume/Retry Now + archive; controls are fixed-size so long progress text truncates rather than compressing buttons), Downloaded on Device, Recently Archived (re-download). **Waiting to retry** is displayed only while an actual scheduled retry exists; failed or ownerless paused work remains immediately recoverable with **Retry Now**. Audio/Video and Explicit pills sit inline next to the podcast title. Progress publishes are coalesced to ≥1% steps so multiple concurrent downloads don't re-render whole pages every second. Opening the page records aggregate state counts for diagnosis but does not secretly restart downloads.
 
 **Manual download:** Episodes not yet downloaded show a "Download" button in the episode list row.
 
@@ -628,9 +627,9 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 |---|---|---|
 | New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
-| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files, filter-skipped episodes, and arrivals while playback is idle do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
+| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing during an active Instant session, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
 
-**Play Instant footer note (shown in app):** "Play Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Use it sparingly—only for your absolute favourite content. Manual downloads never trigger it."
+**Play Instant footer note (shown in app):** Play Instant interrupts active playback after an automatic download. A temporarily unavailable route arms the episode for up to 30 minutes; it triggers only after safe playback resumes and never autoplays through the phone speaker.
 
 ---
 

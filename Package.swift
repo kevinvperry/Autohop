@@ -130,16 +130,7 @@ let package = Package(
                 "PlaybackCore/StreamingPlaybackEngine.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift",
-                "Downloads/DownloadRecoveryPolicy.swift",
-                // Autohop Relay client (2026-07-10): zero UIKit dependency
-                // (pure Foundation/URLSession/Security), shared so tvOS can
-                // register/receive push without duplicating this networking
-                // layer. The iOS Xcode target compiles these directly via its
-                // own source glob too — they physically stay in Relay/, this
-                // just ALSO exposes them to TV's AutohopCore package product.
-                "Relay/RelayModels.swift",
-                "Relay/RelayCredentialsStore.swift",
-                "Relay/RelayClient.swift"
+                "Downloads/DownloadRecoveryPolicy.swift"
             ]
         ),
         .executableTarget(

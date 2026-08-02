@@ -11,11 +11,11 @@ legacy `Queue*` type/property names in several places.
 Priority Stack reordering uses a stable active-subscription UUID draft and one
 atomic cross-device order generation; Inactive and hidden browse rows never share
 its move-index space.
-The checked-in production configuration is Version 1.4 build 5 and iPhone-only.
+The checked-in production configuration includes the full iPhone and Apple TV
+codebases. Cross-device synchronization uses only the user's private iCloud.
 VERSION_1.4.md is the closed ledger for the build submitted to Apple on 25 July
-2026; VERSION_1.5.md tracks improvements implemented after that submission. The separate tvOS target,
-Autohop Pro subscription, and Cloudflare Relay service remain development
-features and are not offered, advertised, or contacted by the submitted build.
+2026; VERSION_1.5.md tracks improvements implemented after that submission.
+The abandoned Autohop Pro and Cloudflare relay prototypes have been removed.
 The post-1.4 tvOS rebuild is implemented through automated Phase 6 hardening:
 compact cached projections, targeted detail loading, truthful streaming states,
 native video and read-only sync authority. It remains unsubmitted until the
@@ -23,7 +23,7 @@ physical Apple TV soak checklist passes.
 AppState decomposition Stages 0–14 are implementation-complete. Domain
 coordinators and named workflows exclusively own playback, queue, downloads,
 feed refresh/Release Radar, Auto Archive, history/Stats, onboarding, import,
-CloudKit/Relay, chapters, media, Play Instant, runtime policy, and startup.
+private iCloud sync, chapters, media, Play Instant, runtime policy, and startup.
 SwiftUI observes narrow owners directly. AppState is now only the process
 singleton, composition root, and stable high-level façade retained for SwiftUI,
 CarPlay, AppDelegate, BGTask, APNs, and file-open entry points. The remaining
@@ -64,10 +64,9 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Current Feature Set
 
-> **Version 1.3 release boundary:** This release contains the iPhone app only.
-> Apple TV, Autohop Pro, and Relay-assisted delivery remain under development.
-> Their source is retained for testing, but explicit compilation conditions are
-> required to enable Pro or Relay and the tvOS target must be uploaded separately.
+> **Current development boundary:** iPhone and Apple TV are separate targets.
+> Both use the user's private iCloud account as their sole cross-device sync
+> transport; no Autohop account, paid sync tier, or external relay exists.
 > See [`RELEASE_1_3.md`](RELEASE_1_3.md) for the archive and App Store checklist.
 
 - First-run onboarding: a Welcome carousel, chart-derived one-tap Starter Packs, guiding empty states, a "You're all set" first-subscribe moment that auto-downloads and cues your first episode, contextual coach marks, and a getting-started checklist — designed to teach the Priority Stack model without forcing playback or asking for permissions up front
@@ -89,7 +88,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Deadline-aware background feed refresh, four-minute background-audio cycles (seven routine feeds; hard ceiling ten for urgent windows), resource-aware budget reduction, deferred-feed fairness/age diagnostics, and per-podcast exclude-from-refresh
 - Explainable Auto Archive with a 25-minute execution gate, per-pass eligibility diagnostics, and a local Activity page recording the rule, threshold, and measured age behind each automatic archive
 - Per-podcast Download Filters for automatic RSS downloads by episode duration, title, and description
-- Play Instant for absolute-favourite shows — a newly auto-downloaded episode can gently warn, interrupt active playback, bypass Up Next, then return to the exact interrupted position
+- Play Instant for absolute-favourite shows — a newly auto-downloaded episode can gently warn, interrupt active playback, bypass Up Next, then return to the exact interrupted position; a brief route loss safely arms the arrival for up to 30 minutes instead of losing it
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive / Skipped
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
@@ -119,7 +118,8 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Diagnostic logging for feeds, downloads, queue, playback/audio routes, main-thread watchdog gaps, and resource metrics (hidden developer tool)
 - Deadline-aware background reliability: phase-aware absolute download watchdog
   deadlines (60s foreground / 4min background), generation-safe single-cancel
-  retries with a persisted post-exhaustion cooldown, per-host and cross-host
+  retries with fresh per-cycle 30/60/120-second ladders and persisted 15/30/60-minute
+  post-exhaustion cooldowns, an active-runtime recovery path, per-host and cross-host
   circuit breakers that pause only automatic downloads to a failing CDN, bounded
   feed parsing (episode/character caps + a parse-memory quarantine for pathological
   feeds), and an opportunistic BGAppRefresh backlog batch that runs only under safe

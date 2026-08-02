@@ -24,10 +24,14 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>GitCommitSHA</key>
 	<string>unavailable</string>
+	<key>GitWorkingTreeDirty</key>
+	<string>unknown</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widgetkit-extension</string>
 	</dict>
+	<key>SourceFingerprint</key>
+	<string>unavailable</string>
 </dict>
 </plist>

@@ -3,7 +3,12 @@ import AutohopCore
 
 // AI CONTEXT — TV/Views/TVHomeView.swift
 // Phase 2 (tvOS proposal §7 item 2): Home's shelf grammar (PC HomeView, §2.1).
-// Two sections in order: Continue Listening hero, Up Next shelf. The Latest
+// One mutually-exclusive hero (active Now Playing/Watching OR historical
+// Continue Listening), followed by the Up Next shelf. Home deliberately has
+// no second in-content title: TVMainTabView owns the persistent system Home
+// chrome. While playback is loaded, its episode is removed only from Home's
+// rendered Up Next projection; the phone-authored queue remains unchanged.
+// The Latest
 // shelf was REMOVED 2026-07-11 (Kevin: irrelevant on TV — Up Next is the
 // point; the space goes to queue metadata instead).
 // Continue Listening / "Continue Watching" (video): driven by the SYNCED
@@ -22,35 +27,143 @@ import AutohopCore
 struct TVHomeView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
+    let onReopenPlayer: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 48) {
-                // Plain heading, not `.navigationTitle` — this tab has no
-                // NavigationStack of its own (see TVMainTabView's header on
-                // why nesting one under .sidebarAdaptable broke the sidebar).
-                Text("Home")
-                    .font(.largeTitle.bold())
-                if case .updating = model.syncStatus {
-                    Text(model.syncStatus.label).font(.callout).foregroundStyle(.secondary)
-                }
-                if let continueItem = model.continueListening {
+        let visibleQueueRows = homeQueueRows
+        ZStack(alignment: .topTrailing) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 48) {
+                if model.playbackModel.currentEpisode != nil {
+                    nowPlayingSection
+                } else if let continueItem = model.continueListening {
                     continueListeningSection(continueItem)
                 }
-                if !model.queueRows.isEmpty {
-                    queueShelf(title: "Up Next", rows: model.queueRows)
+                if !visibleQueueRows.isEmpty {
+                    queueShelf(title: "Up Next", rows: visibleQueueRows)
                 }
-                if model.continueListening == nil && model.queueRows.isEmpty {
+                if model.playbackModel.currentEpisode == nil,
+                   model.continueListening == nil,
+                   visibleQueueRows.isEmpty {
                     ContentUnavailableView(
                         "Nothing to play yet",
                         systemImage: "play.slash",
                         description: Text("Episodes appear here once your subscriptions have synced.")
                     )
                 }
+                }
+                .padding(.horizontal, 80)
+                .padding(.vertical, 60)
             }
-            .padding(.horizontal, 80)
-            .padding(.vertical, 60)
+
+            if case .updating = model.syncStatus {
+                Label("Updating from iCloud", systemImage: "icloud.and.arrow.down")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    // Status chrome uses the safe viewport edge rather than
+                    // Home's inset content grid.
+                    .padding(.top, 20)
+                    .padding(.trailing, 28)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Updating from iCloud")
+            }
         }
+    }
+
+    /// Home is a presentation projection, not a second queue authority. Keep
+    /// the active item available in the dedicated Up Next tab, but avoid
+    /// showing the same episode immediately below its Now Playing hero here.
+    /// Use every stable identity available because legacy queue rows may have
+    /// been reconstructed from a different object instance than playback.
+    private var homeQueueRows: [TVQueueRowModel] {
+        guard let current = model.playbackModel.currentEpisode else {
+            return model.queueRows
+        }
+        let currentKey = PlaybackPositionStore.key(for: current)
+        return model.queueRows.filter { row in
+            if let episode = row.episode,
+               model.playbackModel.isCurrentEpisode(episode) {
+                return false
+            }
+            return row.id != currentKey
+        }
+    }
+
+    // MARK: - Current playback
+
+    /// A stable, in-layout return path replaces the former floating overlay.
+    /// It participates in Home's normal focus order and never obscures shelves.
+    private var nowPlayingSection: some View {
+        let playback = model.playbackModel
+        return VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(playback.currentEpisode?.mediaKind == .video ? "Now Watching" : "Now Playing")
+            HStack(spacing: 20) {
+                Button(action: onReopenPlayer) {
+                    HStack(spacing: 20) {
+                        TVArtworkImage(
+                            url: playback.currentEpisode?.artworkURL,
+                            cornerRadius: 12,
+                            targetPixels: 440
+                        )
+                        .frame(width: 150, height: 150)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(playback.currentEpisode?.title ?? "Current episode")
+                                .font(.title3.bold())
+                                .lineLimit(2)
+                            Text(playback.currentSubscriptionTitle)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Label(
+                                playback.currentEpisode?.mediaKind == .video
+                                    ? "Return to video"
+                                    : "Open player",
+                                systemImage: playback.currentEpisode?.mediaKind == .video
+                                    ? "play.rectangle.fill"
+                                    : "waveform"
+                            )
+                            .font(.headline)
+                            .foregroundStyle(TVTheme.focusAccent)
+                        }
+                        Spacer()
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 20))
+                }
+                .buttonStyle(.card)
+                .tvFocusHighlight(cornerRadius: 20)
+
+                Button {
+                    playback.togglePlayPause()
+                } label: {
+                    Label(
+                        playback.isPlaying ? "Pause" : "Play",
+                        systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
+                    )
+                    .font(.headline)
+                    .frame(minWidth: 150, minHeight: 110)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(TVTheme.brandPurple)
+
+                if let episode = playback.currentEpisode {
+                    Button(role: .destructive) {
+                        model.archiveEpisode(episode)
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                            .font(.headline)
+                            .frame(minWidth: 150, minHeight: 110)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .focusSection()
     }
 
     // MARK: - Continue Listening (TVCard-Hero pattern, DESIGN.md)
@@ -66,19 +179,19 @@ struct TVHomeView: View {
             Button {
                 if let episode = item.episode { onPlay(episode) }
             } label: {
-                HStack(spacing: 24) {
+                HStack(spacing: 20) {
                     TVArtworkImage(
                         url: item.episode?.artworkURL ?? entry.artworkURL,
-                        cornerRadius: 16,
-                        targetPixels: 800
+                        cornerRadius: 12,
+                        targetPixels: 440
                     )
-                    .frame(width: 220, height: 220)
-                    VStack(alignment: .leading, spacing: 8) {
+                    .frame(width: 150, height: 150)
+                    VStack(alignment: .leading, spacing: 7) {
                         Text(entry.episodeTitle)
-                            .font(.title2.bold())
+                            .font(.title3.bold())
                             .lineLimit(2)
                         Text(entry.podcastTitle)
-                            .font(.title3)
+                            .font(.headline)
                             .foregroundStyle(.secondary)
                         // Cross-device resume position bar (synced via the
                         // listening-history record — the same value playback
@@ -86,7 +199,7 @@ struct TVHomeView: View {
                         if positionSeconds > 0, let duration, duration > 0 {
                             ProgressView(value: min(positionSeconds / duration, 1.0))
                                 .tint(.purple)
-                                .frame(maxWidth: 420)
+                                .frame(maxWidth: 360)
                             Text("\(remainingLabel(duration - positionSeconds)) left")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -106,7 +219,7 @@ struct TVHomeView: View {
                     }
                     Spacer()
                 }
-                .padding(24)
+                .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Brand-purple tinted card (2026-07-11 theme pass) — material
                 // base with a purple wash, echoing the phone's purple accent
@@ -117,7 +230,17 @@ struct TVHomeView: View {
                 }
             }
             .buttonStyle(.card)
+            .tvFocusHighlight(cornerRadius: 20)
             .disabled(item.episode == nil)
+            .contextMenu {
+                if let episode = item.episode {
+                    Button(role: .destructive) {
+                        model.archiveEpisode(episode)
+                    } label: {
+                        Label("Archive Episode", systemImage: "archivebox")
+                    }
+                }
+            }
         }
         .focusSection()
     }
@@ -140,7 +263,8 @@ struct TVHomeView: View {
                         TVEpisodeCard(
                             episode: episode,
                             podcastTitle: model.subscription(for: episode)?.title,
-                            onPlay: { onPlay(episode) }
+                            onPlay: { onPlay(episode) },
+                            onArchive: { model.archiveEpisode(episode) }
                         )
                     }
                 }
@@ -182,8 +306,18 @@ struct TVHomeView: View {
                             }
                         }
                         .buttonStyle(.card)
+                        .tvFocusHighlight(cornerRadius: 18)
                         .disabled(!row.isPlayable)
                         .task { model.enrichQueueRowIfNeeded(row) }
+                        .contextMenu {
+                            if let episode = row.episode {
+                                Button(role: .destructive) {
+                                    model.archiveEpisode(episode)
+                                } label: {
+                                    Label("Archive Episode", systemImage: "archivebox")
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -205,6 +339,7 @@ struct TVEpisodeCard: View {
     let episode: Episode
     let podcastTitle: String?
     let onPlay: () -> Void
+    let onArchive: () -> Void
 
     var body: some View {
         Button(action: onPlay) {
@@ -225,5 +360,11 @@ struct TVEpisodeCard: View {
             }
         }
         .buttonStyle(.card)
+        .tvFocusHighlight(cornerRadius: 18)
+        .contextMenu {
+            Button(role: .destructive, action: onArchive) {
+                Label("Archive Episode", systemImage: "archivebox")
+            }
+        }
     }
 }

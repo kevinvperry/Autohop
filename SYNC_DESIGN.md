@@ -2,10 +2,10 @@
 
 <!--
 AI CONTEXT — SYNC_DESIGN.md
-Canonical design/status note for Autohop's opt-in CloudKit sync layer. Verified
+Canonical design/status note for Autohop's private iCloud sync layer. Verified
 again during the 2026-07-24 whole-project audit. Keep this
 aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
-App/SyncCoordinator.swift, App/RelayCoordinator.swift,
+App/SyncCoordinator.swift,
 TV reader note (26 July 2026): the iPhone remains queue/subscription authority.
 TV persists only compact purgeable GRDB render projections and cannot push
 subscription, order or queue authorship.
@@ -19,7 +19,8 @@ ordering is one atomic `SubscriptionOrder` generation; per-subscription
 acknowledgement clears only the exact value/timestamp or order generation that
 was sent, so a newer local edit cannot be lost while an older request is in
 flight. Refresh scheduling stats remain local, and
-download/media state never syncs. DownloadFilterSettings JOINED the sync
+download/media state never syncs. No developer-operated relay, Autohop account,
+or paid synchronization tier participates. DownloadFilterSettings JOINED the sync
 projection in July 2026 (Kevin's product decision) — it was local/backup-only in
 v1; see "Download Filters sync" notes throughout.
 June 2026 diagnostic repair context lives here too: collision quarantine,
@@ -98,7 +99,7 @@ and, since July 2026, is also part of the sync projection.
 AppState decomposition Stages 0–14 did not change CloudKit schemas or merge
 policy. `SyncCoordinator` owns the iOS CloudKit lifecycle, callback graph,
 remote materialization, active-player identity provider, history/Stats routing,
-deferred pushes, and Relay nudge connection. `PlaybackCheckpointWorkflow`
+and deferred private-iCloud pushes. `PlaybackCheckpointWorkflow`
 enforces playback-position → local history/Stats → deferred-push ordering.
 DownloadCoordinator owns device-local transfer runtime, FeedRefreshCoordinator
 owns device-local Release Radar runtime, AutoDownloadIntentWorkflow owns

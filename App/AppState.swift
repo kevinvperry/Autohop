@@ -16,7 +16,7 @@ import Foundation
 // - AppLifecycleCoordinator owns every retained lifecycle/maintenance Task.
 // - AppRuntimeWorkflow owns scene/application policy and resource diagnostics.
 // - Domain coordinators/workflows exclusively own playback, queue, download,
-//   refresh/Radar, Auto Archive, import, history/Stats, sync, Relay, onboarding,
+//   refresh/Radar, Auto Archive, import, history/Stats, iCloud sync, onboarding,
 //   routing, notifications, media, chapters, and Play Instant behavior.
 //
 // INVARIANTS:
@@ -28,7 +28,7 @@ import Foundation
 //   coordinate domains only by delegating to a named workflow.
 // - `bootstrap()` publishes exactly one instance before `start()` can emit work;
 //   repeated phone/CarPlay/background bootstrap requests resolve that instance.
-// - Persistence formats, CloudKit/Relay schemas, queue rules, and release
+// - Persistence formats, CloudKit schemas, queue rules, and release
 //   behavior are owned elsewhere and must not be duplicated here.
 //
 // AI CONTEXT — AppState startup state exposed by AppLifecycleCoordinator.
@@ -66,7 +66,6 @@ final class AppState: ObservableObject {
     let autoArchiveCoordinator: AutoArchiveCoordinator
     let subscriptionImportCoordinator: SubscriptionImportCoordinator
     private let syncCoordinator: SyncCoordinator
-    private let relayCoordinator: RelayCoordinator
     private let lifecycleCoordinator: AppLifecycleCoordinator
     var listeningHistoryStore: ListeningHistoryStore { historyStatsCoordinator.historyStore }
     var listeningStatsStore: ListeningStatsStore { historyStatsCoordinator.statsStore }
@@ -81,11 +80,6 @@ final class AppState: ObservableObject {
     var downloadActivityStore: DownloadActivityStore {
         downloadCoordinator.activityStore
     }
-
-    /// Autohop Pro entitlement (StoreKit 2) exposed for compatibility.
-    /// RelayCoordinator owns entitlement reactions, registration, membership,
-    /// heartbeat, and push dispatch; AppState only forwards platform entry calls.
-    var autohopProStore: AutohopProStore { relayCoordinator.proStore }
 
     // Player state
     var currentPlayerEpisode: Episode? {
@@ -345,7 +339,6 @@ final class AppState: ObservableObject {
         autoDownloadIntentStore: autoDownloadWorkflow.intentStore,
         autoArchiveCoordinator: autoArchiveCoordinator,
         syncCoordinator: syncCoordinator,
-        relayCoordinator: relayCoordinator,
         playbackCoordinator: playbackCoordinator,
         playbackPreferenceWorkflow: playbackPreferenceWorkflow,
         playbackSeekWorkflow: playbackSeekWorkflow,
@@ -468,17 +461,10 @@ final class AppState: ObservableObject {
             subscriptionStore: subscriptionStore,
             historyStatsCoordinator: historyStatsCoordinator
         )
-        self.relayCoordinator = RelayCoordinator(subscriptionStore: subscriptionStore)
         self.lifecycleCoordinator = AppLifecycleCoordinator()
         queueCoordinator.observePlayback(playbackCoordinator)
         playbackCoordinator.observeChapters(playbackChapterWorkflow)
         syncCoordinator.observePlayback(playbackCoordinator)
-        relayCoordinator.installWorkflows(
-            refreshWorkflow: feedRefreshCycleWorkflow,
-            syncCoordinator: syncCoordinator,
-            legacyMaxSubscriptions: backgroundRefreshFeedLimit
-        )
-        syncCoordinator.installRelayNudge(relayCoordinator)
         let instantWorkflow = playInstantWorkflow
         let startWorkflow = playbackStartWorkflow
         let transportWorkflow = playbackTransportWorkflow
@@ -547,10 +533,12 @@ final class AppState: ObservableObject {
         settingsStore: SettingsStoring,
         subscriptionStore: SubscriptionStore
     ) {
+        let playbackPositionStore = PlaybackPositionStore()
         let historyStatsCoordinator = HistoryStatsCoordinator(
             historyStore: ListeningHistoryStore(),
             statsStore: ListeningStatsStore(),
-            subscriptionStore: subscriptionStore
+            subscriptionStore: subscriptionStore,
+            playbackPositionStore: playbackPositionStore
         )
         let queueCoordinator = QueueCoordinator(
             subscriptionStore: subscriptionStore,
@@ -573,7 +561,7 @@ final class AppState: ObservableObject {
                 settingsStore: settingsStore
             ),
             routingCoordinator: AppRoutingCoordinator(),
-            playbackPositionStore: PlaybackPositionStore()
+            playbackPositionStore: playbackPositionStore
         )
     }
 
@@ -713,6 +701,13 @@ final class AppState: ObservableObject {
 
     func seek(to seconds: TimeInterval) {
         playbackSeekWorkflow.seek(to: seconds)
+    }
+
+    /// Internal cross-device counterpart to seek(to:). It updates an open,
+    /// paused player's in-memory playhead without treating iCloud as a user
+    /// transport command.
+    func applyRemotePlaybackPosition(_ seconds: TimeInterval) {
+        playbackSeekWorkflow.applyRemotePosition(seconds)
     }
 
     /// Compatibility façade for chapter settings screens. Chapter ownership and
@@ -1114,25 +1109,6 @@ final class AppState: ObservableObject {
     /// it after their own durable checkpoint.
     func flushDeferredSyncPushes(reason: String) {
         syncCoordinator.flushDeferredPushes(reason: reason)
-    }
-
-    // MARK: - Autohop Relay (Autohop Pro — RELAY_TIER1_IMPLEMENTATION.md §4)
-
-    /// Forwarded from AppDelegate.didRegisterForRemoteNotificationsWithDeviceToken.
-    /// Called on every launch (registerForRemoteNotifications runs unconditionally),
-    /// so this is frequently a no-op token refresh; RelayCoordinator applies the
-    /// release-feature and entitlement gates.
-    func relayTokenReceived(_ token: String) {
-        relayCoordinator.tokenReceived(token)
-    }
-
-    func sendRelayHeartbeatIfDue() async {
-        await relayCoordinator.sendHeartbeatIfDue()
-    }
-
-    @discardableResult
-    func handleRelayPush(type: String, feedIDs: [String] = []) async -> Bool {
-        await relayCoordinator.handlePush(type: type, feedIDs: feedIDs)
     }
 
     // MARK: - Runtime compatibility façade

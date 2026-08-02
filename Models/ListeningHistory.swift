@@ -62,6 +62,11 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
     public var lastPositionSeconds: TimeInterval
     public var lastListenedAt: Date
     public var status: ListeningHistoryStatus
+    /// Last explicitly selected playback speed for this episode/session. This
+    /// optional, history-scoped value lets a projection-only companion device
+    /// restore speed even when the source subscription has not materialised
+    /// locally. Older records decode as nil and retain existing behaviour.
+    public var playbackSpeed: Double?
 
     // MARK: - Richer completion data (added 2026-06; absent in older JSON entries)
 
@@ -83,7 +88,7 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         case id, subscriptionID, episodeID, episodeTitle, podcastTitle, artworkURL
         case streamURL, mediaKind
         case publishedAt, durationSeconds, listenedSeconds, lastPositionSeconds
-        case lastListenedAt, status
+        case lastListenedAt, status, playbackSpeed
         case completionKind, completionPercent, listenedDurationSeconds, episodeDurationSeconds
     }
 
@@ -102,6 +107,7 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         lastPositionSeconds: TimeInterval,
         lastListenedAt: Date,
         status: ListeningHistoryStatus,
+        playbackSpeed: Double? = nil,
         completionKind: CompletionKind? = nil,
         completionPercent: Double? = nil,
         listenedDurationSeconds: TimeInterval? = nil,
@@ -121,6 +127,7 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         self.lastPositionSeconds = lastPositionSeconds
         self.lastListenedAt = lastListenedAt
         self.status = status
+        self.playbackSpeed = playbackSpeed
         self.completionKind = completionKind
         self.completionPercent = completionPercent
         self.listenedDurationSeconds = listenedDurationSeconds
@@ -143,6 +150,7 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         lastPositionSeconds = try c.decode(TimeInterval.self, forKey: .lastPositionSeconds)
         lastListenedAt = try c.decode(Date.self, forKey: .lastListenedAt)
         status = try c.decode(ListeningHistoryStatus.self, forKey: .status)
+        playbackSpeed = try c.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         // New fields — absent in old JSON; default to nil.
         completionKind = try c.decodeIfPresent(CompletionKind.self, forKey: .completionKind)
         completionPercent = try c.decodeIfPresent(Double.self, forKey: .completionPercent)

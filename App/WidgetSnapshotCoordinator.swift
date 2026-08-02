@@ -17,7 +17,7 @@ import WidgetKit
 // MainActor owns subscriptions, debounce state, and domain reads. A debounce
 // Task may be cancelled only while sleeping. Once publication starts, later
 // events accumulate reasons for a follow-up pass instead of cancelling artwork
-// or filesystem work—the relay/feed-sync cancellation bug must not recur here.
+// or filesystem work—background sync cancellation must not recur here.
 // WidgetSnapshotPersistence is an actor so JSON/JPEG I/O and garbage collection
 // never block the main actor.
 //

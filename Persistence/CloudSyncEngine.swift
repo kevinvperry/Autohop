@@ -55,12 +55,8 @@ import Combine
 // a remote subscription for a podcast not present here triggers
 // `onSubscriptionNeedsMaterialization` (SyncCoordinator fetches the feed).
 //
-// Autohop Relay hook (added 2026-07-10): `onLocalChangesPushed` fires whenever
-// handleSentChanges sees ≥1 successfully saved record — the send-side of §6.4
-// sync-nudge. SyncCoordinator connects RelayCoordinator's debounced
-// POST /v1/sync-nudge so this user's
-// OTHER devices (TV) wake and fetch immediately instead of waiting on CloudKit's
-// own lag. This engine has no relay awareness beyond firing that one callback.
+// Successful sends remain entirely within the user's private iCloud account.
+// No developer-operated relay or third-party sync transport is involved.
 //
 // Cannot be exercised by `swift test` (CKSyncEngine needs a container,
 // entitlements, and a signed-in account) — verified by building and running on a
@@ -205,17 +201,6 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     /// (tvOS TVAppModel) refresh their rendered queue here.
     public var onRemoteQueueSnapshotChanged: (() async -> Void)?
 
-    /// Invoked after this device successfully pushed ≥1 local record to iCloud
-    /// (RELAY_TIER1_IMPLEMENTATION.md §6.4 sync-nudge send-side, added
-    /// 2026-07-10 — previously nothing called this). AppState debounces this
-    /// into a POST /v1/sync-nudge so the relay wakes this user's OTHER devices
-    /// (e.g. TV) to fetch immediately instead of waiting on CloudKit's own lag.
-    /// Fired unconditionally on any successful push — AppState's debounce, not
-    /// this engine, is what keeps that from becoming a request storm during
-    /// bursty local activity (same class of bug as the feed-sync storm fixed
-    /// the same day; see AppState.scheduleRelaySyncNudge()).
-    public var onLocalChangesPushed: (() async -> Void)?
-
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
     /// - Parameter database: the store's record database, passed explicitly so
@@ -349,6 +334,34 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         guard engine != nil else { return }
         Task { [weak self] in
             await self?.queuePendingLocalChanges(slowLane: .flush(reason: reason))
+        }
+    }
+
+    /// tvOS checkpoint variant: queue the just-persisted history row and ask
+    /// CKSyncEngine to start sending now. Adding a pending change is not an
+    /// upload acknowledgement; physical-TV diagnostics showed a row remaining
+    /// dirty for minutes despite repeated queue scans. iPhone callers retain
+    /// the existing coalesced behaviour above.
+    public func flushAndSendDeferredPushes(reason: String) {
+        guard engine != nil else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.queuePendingLocalChanges(slowLane: .flush(reason: reason))
+            guard let engine = self.engine else { return }
+            self.logger.info("sync.sendRequested", "Requested immediate iCloud send", metadata: [
+                "reason": reason
+            ], alwaysPersist: true)
+            do {
+                try await engine.sendChanges()
+                self.logger.info("sync.sendCompleted", "Immediate iCloud send cycle completed", metadata: [
+                    "reason": reason
+                ], alwaysPersist: true)
+            } catch {
+                self.logger.error("sync.sendFailed", "Immediate iCloud send cycle failed", metadata: [
+                    "reason": reason,
+                    "error": String(describing: error)
+                ], alwaysPersist: true)
+            }
         }
     }
 
@@ -501,6 +514,52 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             ])
             if applied > 0 { await onRemoteHistoryChanged?() } // partial batch still notifies once
             return applied
+        }
+    }
+
+    /// Bounded companion-surface history prime. Home needs the latest active
+    /// listening records, not an every-launch replay of the entire multi-year
+    /// history zone. CloudKit stores `lastListenedAt` as a sortable field, so
+    /// this query applies only the newest page. If an older production schema
+    /// lacks the required index, the normal CKSyncEngine change stream remains
+    /// authoritative and the failure is diagnostic rather than destructive.
+    @discardableResult
+    public func fetchRecentHistoryNow(reason: String, limit: Int = 100) async -> Int {
+        guard engine != nil else { return 0 }
+        let query = CKQuery(recordType: CloudKitSync.historyRecordType, predicate: NSPredicate(value: true))
+        query.sortDescriptors = [NSSortDescriptor(key: "lastListenedAt", ascending: false)]
+        do {
+            let page = try await container.privateCloudDatabase.records(
+                matching: query,
+                inZoneWith: CloudKitSync.zoneID,
+                desiredKeys: nil,
+                resultsLimit: max(1, min(limit, 200))
+            )
+            suppressPerRecordHistoryNotify = true
+            historyChangedDuringSuppressedBatch = false
+            var applied = 0
+            for (_, result) in page.matchResults {
+                guard case .success(let record) = result else { continue }
+                await applyRemote(record: record)
+                applied += 1
+            }
+            suppressPerRecordHistoryNotify = false
+            historyChangedDuringSuppressedBatch = false
+            if applied > 0 { await onRemoteHistoryChanged?() }
+            logger.info("sync.recentHistoryPrimed", "Bounded recent-history prime applied", metadata: [
+                "reason": reason,
+                "count": "\(applied)",
+                "limit": "\(limit)"
+            ])
+            return applied
+        } catch {
+            suppressPerRecordHistoryNotify = false
+            historyChangedDuringSuppressedBatch = false
+            logger.warning("sync.recentHistoryPrimeFailed", "Bounded recent-history prime unavailable; change stream remains active", metadata: [
+                "reason": reason,
+                "error": String(describing: error)
+            ])
+            return 0
         }
     }
 
@@ -1005,6 +1064,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             runDB("storeEpisodeSystemFields", metadata: ["syncKey": remote.syncKey]) {
                 try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: remote.syncKey)
             }
+            logger.info("sync.episodeStateReceived", "Applied episode state received from iCloud", metadata: [
+                "syncKey": remote.syncKey,
+                "subscriptionID": remote.subscriptionID.uuidString,
+                "guid": remote.guid,
+                "playedState": String(describing: remote.playedState),
+                "wasCompleted": "\(remote.wasCompleted)"
+            ], alwaysPersist: true)
 
         case CloudKitSync.subscriptionRecordType:
             guard let remote = CloudKitSync.subscriptionSyncState(from: record) else {
@@ -1069,6 +1135,14 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             runDB("storeHistorySystemFields", metadata: ["id": remote.id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
             }
+            logger.info("sync.historyReceived", "Applied listening history received from iCloud", metadata: [
+                "id": remote.id,
+                "episodeID": remote.episodeID.uuidString,
+                "position": String(format: "%.1f", remote.lastPositionSeconds),
+                "playbackSpeed": remote.playbackSpeed.map { String(format: "%.2f", $0) } ?? "unset",
+                "status": String(describing: remote.status),
+                "lastListenedAt": ISO8601DateFormatter().string(from: remote.lastListenedAt)
+            ], alwaysPersist: true)
             if suppressPerRecordHistoryNotify {
                 historyChangedDuringSuppressedBatch = true
             } else {
@@ -1235,7 +1309,6 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             logger.info("sync.pushed", "Pushed local records to iCloud", metadata: [
                 "saved": "\(event.savedRecords.count)"
             ])
-            await onLocalChangesPushed?()
         }
         if newerLocalVersionRemains {
             logger.info("sync.staleAcknowledgmentPreserved", "A newer local version remained dirty after an older push completed")
@@ -1395,10 +1468,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             remainsPending = true
             let syncKey = CloudKitSync.episodeSyncKey(from: record)
                 ?? CloudKitSync.episodeSyncKey(fromRecordName: name)
+            let acknowledged = CloudKitSync.episodeSyncState(from: record)
             runDB("markSaved.episode", metadata: ["syncKey": syncKey]) {
                 try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: syncKey)
-                guard let acknowledged = CloudKitSync.episodeSyncState(from: record) else { return }
+                guard let acknowledged else { return }
                 remainsPending = try self.database?.acknowledgeEpisodeSyncState(acknowledged) ?? false
+            }
+            if let acknowledged {
+                logger.info("sync.episodeStatePushed", "iCloud acknowledged episode state", metadata: [
+                    "syncKey": acknowledged.syncKey,
+                    "subscriptionID": acknowledged.subscriptionID.uuidString,
+                    "guid": acknowledged.guid,
+                    "playedState": String(describing: acknowledged.playedState),
+                    "remainsPending": "\(remainsPending)"
+                ], alwaysPersist: true)
             }
         case CloudKitSync.subscriptionRecordType:
             if let id = CloudKitSync.subscriptionID(fromRecordName: name) {
@@ -1421,10 +1504,21 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         case CloudKitSync.historyRecordType:
             remainsPending = true
             let id = CloudKitSync.historyID(fromRecordName: name)
+            let acknowledged = CloudKitSync.historyEntry(from: record)
             runDB("markSaved.history", metadata: ["id": id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: id)
-                guard let acknowledged = CloudKitSync.historyEntry(from: record) else { return }
+                guard let acknowledged else { return }
                 remainsPending = try self.database?.acknowledgeHistoryEntry(acknowledged) ?? false
+            }
+            if let acknowledged {
+                logger.info("sync.historyPushed", "iCloud acknowledged listening history", metadata: [
+                    "id": acknowledged.id,
+                    "episodeID": acknowledged.episodeID.uuidString,
+                    "position": String(format: "%.1f", acknowledged.lastPositionSeconds),
+                    "playbackSpeed": acknowledged.playbackSpeed.map { String(format: "%.2f", $0) } ?? "unset",
+                    "status": String(describing: acknowledged.status),
+                    "remainsPending": "\(remainsPending)"
+                ], alwaysPersist: true)
             }
         case CloudKitSync.statsRecordType:
             if let dayKey = CloudKitSync.statsDayKey(fromRecordName: name) {

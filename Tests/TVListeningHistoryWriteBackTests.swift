@@ -71,6 +71,34 @@ final class TVListeningHistoryWriteBackTests: XCTestCase {
         XCTAssertEqual(stored.lastPositionSeconds, 360, "Position reflects the latest write")
     }
 
+    func testPlaybackSpeedPersistsAndNilWriteDoesNotEraseIt() throws {
+        let store = SubscriptionStore.inMemory()
+        let episode = makeEpisode(subscriptionID: UUID())
+
+        store.recordListeningProgress(
+            episode: episode,
+            podcastTitle: "Video Show",
+            artworkURL: nil,
+            listenedSecondsDelta: 10,
+            positionSeconds: 100,
+            durationSeconds: 1800,
+            playbackSpeed: 1.4
+        )
+        store.recordListeningProgress(
+            episode: episode,
+            podcastTitle: "Video Show",
+            artworkURL: nil,
+            listenedSecondsDelta: 10,
+            positionSeconds: 110,
+            durationSeconds: 1800
+        )
+
+        let entry = try XCTUnwrap(
+            store.database?.historyEntry(id: PlaybackPositionStore.key(for: episode))
+        )
+        XCTAssertEqual(entry.playbackSpeed, 1.4)
+    }
+
     func testRecoveredEpisodeCanWriteBackToAuthoritativeHistoryIdentity() throws {
         let store = SubscriptionStore.inMemory()
         let episode = makeEpisode(subscriptionID: UUID(), guid: "public-video-guid")
@@ -90,6 +118,95 @@ final class TVListeningHistoryWriteBackTests: XCTestCase {
         let stored = try XCTUnwrap(db.historyEntry(id: phoneHistoryID))
         XCTAssertEqual(stored.lastPositionSeconds, 420)
         XCTAssertNil(try db.historyEntry(id: PlaybackPositionStore.key(for: episode)))
+    }
+
+    func testHistoryIdentityRecoversByEnclosureWhenLocalUUIDChanged() throws {
+        let store = SubscriptionStore.inMemory()
+        let oldSubscriptionID = UUID()
+        let newSubscriptionID = UUID()
+        let oldEpisode = makeEpisode(subscriptionID: oldSubscriptionID, guid: "legacy-guid")
+        store.recordListeningProgress(
+            episode: oldEpisode,
+            podcastTitle: "Video Show",
+            artworkURL: nil,
+            listenedSecondsDelta: 60,
+            positionSeconds: 600,
+            durationSeconds: 1800
+        )
+
+        var projected = makeEpisode(subscriptionID: newSubscriptionID, guid: "replacement-guid")
+        projected.audioURL = oldEpisode.audioURL
+
+        let recovered = try XCTUnwrap(store.listeningHistoryEntry(matching: projected))
+        XCTAssertEqual(recovered.id, PlaybackPositionStore.key(for: oldEpisode))
+        XCTAssertEqual(recovered.lastPositionSeconds, 600)
+    }
+
+    func testCompanionPlayingStateIsAuthoredWithoutCatalogueEpisode() throws {
+        let store = SubscriptionStore.inMemory()
+        let subscriptionID = UUID()
+        let projected = makeEpisode(subscriptionID: subscriptionID, guid: "projected-video-guid")
+
+        XCTAssertTrue(
+            store.markCompanionEpisodePlaying(
+                projected,
+                preferredSubscriptionID: subscriptionID
+            )
+        )
+
+        let state = try XCTUnwrap(
+            store.database?.episodeSyncState(
+                subscriptionID: subscriptionID,
+                guid: projected.guid
+            )
+        )
+        XCTAssertEqual(state.playedState, .playing)
+        XCTAssertFalse(state.wasCompleted)
+        XCTAssertTrue(state.hasPendingChanges)
+    }
+
+    func testCompanionArchiveStateIsAuthoredWithoutCatalogueEpisode() throws {
+        let store = SubscriptionStore.inMemory()
+        let subscriptionID = UUID()
+        let projected = makeEpisode(subscriptionID: subscriptionID, guid: "projected-archive-guid")
+
+        XCTAssertTrue(
+            store.markCompanionEpisodeArchived(
+                projected,
+                preferredSubscriptionID: subscriptionID
+            )
+        )
+
+        let state = try XCTUnwrap(
+            store.database?.episodeSyncState(
+                subscriptionID: subscriptionID,
+                guid: projected.guid
+            )
+        )
+        XCTAssertEqual(state.playedState, .archived)
+        XCTAssertFalse(state.wasCompleted)
+        XCTAssertTrue(state.hasPendingChanges)
+    }
+
+    func testCompanionArchiveTerminatesContinueListeningHistory() throws {
+        let store = SubscriptionStore.inMemory()
+        let subscriptionID = UUID()
+        let episode = makeEpisode(subscriptionID: subscriptionID, guid: "archive-history-guid")
+        store.recordListeningProgress(
+            episode: episode,
+            podcastTitle: "Archive Show",
+            artworkURL: nil,
+            listenedSecondsDelta: 120,
+            positionSeconds: 120,
+            durationSeconds: 1200
+        )
+
+        store.markListeningHistoryArchived(episode: episode)
+
+        let entry = try XCTUnwrap(store.listeningHistoryEntry(matching: episode))
+        XCTAssertEqual(entry.status, .archived)
+        XCTAssertEqual(entry.completionKind, .manuallyArchived)
+        XCTAssertNil(store.mostRecentInProgressListeningEntry())
     }
 
     func testMarkListeningHistoryFinishedSetsPlayedStatusAndCompletionKind() throws {

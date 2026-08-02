@@ -69,4 +69,28 @@ final class StatsWriteCoalescingTests: XCTestCase {
         XCTAssertEqual(total, 5.0, accuracy: 0.001,
                        "Coalesced flush must persist the complete accumulated day value")
     }
+
+    @MainActor
+    func testDownloadAccountingDefersPersistenceUntilCheckpoint() throws {
+        let db = try AutohopDatabase()
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        store.syncDatabase = db
+        db._testStatsDayWriteCount = 0
+
+        store.recordDownload(bytes: 42_000)
+
+        XCTAssertEqual(
+            db._testStatsDayWriteCount,
+            0,
+            "Download settlement must not synchronously flush statistics"
+        )
+
+        store.save()
+
+        XCTAssertEqual(
+            db._testStatsDayWriteCount,
+            1,
+            "A lifecycle checkpoint must persist deferred download accounting"
+        )
+    }
 }

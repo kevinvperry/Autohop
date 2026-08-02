@@ -46,7 +46,7 @@ enum TVSyncStatus: Equatable {
     var label: String {
         switch self {
         case .upToDate: return "Up to date"
-        case .updating: return "Updating from iPhone…"
+        case .updating: return "Updating from iCloud…"
         case .cached(let date, _): return "Cached · updated \(date.formatted(.relative(presentation: .named)))"
         case .unavailable: return "iCloud unavailable"
         case .failed: return "Update failed — try again"

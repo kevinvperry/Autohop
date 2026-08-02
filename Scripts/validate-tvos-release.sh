@@ -38,11 +38,10 @@ checklist="$repo_root/Docs/TVOS_PHASE6_VALIDATION.md"
 grep -Eq '^[[:space:]]*AutohopTV:' "$project" || fail "AutohopTV target missing"
 grep -Eq '^[[:space:]]*deploymentTarget: "18\.0"' "$project" || fail "tvOS minimum must be explicit"
 grep -Eq '^[[:space:]]*aps-environment: development' "$project" || fail "source APNs entitlement missing"
-grep -Eq 'submitTVApp = false' "$repo_root/Store/AutohopProStore.swift" || fail "tvOS submission feature gate missing"
 [[ -f "$checklist" ]] || fail "physical-device validation checklist missing"
 
 if [[ "${1:---configuration-only}" == "--configuration-only" ]]; then
-  echo "tvOS configuration checks passed; submission remains disabled pending signed hardware checklist."
+  echo "tvOS configuration checks passed; signed hardware checklist remains required for submission."
   exit 0
 fi
 [[ "$1" == "--archive" && -d "${2:-}" ]] || fail "use --archive <AutohopTV.xcarchive>"

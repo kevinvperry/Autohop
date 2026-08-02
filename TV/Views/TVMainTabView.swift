@@ -31,6 +31,7 @@ struct TVMainTabView: View {
     /// either fail to show a fresh play or force the cover back open when the
     /// user had deliberately backed out of it.
     @State private var isPlayerVisible = false
+    @State private var isPreparingPlayback = false
 
     var body: some View {
         TabView(selection: $router.selectedTab) {
@@ -44,15 +45,42 @@ struct TVMainTabView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        // Home's system tab pill is the sole page heading. Keep the tab chrome
+        // visible while shelves scroll vertically or horizontally so users do
+        // not lose their location or the route back to the sidebar.
+        .toolbarVisibility(.visible, for: .tabBar)
         // Phone design tokens on TV (TVTheme.swift, 2026-07-11): Accent-Purple
         // for focus/controls + the ambient brand-purple wash behind every tab.
         .tint(.purple)
         .background(TVBrandBackground())
-        .fullScreenCover(isPresented: $isPlayerVisible) {
-            TVPlayerView(playbackModel: model.playbackModel) {
-                model.playbackModel.dismissedCover()
-                isPlayerVisible = false
+        .overlay {
+            if isPreparingPlayback {
+                VStack(spacing: 18) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text("Preparing playback…")
+                        .font(.headline)
+                }
+                .padding(.horizontal, 48)
+                .padding(.vertical, 30)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
+                .allowsHitTesting(false)
             }
+        }
+        .fullScreenCover(isPresented: $isPlayerVisible) {
+            TVPlayerView(
+                playbackModel: model.playbackModel,
+                onArchive: {
+                    if let episode = model.playbackModel.currentEpisode {
+                        model.archiveEpisode(episode)
+                    }
+                    isPlayerVisible = false
+                },
+                onExit: {
+                    model.playbackModel.dismissedCover()
+                    isPlayerVisible = false
+                }
+            )
         }
     }
 
@@ -60,7 +88,11 @@ struct TVMainTabView: View {
     private func destination(for tab: TVTab) -> some View {
         switch tab {
         case .home:
-            TVHomeView(model: model, onPlay: play)
+            TVHomeView(
+                model: model,
+                onPlay: play,
+                onReopenPlayer: { isPlayerVisible = true }
+            )
         case .queue:
             TVQueueView(model: model, onPlay: play)
         case .library:
@@ -75,7 +107,23 @@ struct TVMainTabView: View {
     }
 
     private func play(_ episode: Episode) {
-        model.beginPlayback(episode)
-        isPlayerVisible = true
+        if model.playbackModel.isCurrentEpisode(episode) {
+            isPlayerVisible = true
+            return
+        }
+        guard !isPreparingPlayback else { return }
+        isPreparingPlayback = true
+        Task { @MainActor in
+            await model.beginPlayback(episode)
+            isPreparingPlayback = false
+            // Present AVKit only after media classification, item readiness and
+            // the resume seek complete. Physical tvOS otherwise retains the
+            // cover's interim audio-only hierarchy until it is dismissed and
+            // reopened around the same player.
+            if model.playbackModel.currentEpisode != nil,
+               model.playbackModel.errorMessage == nil {
+                isPlayerVisible = true
+            }
+        }
     }
 }

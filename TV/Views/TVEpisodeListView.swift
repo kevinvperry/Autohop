@@ -63,7 +63,11 @@ struct TVEpisodeListView: View {
     private var episodeList: some View {
         LazyVStack(alignment: .leading, spacing: 20) {
             ForEach(model.episodeRows(subscriptionID: subscriptionID)) { row in
-                TVEpisodeRow(episode: row.episode, onPlay: { onPlay(row.episode) })
+                TVEpisodeRow(
+                    episode: row.episode,
+                    onPlay: { onPlay(row.episode) },
+                    onArchive: { model.archiveEpisode(row.episode) }
+                )
             }
         }
     }
@@ -76,6 +80,7 @@ struct TVEpisodeListView: View {
 struct TVEpisodeRow: View {
     let episode: Episode
     let onPlay: () -> Void
+    let onArchive: () -> Void
 
     var body: some View {
         Button(action: onPlay) {
@@ -98,6 +103,12 @@ struct TVEpisodeRow: View {
             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.card)
+        .tvFocusHighlight(cornerRadius: 14)
+        .contextMenu {
+            Button(role: .destructive, action: onArchive) {
+                Label("Archive Episode", systemImage: "archivebox")
+            }
+        }
     }
 
     @ViewBuilder

@@ -1070,6 +1070,40 @@ public final class SubscriptionStore: ObservableObject {
         }
     }
 
+    /// Companion-device playback records can outlive an unsubscribe/re-subscribe
+    /// cycle, so their local UUIDs are not guaranteed to equal the current
+    /// iPhone-authored catalogue UUIDs. Resolve the current catalogue row by
+    /// durable feed identity before authoring EpisodeSyncState. This method is
+    /// consumed by tvOS; existing iPhone playback paths retain their exact-ID
+    /// behaviour.
+    @discardableResult
+    public func markCompanionEpisodePlaying(
+        _ companionEpisode: Episode,
+        preferredSubscriptionID: UUID
+    ) -> Bool {
+        guard let location = companionEpisodeLocation(
+            for: companionEpisode,
+            preferredSubscriptionID: preferredSubscriptionID
+        ) else {
+            return authorCompanionEpisodeState(
+                companionEpisode,
+                subscriptionID: preferredSubscriptionID,
+                playedState: .playing,
+                wasCompleted: false
+            )
+        }
+        let now = Date()
+        subscriptions[location.subscription].episodes[location.episode].playedState = .playing
+        subscriptions[location.subscription].episodes[location.episode].lastPlayedAt = now
+        if subscriptions[location.subscription].latestEpisode?.id
+            == subscriptions[location.subscription].episodes[location.episode].id {
+            subscriptions[location.subscription].latestEpisode =
+                subscriptions[location.subscription].episodes[location.episode]
+        }
+        save()
+        return true
+    }
+
     public func markEpisodePlayed(subscriptionID: UUID) {
         updateLatestEpisode(subscriptionID: subscriptionID) {
             $0.downloadState = .notDownloaded
@@ -1093,6 +1127,145 @@ public final class SubscriptionStore: ObservableObject {
             $0.isManualDownloadProtected = false
         }
         rememberPlayedEpisode(subscriptionID: subscriptionID, episodeID: episodeID)
+    }
+
+    /// Completion counterpart to `markCompanionEpisodePlaying`. Mutation is
+    /// applied to the current catalogue identity so CloudKit sends a state the
+    /// phone can merge, rather than a stale Apple-TV-local UUID it cannot find.
+    @discardableResult
+    public func markCompanionEpisodePlayed(
+        _ companionEpisode: Episode,
+        preferredSubscriptionID: UUID
+    ) -> Bool {
+        guard let location = companionEpisodeLocation(
+            for: companionEpisode,
+            preferredSubscriptionID: preferredSubscriptionID
+        ) else {
+            return authorCompanionEpisodeState(
+                companionEpisode,
+                subscriptionID: preferredSubscriptionID,
+                playedState: .played,
+                wasCompleted: true
+            )
+        }
+        let now = Date()
+        var episode = subscriptions[location.subscription].episodes[location.episode]
+        episode.downloadState = .notDownloaded
+        episode.localFileURL = nil
+        episode.localFileName = nil
+        episode.playedState = .played
+        episode.lastPlayedAt = now
+        episode.wasCompleted = true
+        episode.isManualDownloadProtected = false
+        subscriptions[location.subscription].episodes[location.episode] = episode
+        if subscriptions[location.subscription].latestEpisode?.id == episode.id {
+            subscriptions[location.subscription].latestEpisode = episode
+        }
+        subscriptions[location.subscription].playedEpisodeKeys.formUnion(playedEpisodeKeys(for: episode))
+        save()
+        return true
+    }
+
+    /// tvOS archive counterpart to the companion playing/played helpers.
+    /// The Apple TV can be rendering an episode from a queue projection whose
+    /// local UUID no longer matches the iPhone catalogue. Resolve by durable
+    /// identity when possible and otherwise author EpisodeSyncState directly,
+    /// so Archive remains available on every TV episode surface.
+    @discardableResult
+    public func markCompanionEpisodeArchived(
+        _ companionEpisode: Episode,
+        preferredSubscriptionID: UUID
+    ) -> Bool {
+        guard let location = companionEpisodeLocation(
+            for: companionEpisode,
+            preferredSubscriptionID: preferredSubscriptionID
+        ) else {
+            return authorCompanionEpisodeState(
+                companionEpisode,
+                subscriptionID: preferredSubscriptionID,
+                playedState: .archived,
+                wasCompleted: false
+            )
+        }
+        var episode = subscriptions[location.subscription].episodes[location.episode]
+        episode.downloadState = .notDownloaded
+        episode.localFileURL = nil
+        episode.localFileName = nil
+        episode.playedState = .archived
+        episode.wasCompleted = false
+        episode.isManualDownloadProtected = false
+        subscriptions[location.subscription].episodes[location.episode] = episode
+        if subscriptions[location.subscription].latestEpisode?.id == episode.id {
+            subscriptions[location.subscription].latestEpisode = episode
+        }
+        subscriptions[location.subscription].archivedEpisodeKeys.formUnion(playedEpisodeKeys(for: episode))
+        save()
+        return true
+    }
+
+    private func companionEpisodeLocation(
+        for episode: Episode,
+        preferredSubscriptionID: UUID
+    ) -> (subscription: Int, episode: Int)? {
+        let preferred = subscriptions.indices.filter { subscriptions[$0].id == preferredSubscriptionID }
+        let remaining = subscriptions.indices.filter { subscriptions[$0].id != preferredSubscriptionID }
+        for subscriptionIndex in preferred + remaining {
+            if let episodeIndex = subscriptions[subscriptionIndex].episodes.firstIndex(where: {
+                $0.id == episode.id
+                    || (!episode.guid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && $0.guid == episode.guid)
+                    || $0.audioURL.absoluteString == episode.audioURL.absoluteString
+            }) {
+                return (subscriptionIndex, episodeIndex)
+            }
+        }
+        return nil
+    }
+
+    /// Authors durable companion state even when the TV has only a self-
+    /// contained Queue/History projection and no materialised Episode row.
+    /// Cloud identity is `(subscriptionID, guid)`, not the local episode UUID;
+    /// requiring a catalogue row made `catalogMatch=false` silently suppress
+    /// TV→phone playing/played updates for exactly those legacy video rows.
+    private func authorCompanionEpisodeState(
+        _ episode: Episode,
+        subscriptionID: UUID,
+        playedState: PlayedState,
+        wasCompleted: Bool
+    ) -> Bool {
+        guard let database else { return false }
+        let guid = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !guid.isEmpty else { return false }
+        var projected = episode
+        projected.playedState = playedState
+        projected.wasCompleted = wasCompleted
+        projected.lastPlayedAt = Date()
+        do {
+            if var existing = try database.episodeSyncState(
+                subscriptionID: subscriptionID,
+                guid: guid
+            ) {
+                existing.apply(projected)
+                try database.saveEpisodeSyncState(existing)
+            } else {
+                try database.saveEpisodeSyncState(
+                    EpisodeSyncState(episode: projected, subscriptionID: subscriptionID)
+                )
+            }
+            return true
+        } catch {
+            AppLogger.shared.error(
+                "tv.sync.episodeStateWriteFailed",
+                "Could not author companion episode state without a local catalogue row",
+                metadata: [
+                    "subscriptionID": subscriptionID.uuidString,
+                    "guid": guid,
+                    "error": String(describing: error)
+                ],
+                alwaysPersist: true
+            )
+            return false
+        }
     }
 
     // MARK: - Listening history write-back (tvOS Phase 3, §8 item 3)
@@ -1122,7 +1295,8 @@ public final class SubscriptionStore: ObservableObject {
         listenedSecondsDelta: TimeInterval,
         positionSeconds: TimeInterval,
         durationSeconds: TimeInterval?,
-        historyEntryID: String? = nil
+        historyEntryID: String? = nil,
+        playbackSpeed: Double? = nil
     ) {
         guard let database else { return }
         let key = historyEntryID ?? PlaybackPositionStore.key(for: episode)
@@ -1154,9 +1328,18 @@ public final class SubscriptionStore: ObservableObject {
         entry.listenedSeconds += max(0, listenedSecondsDelta)
         entry.lastPositionSeconds = positionSeconds
         entry.lastListenedAt = now
+        if let playbackSpeed, playbackSpeed.isFinite, playbackSpeed > 0 {
+            entry.playbackSpeed = playbackSpeed
+        }
         // Status is intentionally left unchanged here — played/archived
         // transitions go through markListeningHistoryFinished below.
         try? database.recordHistoryEntry(entry)
+    }
+
+    /// Diagnostic-only count for companion surfaces. A non-zero value after a
+    /// checkpoint means history is still waiting for CloudKit acknowledgement.
+    public func pendingListeningHistoryUploadCount() -> Int {
+        (try? database?.pendingHistoryEntries().count) ?? 0
     }
 
     /// Records the whole-entry status transition at natural finish — the tvOS
@@ -1199,6 +1382,29 @@ public final class SubscriptionStore: ObservableObject {
         try? database.recordHistoryEntry(entry)
     }
 
+    /// Marks the authoritative companion history row archived. tvOS calls
+    /// this alongside EpisodeSyncState so Continue Listening cannot immediately
+    /// resurrect an episode the user just archived from a TV surface.
+    public func markListeningHistoryArchived(
+        episode: Episode,
+        historyEntryID: String? = nil
+    ) {
+        guard let database else { return }
+        let recoveredID = listeningHistoryEntry(matching: episode)?.id
+        let key = historyEntryID ?? recoveredID ?? PlaybackPositionStore.key(for: episode)
+        guard var entry = try? database.historyEntry(id: key) else { return }
+        entry.status = .archived
+        entry.completionKind = .manuallyArchived
+        entry.completionPercent = entry.durationSeconds.flatMap { duration in
+            guard duration > 0 else { return nil }
+            return min(max(entry.lastPositionSeconds / duration, 0), 1)
+        }
+        entry.listenedDurationSeconds = entry.lastPositionSeconds
+        entry.episodeDurationSeconds = entry.durationSeconds
+        entry.lastListenedAt = Date()
+        try? database.recordHistoryEntry(entry)
+    }
+
     /// Cross-device resume position for an episode (tvOS Phase 3+ read side —
     /// the counterpart of recordListeningProgress above). Reads the synced
     /// ListeningHistoryEntry (position roams inside it, SYNC_DESIGN.md) and
@@ -1216,6 +1422,24 @@ public final class SubscriptionStore: ObservableObject {
             duration: episode.durationSeconds ?? entry.durationSeconds
         )
         return normalized > 0 ? normalized : nil
+    }
+
+    /// Finds the authoritative existing history record for a companion
+    /// projection. The direct history key remains the fast path; the bounded
+    /// recent scan repairs reinstall/legacy rows whose local UUID changed but
+    /// whose enclosure URL or durable GUID did not. Returning this record's ID
+    /// prevents TV playback from creating a second `generated` history entry.
+    public func listeningHistoryEntry(matching episode: Episode) -> ListeningHistoryEntry? {
+        guard let database else { return nil }
+        let directKey = PlaybackPositionStore.key(for: episode)
+        if let direct = try? database.historyEntry(id: directKey) { return direct }
+        guard let recent = try? database.historyEntriesNewestFirst(limit: 100) else { return nil }
+        let guid = episode.guid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return recent.first { entry in
+            entry.episodeID == episode.id
+                || entry.streamURL == episode.audioURL
+                || (!guid.isEmpty && entry.id.hasSuffix("|guid:\(guid)"))
+        }
     }
 
     /// The most recently listened-to, still-in-progress history entry across

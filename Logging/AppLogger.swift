@@ -119,6 +119,21 @@ public final class AppLogger: ObservableObject {
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
+        #if os(tvOS)
+        // Physical tvOS can return an Application Support URL while denying
+        // directory creation there. Its temporary directory is writable but
+        // omitted from Xcode's downloaded .xcappdata container. Caches is both
+        // app-writable and container-exported (the TV databases already use
+        // Library/Caches/Autohop), making it the reliable TV diagnostic home.
+        let cacheRoot = try? fileManager.url(
+            for: .cachesDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = (cacheRoot ?? fileManager.temporaryDirectory)
+            .appendingPathComponent("Autohop", isDirectory: true)
+        #else
         let appSupport = try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -127,6 +142,7 @@ public final class AppLogger: ObservableObject {
         )
         let directory = (appSupport ?? fileManager.temporaryDirectory)
             .appendingPathComponent("Autohop", isDirectory: true)
+        #endif
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         logFileURL = directory.appendingPathComponent("autohop-diagnostic.log")
     }
@@ -209,6 +225,29 @@ public final class AppLogger: ObservableObject {
         let text = redactedContents()
         try? text.data(using: .utf8)?.write(to: exportURL, options: [.atomic])
         return exportURL
+    }
+
+    /// Writes a diagnostic export to a caller-owned durable destination and
+    /// propagates failures. `redactedExportURL()` is retained for share-sheet
+    /// compatibility, but its historical best-effort temp write cannot explain
+    /// an export failure to a television user.
+    public func writeRedactedExport(to destination: URL) throws {
+        let text = redactedContents()
+        guard let data = text.data(using: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        try data.write(to: destination, options: [.atomic])
+    }
+
+    /// Writes beside the live log in the exact directory already proven
+    /// writable by this process. This avoids asking physical tvOS to create a
+    /// second directory, which some device sandbox/container states reject.
+    @discardableResult
+    public func writeRedactedExportBesideLiveLog() throws -> URL {
+        let destination = logFileURL.deletingLastPathComponent()
+            .appendingPathComponent("autohop-tv-diagnostic-redacted.log")
+        try writeRedactedExport(to: destination)
+        return destination
     }
 
     func recentLines(limit: Int) -> [String] {

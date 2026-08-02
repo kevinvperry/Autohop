@@ -364,7 +364,10 @@ public final class ListeningStatsStore: ObservableObject {
     private var lastPendingDiagnosticAt: Date?
     private var lastFlushDiagnosticAt: Date?
 
-    private func recordDayPending(_ day: DayStats) {
+    private func recordDayPending(
+        _ day: DayStats,
+        allowImmediateFlush: Bool = true
+    ) {
         guard syncDatabase != nil else { return }
         let now = Date()
         let inserted = pendingStatsDayKeys.insert(day.dayKey).inserted
@@ -382,7 +385,7 @@ public final class ListeningStatsStore: ObservableObject {
                 "showCount": "\(day.perShowSeconds.count)"
             ])
         }
-        if throttled {
+        if throttled || !allowImmediateFlush {
             return // coalesce — flushed on the throttle window or at a lifecycle checkpoint
         }
         flushPendingStatsDays(reason: "throttle")
@@ -538,7 +541,7 @@ public final class ListeningStatsStore: ObservableObject {
     /// historical byte data to backfill, so totals accrue from this build onward.
     public func recordDownload(bytes: Int64) {
         guard bytes > 0 else { return }
-        mutateToday {
+        mutateToday(persistImmediately: false) {
             $0.bytesDownloaded += bytes
             $0.episodesDownloaded += 1
         }
@@ -784,13 +787,18 @@ public final class ListeningStatsStore: ObservableObject {
 
     // MARK: - Private
 
-    private func mutateToday(_ change: (inout DayStats) -> Void) {
+    private func mutateToday(
+        persistImmediately: Bool = true,
+        _ change: (inout DayStats) -> Void
+    ) {
         var day = bucket(for: Date())
         change(&day)
         data.days[day.dayKey] = day
-        recordDayPending(day)
+        recordDayPending(day, allowImmediateFlush: persistImmediately)
         bumpRevision()
-        saveThrottled()
+        if persistImmediately {
+            saveThrottled()
+        }
     }
 
     private func bucket(for date: Date) -> DayStats {

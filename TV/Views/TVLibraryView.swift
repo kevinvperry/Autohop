@@ -50,6 +50,7 @@ struct TVLibraryView: View {
                                             TVSubscriptionCard(podcast: podcast)
                                         }
                                         .buttonStyle(.card)
+                                        .tvFocusHighlight(cornerRadius: 18)
                                     }
                                 }
                             }

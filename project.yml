@@ -100,6 +100,7 @@ targets:
           - "StatsSmokeTests/**"             # contains main.swift
           - "Tests/**"                       # picked up by AutohopTests target instead
           - "TV/**"                          # tvOS target sources — never in the iPhone app
+          - "TVTests/**"                     # tvOS-only XCTest sources — never in the iPhone app
           - "Widgets/**"                     # widget extension sources — shared contract is re-added below
       # AI CONTEXT — The widget display/storage contract is deliberately compiled
       # into both the app and extension. Nothing else under Widgets enters the app
@@ -111,9 +112,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "1"          # iPhone only — explicit on the app target
-        # AI CONTEXT — Version 1.4 is intentionally iPhone-only. Pro/Relay have no
-        # enabling compilation conditions in either config; opt-in development
-        # builds must add AUTOHOP_PRO_ENABLED and AUTOHOP_RELAY_ENABLED explicitly.
+        # iPhone and Apple TV use only the user's private iCloud account for
+        # cross-device synchronization. No subscription or relay feature gates
+        # exist in either configuration.
         MARKETING_VERSION: "1.4"
         CURRENT_PROJECT_VERSION: "5"
         CODE_SIGN_STYLE: Automatic
@@ -145,6 +146,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         GitCommitSHA: unavailable
+        GitWorkingTreeDirty: unknown
+        SourceFingerprint: unavailable
         BuildTimestampUTC: unavailable
         # Stage 3 widget navigation. WidgetDeepLinkParser accepts only the four
         # documented hosts and rejects malformed identities.
@@ -280,23 +283,6 @@ targets:
 
     scheme:
       gatherCoverageData: false
-      # Local StoreKit Testing (Autohop.storekit) is DELIBERATELY NOT set here.
-      # BUG, FOUND 2026-07-10 (real device testing): this used to say
-      # `storeKitConfiguration: Autohop.storekit`. Every `xcodegen generate` run
-      # regenerates the scheme FROM project.yml, so Kevin manually switching the
-      # scheme's StoreKit Configuration to "None" in Xcode's UI (to test against
-      # real Sandbox/App Store Connect data — see RELAY_TIER1_IMPLEMENTATION.md
-      # §6.1) got SILENTLY REVERTED back to Autohop.storekit on the next regen,
-      # with no visible diff/warning — a real purchase kept showing
-      # `[Environment: Xcode]` instead of Sandbox despite the manual fix.
-      # To use local StoreKit Testing again for quick iteration: set it manually
-      # in Xcode (Product → Scheme → Edit Scheme → Run → Options → StoreKit
-      # Configuration → Autohop.storekit) — just know a future `xcodegen
-      # generate` will NOT persist that choice; it always regenerates to "None"
-      # now, matching this file. Do not put it back here without a stronger
-      # safeguard (e.g. a project.yml comment isn't enough, as this incident
-      # showed) — Kevin should be the one to decide when local testing is worth
-      # this footgun again, not a silent regeneration default.
       testTargets:
         - AutohopTests
 
@@ -339,6 +325,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         GitCommitSHA: unavailable
+        GitWorkingTreeDirty: unknown
+        SourceFingerprint: unavailable
         BuildTimestampUTC: unavailable
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
@@ -402,11 +390,11 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         GitCommitSHA: unavailable
+        GitWorkingTreeDirty: unknown
+        SourceFingerprint: unavailable
         BuildTimestampUTC: unavailable
-        # Audio keeps playing when the TV UI sleeps (PC precedent, proposal §2.3).
-        # remote-notification: Autohop Relay sync-nudge wake-push (§6.4, added
-        # 2026-07-10) — without this, TVAppDelegate's didReceiveRemoteNotification
-        # is never invoked even with a valid APNs token/registration.
+        # Audio keeps playing when the TV UI sleeps. Remote notifications are
+        # retained solely for CKSyncEngine's private CloudKit change delivery.
         UIBackgroundModes:
           - audio
           - remote-notification
@@ -423,6 +411,8 @@ targets:
     # like the iPhone target's above.
     scheme:
       gatherCoverageData: false
+      testTargets:
+        - AutohopTVTests
 
     entitlements:
       path: TV/AutohopTV.entitlements
@@ -439,6 +429,25 @@ targets:
         product: AutohopCore
       - sdk: CloudKit.framework
       - sdk: AVFoundation.framework
+
+  # tvOS-only regression tests. Kept separate from AutohopTests so these tests
+  # can import TVAppModel's canonical resolver without linking any TV source
+  # into the iPhone application or changing iPhone runtime behaviour.
+  AutohopTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    deploymentTarget: "18.0"
+    sources:
+      - TVTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.autohop.tv.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: AutohopTV
+        embed: false
+      - package: AutohopCore
+        product: AutohopCore
 
   # ── Unit tests ─────────────────────────────────────────────────────────────
 
@@ -461,3 +470,9 @@ targets:
     dependencies:
       - target: Autohop
         embed: false
+      # AI CONTEXT — A small subset of cross-platform contract tests imports
+      # AutohopCore directly (for example ShareURLResolverTests), while iOS
+      # integration tests import the application module. Both dependencies are
+      # intentional; the test bundle does not embed either product.
+      - package: AutohopCore
+        product: AutohopCore

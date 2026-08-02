@@ -86,6 +86,7 @@ public protocol DownloadManaging: AnyObject {
     /// Requests an immediate absolute-deadline check. Default protocol behavior is
     /// a no-op so lightweight test doubles do not need watchdog machinery.
     func reevaluateWatchdog(reason: String)
+    func configureActiveExecutionWindow(_ provider: @escaping () -> Bool)
 }
 
 public extension DownloadManaging {
@@ -98,6 +99,7 @@ public extension DownloadManaging {
     }
     func reevaluateWatchdog(reason: String) {}
     func recoverFromSharedStall(reason: String) {}
+    func configureActiveExecutionWindow(_ provider: @escaping () -> Bool) {}
 }
 
 public final class DownloadManager: NSObject, DownloadManaging {
@@ -143,6 +145,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
     private var lastFirstByteDiagnosticAtByEpisodeID: [UUID: Date] = [:]
     private var connectivityWaitingTaskIDs = Set<Int>()
     private var downloadWatchdogTimer: Timer?
+    private var activeExecutionWindowProvider: (() -> Bool)?
     /// Wall-clock time of the last watchdog tick. The timer only fires while the app is
     /// running, so a gap far larger than `watchdogInterval` means the app was suspended
     /// in between — during which a background URLSession keeps transferring out-of-process
@@ -1103,9 +1106,12 @@ extension DownloadManager {
 
     // MARK: - Watchdog
 
-    static func firstByteWaitThreshold(applicationIsActive: Bool)
+    static func firstByteWaitThreshold(
+        applicationIsActive: Bool,
+        hasActiveExecutionWindow: Bool = false
+    )
         -> TimeInterval {
-        applicationIsActive ? 60 : 4 * 60
+        applicationIsActive || hasActiveExecutionWindow ? 60 : 4 * 60
     }
 
     /// Pure final-cancellation gate used after URLSession task enumeration and
@@ -1134,11 +1140,51 @@ extension DownloadManager {
         #if canImport(UIKit)
         return Self.firstByteWaitThreshold(
             applicationIsActive:
-                UIApplication.shared.applicationState == .active
+                UIApplication.shared.applicationState == .active,
+            hasActiveExecutionWindow:
+                activeExecutionWindowProvider?() ?? false
         )
         #else
         return backgroundFirstByteWaitThreshold
         #endif
+    }
+
+    public func configureActiveExecutionWindow(
+        _ provider: @escaping () -> Bool
+    ) {
+        activeExecutionWindowProvider = provider
+    }
+
+    private func tightenFirstByteDeadlinesForActiveExecutionIfNeeded(
+        now: Date
+    ) {
+        let threshold = effectiveFirstByteWaitThreshold
+        guard threshold <= foregroundFirstByteWaitThreshold else { return }
+        for (episodeID, startedAt) in taskStartedAtByEpisodeID
+        where (progressLastObservedBytes[episodeID] ?? 0) == 0 {
+            let tightened = startedAt.addingTimeInterval(threshold)
+            guard tightened < (firstByteDeadlineByEpisodeID[episodeID] ?? .distantFuture),
+                  let taskID = taskIDByEpisodeID[episodeID] else {
+                continue
+            }
+            firstByteDeadlineByEpisodeID[episodeID] = tightened
+            scheduleFirstByteDeadline(
+                episodeID: episodeID,
+                taskID: taskID,
+                deadline: tightened
+            )
+            logger.info(
+                "download.watchdogFirstByteEscalated",
+                "Shortened first-byte wait after an executable runtime window became available",
+                metadata: [
+                    "episodeID": episodeID.uuidString,
+                    "taskID": "\(taskID)",
+                    "deadlineSeconds": "\(Int(threshold))",
+                    "overdueSeconds":
+                        "\(max(0, Int(now.timeIntervalSince(tightened))))"
+                ]
+            )
+        }
     }
 
     /// Moving an already-started transfer into the background may extend its
@@ -1226,6 +1272,7 @@ extension DownloadManager {
         }
         let now = Date()
         extendFirstByteDeadlinesForBackgroundIfNeeded(now: now)
+        tightenFirstByteDeadlinesForActiveExecutionIfNeeded(now: now)
         // The watchdog Timer only fires while the app is running. A gap far larger than
         // its interval means the app was suspended in between — during which a background
         // URLSession keeps transferring out-of-process but delivers no progress callbacks,

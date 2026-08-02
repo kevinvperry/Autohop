@@ -106,6 +106,8 @@ final class PlaybackCoordinator: ObservableObject {
     struct PlayInstantCandidate: Equatable {
         let episodeID: UUID
         let subscriptionID: UUID
+        let queuedAt: Date
+        let expiresAt: Date
     }
 
     struct InterruptedSession {
@@ -126,7 +128,13 @@ final class PlaybackCoordinator: ObservableObject {
             }
         }
     }
-    @Published var isPlaying = false
+    @Published var isPlaying = false {
+        didSet {
+            if isPlaying, !oldValue {
+                playInstantPlaybackBecameActive?()
+            }
+        }
+    }
     @Published var message: String?
 
     private(set) var generation: UInt64 = 0
@@ -136,7 +144,9 @@ final class PlaybackCoordinator: ObservableObject {
     var interruptedSession: InterruptedSession?
     var activePlayInstantEpisodeID: UUID?
     var playInstantTransitionTask: Task<Void, Never>?
+    var playInstantExpiryTask: Task<Void, Never>?
     var playInstantWarningPlayer: AVAudioPlayer?
+    var playInstantPlaybackBecameActive: (() -> Void)?
     private var statisticsCallbacksInstalled = false
     private var sessionCallbacksInstalled = false
     private var sleepCallbacksInstalled = false

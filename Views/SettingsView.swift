@@ -2,12 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
-// settings Form. Autohop Pro is omitted from production unless its explicit
-// release compilation condition is enabled;
-// when the explicit development feature is enabled its status row opens
-// AutohopProSettingsView, the only screen that calls AutohopProStore.purchase() — see
-// Docs/RELAY_TIER1_IMPLEMENTATION.md §4 and that file's own header for the
-// purchase/restore/manage-subscription flow), Startup (Open-at-launch menu picker →
+// settings Form. Startup (Open-at-launch menu picker →
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
 // cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (fully automatic adaptive scheduling +
 // Notification Settings link — the global notifications toggle now lives on
@@ -92,9 +87,6 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            if ReleaseFeatures.autohopPro {
-                autohopProSection
-            }
             startupSection
             pollingSection
             autoArchiveSection
@@ -201,25 +193,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Sections
-
-    @ViewBuilder
-    private var autohopProSection: some View {
-        Section {
-            NavigationLink {
-                AutohopProSettingsView()
-            } label: {
-                HStack {
-                    rowLabel("Autohop Pro", systemImage: "bolt.badge.clock")
-                    Spacer()
-                    Text(appState.autohopProStore.isPro ? "Active" : "Not Subscribed")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } footer: {
-            Text("Reliable background downloads and faster cross-device sync, even overnight while the app is closed.")
-        }
-        .listRowBackground(cardBackground)
-    }
 
     @ViewBuilder
     private var startupSection: some View {

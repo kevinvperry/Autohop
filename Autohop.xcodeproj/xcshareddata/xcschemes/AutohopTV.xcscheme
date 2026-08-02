@@ -39,6 +39,17 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9BE964EF7CAB19805DCAB63E"
+               BuildableName = "AutohopTVTests.xctest"
+               BlueprintName = "AutohopTVTests"
+               ReferencedContainer = "container:Autohop.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

@@ -29,6 +29,7 @@ import AutohopCore
 // moved into it; the standalone button forced vertical focus hops).
 struct TVPlayerView: View {
     let playbackModel: TVPlaybackModel
+    let onArchive: () -> Void
     let onExit: () -> Void
 
     var body: some View {
@@ -62,20 +63,23 @@ struct TVPlayerView: View {
             // during the brief interval before AVPlayer is published. That
             // branch became sticky on physical tvOS and hid the video surface.
             if let player = playbackModel.avPlayer {
-                TVAVPlayerRepresentable(player: player, playbackModel: playbackModel)
+                TVAVPlayerRepresentable(
+                    player: player,
+                    playbackModel: playbackModel,
+                    playbackSpeed: playbackModel.currentSpeed,
+                    onArchive: onArchive
+                )
                     .ignoresSafeArea()
                     .onExitCommand {
-                        playbackModel.dismissedCover()
                         onExit()
                     }
             } else {
-                ProgressView("Preparing video…")
+                ProgressView("Preparing playback…")
                     .controlSize(.large)
             }
         } else if playbackModel.currentEpisode != nil {
-            TVPlayerPage(playbackModel: playbackModel)
+            TVPlayerPage(playbackModel: playbackModel, onArchive: onArchive)
             .onExitCommand {
-                playbackModel.dismissedCover()
                 onExit()
             }
         } else {
@@ -88,6 +92,7 @@ struct TVPlayerView: View {
 
 private struct TVPlayerPage: View {
     let playbackModel: TVPlaybackModel
+    let onArchive: () -> Void
 
     private var episode: Episode? { playbackModel.currentEpisode }
     private var duration: TimeInterval? { episode?.durationSeconds }
@@ -106,10 +111,7 @@ private struct TVPlayerPage: View {
                 mediaSurface
 
                 VStack(spacing: 10) {
-                    Text(episode?.title ?? "")
-                        .font(.title2.bold())
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
+                    TVMarqueeText(text: episode?.title ?? "")
                     Text(playbackModel.currentSubscriptionTitle)
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -259,6 +261,10 @@ private struct TVPlayerPage: View {
                 Label("Speed", systemImage: "gauge.with.needle")
             }
 
+            Button(role: .destructive, action: onArchive) {
+                Label("Archive", systemImage: "archivebox")
+            }
+
         }
         .buttonStyle(.bordered)
         .focusSection()
@@ -277,30 +283,108 @@ private struct TVPlayerPage: View {
 
 // MARK: - Native system video player
 
+private final class TVNativePlayerViewController: AVPlayerViewController {
+    var onReadyForCustomMenu: (() -> Void)?
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onReadyForCustomMenu?()
+    }
+}
+
 private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
     let player: AVPlayer
     let playbackModel: TVPlaybackModel
+    /// Passed separately so SwiftUI observes rate changes and refreshes the
+    /// native transport menu instead of leaving a stale checked item.
+    let playbackSpeed: Double
+    let onArchive: () -> Void
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
+    func makeUIViewController(context: Context) -> TVNativePlayerViewController {
+        let controller = TVNativePlayerViewController()
         controller.player = player
         controller.allowsPictureInPicturePlayback = false
-        applyTransportBarMenu(to: controller)
+        controller.requiresLinearPlayback = false
+        // AVKit's transport view has zero width before presentation. Installing
+        // a custom menu at that point creates unsatisfiable focus/menu
+        // constraints and can make Siri Remote navigation feel erratic.
+        controller.onReadyForCustomMenu = { [weak controller] in
+            guard let controller else { return }
+            applyTransportBarMenu(to: controller)
+        }
+        logSurface("attached", controller: controller)
         return controller
     }
 
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        if controller.player !== player { controller.player = player }
-        applyTransportBarMenu(to: controller)
+    func updateUIViewController(_ controller: TVNativePlayerViewController, context: Context) {
+        if controller.player !== player {
+            controller.player = player
+            logSurface("reattached", controller: controller)
+        }
+        controller.onReadyForCustomMenu = { [weak controller] in
+            guard let controller else { return }
+            applyTransportBarMenu(to: controller)
+        }
+        if controller.viewIfLoaded?.window != nil, controller.view.bounds.width > 0 {
+            applyTransportBarMenu(to: controller)
+        }
+    }
+
+    static func dismantleUIViewController(
+        _ controller: TVNativePlayerViewController,
+        coordinator: Void
+    ) {
+        // The AVPlayer belongs to StreamingPlaybackEngine, not this transient
+        // cover. Detach the retiring controller so reopening creates a clean
+        // presentation surface around the same still-playing player.
+        AppLogger.shared.info("tv.videoSurface", "Native video surface detached", metadata: [
+            "player": controller.player.map { "\(ObjectIdentifier($0).hashValue)" } ?? "none",
+            "itemStatus": controller.player?.currentItem.map { "\($0.status.rawValue)" } ?? "none",
+            "rate": String(format: "%.2f", Double(controller.player?.rate ?? 0.0))
+        ], alwaysPersist: true)
+        controller.player = nil
+        controller.transportBarCustomMenuItems = []
+    }
+
+    private func logSurface(_ action: String, controller: AVPlayerViewController) {
+        AppLogger.shared.info("tv.videoSurface", "Native video surface \(action)", metadata: [
+            "player": "\(ObjectIdentifier(player).hashValue)",
+            "controllerHasPlayer": "\(controller.player === player)",
+            "itemStatus": player.currentItem.map { "\($0.status.rawValue)" } ?? "none",
+            "rate": String(format: "%.2f", player.rate),
+            "defaultRate": String(format: "%.2f", player.defaultRate),
+            "expectedSpeed": String(format: "%.2f", playbackSpeed),
+            "position": String(format: "%.1f", player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0),
+            "episodeID": playbackModel.currentEpisode?.id.uuidString ?? "none"
+        ], alwaysPersist: true)
     }
 
     private func applyTransportBarMenu(to controller: AVPlayerViewController) {
-        let menu = UIMenu(title: "Playback Speed", children: PlaybackPreference.speedOptions.map { speed in
-            UIAction(title: PlaybackPreference.speedLabel(speed)) { _ in
+        let menu = UIMenu(
+            title: "Speed · \(PlaybackPreference.speedLabel(playbackSpeed))",
+            image: UIImage(systemName: "gauge.with.needle"),
+            children: PlaybackPreference.speedOptions.map { speed in
+            let action = UIAction(
+                title: PlaybackPreference.speedLabel(speed),
+                state: abs(speed - playbackSpeed) < 0.001 ? .on : .off
+            ) { _ in
                 playbackModel.setSpeed(speed)
             }
+            return action
         })
-        controller.transportBarCustomMenuItems = [menu]
+        let archive = UIAction(
+            title: "Archive Episode",
+            image: UIImage(systemName: "archivebox"),
+            attributes: .destructive
+        ) { _ in
+            onArchive()
+        }
+        let archiveMenu = UIMenu(
+            title: "Episode",
+            image: UIImage(systemName: "ellipsis.circle"),
+            children: [archive]
+        )
+        controller.transportBarCustomMenuItems = [menu, archiveMenu]
     }
 }
 

@@ -72,24 +72,8 @@ import MetricKit
 //     that symbolicates against that build's dSYM; hangs log `metrics.hang` with
 //     duration + stack. MetricKit delivers these on a later launch via
 //     pastDiagnosticPayloads, so a background crash is pinpointed after the fact.
-//  9. Autohop Relay wake-push (development-disabled for the Version 1.3 App Store
-//     build; see ReleaseFeatures). registerForRemoteNotifications() remains
-//     unconditional because CKSyncEngine also requires APNs. When Relay is enabled,
-//     the raw APNs token is
-//     ready the moment AutohopProStore confirms entitlement — AppState.relay-
-//     TokenReceived(_:) forwards it and drives POST /v1/register when both the
-//     token AND an active entitlement are present. didReceiveRemoteNotification
-//     dispatches by the relay's own `type` payload key. Protocol-v2
-//     "feed-updated" payloads carry opaque `feed_ids` (never RSS URLs), which
-//     AppState resolves to a bounded targeted refresh; legacy ID-less payloads
-//     use AppState's eight-feed due-only fallback. "sync-nudge" triggers an
-//     immediate CloudKit pull. RelayPushCompletionGate races that work against a
-//     20-second deadline and calls iOS's fetch completion exactly once. A late
-//     refresh may finish through its existing shared-cycle owner, but cannot hold
-//     the silent-push contract open or cancel foreground/manual refresh work.
-//     The received log records only the type and ID count — no feed URLs.
-//     BONUS FIX (found 2026-07-09, not a separate code change): this same
-//     registerForRemoteNotifications() call also fixes CKSyncEngine's own native
+//  9. Private iCloud push registration. registerForRemoteNotifications() is
+//     unconditional because CKSyncEngine requires APNs. This call enables
 //     CloudKit push delivery, which had silently never worked — CKSyncEngine
 //     needs a valid APNs token to receive its CKDatabaseSubscription pushes at
 //     all, and nothing in this app called registerForRemoteNotifications() before
@@ -99,10 +83,7 @@ import MetricKit
 //     task to the scheduler.") and Apple's own sample-cloudkit-sync-engine (which
 //     has NO didReceiveRemoteNotification code at all), CKSyncEngine listens for
 //     its own pushes independent of this delegate — Persistence/CloudSyncEngine.swift
-//     needs no forwarding call. This delegate method only handles OUR relay's
-//     "type"-keyed payload; any CloudKit-shaped push (no "type" key) falls through
-//     to the guard above and completes with .noData, which is correct — CKSyncEngine
-//     has already claimed it before this method's userInfo check even matters.
+//     needs no token forwarding or custom notification dispatch in this delegate.
 final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
     private static let processSessionID = UUID().uuidString
 
@@ -117,24 +98,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         let commit = bundle.object(
             forInfoDictionaryKey: "GitCommitSHA"
         ) as? String ?? "unavailable"
+        let dirty = bundle.object(
+            forInfoDictionaryKey: "GitWorkingTreeDirty"
+        ) as? String ?? "unknown"
+        let sourceFingerprint = bundle.object(
+            forInfoDictionaryKey: "SourceFingerprint"
+        ) as? String ?? "unavailable"
+        let buildTimestamp = bundle.object(
+            forInfoDictionaryKey: "BuildTimestampUTC"
+        ) as? String ?? "unavailable"
         let containerID = URL(fileURLWithPath: NSHomeDirectory())
             .lastPathComponent
         return [
             "appVersion": version,
             "appBuild": build,
             "gitCommit": commit,
+            "gitWorkingTreeDirty": dirty,
+            "sourceFingerprint": sourceFingerprint,
+            "buildTimestampUTC": buildTimestamp,
             "containerID": containerID,
-            "processSessionID": processSessionID,
-            "featureAutohopPro": "\(ReleaseFeatures.autohopPro)",
-            "featureRelay": "\(ReleaseFeatures.relayService)",
-            "featureSubmitTVApp": "\(ReleaseFeatures.submitTVApp)"
+            "processSessionID": processSessionID
         ]
     }
-
-    /// Silent pushes normally receive only a short background execution window.
-    /// Keep a safety margin below the system's practical ~30-second ceiling so
-    /// completion is delivered before iOS terminates or penalises the process.
-    static let relayPushCompletionDeadline: Duration = .seconds(20)
 
     weak var appState: AppState?
 
@@ -171,24 +156,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         // Install the notification-center delegate before launch returns so
         // "Still Listening" action taps that wake the app are delivered.
         NotificationService.shared.configure()
-        // Cheap unconditionally: obtains the raw APNs token so it's ready the
-        // instant AutohopProStore confirms an active entitlement (see item 9
-        // above). Users who never subscribe simply get a token nobody uses.
+        // CKSyncEngine listens for its own CloudKit pushes once APNs
+        // registration is active; no app-operated relay receives this token.
         application.registerForRemoteNotifications()
         return true
-    }
-
-    func application(
-        _ application: UIApplication,
-        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-    ) {
-        guard ReleaseFeatures.relayService else { return }
-        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
-        Task { @MainActor [weak self] in
-            let state = AppState.sharedOrBootstrap()
-            self?.appState = state
-            state.relayTokenReceived(token)
-        }
     }
 
     func application(
@@ -200,51 +171,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         ])
     }
 
-    func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        guard ReleaseFeatures.relayService else {
-            completionHandler(.noData)
-            return
-        }
-        guard let type = userInfo["type"] as? String else {
-            completionHandler(.noData)
-            return
-        }
-        let feedIDs = userInfo["feed_ids"] as? [String] ?? []
-        AppLogger.shared.info("relay.pushReceived", "Silent push received", metadata: [
-            "type": type,
-            "feedIDCount": "\(feedIDs.count)"
-        ], alwaysPersist: true)
-        let gate = RelayPushCompletionGate(
-            type: type,
-            feedIDCount: feedIDs.count,
-            completionHandler: completionHandler
-        )
-
-        // AI CONTEXT — These are intentionally independent tasks rather than a
-        // structured task group. A task-group scope waits for cancelled children;
-        // handleRelayPush can be awaiting AppState's shared unstructured refresh
-        // cycle, so a group "timeout" could still block until that cycle finished.
-        // The one-shot MainActor gate lets the deadline return immediately while
-        // preserving any cycle also owned by foreground/audio/BGTask work.
-        Task { @MainActor [weak self] in
-            let state = AppState.sharedOrBootstrap()
-            self?.appState = state
-            let didRun = await state.handleRelayPush(type: type, feedIDs: feedIDs)
-            gate.finish(
-                result: didRun ? .newData : .noData,
-                source: .workFinished
-            )
-        }
-        Task { @MainActor in
-            try? await Task.sleep(for: Self.relayPushCompletionDeadline)
-            guard !Task.isCancelled else { return }
-            gate.finish(result: .noData, source: .deadline)
-        }
-    }
 
     func application(
         _ application: UIApplication,
@@ -281,15 +207,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         existingAppState()?.logResourceSnapshot(reason: "app.didBecomeActive", extra: [
             "applicationState": applicationStateLabel(application.applicationState)
         ], force: true)
-        // §4.5 heartbeat send-side (RELAY_TIER1_IMPLEMENTATION.md) — foreground is
-        // the documented trigger; AppState debounces to ≤1/day itself.
-        if ReleaseFeatures.relayService {
-            Task { @MainActor [weak self] in
-                let state = AppState.sharedOrBootstrap()
-                self?.appState = state
-                await state.sendRelayHeartbeatIfDue()
-            }
-        }
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
@@ -978,83 +895,5 @@ final class BackgroundTaskCompletionGate: @unchecked Sendable {
         guard !claimed else { return false }
         claimed = true
         return true
-    }
-}
-
-/// AI CONTEXT — One-shot arbiter for the two independent relay-push completion
-/// paths: actual work completion and the hard deadline. MainActor isolation makes
-/// the boolean check + completion-handler call atomic without a lock. The losing
-/// path only writes a diagnostic and can never invoke UIKit's handler twice.
-@MainActor
-final class RelayPushCompletionGate {
-    enum Source: String {
-        case workFinished
-        case deadline
-    }
-
-    private let type: String
-    private let feedIDCount: Int
-    private let startedAt = CFAbsoluteTimeGetCurrent()
-    private let completionHandler: (UIBackgroundFetchResult) -> Void
-    private var winningSource: Source?
-
-    init(
-        type: String,
-        feedIDCount: Int,
-        completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        self.type = type
-        self.feedIDCount = feedIDCount
-        self.completionHandler = completionHandler
-    }
-
-    func finish(result: UIBackgroundFetchResult, source: Source) {
-        let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1_000)
-        guard winningSource == nil else {
-            // A normal work-first completion leaves the sleeping deadline task
-            // behind briefly; that expected loser is silent. Only work finishing
-            // after a deadline is operationally useful and worth persisting.
-            if winningSource == .deadline, source == .workFinished {
-                AppLogger.shared.info(
-                    "relay.pushLateResult",
-                    "Relay push work finished after iOS completion was already delivered",
-                    metadata: [
-                        "type": type,
-                        "feedIDCount": "\(feedIDCount)",
-                        "elapsedMs": "\(elapsedMs)",
-                        "winningSource": Source.deadline.rawValue,
-                        "lateSource": source.rawValue
-                    ],
-                    alwaysPersist: true
-                )
-            }
-            return
-        }
-
-        winningSource = source
-        AppLogger.shared.info(
-            source == .deadline ? "relay.pushDeadline" : "relay.pushComplete",
-            source == .deadline
-                ? "Relay push completion deadline reached; returning control to iOS"
-                : "Relay push work completed within its iOS execution budget",
-            metadata: [
-                "type": type,
-                "feedIDCount": "\(feedIDCount)",
-                "elapsedMs": "\(elapsedMs)",
-                "result": Self.resultLabel(result),
-                "source": source.rawValue
-            ],
-            alwaysPersist: true
-        )
-        completionHandler(result)
-    }
-
-    private static func resultLabel(_ result: UIBackgroundFetchResult) -> String {
-        switch result {
-        case .newData: return "newData"
-        case .noData: return "noData"
-        case .failed: return "failed"
-        @unknown default: return "unknown"
-        }
     }
 }

@@ -11,7 +11,8 @@ import Foundation
 //
 // ORDERING INVARIANTS:
 // 1. Connect every domain callback/provider before a service can emit events.
-// 2. Start sync/Relay/queue/network/runtime owners before restoration work.
+// 2. Start private iCloud sync, queue, network, and runtime owners before
+//    restoration work.
 // 3. Preserve existing migration order and one-way migration flags.
 // 4. Restore playback before loading queue pins and warming Radar profiles.
 // 5. Retain all asynchronous maintenance in AppLifecycleCoordinator.
@@ -42,7 +43,6 @@ final class AppStartupWorkflow {
     private let autoDownloadIntentStore: AutoDownloadIntentStore
     private let autoArchiveCoordinator: AutoArchiveCoordinator
     private let syncCoordinator: SyncCoordinator
-    private let relayCoordinator: RelayCoordinator
     private let playbackCoordinator: PlaybackCoordinator
     private let playbackPreferenceWorkflow: PlaybackPreferenceWorkflow
     private let playbackSeekWorkflow: PlaybackSeekWorkflow
@@ -76,7 +76,6 @@ final class AppStartupWorkflow {
         autoDownloadIntentStore: AutoDownloadIntentStore,
         autoArchiveCoordinator: AutoArchiveCoordinator,
         syncCoordinator: SyncCoordinator,
-        relayCoordinator: RelayCoordinator,
         playbackCoordinator: PlaybackCoordinator,
         playbackPreferenceWorkflow: PlaybackPreferenceWorkflow,
         playbackSeekWorkflow: PlaybackSeekWorkflow,
@@ -106,7 +105,6 @@ final class AppStartupWorkflow {
         self.autoDownloadIntentStore = autoDownloadIntentStore
         self.autoArchiveCoordinator = autoArchiveCoordinator
         self.syncCoordinator = syncCoordinator
-        self.relayCoordinator = relayCoordinator
         self.playbackCoordinator = playbackCoordinator
         self.playbackPreferenceWorkflow = playbackPreferenceWorkflow
         self.playbackSeekWorkflow = playbackSeekWorkflow
@@ -132,7 +130,6 @@ final class AppStartupWorkflow {
         syncCoordinator.startIfEnabled(
             settingsStore.appSettings.iCloudSyncEnabled
         )
-        relayCoordinator.start()
         queueCoordinator.start()
         downloadCoordinator.startNetworkMonitoring()
         subscriptionStore.cleanupExpiredPreviewSubscriptions(
@@ -255,6 +252,10 @@ final class AppStartupWorkflow {
             preferenceWorkflow: playbackPreferenceWorkflow
         )
         downloadCoordinator.installProgressCallback(on: downloadManager)
+        downloadManager.configureActiveExecutionWindow {
+            [weak appRuntimeWorkflow] in
+            appRuntimeWorkflow?.hasActiveDownloadExecutionWindow ?? false
+        }
         downloadCoordinator.installWatchdogCallback(
             on: downloadManager,
             subscriptionStore: subscriptionStore,

@@ -288,14 +288,15 @@ final class ListeningHistoryStore: ObservableObject {
 
     /// Merges a remote history entry with record-level last-write-wins
     /// (the entry with the newer `lastListenedAt` wins the whole record).
+    @discardableResult
     @MainActor
-    func applyRemote(_ remote: ListeningHistoryEntry) {
+    func applyRemote(_ remote: ListeningHistoryEntry) -> Bool {
         // Resolve local buffered ticks before record-level LWW compares timestamps.
         flushPendingProgress(reason: "remoteMerge")
         var normalizedRemote = remote
         normalizedRemote.repairAutoArchiveOverwriteIfClearlyCompleted()
         if let index = entries.firstIndex(where: { $0.id == normalizedRemote.id }) {
-            guard normalizedRemote.lastListenedAt > entries[index].lastListenedAt else { return } // local newer — keep, stays pending
+            guard normalizedRemote.lastListenedAt > entries[index].lastListenedAt else { return false } // local newer — keep, stays pending
             entries[index] = normalizedRemote
         } else {
             entries.append(normalizedRemote)
@@ -306,6 +307,7 @@ final class ListeningHistoryStore: ObservableObject {
         }
         try? syncDatabase?.saveSyncedHistoryEntry(normalizedRemote) // clean — don't re-push
         save()
+        return true
     }
 
     func save() {

@@ -237,8 +237,8 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             await newPlayer.seek(to: CMTime(seconds: preference.startSkipSeconds, preferredTimescale: 600))
             onAutoSkip?(preference.startSkipSeconds)
         }
-        newPlayer.play()
-        applyRate()
+        applyRate(to: newPlayer)
+        newPlayer.playImmediately(atRate: effectiveRate)
         transition(to: newPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate ? .buffering : .playing)
     }
 
@@ -248,8 +248,10 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     }
 
     public func resume() {
-        player?.play()
-        applyRate()
+        if let player {
+            applyRate(to: player)
+            player.playImmediately(atRate: effectiveRate)
+        }
         transition(to: player?.timeControlStatus == .waitingToPlayAtSpecifiedRate ? .buffering : .playing)
         onPlaybackResumed?()
     }
@@ -290,7 +292,10 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
 
     public func updatePlaybackSpeed(_ speed: Double) {
         self.speed = speed
-        if isPlaying { applyRate() }
+        if let player {
+            player.defaultRate = effectiveRate
+            if isPlaying { player.rate = effectiveRate }
+        }
     }
 
     // DSP effects need the complete-file AVAudioEngine path (iOS engine only);
@@ -372,11 +377,18 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         return .unknown(nsError.localizedDescription)
     }
 
-    private func applyRate() {
-        guard let player else { return }
-        let rate = Float(speed)
-        if player.rate != 0 || rate > 0 {
-            player.rate = rate.isFinite && rate > 0 ? rate : 1.0
+    private var effectiveRate: Float {
+        let requested = Float(speed)
+        return requested.isFinite && requested > 0 ? requested : 1.0
+    }
+
+    /// `play()` resumes at `defaultRate`; setting only `rate` is transient and
+    /// AVPlayer may restore 1× after a pause/buffer transition. Keep both values
+    /// aligned, then use `playImmediately(atRate:)` for explicit resumption.
+    private func applyRate(to player: AVPlayer) {
+        player.defaultRate = effectiveRate
+        if player.rate != 0 {
+            player.rate = effectiveRate
         }
     }
 
@@ -408,7 +420,12 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             Task { @MainActor in
                 guard let self, generation == self.playbackGeneration else { return }
                 switch observedPlayer.timeControlStatus {
-                case .playing: self.transition(to: .playing)
+                case .playing:
+                    if abs(observedPlayer.rate - self.effectiveRate) > 0.001 {
+                        observedPlayer.defaultRate = self.effectiveRate
+                        observedPlayer.rate = self.effectiveRate
+                    }
+                    self.transition(to: .playing)
                 case .waitingToPlayAtSpecifiedRate: self.transition(to: .buffering)
                 case .paused where self.state.isPlaying || self.state.isBuffering: self.transition(to: .paused)
                 default: break

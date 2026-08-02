@@ -55,6 +55,12 @@ final class TVPlaybackModel {
     private(set) var avPlayer: AVPlayer?
     /// Non-nil after a failed `play()`/mid-stream stall — see file header.
     private(set) var errorMessage: String?
+    /// Increments for every user/auto-advance playback request. Async AVAsset
+    /// validation is re-entrant on MainActor; without request ownership an
+    /// older request could return after a newer tile tap and clear/overwrite
+    /// the new player's presentation state.
+    private var requestOwnership = TVPlaybackRequestOwnership()
+    private(set) var playbackRequestGeneration: UInt64 = 0
 
     /// Supplied by TVAppModel post-init: the live streaming queue, for
     /// auto-advance on finish.
@@ -76,11 +82,14 @@ final class TVPlaybackModel {
     /// under the compatibility feed's GUID and future resume would split.
     private var currentHistoryEntryID: String?
     private var lastHistoryWriteAt: Date?
+    private var lastProgressPushRequestedAt = Date.distantPast
     private var sessionListenedSeconds: TimeInterval = 0
     private let historyWriteInterval: TimeInterval = 20
     /// Effective playback speed for the stats time-saved calculation — seeded
     /// from the subscription's playbackPreference on play, updated by setSpeed.
-    private var currentSpeed: Double = 1.0
+    /// Observation-visible so native video transport controls can display the
+    /// active rate and refresh their checked menu item after a change.
+    private(set) var currentSpeed: Double = 1.0
 
     /// The underlying AVPlayer for ANY media kind (audio included) — see
     /// StreamingPlaybackEngine.avPlayer's header for why this differs from
@@ -114,7 +123,12 @@ final class TVPlaybackModel {
             AppLogger.shared.info("tv.playback", "Playback lifecycle changed", metadata: [
                 "state": String(describing: state),
                 "episodeID": self.currentEpisode?.id.uuidString ?? "none",
-                "mediaKind": self.currentEpisode.map { String(describing: $0.mediaKind) } ?? "none"
+                "mediaKind": self.currentEpisode.map { String(describing: $0.mediaKind) } ?? "none",
+                "expectedSpeed": String(format: "%.2f", self.currentSpeed),
+                "actualRate": String(format: "%.2f", Double(self.avPlayer?.rate ?? 0.0)),
+                "defaultRate": String(format: "%.2f", Double(self.avPlayer?.defaultRate ?? 0.0)),
+                "position": String(format: "%.1f", self.currentTime),
+                "requestGeneration": "\(self.playbackRequestGeneration)"
             ], alwaysPersist: true)
         }
         configureRemoteCommands()
@@ -132,8 +146,15 @@ final class TVPlaybackModel {
         subscription: Subscription,
         resumePositionOverride: TimeInterval? = nil,
         historyEntryID: String? = nil,
-        displayPodcastTitle: String? = nil
+        displayPodcastTitle: String? = nil,
+        verifyVideoIfAmbiguous: Bool = false
     ) async {
+        let requestGeneration = requestOwnership.begin()
+        playbackRequestGeneration = requestGeneration
+        let episode = verifyVideoIfAmbiguous
+            ? await TVMediaTrackProbe.shared.resolvingAmbiguousMediaKind(for: episode)
+            : episode
+        guard requestOwnership.owns(requestGeneration) else { return }
         AppLogger.shared.info("tv.playback", "Playback requested", metadata: [
             "episodeID": episode.id.uuidString,
             "host": episode.audioURL.host ?? "unknown",
@@ -152,12 +173,22 @@ final class TVPlaybackModel {
         currentTime = 0
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
+        lastProgressPushRequestedAt = Date.distantPast
         errorMessage = nil
         currentSpeed = subscription.playbackPreference.speed
-        subscriptionStore.markEpisodePlaying(subscriptionID: subscription.id, episodeID: episode.id)
+        let catalogStateAuthored = subscriptionStore.markCompanionEpisodePlaying(
+            episode,
+            preferredSubscriptionID: subscription.id
+        )
+        AppLogger.shared.info("tv.playback.catalogState", "TV authored playing state for cross-device sync", metadata: [
+            "episodeID": episode.id.uuidString,
+            "subscriptionID": subscription.id.uuidString,
+            "catalogMatch": "\(catalogStateAuthored)"
+        ], alwaysPersist: true)
         statsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
         do {
             try await engine.play(episode, preference: subscription.playbackPreference, filter: subscription.chapterFilter)
+            guard requestOwnership.owns(requestGeneration) else { return }
             // Cross-device RESUME (fix, 2026-07-04 — previously never
             // implemented; write-back existed but the read side didn't):
             // position roams in the synced ListeningHistoryEntry. Same
@@ -174,6 +205,7 @@ final class TVPlaybackModel {
             if let seekTarget = start.seekTarget {
                 await engine.seekAndWait(to: seekTarget)
             }
+            guard requestOwnership.owns(requestGeneration) else { return }
             AppLogger.shared.info("tv.playbackStartResolved", "Playback settings and resume applied", metadata: [
                 "mediaKind": String(describing: episode.mediaKind),
                 "speed": String(format: "%.2f", subscription.playbackPreference.speed),
@@ -183,6 +215,10 @@ final class TVPlaybackModel {
             currentTime = start.reportedStartTime
             updateNowPlayingInfo()
         } catch {
+            guard requestOwnership.owns(requestGeneration) else { return }
+            if let failure = error as? StreamingPlaybackFailure, failure == .cancelled {
+                return
+            }
             // currentEpisode/currentSubscriptionID stay set on purpose — see
             // file header's Failure UX note.
             if let failure = error as? StreamingPlaybackFailure {
@@ -191,6 +227,13 @@ final class TVPlaybackModel {
                 errorMessage = "Couldn't play \"\(episode.title)\". Check your connection and try again."
             }
         }
+    }
+
+    /// Presentation taps on the episode that is already playing must only
+    /// reopen the player UI. Restarting the stream caused another 20–30 second
+    /// buffer, reset the resume seek and raced the still-live AVPlayer.
+    func isCurrentEpisode(_ episode: Episode) -> Bool {
+        TVPlaybackPresentationPolicy.representsSameEpisode(currentEpisode, as: episode)
     }
 
     /// Re-attempts the episode/subscription currently loaded, after a failure.
@@ -203,7 +246,8 @@ final class TVPlaybackModel {
             subscription: subscription,
             resumePositionOverride: currentTime,
             historyEntryID: currentHistoryEntryID,
-            displayPodcastTitle: currentSubscriptionTitle
+            displayPodcastTitle: currentSubscriptionTitle,
+            verifyVideoIfAmbiguous: false
         )
     }
 
@@ -211,9 +255,14 @@ final class TVPlaybackModel {
         guard errorMessage == nil else { return }
         if isPlaying {
             engine.pause()
+            AppLogger.shared.info("tv.playback.command", "Pause requested", metadata: playbackDiagnosticMetadata())
             checkpoint()
         } else {
+            // Reassert before every resume. StreamingPlaybackEngine also keeps
+            // AVPlayer.defaultRate aligned, but this makes TV ownership explicit.
+            engine.updatePlaybackSpeed(currentSpeed)
             engine.resume()
+            AppLogger.shared.info("tv.playback.command", "Resume requested", metadata: playbackDiagnosticMetadata())
         }
         updateNowPlayingInfo()
     }
@@ -256,11 +305,18 @@ final class TVPlaybackModel {
         engine.skipForward(seconds: seconds)
         // Same stats semantics as iPhone: a deliberate skip forward is time saved.
         statsStore.addManualSkipForward(seconds, subscriptionID: currentSubscriptionID)
+        updateNowPlayingInfo()
     }
-    func skipBackward(_ seconds: TimeInterval = 15) { engine.skipBackward(seconds: seconds) }
+    func skipBackward(_ seconds: TimeInterval = 15) {
+        engine.skipBackward(seconds: seconds)
+        updateNowPlayingInfo()
+    }
     func setSpeed(_ speed: Double) {
         engine.updatePlaybackSpeed(speed)
         currentSpeed = speed
+        updateNowPlayingInfo()
+        AppLogger.shared.info("tv.playback.speed", "Playback speed changed", metadata: playbackDiagnosticMetadata())
+        checkpoint()
     }
 
     /// Called when the player cover is dismissed (Menu / onExitCommand).
@@ -285,6 +341,8 @@ final class TVPlaybackModel {
     }
 
     func stopAndClear() {
+        requestOwnership.invalidate()
+        playbackRequestGeneration = requestOwnership.generation
         flushProgress()
         engine.stop()
         currentEpisode = nil
@@ -302,12 +360,16 @@ final class TVPlaybackModel {
     private func handleTimeUpdate(_ time: TimeInterval) {
         if time > currentTime {
             let delta = time - currentTime
-            sessionListenedSeconds += delta
-            // A forward tick is genuine listened time — record it into the
-            // synced day bucket. The < 5 s guard keeps a forward SEEK's jump
-            // (skip-30 lands here as one big delta) out of the wall-clock
-            // stats; real ticks arrive every ~0.5 s.
-            if delta < 5, let subscriptionID = currentSubscriptionID {
+            // AI CONTEXT — Both lifetime history and daily Stats must use the
+            // SAME natural-playback gate. Previously only Stats rejected large
+            // forward jumps; `sessionListenedSeconds` still credited the resume
+            // seek (and any scrub) as time actually heard. That made a two-hour
+            // resume instantly add two hours to synced listening history.
+            if TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta) {
+                sessionListenedSeconds += delta
+            }
+            if TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta),
+               let subscriptionID = currentSubscriptionID {
                 statsStore.addListeningTime(
                     delta,
                     speed: currentSpeed,
@@ -319,8 +381,8 @@ final class TVPlaybackModel {
         currentTime = time
         if let lastHistoryWriteAt, Date().timeIntervalSince(lastHistoryWriteAt) >= historyWriteInterval {
             flushProgress()
+            requestProgressPushIfDue()
         }
-        updateNowPlayingElapsed()
     }
 
     private func flushProgress() {
@@ -334,10 +396,49 @@ final class TVPlaybackModel {
             listenedSecondsDelta: sessionListenedSeconds,
             positionSeconds: currentTime,
             durationSeconds: episode.durationSeconds,
-            historyEntryID: currentHistoryEntryID
+            historyEntryID: currentHistoryEntryID,
+            playbackSpeed: currentSpeed
         )
+        AppLogger.shared.info("tv.playback.progressPersisted", "TV listening position saved locally", metadata: [
+            "episodeID": episode.id.uuidString,
+            "historyEntryID": currentHistoryEntryID ?? "generated",
+            "position": String(format: "%.1f", currentTime),
+            "listenedDelta": String(format: "%.1f", sessionListenedSeconds),
+            "duration": episode.durationSeconds.map { String(format: "%.1f", $0) } ?? "unknown",
+            "mediaKind": String(describing: episode.mediaKind),
+            "playbackSpeed": String(format: "%.2f", currentSpeed)
+        ])
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
+    }
+
+    /// Direct history-database writes do not publish SubscriptionStore's
+    /// objectWillChange, so CloudSyncEngine's ordinary observer cannot discover
+    /// them. Ask the TV composition root to queue the slow lane at most once per
+    /// minute during uninterrupted playback; pause/exit checkpoints remain
+    /// immediate.
+    private func requestProgressPushIfDue() {
+        let now = Date()
+        guard TVPlaybackProgressPushPolicy.shouldRequestPush(
+            now: now,
+            lastRequestedAt: lastProgressPushRequestedAt
+        ) else { return }
+        lastProgressPushRequestedAt = now
+        AppLogger.shared.info("tv.playback.progressPushRequested", "Queued periodic TV listening-history upload", metadata: playbackDiagnosticMetadata())
+        onPlaybackCheckpoint?()
+    }
+
+    private func playbackDiagnosticMetadata() -> [String: String] {
+        [
+            "episodeID": currentEpisode?.id.uuidString ?? "none",
+            "mediaKind": currentEpisode.map { String(describing: $0.mediaKind) } ?? "none",
+            "position": String(format: "%.1f", currentTime),
+            "expectedSpeed": String(format: "%.2f", currentSpeed),
+            "actualRate": String(format: "%.2f", Double(avPlayer?.rate ?? 0.0)),
+            "defaultRate": String(format: "%.2f", Double(avPlayer?.defaultRate ?? 0.0)),
+            "state": String(describing: playbackState),
+            "requestGeneration": "\(playbackRequestGeneration)"
+        ]
     }
 
     private func handleFinished(_ episode: Episode) {
@@ -351,7 +452,10 @@ final class TVPlaybackModel {
             historyEntryID: currentHistoryEntryID
         )
         sessionListenedSeconds = 0
-        subscriptionStore.markEpisodePlayed(subscriptionID: subscription.id, episodeID: episode.id)
+        _ = subscriptionStore.markCompanionEpisodePlayed(
+            episode,
+            preferredSubscriptionID: subscription.id
+        )
         statsStore.recordEpisodeCompleted(subscriptionID: subscription.id)
 
         // Auto-advance through the streaming Priority Stack — same policy
@@ -372,18 +476,13 @@ final class TVPlaybackModel {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: episode.title,
             MPMediaItemPropertyArtist: currentSubscriptionTitle,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? currentSpeed : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: currentSpeed,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime
         ]
         if let duration = episode.durationSeconds {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-    }
-
-    private func updateNowPlayingElapsed() {
-        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 

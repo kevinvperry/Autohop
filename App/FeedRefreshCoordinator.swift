@@ -21,7 +21,6 @@ enum FeedRefreshTrigger: String, Sendable {
     case foregroundTimer
     case backgroundRefreshTask = "BGAppRefreshTask"
     case backgroundProcessingTask = "BGProcessingTask"
-    case relayPush = "AutohopRelay"
 }
 
 enum FeedRefreshExecutionContext: String, Sendable, Hashable {
@@ -30,7 +29,6 @@ enum FeedRefreshExecutionContext: String, Sendable, Hashable {
     case backgroundRefreshTask
     case backgroundAudioAlive
     case backgroundProcessingTask
-    case relayPush
 }
 
 struct RefreshCycleDiagnostics: Sendable {

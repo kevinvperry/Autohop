@@ -108,6 +108,14 @@ final class DownloadResponseValidationTests: XCTestCase {
             DownloadManager.firstByteWaitThreshold(applicationIsActive: false),
             4 * 60
         )
+        XCTAssertEqual(
+            DownloadManager.firstByteWaitThreshold(
+                applicationIsActive: false,
+                hasActiveExecutionWindow: true
+            ),
+            60,
+            "Screen-closed audio is an executable window, not suspension"
+        )
     }
 
     func testWatchdogFinalGateCancelsOnlyCurrentZeroByteRunningTask() {

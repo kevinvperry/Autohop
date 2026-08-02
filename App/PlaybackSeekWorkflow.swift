@@ -116,4 +116,25 @@ final class PlaybackSeekWorkflow {
             )
         }
     }
+
+    /// Applies a newer cross-device resume point to an already-open paused
+    /// player. This is deliberately separate from the user seek path: remote
+    /// synchronization must not dismiss a Sleep Schedule prompt, earn manual
+    /// skip credit, or complete an episode as though the listener scrubbed it.
+    func applyRemotePosition(_ requestedTime: TimeInterval) {
+        let target = PlaybackPositionStore.clampedTime(
+            requestedTime,
+            duration: playback.currentEpisode?.durationSeconds
+        )
+        playback.engine.seek(to: target)
+        playback.clock.time = target
+        if let episode = playback.currentEpisode,
+           let subscription = subscriptionStore.subscription(id: episode.subscriptionID) {
+            NowPlayingService.shared.updateTime(
+                currentTime: target,
+                isPlaying: false,
+                speed: preferenceWorkflow.effectiveSpeed(for: subscription)
+            )
+        }
+    }
 }

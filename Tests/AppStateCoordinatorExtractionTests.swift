@@ -104,6 +104,63 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertEqual(subject.completedEpisodeCount, 1)
     }
 
+    func testAcceptedRemoteHistoryUpdatesAuthoritativePhoneResumePosition() throws {
+        let store = SubscriptionStore.inMemory()
+        let subscriptionID = UUID()
+        var episode = Episode(
+            subscriptionID: subscriptionID,
+            guid: "remote-tv-position",
+            title: "Remote TV Episode",
+            audioURL: URL(string: "https://example.com/remote-tv.mp4")!,
+            mediaKind: .video
+        )
+        episode.durationSeconds = 3600
+        _ = try store.addSubscription(
+            id: subscriptionID,
+            feedURL: URL(string: "https://example.com/video.xml")!,
+            title: "Video Show",
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: episode
+        )
+        let positionStore = PlaybackPositionStore(fileURL: temporaryURL("remote-position.json"))
+        let subject = HistoryStatsCoordinator(
+            historyStore: ListeningHistoryStore(fileURL: temporaryURL("remote-history.json")),
+            statsStore: ListeningStatsStore(fileURL: temporaryURL("remote-stats.json"), legacyFileURL: nil),
+            subscriptionStore: store,
+            playbackPositionStore: positionStore
+        )
+        let remote = ListeningHistoryEntry(
+            id: PlaybackPositionStore.key(for: episode),
+            subscriptionID: subscriptionID,
+            episodeID: episode.id,
+            episodeTitle: episode.title,
+            podcastTitle: "Video Show",
+            artworkURL: nil,
+            streamURL: episode.audioURL,
+            mediaKind: .video,
+            publishedAt: nil,
+            durationSeconds: 3600,
+            listenedSeconds: 600,
+            lastPositionSeconds: 600,
+            lastListenedAt: Date(),
+            status: .listened,
+            playbackSpeed: 1.4
+        )
+        var adoptedEpisodeID: UUID?
+        var adoptedPosition: TimeInterval?
+        subject.onRemotePlaybackPositionAdopted = { episode, position, _ in
+            adoptedEpisodeID = episode.id
+            adoptedPosition = position
+        }
+
+        subject.applyRemoteHistory(remote)
+
+        XCTAssertEqual(positionStore.savedTime(for: episode), 600)
+        XCTAssertEqual(adoptedEpisodeID, episode.id)
+        XCTAssertEqual(adoptedPosition, 600)
+    }
+
     func testSettingsViewModelWritesThroughAndAcceptsExternalStoreChanges() {
         let store = PublishingTestSettingsStore()
         let subject = SettingsViewModel(settingsStore: store)

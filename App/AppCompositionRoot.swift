@@ -102,7 +102,8 @@ struct AppCompositionRoot {
         let historyStatsCoordinator = HistoryStatsCoordinator(
             historyStore: ListeningHistoryStore(),
             statsStore: ListeningStatsStore(),
-            subscriptionStore: dependencies.subscriptionStore
+            subscriptionStore: dependencies.subscriptionStore,
+            playbackPositionStore: playbackPositionStore
         )
         let queueCoordinator = QueueCoordinator(
             subscriptionStore: dependencies.subscriptionStore,
@@ -128,6 +129,41 @@ struct AppCompositionRoot {
             routingCoordinator: AppRoutingCoordinator(),
             playbackPositionStore: playbackPositionStore
         )
+        historyStatsCoordinator.onRemotePlaybackPositionAdopted = { [weak appState] episode, position, entry in
+            guard let appState,
+                  appState.currentPlayerEpisode?.id == episode.id
+            else { return }
+
+            // Never seek underneath active phone playback. When the player is
+            // paused, however, its in-memory clock otherwise masks the newly
+            // synced PlaybackPositionStore value until another episode is
+            // loaded. Apply the accepted TV position directly to that paused
+            // player so the visible scrubber and next Resume agree immediately.
+            guard !appState.isPlaying else {
+                AppLogger.shared.info(
+                    "sync.historyActivePlayerDeferred",
+                    "Kept actively playing iPhone session authoritative over remote position",
+                    metadata: [
+                        "episodeID": episode.id.uuidString,
+                        "remotePosition": String(format: "%.1f", position),
+                        "remoteUpdatedAt": ISO8601DateFormatter().string(from: entry.lastListenedAt)
+                    ],
+                    alwaysPersist: true
+                )
+                return
+            }
+            appState.applyRemotePlaybackPosition(position)
+            AppLogger.shared.info(
+                "sync.historyPausedPlayerApplied",
+                "Moved paused iPhone player to accepted remote position",
+                metadata: [
+                    "episodeID": episode.id.uuidString,
+                    "position": String(format: "%.1f", position),
+                    "remoteUpdatedAt": ISO8601DateFormatter().string(from: entry.lastListenedAt)
+                ],
+                alwaysPersist: true
+            )
+        }
         if installWidgetCoordinator {
             appState.installWidgetSnapshotCoordinator(
                 WidgetSnapshotCoordinator(

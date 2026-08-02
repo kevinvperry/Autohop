@@ -44,7 +44,8 @@ struct TVQueueView: View {
                             TVQueueRow(
                                 row: row,
                                 detailLoadFailed: model.queueEnrichmentFailed(for: row),
-                                onPlay: { if let episode = row.episode { onPlay(episode) } }
+                                onPlay: { if let episode = row.episode { onPlay(episode) } },
+                                onArchive: { if let episode = row.episode { model.archiveEpisode(episode) } }
                             )
                             .focused($focusedRowID, equals: row.id)
                             .task { model.enrichQueueRowIfNeeded(row) }
@@ -55,6 +56,25 @@ struct TVQueueView: View {
                 }
             }
         }
+        .onAppear {
+            restoreFocusIfNeeded(rowIDs: model.queueRows.map(\.id))
+        }
+        .onChange(of: model.queueRows.map(\.id)) { _, rowIDs in
+            restoreFocusIfNeeded(rowIDs: rowIDs)
+        }
+    }
+
+    /// Cloud sync can replace the entire queue collection while the user is
+    /// navigating it. Preserve the current row when it still exists; otherwise
+    /// move predictably to the first playable row instead of letting focus fall
+    /// out of the hierarchy.
+    private func restoreFocusIfNeeded(rowIDs: [String]) {
+        guard !rowIDs.isEmpty else {
+            focusedRowID = nil
+            return
+        }
+        if let focusedRowID, rowIDs.contains(focusedRowID) { return }
+        focusedRowID = model.queueRows.first(where: \.isPlayable)?.id ?? rowIDs[0]
     }
 }
 
@@ -65,54 +85,76 @@ struct TVQueueRow: View {
     let row: TVQueueRowModel
     let detailLoadFailed: Bool
     let onPlay: () -> Void
+    let onArchive: () -> Void
 
     /// nil until this item's catalog has materialized locally — until then the
     /// row is a non-playable placeholder showing the synced title + order.
     private var episode: Episode? { row.episode }
 
     var body: some View {
-        Button(action: onPlay) {
-            HStack(spacing: 24) {
-                TVArtworkImage(url: row.artworkURL, cornerRadius: 12, targetPixels: 360)
-                    .frame(width: 140, height: 140)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("\(row.position)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                        Text(row.title)
-                    }
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text(row.podcastTitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    if row.mediaKind == .video {
-                        Label("Video", systemImage: "play.rectangle.fill")
-                            .font(.caption)
+        HStack(spacing: 20) {
+            Button(action: onPlay) {
+                HStack(spacing: 24) {
+                    TVArtworkImage(url: row.artworkURL, cornerRadius: 12, targetPixels: 360)
+                        .frame(width: 140, height: 140)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("\(row.position)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                            Text(row.title)
+                        }
+                            .font(.headline)
+                            .lineLimit(2)
+                        Text(row.podcastTitle)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
+                        if row.mediaKind == .video {
+                            Label("Video", systemImage: "play.rectangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let episode, let duration = episode.durationSeconds {
+                            Text(formattedDuration(duration))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else if episode == nil {
+                            Label(
+                                modelLabel,
+                                systemImage: modelLabel == "Episode details unavailable" ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath"
+                            )
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                    if let episode, let duration = episode.durationSeconds {
-                        Text(formattedDuration(duration))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    } else if episode == nil {
-                        Label(
-                            modelLabel,
-                            systemImage: modelLabel == "Episode details unavailable" ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath"
-                        )
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
+                    Spacer()
                 }
-                Spacer()
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .buttonStyle(.card)
+            .tvFocusHighlight(cornerRadius: 16)
+            .disabled(episode == nil)
+
+            // Context-menu focus was unreliable on device. This normal
+            // sibling button can always be reached with the Siri Remote.
+            if episode != nil {
+                Button(role: .destructive, action: onArchive) {
+                    Label("Archive", systemImage: "archivebox")
+                        .font(.headline)
+                        .frame(minWidth: 150, minHeight: 110)
+                }
+                .buttonStyle(.bordered)
+            }
         }
-        .buttonStyle(.card)
-        .disabled(episode == nil)
+        .contextMenu {
+            if episode != nil {
+                Button(role: .destructive, action: onArchive) {
+                    Label("Archive Episode", systemImage: "archivebox")
+                }
+            }
+        }
     }
 
     private var modelLabel: String {

@@ -14,7 +14,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project_file="$repo_root/project.yml"
-feature_file="$repo_root/Store/AutohopProStore.swift"
 commit_script="$repo_root/Scripts/embed-git-commit.sh"
 mode="${1:---configuration-only}"
 
@@ -33,7 +32,6 @@ require_literal() {
 }
 
 [[ -f "$project_file" ]] || fail "Missing project.yml"
-[[ -f "$feature_file" ]] || fail "Missing Store/AutohopProStore.swift"
 [[ -x "$commit_script" ]] \
   || fail "Git commit identity embed script is missing or not executable"
 
@@ -56,23 +54,11 @@ release_conditions="$(
 [[ "$release_conditions" == '""' ]] \
   || fail "Release compilation conditions must be empty; found: $release_conditions"
 
-if [[ "$release_conditions" == *AUTOHOP_PRO_ENABLED* \
-   || "$release_conditions" == *AUTOHOP_RELAY_ENABLED* ]]; then
-  fail "Autohop Pro/Relay compilation conditions are enabled for Release"
+if rg -n 'AUTOHOP_(PRO|RELAY)_ENABLED|AutohopProStore|RelayCoordinator|RelayClient' \
+  "$repo_root/App" "$repo_root/Store" "$repo_root/Views" "$repo_root/TV" \
+  "$repo_root/Relay" "$project_file" 2>/dev/null; then
+  fail "Retired Autohop Pro or relay production code has returned"
 fi
-
-require_literal \
-  "$feature_file" \
-  '^[[:space:]]*#if AUTOHOP_PRO_ENABLED[[:space:]]*$' \
-  "Autohop Pro is no longer guarded by AUTOHOP_PRO_ENABLED"
-require_literal \
-  "$feature_file" \
-  '^[[:space:]]*#if AUTOHOP_RELAY_ENABLED[[:space:]]*$' \
-  "Relay is no longer guarded by AUTOHOP_RELAY_ENABLED"
-require_literal \
-  "$feature_file" \
-  '^[[:space:]]*static let submitTVApp = false[[:space:]]*$' \
-  "The iPhone-only release gate submitTVApp=false is missing"
 require_literal \
   "$project_file" \
   '^[[:space:]]*GitCommitSHA:[[:space:]]+unavailable[[:space:]]*$' \
@@ -83,7 +69,7 @@ require_literal \
   "The app target no longer embeds its Git commit identity"
 
 if [[ "$mode" == "--configuration-only" ]]; then
-  echo "Release configuration checks passed (Pro off, Relay off, tvOS submission off)."
+  echo "Release configuration checks passed (private iCloud sync only)."
   echo "Archive APNs check not run; pass --archive <path> for upload validation."
   exit 0
 fi
@@ -116,5 +102,5 @@ fi
 
 echo "Release archive checks passed:"
 echo "  signed APNs environment: production"
-echo "  Pro/Relay compilation gates: disabled"
+echo "  sync transport: private iCloud only"
 echo "  tvOS app submission gate: disabled"

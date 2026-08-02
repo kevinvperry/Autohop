@@ -41,17 +41,26 @@ final class HistoryStatsCoordinator: ObservableObject {
     @Published private(set) var completedEpisodeCount = 0
 
     private let subscriptionStore: SubscriptionStore
+    private let playbackPositionStore: PlaybackPositionStore?
+    /// Invoked only after a remote history row wins LWW and is matched to a
+    /// concrete local episode. AppCompositionRoot uses this narrow seam to
+    /// move an already-open, PAUSED iPhone player to the newly accepted TV
+    /// position. An actively playing phone remains authoritative and is never
+    /// interrupted by a remote progress update.
+    var onRemotePlaybackPositionAdopted: ((Episode, TimeInterval, ListeningHistoryEntry) -> Void)?
     private var trackingEpisodeID: UUID?
     private var trackingLastTime: TimeInterval?
 
     init(
         historyStore: ListeningHistoryStore,
         statsStore: ListeningStatsStore,
-        subscriptionStore: SubscriptionStore
+        subscriptionStore: SubscriptionStore,
+        playbackPositionStore: PlaybackPositionStore? = nil
     ) {
         self.historyStore = historyStore
         self.statsStore = statsStore
         self.subscriptionStore = subscriptionStore
+        self.playbackPositionStore = playbackPositionStore
         refreshHistoryProjection()
     }
 
@@ -61,8 +70,75 @@ final class HistoryStatsCoordinator: ObservableObject {
     }
 
     func applyRemoteHistory(_ entry: ListeningHistoryEntry) {
-        historyStore.applyRemote(entry)
+        let adopted = historyStore.applyRemote(entry)
+        if adopted {
+            applyRemotePlaybackPosition(entry)
+        } else {
+            AppLogger.shared.info("sync.historyPositionIgnored", "Remote listening position did not win local history merge", metadata: [
+                "id": entry.id,
+                "position": String(format: "%.1f", entry.lastPositionSeconds),
+                "lastListenedAt": ISO8601DateFormatter().string(from: entry.lastListenedAt)
+            ], alwaysPersist: true)
+        }
         refreshHistoryProjection()
+    }
+
+    /// iPhone resume playback is owned by PlaybackPositionStore, while the
+    /// cross-device transport is ListeningHistoryEntry. An accepted remote
+    /// history row must update both stores; otherwise History displays the TV
+    /// session but playback still resumes from the phone's stale local cache.
+    private func applyRemotePlaybackPosition(_ entry: ListeningHistoryEntry) {
+        guard let playbackPositionStore else { return }
+        guard let episode = localEpisode(matching: entry) else {
+            AppLogger.shared.warning("sync.historyPositionUnresolved", "Received history but could not match it to a local episode", metadata: [
+                "id": entry.id,
+                "episodeID": entry.episodeID.uuidString,
+                "subscriptionID": entry.subscriptionID.uuidString,
+                "title": entry.episodeTitle,
+                "streamHost": entry.streamURL?.host ?? "unknown"
+            ], alwaysPersist: true)
+            return
+        }
+
+        let position = PlaybackPositionStore.normalizedResumeTime(
+            entry.lastPositionSeconds,
+            duration: episode.durationSeconds ?? entry.durationSeconds
+        )
+        if entry.status == .listened, position > 0 {
+            playbackPositionStore.save(
+                episode: episode,
+                timeSeconds: position,
+                updatedAt: entry.lastListenedAt
+            )
+            onRemotePlaybackPositionAdopted?(episode, position, entry)
+        } else {
+            playbackPositionStore.clear(for: episode)
+        }
+        AppLogger.shared.info("sync.historyPositionApplied", "Applied remote listening position to iPhone resume store", metadata: [
+            "id": entry.id,
+            "localEpisodeID": episode.id.uuidString,
+            "localKey": PlaybackPositionStore.key(for: episode),
+            "position": String(format: "%.1f", position),
+            "status": String(describing: entry.status)
+        ], alwaysPersist: true)
+    }
+
+    /// Match strongly by the phone's current catalogue identity, then by the
+    /// enclosure URL carried in the synced history projection. Title-only
+    /// matching is deliberately excluded because recurring shows often reuse
+    /// titles and a false match would move an unrelated episode's position.
+    private func localEpisode(matching entry: ListeningHistoryEntry) -> Episode? {
+        if let subscription = subscriptionStore.subscription(id: entry.subscriptionID),
+           let exact = subscription.episodes.first(where: {
+               $0.id == entry.episodeID || PlaybackPositionStore.key(for: $0) == entry.id
+           }) {
+            return exact
+        }
+        guard let streamURL = entry.streamURL else { return nil }
+        let matches = subscriptionStore.subscriptions
+            .flatMap(\.episodes)
+            .filter { $0.audioURL == streamURL }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     func reloadRemoteStats() {
