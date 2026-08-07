@@ -917,6 +917,24 @@ complete or the tvOS app is promoted as shipping.
   coverage for fresh installs, explicit saved choices and old settings payloads
   that predate the global Default Playback setting.
 
+### tvOS Discover and player polish — 8 August 2026
+
+- Increased vertical separation between Discover shelves so category rows are
+  easier to scan and focus from a ten-foot viewing distance.
+- Reused one deterministic RSS show-notes formatter across Discover show and
+  episode details, removing visible HTML tags while preserving paragraph and
+  list boundaries.
+- Rehydrated lightweight queue/history playback projections from the owning
+  subscription before player presentation, so the Description sheet receives
+  publisher episode notes rather than a title-only record. Reduced sheet title,
+  publisher and body typography to a more readable long-form scale.
+- Changed long player titles to scroll left only, pause on the final words and
+  reset without an animated backwards pass. Added vertical glyph space and
+  horizontal-only masking so descenders such as j, g and y are not clipped.
+- Added a persistent **Discover Playback Speed** control to Apple TV Settings.
+  It applies only to episodes launched from Discover; Library episodes continue
+  to use their synced per-podcast speed.
+
 ## Validation still required
 
 - Run a prolonged unplugged, screen-closed playback capture on a physical

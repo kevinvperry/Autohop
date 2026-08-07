@@ -40,7 +40,7 @@ struct TVDiscoverView: View {
 
     private var landing: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 44) {
+            LazyVStack(alignment: .leading, spacing: 72) {
                 HStack(spacing: 24) {
                     NavigationLink(value: TVDiscoverRoute.search) {
                         Label("Search Shows", systemImage: "magnifyingglass")
@@ -91,6 +91,7 @@ struct TVDiscoverView: View {
                     .padding(.horizontal, 72).padding(.vertical, 14)
             }
         }
+        .padding(.vertical, 8)
     }
 
     private var categoryChips: some View {
@@ -196,7 +197,10 @@ private struct TVDiscoverShowDetail: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(show.subscription.title).font(.largeTitle.bold())
                         Text(show.subscription.author ?? show.catalogue.author).font(.title2).foregroundStyle(.secondary)
-                        if let description = show.subscription.description { Text(description).lineLimit(4).foregroundStyle(.secondary) }
+                        let description = TVEpisodeDescriptionText.plainText(from: show.subscription.description)
+                        if !description.isEmpty {
+                            Text(description).font(.callout).lineLimit(4).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Text("Episodes").font(.title.bold())
@@ -240,7 +244,10 @@ private struct TVDiscoverEpisodeDetail: View {
                         AppLogger.shared.info("tv.discover.playRequested", "Discover play selected", metadata: ["episodeID": episode.id.uuidString], alwaysPersist: true)
                         onPlay(episode, subscription)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
-                    if let description = episode.description { Text(description).font(.body) }
+                    let description = TVEpisodeDescriptionText.plainText(from: episode.description)
+                    if !description.isEmpty {
+                        Text(description).font(.callout).lineSpacing(3)
+                    }
                 }
             }.padding(80)
         }

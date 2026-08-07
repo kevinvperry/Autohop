@@ -7,12 +7,31 @@ import AutohopCore
 struct TVDiagnosticsView: View {
     let model: TVAppModel
     @State private var exportStatus: String?
+    @AppStorage(TVDiscoverPlaybackSettings.key)
+    private var discoverPlaybackSpeed = TVDiscoverPlaybackSettings.defaultSpeed
 
     var body: some View {
         let snapshot = model.diagnosticsSnapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Settings & Diagnostics").font(.largeTitle.bold())
+                HStack {
+                    Label("Discover Playback Speed", systemImage: "gauge.with.needle")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Discover Playback Speed", selection: $discoverPlaybackSpeed) {
+                        ForEach(PlaybackPreference.speedOptions, id: \.self) { speed in
+                            Text(PlaybackPreference.speedLabel(speed)).tag(speed)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 230)
+                }
+                .padding(20)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                Text("Used when an episode is started from Discover. Library episodes continue to use their podcast-specific speed.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 Button {
                     prepareDiagnosticExport()
                 } label: {

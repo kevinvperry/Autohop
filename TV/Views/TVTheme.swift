@@ -77,8 +77,10 @@ extension View {
 // A ten-foot interface cannot rely on truncation for the currently playing
 // episode title. This view measures the rendered single-line title and moves it
 // only when it genuinely exceeds the available width. The motion pauses at
-// both readable endpoints, travels at a constant points-per-second rate, and
-// reverses instead of snapping. Reduce Motion falls back to a wrapped title.
+// both readable endpoints, travels left at a constant points-per-second rate,
+// then resets without an animated backwards pass. The mask clips horizontally
+// only; extra vertical breathing room preserves descenders such as j/g/y.
+// Reduce Motion falls back to a wrapped title.
 struct TVMarqueeText: View {
     let text: String
     var font: Font = .title2.bold()
@@ -105,6 +107,7 @@ struct TVMarqueeText: View {
                     Text(text)
                         .font(font)
                         .fixedSize(horizontal: true, vertical: false)
+                        .padding(.vertical, 8)
                         .offset(x: offset)
                         .background {
                             GeometryReader { textGeometry in
@@ -120,18 +123,18 @@ struct TVMarqueeText: View {
                             containerWidth = value
                         }
                 }
-                .clipped()
+                .mask(Rectangle().padding(.vertical, -16))
             }
         }
-        .frame(height: reduceMotion ? 92 : 58)
+        .frame(height: reduceMotion ? 96 : 76)
         .accessibilityLabel(text)
         .task(id: MarqueeRunID(text: text, overflow: overflow, reduceMotion: reduceMotion)) {
             offset = 0
             guard !reduceMotion, overflow > 1 else { return }
 
             // The title remains still before its first movement, then pauses
-            // again with the final words fully visible. Returning at the same
-            // speed avoids the distracting jump produced by a looping ticker.
+            // with the final words fully visible. Reset without animation so
+            // the text never appears to scroll backwards.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1.6))
                 guard !Task.isCancelled else { return }
@@ -141,10 +144,11 @@ struct TVMarqueeText: View {
                 }
                 try? await Task.sleep(for: .seconds(travelDuration + 1.8))
                 guard !Task.isCancelled else { return }
-                withAnimation(.linear(duration: travelDuration)) {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
                     offset = 0
                 }
-                try? await Task.sleep(for: .seconds(travelDuration))
             }
         }
     }

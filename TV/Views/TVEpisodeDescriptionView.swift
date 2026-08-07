@@ -26,13 +26,13 @@ struct TVEpisodeDescriptionView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     Text(item.episode.title)
-                        .font(.title.bold())
+                        .font(.title2.bold())
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let podcastTitle = item.podcastTitle,
                        !podcastTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text(podcastTitle)
-                            .font(.title3)
+                            .font(.headline)
                             .foregroundStyle(.secondary)
                     }
 
@@ -47,8 +47,8 @@ struct TVEpisodeDescriptionView: View {
                         .frame(maxWidth: .infinity, minHeight: 300)
                     } else {
                         Text(descriptionText)
-                            .font(.title3)
-                            .lineSpacing(8)
+                            .font(.body)
+                            .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }

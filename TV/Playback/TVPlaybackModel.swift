@@ -157,9 +157,20 @@ final class TVPlaybackModel {
     ) async {
         let requestGeneration = requestOwnership.begin()
         playbackRequestGeneration = requestGeneration
-        let episode = verifyVideoIfAmbiguous
+        var episode = verifyVideoIfAmbiguous
             ? await TVMediaTrackProbe.shared.resolvingAmbiguousMediaKind(for: episode)
             : episode
+        // Queue/history projections intentionally carry little metadata. Once
+        // the owning subscription is available, restore publisher show notes
+        // so the player's Description sheet presents the actual description
+        // instead of falling back to a title-only projection.
+        if episode.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+           let richer = subscription.episodes.first(where: {
+               $0.id == episode.id || $0.audioURL == episode.audioURL || $0.guid == episode.guid
+           }),
+           richer.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            episode.description = richer.description
+        }
         guard requestOwnership.owns(requestGeneration) else { return }
         AppLogger.shared.info("tv.playback", "Playback requested", metadata: [
             "episodeID": episode.id.uuidString,

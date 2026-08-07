@@ -42,6 +42,8 @@ final class TVPlaybackCoordinator {
     }
 
     func beginDiscoverPlayback(_ episode: Episode, subscription: Subscription) async {
+        var subscription = subscription
+        subscription.playbackPreference.speed = TVDiscoverPlaybackSettings.speed
         await playbackModel.play(
             episode: episode,
             subscription: subscription,
