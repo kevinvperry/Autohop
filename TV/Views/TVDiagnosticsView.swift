@@ -15,17 +15,30 @@ struct TVDiagnosticsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Settings & Diagnostics").font(.largeTitle.bold())
-                HStack {
+                HStack(spacing: 24) {
                     Label("Discover Playback Speed", systemImage: "gauge.with.needle")
                         .font(.headline)
                     Spacer()
-                    Picker("Discover Playback Speed", selection: $discoverPlaybackSpeed) {
+                    Menu {
                         ForEach(PlaybackPreference.speedOptions, id: \.self) { speed in
-                            Text(PlaybackPreference.speedLabel(speed)).tag(speed)
+                            Button {
+                                discoverPlaybackSpeed = speed
+                            } label: {
+                                if abs(discoverPlaybackSpeed - speed) < 0.001 {
+                                    Label(PlaybackPreference.speedLabel(speed), systemImage: "checkmark")
+                                } else {
+                                    Text(PlaybackPreference.speedLabel(speed))
+                                }
+                            }
                         }
+                    } label: {
+                        Label(
+                            PlaybackPreference.speedLabel(discoverPlaybackSpeed),
+                            systemImage: "chevron.up.chevron.down"
+                        )
+                        .frame(minWidth: 150)
                     }
-                    .labelsHidden()
-                    .frame(width: 230)
+                    .buttonStyle(.bordered)
                 }
                 .padding(20)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))

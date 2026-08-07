@@ -81,6 +81,9 @@ final class TVPlaybackModel {
 
     private var currentSubscriptionID: UUID?
     private var currentSubscription: Subscription?
+    /// Read-only metadata source for the Description resolver. Playback keeps
+    /// ownership of this snapshot; callers must not mutate or persist it.
+    var currentSubscriptionForDescription: Subscription? { currentSubscription }
     private var playbackOrigin: PlaybackOrigin = .library
     /// Authoritative phone-authored history key for an orphan/recovered row.
     /// Without this override, playback would create a second history record

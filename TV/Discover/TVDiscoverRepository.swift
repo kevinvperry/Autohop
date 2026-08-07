@@ -9,6 +9,9 @@ import AutohopCore
 actor TVDiscoverRepository {
     private let charts: any PodcastChartsProviding
     private let feedLoader = EpisodeFeedLoader()
+    private var videoShowCache: [String: Bool] = [:]
+    private var activeVideoProbes = 0
+    private var videoProbeWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(charts: any PodcastChartsProviding = ApplePodcastChartsProvider()) {
         self.charts = charts
@@ -99,6 +102,53 @@ actor TVDiscoverRepository {
             throw TVDiscoverResolutionError.episodeUnavailable
         }
         return (resolved, episode)
+    }
+
+    /// Apple chart records do not declare whether a podcast is audio or video.
+    /// Confirm the badge from a small publisher-RSS sample and cache it; never
+    /// infer video from a title, publisher name or artwork.
+    func isVideoShow(countryCode: String, id: String) async -> Bool {
+        let key = "\(countryCode.lowercased()):\(id)"
+        if let cached = videoShowCache[key] { return cached }
+        await acquireVideoProbePermit()
+        defer { releaseVideoProbePermit() }
+        if let cached = videoShowCache[key] { return cached }
+        do {
+            guard let catalogue = try await charts.resolveShow(id: id, countryCode: countryCode) else {
+                videoShowCache[key] = false
+                return false
+            }
+            let feed = try await feedLoader.fetch(feedURL: catalogue.feedURL, limit: 3)
+            let value = feed.episodes.contains(where: { $0.mediaKind == .video })
+            videoShowCache[key] = value
+            return value
+        } catch {
+            return false
+        }
+    }
+
+    func isVideoEpisode(countryCode: String, episode: PodcastChartEpisode) async -> Bool {
+        guard let collectionID = episode.collectionID else { return false }
+        return await isVideoShow(countryCode: countryCode, id: collectionID)
+    }
+
+    /// Large shelves can materialise several cards together. Keep RSS media
+    /// classification deliberately narrow so badge discovery cannot compete
+    /// with focus navigation, artwork loading or an episode the user selected.
+    private func acquireVideoProbePermit() async {
+        if activeVideoProbes < 2 {
+            activeVideoProbes += 1
+            return
+        }
+        await withCheckedContinuation { videoProbeWaiters.append($0) }
+    }
+
+    private func releaseVideoProbePermit() {
+        if videoProbeWaiters.isEmpty {
+            activeVideoProbes = max(0, activeVideoProbes - 1)
+        } else {
+            videoProbeWaiters.removeFirst().resume()
+        }
     }
 
     private static func normalized(_ value: String) -> String {

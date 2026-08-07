@@ -68,7 +68,13 @@ struct TVDiscoverView: View {
     private func episodeShelf(_ title: String, _ episodes: [PodcastChartEpisode]) -> some View {
         shelf(title) {
             ForEach(episodes) { episode in
-                NavigationLink(value: TVDiscoverRoute.episode(episode)) { TVDiscoverEpisodeCard(episode: episode) }
+                NavigationLink(value: TVDiscoverRoute.episode(episode)) {
+                    TVDiscoverEpisodeCard(
+                        episode: episode,
+                        countryCode: discoverModel.selectedStorefront.code,
+                        repository: repository
+                    )
+                }
                     .buttonStyle(.card).tvFocusHighlight()
             }
         }
@@ -77,7 +83,13 @@ struct TVDiscoverView: View {
     private func showShelf(_ title: String, _ shows: [PodcastChartShow]) -> some View {
         shelf(title) {
             ForEach(shows) { show in
-                NavigationLink(value: TVDiscoverRoute.show(show)) { TVDiscoverShowCard(show: show) }
+                NavigationLink(value: TVDiscoverRoute.show(show)) {
+                    TVDiscoverShowCard(
+                        show: show,
+                        countryCode: discoverModel.selectedStorefront.code,
+                        repository: repository
+                    )
+                }
                     .buttonStyle(.card).tvFocusHighlight()
             }
         }
@@ -262,11 +274,13 @@ private struct TVDiscoverCategoryView: View {
     var body: some View {
         ScrollView {
             if let error { ContentUnavailableView("Category Unavailable", systemImage: "wifi.exclamationmark", description: Text(error)) }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 34)], spacing: 38) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), spacing: 38)], spacing: 42) {
                 ForEach(shows.isEmpty ? initialShows : shows) { show in
                     NavigationLink {
                         TVDiscoverShowDetail(source: .chart(show), countryCode: countryCode, repository: repository, onPlay: onPlay)
-                    } label: { TVDiscoverShowCard(show: show) }
+                    } label: {
+                        TVDiscoverShowCard(show: show, countryCode: countryCode, repository: repository)
+                    }
                     .buttonStyle(.card).tvFocusHighlight()
                 }
             }.padding(64)
@@ -279,17 +293,47 @@ private struct TVDiscoverCategoryView: View {
 
 private struct TVDiscoverShowCard: View {
     let show: PodcastChartShow
-    var body: some View { VStack(alignment: .leading, spacing: 8) {
-        TVArtworkImage(url: show.artworkURL, targetPixels: 480).frame(width: 250, height: 250)
-        Text(show.title).font(.headline).lineLimit(2); Text(show.publisher).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-    }.frame(width: 250, height: 350, alignment: .topLeading) }
+    let countryCode: String
+    let repository: TVDiscoverRepository
+    @State private var isVideo = false
+
+    var body: some View {
+        TVArtworkImage(url: show.artworkURL, targetPixels: 640)
+            .frame(width: 290, height: 290)
+            .overlay(alignment: .topTrailing) { if isVideo { TVDiscoverVideoPill() } }
+            .task(id: show.id) {
+                isVideo = await repository.isVideoShow(countryCode: countryCode, id: show.id)
+            }
+            .accessibilityLabel("\(show.title), \(show.publisher)")
+    }
 }
 private struct TVDiscoverEpisodeCard: View {
     let episode: PodcastChartEpisode
-    var body: some View { VStack(alignment: .leading, spacing: 8) {
-        TVArtworkImage(url: episode.artworkURL, targetPixels: 480).frame(width: 250, height: 250)
-        Text(episode.title).font(.headline).lineLimit(2); Text(episode.showTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-    }.frame(width: 250, height: 350, alignment: .topLeading) }
+    let countryCode: String
+    let repository: TVDiscoverRepository
+    @State private var isVideo = false
+
+    var body: some View {
+        TVArtworkImage(url: episode.artworkURL, targetPixels: 640)
+            .frame(width: 290, height: 290)
+            .overlay(alignment: .topTrailing) { if isVideo { TVDiscoverVideoPill() } }
+            .task(id: episode.id) {
+                isVideo = await repository.isVideoEpisode(countryCode: countryCode, episode: episode)
+            }
+            .accessibilityLabel("\(episode.title), \(episode.showTitle)")
+    }
+}
+
+private struct TVDiscoverVideoPill: View {
+    var body: some View {
+        Label("Video", systemImage: "play.rectangle.fill")
+            .font(.caption.bold())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .foregroundStyle(.white)
+            .background(.purple.opacity(0.92), in: Capsule())
+            .padding(12)
+    }
 }
 private struct TVDiscoverEpisodeRow: View {
     let episode: Episode

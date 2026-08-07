@@ -934,6 +934,17 @@ complete or the tvOS app is promoted as shipping.
 - Added a persistent **Discover Playback Speed** control to Apple TV Settings.
   It applies only to episodes launched from Discover; Library episodes continue
   to use their synced per-podcast speed.
+- Replaced the compressed tvOS speed picker with a focusable menu that clearly
+  shows the selected speed and exposes each available value as a separate item.
+- Simplified Discover shelves to larger artwork-only cards, retaining titles
+  and publishers as VoiceOver labels rather than duplicating them visually.
+- Added an RSS-confirmed **Video** pill to Discover artwork. Apple chart data
+  does not declare media type, so Autohop samples and caches publisher enclosure
+  metadata instead of guessing from show names or artwork.
+- Added an explicit, bounded publisher-feed lookup when a lightweight playback
+  record has no show notes. The Description control now displays a loading
+  state while resolving up to 250 items, then presents the full cleaned notes
+  or an honest unavailable state if the publisher no longer carries them.
 
 ## Validation still required
 

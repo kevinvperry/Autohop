@@ -29,9 +29,11 @@ import AutohopCore
 // moved into it; the standalone button forced vertical focus hops).
 struct TVPlayerView: View {
     let playbackModel: TVPlaybackModel
+    let resolveEpisodeDescription: (Episode) async -> Episode
     let onArchive: () -> Void
     let onExit: () -> Void
     @State private var descriptionItem: TVEpisodeDescriptionItem?
+    @State private var isResolvingDescription = false
 
     var body: some View {
         ZStack {
@@ -50,6 +52,18 @@ struct TVPlayerView: View {
         }
         .preferredColorScheme(.dark)
         .tvEpisodeDescriptionSheet(item: $descriptionItem)
+        .overlay {
+            if isResolvingDescription {
+                VStack(spacing: 16) {
+                    ProgressView().controlSize(.large)
+                    Text("Loading episode description…").font(.headline)
+                }
+                .padding(.horizontal, 42)
+                .padding(.vertical, 28)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     @ViewBuilder
@@ -95,11 +109,19 @@ struct TVPlayerView: View {
     }
 
     private func showDescription() {
-        guard let episode = playbackModel.currentEpisode else { return }
-        descriptionItem = TVEpisodeDescriptionItem(
-            episode: episode,
-            podcastTitle: playbackModel.currentSubscriptionTitle
-        )
+        guard let episode = playbackModel.currentEpisode,
+              !isResolvingDescription else { return }
+        let podcastTitle = playbackModel.currentSubscriptionTitle
+        if episode.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            descriptionItem = TVEpisodeDescriptionItem(episode: episode, podcastTitle: podcastTitle)
+            return
+        }
+        isResolvingDescription = true
+        Task { @MainActor in
+            let resolved = await resolveEpisodeDescription(episode)
+            isResolvingDescription = false
+            descriptionItem = TVEpisodeDescriptionItem(episode: resolved, podcastTitle: podcastTitle)
+        }
     }
 }
 

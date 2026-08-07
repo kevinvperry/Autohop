@@ -69,6 +69,9 @@ struct TVMainTabView: View {
         .fullScreenCover(isPresented: $isPlayerVisible) {
             TVPlayerView(
                 playbackModel: model.playbackModel,
+                resolveEpisodeDescription: { episode in
+                    await model.episodeWithResolvedDescription(episode)
+                },
                 onArchive: {
                     if let episode = model.playbackModel.currentEpisode {
                         model.archiveEpisode(episode)
