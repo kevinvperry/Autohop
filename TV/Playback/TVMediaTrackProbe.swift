@@ -19,8 +19,11 @@ actor TVMediaTrackProbe {
         let hasVideo = await withTaskGroup(of: Bool?.self, returning: Bool.self) { group in
             group.addTask {
                 do {
-                    let tracks = try await AVURLAsset(url: episode.audioURL)
-                        .loadTracks(withMediaType: .video)
+                    let asset = AVURLAsset(
+                        url: episode.audioURL,
+                        options: [AVURLAssetHTTPUserAgentKey: PodcastUserAgent.value]
+                    )
+                    let tracks = try await asset.loadTracks(withMediaType: .video)
                     return !tracks.isEmpty
                 } catch {
                     return false

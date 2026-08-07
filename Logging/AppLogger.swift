@@ -327,6 +327,13 @@ public final class AppLogger: ObservableObject {
                 message: message,
                 metadata: capturedMetadata
             )
+            // Xcode's physical-tvOS container download can snapshot an open
+            // file before buffered bytes are materialised. Force only the
+            // sparse important/always-persist evidence (lifecycle, failures,
+            // Play Next stages), not routine high-volume diagnostics.
+            if important || force {
+                try? self.fileHandle?.synchronize()
+            }
             self.scheduleLastUpdatedPublication()
         }
     }

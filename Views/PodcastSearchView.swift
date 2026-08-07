@@ -21,6 +21,12 @@ import SwiftUI
 // Lifecycle rules: PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
 // Search and Recently Viewed rows use 44 pt CachedArtworkImage thumbnails so
 // catalog/browse art participates in the same shared downsampled cache.
+// NAVIGATION CONTRACT: Search and show-detail pages append typed AppRoute
+// values to RootView's one NavigationPath. Do not reintroduce closure-only or
+// local-item destinations here: the mini-player must be able to clear the root
+// path from every search descendant, and Back must always reveal Search rather
+// than an orphaned local destination. Search requests focus after its push
+// transition so the first tap on Discover's search control opens the keyboard.
 // MARK: - Dedicated Search page
 
 struct PodcastSearchView: View {
@@ -34,6 +40,7 @@ struct PodcastSearchView: View {
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @State private var query = ""
     @State private var scope: Scope = .all
+    @FocusState private var isSearchFieldFocused: Bool
     let countryCode: String
 
     private var recentlyViewed: [Subscription] {
@@ -51,18 +58,23 @@ struct PodcastSearchView: View {
     }
 
     var body: some View {
-        Group {
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                idleState
-            } else {
-                searchResults
+        VStack(spacing: 0) {
+            searchField
+
+            Group {
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    idleState
+                } else {
+                    searchResults
+                }
             }
         }
-        .searchable(
-            text: $query,
-            placement: .navigationBarDrawer(displayMode: .always),
-            prompt: "Shows, episodes, publishers…"
-        )
+        .task {
+            // This page owns a real TextField, so focus is deterministic on
+            // iOS 17 and does not depend on UISearchController installation.
+            await Task.yield()
+            isSearchFieldFocused = true
+        }
         .onChange(of: query) { _, new in
             if scope == .all {
                 viewModel.queryChanged(new, countryCode: countryCode)
@@ -77,7 +89,47 @@ struct PodcastSearchView: View {
         }
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            TextField("Shows, episodes, publishers…", text: $query)
+                .focused($isSearchFieldFocused)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                    isSearchFieldFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+        .background(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Color(white: 0.11))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
     }
 
     // MARK: Idle state (+ Recently Viewed)
@@ -116,9 +168,10 @@ struct PodcastSearchView: View {
 
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(recentlyViewed) { sub in
-                                NavigationLink {
-                                    podcastDestination(directoryResult(sub))
-                                } label: {
+                                NavigationLink(value: podcastSearchRoute(
+                                    for: directoryResult(sub),
+                                    in: subscriptionStore
+                                )) {
                                     recentlyViewedRow(sub)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
@@ -330,9 +383,10 @@ struct PodcastSearchView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 12) {
                 ForEach(results) { result in
-                    NavigationLink {
-                        podcastDestination(result)
-                    } label: {
+                    NavigationLink(value: podcastSearchRoute(
+                        for: result,
+                        in: subscriptionStore
+                    )) {
                         showResultRow(result)
                             .containerRelativeFrame(.horizontal) { available, _ in
                                 min(max(available * 0.84, 300), 440)
@@ -497,19 +551,6 @@ struct PodcastSearchView: View {
         )
     }
 
-    @ViewBuilder
-    private func podcastDestination(_ result: PodcastSearchResult) -> some View {
-        if let subscription = subscriptionStore.subscriptions.first(where: { $0.feedURL == result.feedURL }) {
-            if subscription.browseDate != nil {
-                PodcastDetailView(browseSubscription: subscription)
-            } else {
-                PodcastDetailView(subscriptionID: subscription.id)
-            }
-        } else {
-            PodcastDetailView(result: result)
-        }
-    }
-
     private func artworkPlaceholder(size: CGFloat) -> some View {
         ZStack {
             LinearGradient(
@@ -546,17 +587,10 @@ private struct PodcastCreatorResultsView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 ForEach(group.shows) { show in
-                    NavigationLink {
-                        if let subscription = subscriptionStore.subscriptions.first(where: { $0.feedURL == show.feedURL }) {
-                            if subscription.browseDate != nil {
-                                PodcastDetailView(browseSubscription: subscription)
-                            } else {
-                                PodcastDetailView(subscriptionID: subscription.id)
-                            }
-                        } else {
-                            PodcastDetailView(result: show)
-                        }
-                    } label: {
+                    NavigationLink(value: podcastSearchRoute(
+                        for: show,
+                        in: subscriptionStore
+                    )) {
                         HStack(spacing: 14) {
                             CachedArtworkImage(url: show.artworkURL, targetSize: CGSize(width: 64, height: 64)) {
                                 Image(systemName: "waveform")
@@ -587,6 +621,23 @@ private struct PodcastCreatorResultsView: View {
         .preferredColorScheme(.dark)
     }
 }
+
+/// Resolves a show search hit to a stable root route. Real subscriptions use
+/// their durable UUID; browse-only and remote results retain the Apple result
+/// so PodcastDetailView can refresh/create the existing preview by feed URL.
+@MainActor
+private func podcastSearchRoute(
+    for result: PodcastSearchResult,
+    in subscriptionStore: SubscriptionStore
+) -> AppRoute {
+    if let subscription = subscriptionStore.subscriptions.first(where: {
+        $0.feedURL == result.feedURL && $0.browseDate == nil
+    }) {
+        return .podcast(subscriptionID: subscription.id)
+    }
+    return .podcastPreview(result)
+}
+
 
 /// Bridges an Apple episode search hit to Autohop's RSS-owned Episode Detail
 /// page. Apple and RSS identifiers are separate namespaces, so reconciliation

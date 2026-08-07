@@ -47,6 +47,12 @@ enum AppRoute: Hashable {
     case stats(ListeningRecapPeriod?)
     case sleepSchedule
     case discover
+    /// Search and show-preview routes belong to the root path. Keeping these
+    /// values out of Discover's local destination state lets Back and the
+    /// mini-player reliably unwind the same NavigationStack.
+    case podcastSearch(countryCode: String)
+    case podcast(subscriptionID: UUID)
+    case podcastPreview(PodcastSearchResult)
     case episode(subscriptionID: UUID, episodeID: UUID)
 }
 
@@ -67,6 +73,30 @@ extension Notification.Name {
     static let autohopFirstSubscription = Notification.Name("autohopFirstSubscription")
     /// Internal typed-route adapter: PlayerView owns the single Up Next sheet.
     static let autohopOpenUpNext = Notification.Name("autohopOpenUpNext")
+}
+
+// Root navigation actions are injected into every pushed page. Optional
+// defaults keep previews and isolated views functional, while production pages
+// avoid relying on NotificationCenter or a descendant presentation's dismiss
+// semantics to manipulate RootView's one NavigationPath.
+private struct ReturnToPlayerActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+private struct RootBackActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var returnToPlayerAction: (() -> Void)? {
+        get { self[ReturnToPlayerActionKey.self] }
+        set { self[ReturnToPlayerActionKey.self] = newValue }
+    }
+
+    var rootBackAction: (() -> Void)? {
+        get { self[RootBackActionKey.self] }
+        set { self[RootBackActionKey.self] = newValue }
+    }
 }
 
 /// Standard close control for informational sheets (NavRules-SheetClose).
@@ -92,6 +122,7 @@ struct MiniPlayerBar: View {
     /// 2 Hz playback tick (PERF-1): the progress bar / remaining-time readout observe
     /// this dedicated clock so AppState no longer publishes on every 0.5 s update.
     @EnvironmentObject private var playbackClock: PlaybackClock
+    @Environment(\.returnToPlayerAction) private var returnToPlayerAction
 
     var body: some View {
         if let episode = playbackCoordinator.currentEpisode {
@@ -204,7 +235,17 @@ struct MiniPlayerBar: View {
             )
             .contentShape(Rectangle())
             .onTapGesture {
-                NotificationCenter.default.post(name: .autohopReturnToPlayer, object: nil)
+                AppLogger.shared.info(
+                    "navigation.returnToPlayerRequested",
+                    "Mini-player requested the permanent player root"
+                )
+                if let returnToPlayerAction {
+                    returnToPlayerAction()
+                } else {
+                    // Preview/legacy fallback only. RootView injects the direct
+                    // action in the running app.
+                    NotificationCenter.default.post(name: .autohopReturnToPlayer, object: nil)
+                }
             }
             .accessibilityLabel("Return to Player")
             .accessibilityAddTraits(.isButton)
@@ -338,6 +379,12 @@ struct RootView: View {
                             SleepScheduleView()
                         case .discover:
                             DiscoverView()
+                        case .podcastSearch(let countryCode):
+                            PodcastSearchView(countryCode: countryCode)
+                        case .podcast(let subscriptionID):
+                            PodcastDetailView(subscriptionID: subscriptionID)
+                        case .podcastPreview(let result):
+                            PodcastDetailView(result: result)
                         case .episode(let subscriptionID, let episodeID):
                             EpisodeDetailView(
                                 subscriptionID: subscriptionID,
@@ -345,6 +392,12 @@ struct RootView: View {
                             )
                         }
                     }
+            }
+            .environment(\.returnToPlayerAction) {
+                returnToPlayer()
+            }
+            .environment(\.rootBackAction) {
+                popRootNavigation()
             }
 
             // Onboarding coach marks float above pages but below sheets and the
@@ -429,7 +482,7 @@ struct RootView: View {
     private func handleRouteCommand(_ command: AppRouteCommand) {
         switch command {
         case .returnToPlayer:
-            navigationPath = NavigationPath()
+            returnToPlayer()
         case .openUpNext:
             navigationPath = NavigationPath()
             NotificationCenter.default.post(name: .autohopOpenUpNext, object: nil)
@@ -472,6 +525,25 @@ struct RootView: View {
         case .presentFirstSubscription(let subscriptionID):
             firstSubscribeContext = FirstSubscribeContext(id: subscriptionID)
         }
+    }
+
+    private func returnToPlayer() {
+        AppLogger.shared.info(
+            "navigation.returnToPlayer",
+            "Returning to the permanent player root",
+            metadata: ["pathDepth": String(navigationPath.count)]
+        )
+        navigationPath = NavigationPath()
+    }
+
+    private func popRootNavigation() {
+        guard !navigationPath.isEmpty else { return }
+        AppLogger.shared.info(
+            "navigation.rootBack",
+            "Popping one page from the root navigation path",
+            metadata: ["pathDepthBefore": String(navigationPath.count)]
+        )
+        navigationPath.removeLast()
     }
 
     private func resolveEpisode(

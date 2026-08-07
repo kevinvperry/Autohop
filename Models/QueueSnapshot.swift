@@ -19,6 +19,14 @@ import Foundation
 // zero with optional projection fields absent. Whole-record ordering remains
 // authoritative and is never entry-merged. SYNC_DESIGN.md covers the schema;
 // storage remains the existing single queue_snapshot row.
+// VERSION 3 (2026-08-02): every entry also carries its authoritative pin
+// state. Readers must never infer "pinned" merely because an episode is first;
+// the first unpinned episode is simply the natural Priority Stack leader.
+
+public enum QueuePinState: String, Codable, Equatable, Sendable {
+    case playNext
+    case playLast
+}
 
 public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
     /// Stable cross-device episode identity — PlaybackPositionStore.key(for:).
@@ -37,6 +45,8 @@ public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
     public var durationSeconds: TimeInterval?
     public var publishedAt: Date?
     public var isExplicit: Bool?
+    /// iPhone-authored queue override. Nil means natural Priority Stack order.
+    public var pinState: QueuePinState?
 
     public init(
         episodeKey: String,
@@ -48,7 +58,8 @@ public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
         artworkURL: URL? = nil,
         durationSeconds: TimeInterval? = nil,
         publishedAt: Date? = nil,
-        isExplicit: Bool? = nil
+        isExplicit: Bool? = nil,
+        pinState: QueuePinState? = nil
     ) {
         self.episodeKey = episodeKey
         self.subscriptionID = subscriptionID
@@ -60,6 +71,7 @@ public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
         self.durationSeconds = durationSeconds
         self.publishedAt = publishedAt
         self.isExplicit = isExplicit
+        self.pinState = pinState
     }
 
     /// Builds a complete projection entry from the phone's authoritative queue.
@@ -137,7 +149,7 @@ public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
 }
 
 public struct QueueSnapshot: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var generation: Int64
@@ -192,5 +204,60 @@ public enum QueueProjectionAuthority {
         let created = UUID().uuidString
         UserDefaults.standard.set(created, forKey: epochKey)
         return created
+    }
+}
+
+// AI CONTEXT — Companion queue commands are deliberately separate from the
+// phone-authored QueueSnapshot. A television may request one narrow mutation,
+// but it may never publish or replace the complete queue. The iPhone resolves
+// this stable cross-device identity, applies its existing QueueCoordinator
+// policy, then republishes the authoritative snapshot.
+public enum QueueCommandAction: String, Codable, Equatable, Sendable {
+    case playNext
+    case unpin
+}
+
+public struct QueuePlayNextRequest: Codable, Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public let action: QueueCommandAction
+    public let episodeKey: String
+    public let subscriptionID: UUID
+    public let episodeTitle: String
+    public let createdAt: Date
+    public let sourceDeviceID: String
+
+    public init(
+        id: UUID = UUID(),
+        action: QueueCommandAction = .playNext,
+        episodeKey: String,
+        subscriptionID: UUID,
+        episodeTitle: String,
+        createdAt: Date = Date(),
+        sourceDeviceID: String = DeviceIdentity.current
+    ) {
+        self.id = id
+        self.action = action
+        self.episodeKey = episodeKey
+        self.subscriptionID = subscriptionID
+        self.episodeTitle = episodeTitle
+        self.createdAt = createdAt
+        self.sourceDeviceID = sourceDeviceID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, action, episodeKey, subscriptionID, episodeTitle, createdAt, sourceDeviceID
+    }
+
+    /// Commands authored before Unpin existed omitted `action`; preserving
+    /// their original Play Next meaning keeps an in-flight legacy command safe.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        action = try container.decodeIfPresent(QueueCommandAction.self, forKey: .action) ?? .playNext
+        episodeKey = try container.decode(String.self, forKey: .episodeKey)
+        subscriptionID = try container.decode(UUID.self, forKey: .subscriptionID)
+        episodeTitle = try container.decode(String.self, forKey: .episodeTitle)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        sourceDeviceID = try container.decode(String.self, forKey: .sourceDeviceID)
     }
 }

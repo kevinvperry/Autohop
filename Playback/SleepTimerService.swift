@@ -6,7 +6,7 @@ import Foundation
 // Owned by PlaybackCoordinator; driven by PlaybackEngine's 0.5 s time tick via
 // tick(). Two modes: fixed duration (with +5 min extend) and end-of-N-episodes
 // (the playback completion workflow calls episodeFinished()). Fires onFadeVolume
-// with a 0–1 scalar over the last 5 s (linear fade → PlaybackEngine.setVolume),
+// with a 0–1 scalar over the last 30 s (smooth fade → PlaybackEngine.setVolume),
 // then onPause. If the user resumes within 5 minutes of the timer firing
 // (autoRestartWindow), the previous mode restarts automatically.
 
@@ -50,7 +50,7 @@ final class SleepTimerService: ObservableObject {
 
     // MARK: - Callbacks (wired by PlaybackCoordinator)
 
-    /// Called with a 0-1 volume scalar during the 5-second fade before sleep. Called with 1.0
+    /// Called with a 0-1 volume scalar during the 30-second fade before sleep. Called with 1.0
     /// when the timer is cancelled or a new episode starts (volume reset).
     var onFadeVolume: ((Float) -> Void)?
 
@@ -59,7 +59,9 @@ final class SleepTimerService: ObservableObject {
 
     // MARK: - Constants
 
-    private let fadeDuration: TimeInterval = 5
+    /// Shared by the manual timer and recurring Sleep Schedule so both sleep
+    /// experiences use the same deliberately gradual envelope.
+    static let gradualFadeDuration: TimeInterval = 30
     private let autoRestartWindow: TimeInterval = 5 * 60   // 5 minutes
 
     // MARK: - Actions
@@ -101,7 +103,16 @@ final class SleepTimerService: ObservableObject {
 
     // MARK: - Tick (called by PlaybackCoordinator's 0.5 s time pipeline)
 
-    /// Advances the countdown by 0.5 s. Applies a linear volume fade in the final 5 seconds.
+    /// Converts remaining fade time into a smoothstep volume scalar. Smoothstep
+    /// avoids an audible corner at either end while remaining monotonic and
+    /// reaching true silence at the deadline.
+    static func gradualFadeVolume(remaining: TimeInterval) -> Float {
+        let normalized = max(0, min(1, remaining / gradualFadeDuration))
+        return Float(normalized * normalized * (3 - (2 * normalized)))
+    }
+
+    /// Advances the countdown by 0.5 s. Applies a smooth volume fade in the
+    /// final 30 seconds.
     /// Returns true if the timer just fired (playback should pause via the `onPause` callback).
     @discardableResult
     func tick() -> Bool {
@@ -109,10 +120,8 @@ final class SleepTimerService: ObservableObject {
 
         timeRemaining -= 0.5
 
-        // Linear fade in the final `fadeDuration` seconds.
-        if timeRemaining < fadeDuration {
-            let fraction = Float(max(0, timeRemaining / fadeDuration))
-            onFadeVolume?(fraction)
+        if timeRemaining < Self.gradualFadeDuration {
+            onFadeVolume?(Self.gradualFadeVolume(remaining: timeRemaining))
         }
 
         if timeRemaining <= 0 {

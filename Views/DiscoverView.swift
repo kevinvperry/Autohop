@@ -81,7 +81,6 @@ struct DiscoverView: View {
 
     private enum Route: Hashable {
         case preview(PodcastSearchResult)
-        case search
         case episodes(UUID)
         case topEpisodes
         case topPodcasts
@@ -223,8 +222,6 @@ struct DiscoverView: View {
             switch route {
             case .preview(let result):
                 PodcastDetailView(result: result)
-            case .search:
-                PodcastSearchView(countryCode: country.code)
             case .episodes(let subscriptionID):
                 PodcastDetailView(subscriptionID: subscriptionID)
             case .topEpisodes:
@@ -348,9 +345,7 @@ struct DiscoverView: View {
     }
 
     private var searchShortcut: some View {
-        Button {
-            pendingRoute = .search
-        } label: {
+        NavigationLink(value: AppRoute.podcastSearch(countryCode: country.code)) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                 Text("Search podcasts…")
@@ -364,6 +359,7 @@ struct DiscoverView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Search podcasts")
+        .accessibilityHint("Opens Search with the keyboard ready for typing")
     }
 
     // MARK: - Episode hero (top slot — Top 8 Episodes)

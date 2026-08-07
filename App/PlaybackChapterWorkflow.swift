@@ -229,6 +229,7 @@ final class PlaybackChapterWorkflow: PlaybackChapterPresenting {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 10
         configuration.timeoutIntervalForResource = 20
+        PodcastUserAgent.configure(configuration)
         return URLSession(configuration: configuration)
     }()
 }

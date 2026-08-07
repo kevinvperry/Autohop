@@ -20,6 +20,56 @@ import CloudKit
 
 @MainActor
 final class QueueSnapshotSyncTests: XCTestCase {
+    func testPlayNextRequestCloudKitRoundTripUsesSeparateCommandRecord() throws {
+        let request = QueuePlayNextRequest(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            episodeKey: "sub|guid:episode",
+            subscriptionID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            episodeTitle: "Move Me Next",
+            createdAt: Date(timeIntervalSince1970: 1234),
+            sourceDeviceID: "tv-test"
+        )
+
+        let record = CloudKitSync.makeRecord(from: request)
+
+        XCTAssertEqual(record.recordType, CloudKitSync.queueCommandRecordType)
+        XCTAssertEqual(
+            record.recordID,
+            CloudKitSync.queuePlayNextRequestRecordID(request.id)
+        )
+        XCTAssertTrue(CloudKitSync.isCurrentRecordName(record.recordID.recordName))
+        XCTAssertEqual(CloudKitSync.queuePlayNextRequest(from: record), request)
+        XCTAssertNotEqual(record.recordID, CloudKitSync.queueSnapshotRecordID)
+    }
+
+    func testUnpinCommandCloudKitRoundTrip() throws {
+        let request = QueuePlayNextRequest(
+            action: .unpin,
+            episodeKey: "sub|guid:pinned",
+            subscriptionID: UUID(),
+            episodeTitle: "Restore Natural Position",
+            sourceDeviceID: "tv-test"
+        )
+        XCTAssertEqual(
+            CloudKitSync.queuePlayNextRequest(from: CloudKitSync.makeRecord(from: request)),
+            request
+        )
+    }
+
+    func testLegacyCommandWithoutActionDefaultsToPlayNext() throws {
+        let original = QueuePlayNextRequest(
+            episodeKey: "sub|guid:legacy",
+            subscriptionID: UUID(),
+            episodeTitle: "Legacy Command"
+        )
+        let encoded = try JSONEncoder().encode(original)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "action")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        XCTAssertEqual(try JSONDecoder().decode(QueuePlayNextRequest.self, from: legacyData).action, .playNext)
+    }
+
 
     private func makeEntry(key: String, subscriptionID: UUID = UUID(), title: String = "Ep") -> QueueSnapshotEntry {
         QueueSnapshotEntry(episodeKey: key, subscriptionID: subscriptionID, episodeTitle: title)
@@ -27,7 +77,15 @@ final class QueueSnapshotSyncTests: XCTestCase {
 
     func testRecordRoundTrip() throws {
         let snapshot = QueueSnapshot(
-            entries: [makeEntry(key: "a"), makeEntry(key: "b")],
+            entries: [
+                QueueSnapshotEntry(
+                    episodeKey: "a",
+                    subscriptionID: UUID(),
+                    episodeTitle: "Pinned",
+                    pinState: .playNext
+                ),
+                makeEntry(key: "b")
+            ],
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             sourceDeviceID: "device-1"
         )
@@ -39,6 +97,8 @@ final class QueueSnapshotSyncTests: XCTestCase {
 
         let decoded = try XCTUnwrap(CloudKitSync.queueSnapshot(from: record))
         XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.schemaVersion, 3)
+        XCTAssertEqual(decoded.entries.first?.pinState, .playNext)
     }
 
     func testUpdateLocalQueueSnapshotDedupesUnchangedEntries() throws {

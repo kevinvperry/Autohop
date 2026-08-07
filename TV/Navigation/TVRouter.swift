@@ -3,7 +3,7 @@ import Observation
 
 // AI CONTEXT — TV/Navigation/TVRouter.swift
 // Phase 2 (tvOS proposal §7 item 1) + Phase 4 (§9 item 1, search tab): the
-// typed tab enum + router object for the Home/Queue/Library/Search
+// typed tab enum + router object for the Home/Library/History/Search
 // sidebar-adaptable TabView (PC MainTabView/MainTabRouter shape, §2.1 there).
 // `.search` is NOT built with `Tab(title:systemImage:value:)` like the other
 // three — it uses the dedicated `Tab(value:role: .search)` initializer
@@ -14,8 +14,8 @@ import Observation
 // losing the pushed detail when the user glances at another tab and comes back).
 enum TVTab: String, CaseIterable, Identifiable {
     case home
-    case queue
     case library
+    case history
     case search
     case diagnostics
 
@@ -24,8 +24,8 @@ enum TVTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .home: return "Home"
-        case .queue: return "Up Next"
         case .library: return "Library"
+        case .history: return "History"
         case .search: return "Search"
         case .diagnostics: return "Settings"
         }
@@ -34,8 +34,8 @@ enum TVTab: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .home: return "house"
-        case .queue: return "square.stack"
         case .library: return "books.vertical"
+        case .history: return "clock.arrow.circlepath"
         case .search: return "magnifyingglass"
         case .diagnostics: return "gearshape"
         }

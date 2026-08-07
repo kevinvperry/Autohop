@@ -3,7 +3,7 @@ import AutohopCore
 
 // AI CONTEXT — TV/Views/TVMainTabView.swift
 // Phase 2 (tvOS proposal §7 item 1) + Phase 4 (§9 item 1): the
-// Home/Queue/Library/Search sidebar-adaptable TabView shell, shown once
+// Home/Library/History/Search sidebar-adaptable TabView shell, shown once
 // TVAppModel.rootState == .ready. `.search` is built OUTSIDE the ForEach
 // with the dedicated `Tab(value:role: .search)` initializer — it gets
 // tvOS's native search-role treatment (system search field placement, etc.),
@@ -19,7 +19,8 @@ import AutohopCore
 // NavigationStack (for its grid → episode-list push), and it already
 // provides its own internally (TVLibraryView). Home/Queue show their own
 // plain heading text instead of relying on `.navigationTitle`, which has no
-// effect outside a navigation container.
+// effect outside a navigation container. Up Next is fully integrated into
+// Home and intentionally has no duplicate tab.
 struct TVMainTabView: View {
     let model: TVAppModel
     @State private var router = TVRouter()
@@ -53,6 +54,11 @@ struct TVMainTabView: View {
         // for focus/controls + the ambient brand-purple wash behind every tab.
         .tint(.purple)
         .background(TVBrandBackground())
+        .overlay(alignment: .topTrailing) {
+            TVCloudSyncBadge(status: model.syncStatus)
+                .padding(.top, 20)
+                .padding(.trailing, 28)
+        }
         .overlay {
             if isPreparingPlayback {
                 VStack(spacing: 18) {
@@ -90,13 +96,15 @@ struct TVMainTabView: View {
         case .home:
             TVHomeView(
                 model: model,
-                onPlay: play,
+                onPlay: { play($0) },
                 onReopenPlayer: { isPlayerVisible = true }
             )
-        case .queue:
-            TVQueueView(model: model, onPlay: play)
         case .library:
-            TVLibraryView(model: model, router: router, onPlay: play)
+            TVLibraryView(model: model, router: router, onPlay: { play($0) })
+        case .history:
+            TVHistoryView(model: model) { episode in
+                play(episode, restartFromBeginning: true)
+            }
         case .search:
             // Never reached — `.search` is built directly in `body` with the
             // dedicated search-role Tab initializer, not via this switch.
@@ -106,15 +114,15 @@ struct TVMainTabView: View {
         }
     }
 
-    private func play(_ episode: Episode) {
-        if model.playbackModel.isCurrentEpisode(episode) {
+    private func play(_ episode: Episode, restartFromBeginning: Bool = false) {
+        if model.playbackModel.isCurrentEpisode(episode), !restartFromBeginning {
             isPlayerVisible = true
             return
         }
         guard !isPreparingPlayback else { return }
         isPreparingPlayback = true
         Task { @MainActor in
-            await model.beginPlayback(episode)
+            await model.beginPlayback(episode, restartFromBeginning: restartFromBeginning)
             isPreparingPlayback = false
             // Present AVKit only after media classification, item readiness and
             // the resume seek complete. Physical tvOS otherwise retains the

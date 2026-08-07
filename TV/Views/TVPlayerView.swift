@@ -31,6 +31,7 @@ struct TVPlayerView: View {
     let playbackModel: TVPlaybackModel
     let onArchive: () -> Void
     let onExit: () -> Void
+    @State private var descriptionItem: TVEpisodeDescriptionItem?
 
     var body: some View {
         ZStack {
@@ -48,6 +49,7 @@ struct TVPlayerView: View {
             playbackModel.togglePlayPause()
         }
         .preferredColorScheme(.dark)
+        .tvEpisodeDescriptionSheet(item: $descriptionItem)
     }
 
     @ViewBuilder
@@ -67,6 +69,7 @@ struct TVPlayerView: View {
                     player: player,
                     playbackModel: playbackModel,
                     playbackSpeed: playbackModel.currentSpeed,
+                    onShowDescription: showDescription,
                     onArchive: onArchive
                 )
                     .ignoresSafeArea()
@@ -78,7 +81,11 @@ struct TVPlayerView: View {
                     .controlSize(.large)
             }
         } else if playbackModel.currentEpisode != nil {
-            TVPlayerPage(playbackModel: playbackModel, onArchive: onArchive)
+            TVPlayerPage(
+                playbackModel: playbackModel,
+                onShowDescription: showDescription,
+                onArchive: onArchive
+            )
             .onExitCommand {
                 onExit()
             }
@@ -86,12 +93,21 @@ struct TVPlayerView: View {
             ProgressView()
         }
     }
+
+    private func showDescription() {
+        guard let episode = playbackModel.currentEpisode else { return }
+        descriptionItem = TVEpisodeDescriptionItem(
+            episode: episode,
+            podcastTitle: playbackModel.currentSubscriptionTitle
+        )
+    }
 }
 
 // MARK: - The player page (audio full-page / video windowed)
 
 private struct TVPlayerPage: View {
     let playbackModel: TVPlaybackModel
+    let onShowDescription: () -> Void
     let onArchive: () -> Void
 
     private var episode: Episode? { playbackModel.currentEpisode }
@@ -261,6 +277,10 @@ private struct TVPlayerPage: View {
                 Label("Speed", systemImage: "gauge.with.needle")
             }
 
+            Button(action: onShowDescription) {
+                Label("Description", systemImage: "text.page")
+            }
+
             Button(role: .destructive, action: onArchive) {
                 Label("Archive", systemImage: "archivebox")
             }
@@ -298,6 +318,7 @@ private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
     /// Passed separately so SwiftUI observes rate changes and refreshes the
     /// native transport menu instead of leaving a stale checked item.
     let playbackSpeed: Double
+    let onShowDescription: () -> Void
     let onArchive: () -> Void
 
     func makeUIViewController(context: Context) -> TVNativePlayerViewController {
@@ -379,10 +400,16 @@ private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
         ) { _ in
             onArchive()
         }
+        let description = UIAction(
+            title: "Episode Description",
+            image: UIImage(systemName: "text.page")
+        ) { _ in
+            onShowDescription()
+        }
         let archiveMenu = UIMenu(
             title: "Episode",
             image: UIImage(systemName: "ellipsis.circle"),
-            children: [archive]
+            children: [description, archive]
         )
         controller.transportBarCustomMenuItems = [menu, archiveMenu]
     }

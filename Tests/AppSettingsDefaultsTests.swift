@@ -30,6 +30,31 @@ final class AppSettingsDefaultsTests: XCTestCase {
         XCTAssertTrue(settings.showQueueBadge)
     }
 
+    func testFreshUserDefaultsNewSubscriptionsToStrongVocalBoost() {
+        XCTAssertEqual(
+            AppSettings.default.defaultPlaybackPreference.vocalBoostLevel,
+            .strong
+        )
+        // The legacy/per-subscription fallback deliberately remains Off.
+        XCTAssertEqual(PlaybackPreference.default.vocalBoostLevel, .off)
+    }
+
+    func testExistingSavedDefaultVocalBoostIsPreserved() throws {
+        var settings = AppSettings.default
+        settings.defaultPlaybackPreference.vocalBoostLevel = .light
+
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.defaultPlaybackPreference.vocalBoostLevel, .light)
+    }
+
+    func testLegacySettingsWithoutGlobalPlaybackDefaultRemainOff() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(decoded.defaultPlaybackPreference.vocalBoostLevel, .off)
+    }
+
     func testThirtyMinuteInactiveArchiveOptionHasStablePersistenceAndDuration() throws {
         let option = AutoArchiveSettings.AfterInactive.minutes30
 

@@ -1,6 +1,15 @@
 import XCTest
 @testable import AutohopTV
 
+// AI CONTEXT — TVTests/TVPlaybackProgressPushPolicyTests.swift
+// PURPOSE: Locks the throttling boundary for tvOS playback-position uploads.
+// OWNERSHIP: Tests the pure TVPlaybackProgressPushPolicy independently of
+// AVPlayer, CloudKit, ListeningHistoryStore, and TVPlaybackModel lifecycle.
+// INVARIANT: The first progress observation uploads; subsequent observations
+// are suppressed until one minute has elapsed, limiting CloudKit churn while
+// preserving cross-device resume freshness.
+// FAILURE MEANING: Treat a changed interval as a sync-product decision and
+// update SYNC_DESIGN.md; do not work around it in player callbacks.
 final class TVPlaybackProgressPushPolicyTests: XCTestCase {
     func testFirstPlaybackProgressRequestsUpload() {
         XCTAssertTrue(

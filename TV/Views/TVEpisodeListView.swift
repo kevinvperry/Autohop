@@ -14,19 +14,21 @@ struct TVEpisodeListView: View {
     let model: TVAppModel
     let subscriptionID: UUID
     let onPlay: (Episode) -> Void
+    @State private var descriptionItem: TVEpisodeDescriptionItem?
 
     var body: some View {
         // No `.navigationTitle` (display-bug fix 2026-07-04: the fixed title
         // overlapped scrolled content on tvOS) — the in-scroll header below
         // already shows the podcast title/artwork; Menu still pops the stack.
         Group {
-            if let podcast = model.libraryTiles.first(where: { $0.id == subscriptionID }) {
+            if let podcast = model.libraryModel.tiles.first(where: { $0.id == subscriptionID }) {
                 content(for: podcast)
             } else {
                 ContentUnavailableView("Podcast Not Found", systemImage: "questionmark.circle")
             }
         }
         .task { await model.loadEpisodeDetails(subscriptionID: subscriptionID) }
+        .tvEpisodeDescriptionSheet(item: $descriptionItem)
     }
 
     @ViewBuilder
@@ -62,10 +64,16 @@ struct TVEpisodeListView: View {
 
     private var episodeList: some View {
         LazyVStack(alignment: .leading, spacing: 20) {
-            ForEach(model.episodeRows(subscriptionID: subscriptionID)) { row in
+            ForEach(model.libraryModel.episodeRows(subscriptionID: subscriptionID)) { row in
                 TVEpisodeRow(
                     episode: row.episode,
                     onPlay: { onPlay(row.episode) },
+                    onShowDescription: {
+                        descriptionItem = TVEpisodeDescriptionItem(
+                            episode: row.episode,
+                            podcastTitle: model.libraryModel.tiles.first(where: { $0.id == subscriptionID })?.title
+                        )
+                    },
                     onArchive: { model.archiveEpisode(row.episode) }
                 )
             }
@@ -80,6 +88,7 @@ struct TVEpisodeListView: View {
 struct TVEpisodeRow: View {
     let episode: Episode
     let onPlay: () -> Void
+    let onShowDescription: () -> Void
     let onArchive: () -> Void
 
     var body: some View {
@@ -105,6 +114,9 @@ struct TVEpisodeRow: View {
         .buttonStyle(.card)
         .tvFocusHighlight(cornerRadius: 14)
         .contextMenu {
+            Button(action: onShowDescription) {
+                Label("Episode Description", systemImage: "text.page")
+            }
             Button(role: .destructive, action: onArchive) {
                 Label("Archive Episode", systemImage: "archivebox")
             }

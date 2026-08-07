@@ -24,6 +24,7 @@ final class SyncCoordinator {
     private let feedService: FeedServicing
     private let subscriptionStore: SubscriptionStore
     private let historyStatsCoordinator: HistoryStatsCoordinator
+    private let queueCoordinator: QueueCoordinator
     private let logger: AppLogger
     private var currentEpisodeProvider: () -> Episode? = { nil }
     private var callbacksInstalled = false
@@ -32,11 +33,13 @@ final class SyncCoordinator {
         feedService: FeedServicing,
         subscriptionStore: SubscriptionStore,
         historyStatsCoordinator: HistoryStatsCoordinator,
+        queueCoordinator: QueueCoordinator,
         logger: AppLogger? = nil
     ) {
         self.feedService = feedService
         self.subscriptionStore = subscriptionStore
         self.historyStatsCoordinator = historyStatsCoordinator
+        self.queueCoordinator = queueCoordinator
         self.logger = logger ?? .shared
         self.engine = CloudSyncEngine(
             containerIdentifier: Self.cloudKitContainerID,
@@ -89,6 +92,53 @@ final class SyncCoordinator {
         engine.onRemoteStatsChanged = { [weak self] in
             self?.historyStatsCoordinator.reloadRemoteStats()
         }
+        engine.onRemotePlayNextRequest = { [weak self] request in
+            await self?.applyRemoteQueueCommand(request) ?? false
+        }
+    }
+
+    private func applyRemoteQueueCommand(_ request: QueuePlayNextRequest) async -> Bool {
+        let processedKey = "com.autohop.sync.processedPlayNextRequests.v1"
+        var processed = UserDefaults.standard.stringArray(forKey: processedKey) ?? []
+        if processed.contains(request.id.uuidString) { return true }
+
+        guard let subscription = subscriptionStore.subscription(id: request.subscriptionID),
+              let episode = (subscription.episodes + [subscription.latestEpisode].compactMap { $0 })
+                .first(where: { PlaybackPositionStore.key(for: $0) == request.episodeKey })
+        else {
+            logger.warning("sync.playNextUnresolved", "Could not resolve companion Play Next request", metadata: [
+                "requestID": request.id.uuidString,
+                "episode": request.episodeTitle,
+                "subscriptionID": request.subscriptionID.uuidString
+            ], alwaysPersist: true)
+            return false
+        }
+
+        let previousPinState: QueuePinState? = if queueCoordinator.isPinnedNext(episode) {
+            .playNext
+        } else if queueCoordinator.isPinnedLast(episode) {
+            .playLast
+        } else {
+            nil
+        }
+        switch request.action {
+        case .playNext:
+            queueCoordinator.playNext(episode)
+        case .unpin:
+            queueCoordinator.unpin(episode)
+        }
+        processed.append(request.id.uuidString)
+        if processed.count > 50 { processed.removeFirst(processed.count - 50) }
+        UserDefaults.standard.set(processed, forKey: processedKey)
+        logger.info("sync.queueCommandApplied", "Applied Apple TV queue command", metadata: [
+            "action": request.action.rawValue,
+            "requestID": request.id.uuidString,
+            "requestKey": request.episodeKey,
+            "sourceDeviceID": request.sourceDeviceID,
+            "previousPinState": previousPinState?.rawValue ?? "none",
+            "episode": episode.title
+        ], alwaysPersist: true)
+        return true
     }
 
     private func materializeRemoteSubscription(_ state: SubscriptionSyncState) async {

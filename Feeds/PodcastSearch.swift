@@ -383,6 +383,7 @@ private func podcastSearchSession() -> URLSession {
     let config = URLSessionConfiguration.ephemeral
     config.timeoutIntervalForRequest = 15
     config.waitsForConnectivity = false
+    PodcastUserAgent.configure(config)
     return URLSession(configuration: config)
 }
 

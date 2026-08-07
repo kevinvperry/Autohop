@@ -194,6 +194,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         config.waitsForConnectivity = true
         config.allowsExpensiveNetworkAccess = true
         config.allowsConstrainedNetworkAccess = true
+        PodcastUserAgent.configure(config)
         #if os(iOS) || os(watchOS)
         config.sessionSendsLaunchEvents = true
         #endif
@@ -202,6 +203,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         activeConfig.waitsForConnectivity = true
         activeConfig.allowsExpensiveNetworkAccess = true
         activeConfig.allowsConstrainedNetworkAccess = true
+        PodcastUserAgent.configure(activeConfig)
         activeRuntimeSession = URLSession(configuration: activeConfig)
         rebuildTaskMapsFromLiveSession()
         startDownloadWatchdog()
@@ -332,6 +334,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                 }
 
                 var request = URLRequest(url: episode.audioURL)
+                PodcastUserAgent.identify(&request)
                 request.allowsCellularAccess = allowsCellular
                 request.timeoutInterval = 90
                 request.networkServiceType = episode.mediaKind == .video
@@ -446,6 +449,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             ])
         } else {
             var request = URLRequest(url: episode.audioURL)
+            PodcastUserAgent.identify(&request)
             request.allowsCellularAccess = allowsCellular
             request.networkServiceType = episode.mediaKind == .video ? .video : .responsiveData
             task = session.downloadTask(with: request)

@@ -437,7 +437,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Automation")
         } footer: {
-            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A gentle warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
+            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
         }
 
         Section {

@@ -227,6 +227,7 @@ actor ArtworkImageCache {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 15
+        PodcastUserAgent.configure(config)
         session = URLSession(configuration: config)
         memoryCache.totalCostLimit = 32 * 1024 * 1024
         diskMetadata = Self.loadDiskMetadata(in: cacheDirectory, fileName: metadataFileName)

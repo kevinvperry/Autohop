@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+"$(cd "$(dirname "$0")" && pwd)/validate-tv-ai-context.sh"
+
 # Resolve every path from the script location so the gate behaves identically
 # when Xcode, CI, or a developer launches it from another working directory.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

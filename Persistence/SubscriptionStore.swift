@@ -1479,6 +1479,34 @@ public final class SubscriptionStore: ObservableObject {
             .max { $0.lastListenedAt < $1.lastListenedAt }
     }
 
+    /// Returns the newest cross-device archive events for companion history
+    /// surfaces. Listening history is already merged through the user's
+    /// private iCloud database, so this projection includes archives created
+    /// on iPhone, iPad, Mac, or Apple TV without introducing another sync
+    /// authority. The bounded query keeps tvOS launch and focus work small.
+    public func recentArchivedListeningEntries(limit: Int = 50) -> [ListeningHistoryEntry] {
+        guard let database, limit > 0 else { return [] }
+        // Read a wider bounded slice because recent in-progress checkpoints
+        // may be interleaved with archive events.
+        let scanLimit = max(limit * 4, 100)
+        guard let recent = try? database.historyEntriesNewestFirst(limit: scanLimit) else {
+            return []
+        }
+        let archived = Array(recent.lazy.filter { $0.status == .archived }.prefix(limit))
+        if archived.count == limit || recent.count < scanLimit { return archived }
+        // A very active account can have more than `scanLimit` recent
+        // in-progress rows. Fall back only in that exceptional case so the
+        // product promise remains an actual 50 archives, not "up to 50 from
+        // whichever entries happened to fit in the fast window".
+        guard let all = try? database.allHistoryEntries() else { return archived }
+        return Array(
+            all.lazy
+                .filter { $0.status == .archived }
+                .sorted { $0.lastListenedAt > $1.lastListenedAt }
+                .prefix(limit)
+        )
+    }
+
     // MARK: - Synced queue snapshot (2026-07-04 — the Up Next queue roams)
 
     /// Records THIS device's authored Up Next queue for sync. Called by the

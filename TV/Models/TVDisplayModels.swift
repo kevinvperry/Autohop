@@ -7,6 +7,7 @@ import AutohopCore
 
 struct TVQueueRowModel: Identifiable, Equatable {
     let id: String
+    let subscriptionID: UUID
     let position: Int
     let title: String
     let podcastTitle: String
@@ -14,8 +15,10 @@ struct TVQueueRowModel: Identifiable, Equatable {
     let durationSeconds: TimeInterval?
     let mediaKind: EpisodeMediaKind
     let episode: Episode?
+    let pinState: QueuePinState?
 
     var isPlayable: Bool { episode != nil }
+    var isPinned: Bool { pinState != nil }
 }
 
 struct TVPodcastTileModel: Identifiable, Equatable {

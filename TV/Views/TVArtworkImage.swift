@@ -113,6 +113,7 @@ final class TVArtworkLoader {
         let configuration = URLSessionConfiguration.default
         configuration.httpMaximumConnectionsPerHost = 3
         configuration.urlCache = URLCache(memoryCapacity: 8 * 1024 * 1024, diskCapacity: 64 * 1024 * 1024)
+        PodcastUserAgent.configure(configuration)
         session = URLSession(configuration: configuration)
         diskDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Autohop/TVArtwork", isDirectory: true)

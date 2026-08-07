@@ -139,7 +139,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         if preloadURL == assetURL || currentEpisode?.id == episode.id { return }
 
         clearPreload()
-        let item = AVPlayerItem(url: assetURL)
+        let item = AVPlayerItem(asset: Self.asset(for: assetURL))
         // Ask AVFoundation to build a healthy forward buffer while paused.
         item.preferredForwardBufferDuration = 30
         let warm = AVPlayer(playerItem: item)
@@ -154,6 +154,17 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         preloadPlayer?.pause()
         preloadPlayer = nil
         preloadURL = nil
+    }
+
+    /// AVFoundation otherwise emits its generic system identity for streamed
+    /// enclosures. AVURLAssetHTTPUserAgentKey is Apple's supported API for
+    /// applying the same IAB-style podcast identity as URLSession.
+    private static func asset(for url: URL) -> AVURLAsset {
+        guard url.isFileURL == false else { return AVURLAsset(url: url) }
+        return AVURLAsset(
+            url: url,
+            options: [AVURLAssetHTTPUserAgentKey: PodcastUserAgent.value]
+        )
     }
 
     // MARK: - PlaybackControlling
@@ -174,7 +185,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
 
         activateAudioSessionIfAvailable(for: episode.mediaKind)
         transition(to: .loadingAsset)
-        let asset = AVURLAsset(url: assetURL)
+        let asset = Self.asset(for: assetURL)
         do {
             try await validate(asset: asset, mediaKind: episode.mediaKind)
         } catch let failure as StreamingPlaybackFailure {

@@ -1138,6 +1138,15 @@ VStack(alignment: .trailing, spacing: 4) {
 }
 ```
 
+### tvOS Pin and Unpin
+
+The Home Up Next list mirrors this state explicitly from the phone-authored
+queue snapshot. Pinned rows show `pin.fill` beside publisher metadata using the
+same blue Play Next / orange Play Last colours. A pinned row replaces Play Next
+with a teal `pin.slash.fill` button labelled “Unpin” for accessibility. Unpin
+returns the row to its natural Priority Stack position and syncs that result to
+all devices; the first row is never assumed pinned merely because it is first.
+
 ---
 
 ## Download Progress Bar

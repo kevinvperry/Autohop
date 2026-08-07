@@ -9,6 +9,7 @@ struct TVDiagnosticsView: View {
     @State private var exportStatus: String?
 
     var body: some View {
+        let snapshot = model.diagnosticsSnapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Settings & Diagnostics").font(.largeTitle.bold())
@@ -24,18 +25,18 @@ struct TVDiagnosticsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                diagnosticRow("iCloud & Up Next", value: model.syncStatus.label)
-                diagnosticRow("Queue rows", value: "\(model.queueRows.count)")
-                diagnosticRow("Waiting for legacy details", value: "\(model.queueRows.filter { !$0.isPlayable }.count)")
-                ForEach(model.unresolvedQueueDiagnostics, id: \.self) { detail in
+                diagnosticRow("iCloud & Up Next", value: snapshot.syncLabel)
+                diagnosticRow("Queue rows", value: "\(snapshot.queueRowCount)")
+                diagnosticRow("Waiting for legacy details", value: "\(snapshot.unresolvedQueue.count)")
+                ForEach(snapshot.unresolvedQueue, id: \.self) { detail in
                     Text(detail)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 20)
                 }
-                diagnosticRow("Library podcasts", value: "\(model.libraryTiles.count)")
-                diagnosticRow("Subscriptions awaiting details", value: "\(model.pendingMaterializationDiagnostics.count)")
-                ForEach(model.pendingMaterializationDiagnostics, id: \.self) { detail in
+                diagnosticRow("Library podcasts", value: "\(snapshot.libraryPodcastCount)")
+                diagnosticRow("Subscriptions awaiting details", value: "\(snapshot.pendingMaterialization.count)")
+                ForEach(snapshot.pendingMaterialization, id: \.self) { detail in
                     Text(detail)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
@@ -43,27 +44,27 @@ struct TVDiagnosticsView: View {
                 }
                 diagnosticRow(
                     "Current playback",
-                    value: model.playbackModel.currentEpisode?.title ?? "None"
+                    value: snapshot.playbackTitle
                 )
                 diagnosticRow(
                     "Playback state",
-                    value: String(describing: model.playbackModel.playbackState)
+                    value: snapshot.playbackState
                 )
                 diagnosticRow(
                     "Playback position",
-                    value: "\(Int(model.playbackModel.currentTime)) sec"
+                    value: "\(snapshot.playbackPositionSeconds) sec"
                 )
                 diagnosticRow(
                     "Playback speed",
-                    value: String(format: "%.2f×", model.playbackModel.currentSpeed)
+                    value: String(format: "%.2f×", snapshot.configuredSpeed)
                 )
                 diagnosticRow(
                     "Player rate",
-                    value: String(format: "%.2f×", Double(model.playbackModel.avPlayer?.rate ?? 0.0))
+                    value: String(format: "%.2f×", snapshot.playerRate)
                 )
                 diagnosticRow(
                     "History uploads pending",
-                    value: "\(model.subscriptionStore.pendingListeningHistoryUploadCount())"
+                    value: "\(snapshot.pendingHistoryUploads)"
                 )
                 diagnosticRow("Version", value: versionIdentity)
                 Button {

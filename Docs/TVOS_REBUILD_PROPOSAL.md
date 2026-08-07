@@ -61,7 +61,9 @@ The current client is not discarded wholesale. Keep:
 
 Replace or substantially restructure:
 
-- the 970-line `TVAppModel` composition root;
+- the former monolithic `TVAppModel` composition root (decomposed into focused
+  tvOS owners on 2 August 2026; see
+  `Docs/TVAPP_MODEL_DECOMPOSITION_PROPOSAL.md`);
 - full-library episode materialisation on TV;
 - launch/foreground RSS sweeping across every subscription;
 - broad `objectWillChange`-driven projection invalidation;
@@ -919,7 +921,8 @@ TV/App/AutohopTVApp.swift
 TV/Playback/TVPlaybackModel.swift
 TV/Views/TVMainTabView.swift
 TV/Views/TVHomeView.swift
-TV/Views/TVQueueView.swift
+TV/Views/TVQueueRow.swift
+TV/Views/TVHistoryView.swift
 TV/Views/TVLibraryView.swift
 TV/Views/TVEpisodeListView.swift
 TV/Views/TVPlayerView.swift

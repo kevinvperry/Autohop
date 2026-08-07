@@ -20,12 +20,14 @@ public actor EpisodeFeedLoader {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
         config.waitsForConnectivity = false
+        PodcastUserAgent.configure(config)
         session = URLSession(configuration: config)
     }
 
     /// Fetches and parses the feed at `url`.  Pass `limit: nil` to load all episodes.
     public func fetch(feedURL: URL, limit: Int? = 50) async throws -> ParsedFeed {
         var request = URLRequest(url: feedURL)
+        PodcastUserAgent.identify(&request)
         if let validator = validators[feedURL] {
             if let etag = validator.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
             if let modified = validator.lastModified { request.setValue(modified, forHTTPHeaderField: "If-Modified-Since") }

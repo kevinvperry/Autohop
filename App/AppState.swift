@@ -459,7 +459,8 @@ final class AppState: ObservableObject {
         self.syncCoordinator = SyncCoordinator(
             feedService: feedService,
             subscriptionStore: subscriptionStore,
-            historyStatsCoordinator: historyStatsCoordinator
+            historyStatsCoordinator: historyStatsCoordinator,
+            queueCoordinator: queueCoordinator
         )
         self.lifecycleCoordinator = AppLifecycleCoordinator()
         queueCoordinator.observePlayback(playbackCoordinator)

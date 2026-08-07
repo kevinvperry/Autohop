@@ -201,6 +201,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     /// (tvOS TVAppModel) refresh their rendered queue here.
     public var onRemoteQueueSnapshotChanged: (() async -> Void)?
 
+    /// iPhone-only command consumer. Returning true means the existing queue
+    /// policy accepted (or had already accepted) the request; the engine then
+    /// removes the one-use CloudKit record. tvOS intentionally leaves this nil.
+    public var onRemotePlayNextRequest: ((QueuePlayNextRequest) async -> Bool)?
+
     /// Lifecycle is driven by the caller (AppState start/stop based on the
     /// opt-in setting), so the engine doesn't read the settings store itself.
     /// - Parameter database: the store's record database, passed explicitly so
@@ -392,6 +397,32 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 "reason": reason,
                 "error": "\(error)"
             ])
+            return false
+        }
+    }
+
+    /// Sends a narrow companion request without granting this device authority
+    /// to overwrite queue:current. Used by tvOS Play Next. The phone receives
+    /// it through the normal zone change stream and republishes the full queue.
+    @discardableResult
+    public func submitPlayNextRequest(_ request: QueuePlayNextRequest) async -> Bool {
+        guard engine != nil else { return false }
+        do {
+            _ = try await container.privateCloudDatabase.save(
+                CloudKitSync.makeRecord(from: request)
+            )
+            logger.info("sync.queueCommandRequested", "Sent queue command through private iCloud", metadata: [
+                "action": request.action.rawValue,
+                "requestID": request.id.uuidString,
+                "episode": request.episodeTitle
+            ], alwaysPersist: true)
+            return true
+        } catch {
+            logger.error("sync.queueCommandRequestFailed", "Could not send queue command", metadata: [
+                "action": request.action.rawValue,
+                "requestID": request.id.uuidString,
+                "error": String(describing: error)
+            ], alwaysPersist: true)
             return false
         }
     }
@@ -1168,6 +1199,31 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             }
             if adopted {
                 await onRemoteQueueSnapshotChanged?()
+            }
+
+        case CloudKitSync.queueCommandRecordType:
+            guard let request = CloudKitSync.queuePlayNextRequest(from: record) else {
+                logDecodeFailure(record)
+                return
+            }
+            guard let onRemotePlayNextRequest else { return }
+            let consumed = await onRemotePlayNextRequest(request)
+            guard consumed else { return }
+            do {
+                _ = try await container.privateCloudDatabase.deleteRecord(withID: record.recordID)
+                logger.info("sync.queueCommandConsumed", "Applied and removed companion queue command", metadata: [
+                    "action": request.action.rawValue,
+                    "requestID": request.id.uuidString,
+                    "episode": request.episodeTitle
+                ], alwaysPersist: true)
+            } catch let error as CKError where error.code == .unknownItem {
+                // Another phone instance already consumed the idempotent request.
+            } catch {
+                logger.warning("sync.queueCommandCleanupFailed", "Applied queue command but could not remove its request record", metadata: [
+                    "action": request.action.rawValue,
+                    "requestID": request.id.uuidString,
+                    "error": String(describing: error)
+                ], alwaysPersist: true)
             }
 
         case CloudKitSync.statsRecordType:

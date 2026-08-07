@@ -228,7 +228,8 @@ final class PlayInstantWorkflow {
         playWarningTone()
         logger.info("playInstant.warning", "Warning before switching to Play Instant episode", metadata: [
             "interruptedEpisode": interruptedEpisode.title,
-            "delaySeconds": "2"
+            "delaySeconds": "2",
+            "cueVolume": "0.72"
         ])
 
         playback.playInstantTransitionTask = Task { @MainActor [weak self] in
@@ -339,7 +340,11 @@ final class PlayInstantWorkflow {
             return
         }
         playback.playInstantWarningPlayer = try? AVAudioPlayer(data: data)
-        playback.playInstantWarningPlayer?.volume = 0.22
+        // This cue must remain clearly audible over speech already playing.
+        // Waveform headroom prevents clipping while this player-level gain
+        // makes the warning prominent without changing the user's podcast
+        // volume or leaving a ducking state behind after cancellation.
+        playback.playInstantWarningPlayer?.volume = 0.72
         playback.playInstantWarningPlayer?.prepareToPlay()
         playback.playInstantWarningPlayer?.play()
     }

@@ -51,8 +51,11 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 > **Version 1.5 development note:** the separate, still-unsubmitted Apple TV
 > target now uses an iPhone-authored self-contained queue, native audio/video
 > streaming, compact purgeable projections, bounded podcast detail loading and
-> read-only subscription/order behaviour. Physical-device Phase 6 validation is
-> still required before this can become a public feature claim.
+> read-only subscription/order behaviour. It also presents complete feed-supplied
+> episode descriptions in a native scrollable sheet: use the Description control
+> in the audio player, the Episode menu during native video playback, or long-press
+> an episode on Home, Up Next, Library or History. Physical-device Phase 6
+> validation is still required before this can become a public feature claim.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
@@ -529,6 +532,9 @@ Six presets in a 3×2 grid:
 | 1 hour |
 
 While active: shows a countdown display with a **+5 min** extend button and a **Cancel** button.
+During the final 30 seconds, playback follows the shared smooth sleep-fade
+envelope before pausing. Extending or cancelling during the fade restores full
+playback volume immediately.
 
 ### End of N Episodes mode
 A stepper (range: 1–10, default: 1) lets the user choose how many episodes to finish before sleep. Tap **Set** to start. While active: shows episodes remaining with a **Cancel** button.
@@ -553,7 +559,7 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 1. The schedule **arms** — it never self-starts audio. Whenever playback starts (audio or video) inside the window, the cycle begins.
 2. After the chosen duration of playback (or at the episode boundary in End of Episode mode), a soft singing-bowl-style chime asks "Are you still listening?" — **playback keeps going**; the chime (C4 fundamental with quiet partials, slow ~0.5 s attack, ~7 s decay) plays over it at 0/20/40 s inside a single 60 s in-memory WAV via `AVAudioPlayer` (keeps the audio session rendering so the app isn't suspended while waiting; a 75 s backup `Task` covers audio failure). In End of Episode mode the queue still advances to the next episode under the chime.
 3. **Any transport command is "yes"** — play/pause (lock screen, earbud tap, headphone remote), skip forward/back, scrubbing, the oversized on-screen overlay button in `PlayerView` (shown for the screen-on/video case; a deliberately large `minHeight: 160` "Still Listening" target for half-asleep tapping), or the **"Still Listening" action on the lock-screen notification** (see below). The cycle restarts; a pause press both confirms and pauses (the re-armed countdown freezes until resume).
-4. **No response within 60 s = asleep.** Playback fades out over ~2.5 s, pauses, and **rewinds to where the chime started** — the last point plausibly heard, persisted as the morning resume position (start of the auto-advanced episode in End of Episode mode). The session ends; the schedule re-arms on the next playback start inside the window.
+4. **No response within 60 s = asleep.** Playback follows the same smooth 30-second fade used by the manual timer, pauses, and **rewinds to where the chime started** — the last point plausibly heard, persisted as the morning resume position (start of the auto-advanced episode in End of Episode mode). The session ends; the schedule re-arms on the next playback start inside the window.
 5. **Manual Sleep Timer overrides:** setting the regular Sleep Timer suspends the schedule for the rest of that session (`suspendForSession`, checked on every 0.5 s tick).
 6. The countdown only advances while playing — pausing freezes it. **Active Hours are a hard boundary:** when the configured end time arrives, any countdown or End-of-Episode arming is cancelled, and an in-progress chime/overlay/lock-screen notification is dismissed without pausing normal playback. A late "Still Listening" action cannot re-arm the schedule outside the window.
 
@@ -1252,7 +1258,10 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 > by one-shot first-launch migrations (`playbackSpeed160Migrated`,
 > `vocalBoostLevelMigrated`, `trimSilenceLowDefaultMigrated`). A brand-new
 > subscription is seeded from `AppSettings.defaultPlaybackPreference`, which
-> itself defaults to `PlaybackPreference.default` (1.0x / Off / Off). See §15.5.
+> uses `PlaybackPreference.newUserDefault` (1.0x / Strong / Off) on a fresh
+> install. `PlaybackPreference.default` remains the legacy subscription decode
+> fallback (1.0x / Off / Off), so this factory change cannot rewrite existing
+> subscriptions. See §15.5.
 > (Code caveat: `PlaybackPreference`'s member-wise init and decoder fall back to
 > `.strong` vocal boost when the key is absent — a legacy-migration artifact that
 > disagrees with `.default`; see ASSESSMENT.md B3.)
@@ -1290,7 +1299,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | hasSeenDownloadFirstNote | false |
 | dismissedGettingStarted | false |
 | launchScreen | .player |
-| defaultPlaybackPreference | PlaybackPreference.default (1.0x / Off / Off / no skips) |
+| defaultPlaybackPreference | PlaybackPreference.newUserDefault (1.0x / Strong / Off / no skips); user-adjustable and copied only into new subscriptions |
 | defaultAutoArchiveSettings | AutoArchiveSettings.default (After Playing / 1 Week / keep 1) — global default seeded into new subscriptions only |
 
 ### `RefreshStats` / `FeedRefreshScheduling` / refresh-cycle defaults

@@ -91,6 +91,7 @@ let package = Package(
                 "Models/SubscriptionOrder.swift",
                 "Models/ArtworkURL.swift",
                 "Models/ShareContent.swift",
+                "Models/PodcastUserAgent.swift",
                 "Stats/ShowEngagementAnalyzer.swift",
                 "Models/PlaybackPreference.swift",
                 "Models/SilenceGapAccounting.swift",

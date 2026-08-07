@@ -17,9 +17,9 @@ import Foundation
 //
 // PERSISTENCE / SYNC:
 // Pins retain Application Support/Autohop/queue-pins.json and the existing
-// Codable shape. A queue snapshot is written only after the episode identity
-// sequence changes; SubscriptionStore retains its equality dedupe as a second
-// safety boundary.
+// Codable shape. A queue snapshot is written after either episode identity
+// order or explicit pin state changes; SubscriptionStore retains its equality
+// dedupe as a second safety boundary.
 //
 // INVARIANTS:
 // - Queue reads are side-effect free.
@@ -41,6 +41,7 @@ final class QueueCoordinator: ObservableObject {
     private let logger: AppLogger
     private let pinsFileURL: URL?
     private var lastPublishedIDs: [UUID] = []
+    private var lastPublishedPinStates: [UUID: QueuePinState] = [:]
     private var recomputeTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var playbackObservationInstalled = false
@@ -230,7 +231,16 @@ final class QueueCoordinator: ObservableObject {
         let base = queueService.downloadedQueue(from: subscriptionStore.subscriptions)
         let computed = QueueModel.applyPins(base, pins: pins)
         let computedIDs = computed.map(\.id)
+        var computedPinStates: [UUID: QueuePinState] = [:]
+        for episode in computed {
+            if pins.playNextIDs.contains(episode.id) {
+                computedPinStates[episode.id] = .playNext
+            } else if pins.playLastIDs.contains(episode.id) {
+                computedPinStates[episode.id] = .playLast
+            }
+        }
         let compositionChanged = computedIDs != lastPublishedIDs
+            || computedPinStates != lastPublishedPinStates
         let resolvedUpNext: Episode? = {
             guard let current = currentEpisode() else { return computed.first }
             return computed.first { $0.id != current.id }
@@ -240,16 +250,23 @@ final class QueueCoordinator: ObservableObject {
         if compositionChanged {
             episodes = computed
             lastPublishedIDs = computedIDs
+            lastPublishedPinStates = computedPinStates
             let subscriptionsByID = Dictionary(
                 uniqueKeysWithValues: subscriptionStore.subscriptions.map { ($0.id, $0) }
             )
             subscriptionStore.updateLocalQueueSnapshot(entries: computed.map { episode in
                 let subscription = subscriptionsByID[episode.subscriptionID]
-                return QueueSnapshotEntry(
+                var entry = QueueSnapshotEntry(
                     episode: episode,
                     podcastTitle: subscription?.title,
                     podcastArtworkURL: subscription?.artworkURL
                 )
+                if pins.playNextIDs.contains(episode.id) {
+                    entry.pinState = .playNext
+                } else if pins.playLastIDs.contains(episode.id) {
+                    entry.pinState = .playLast
+                }
+                return entry
             })
             publishBadge()
         }

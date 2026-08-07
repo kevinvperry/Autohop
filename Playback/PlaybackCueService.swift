@@ -14,7 +14,9 @@ import Foundation
 //
 // INVARIANTS:
 // - Preserve the existing 22,050 Hz, mono, signed 16-bit little-endian waveform.
-// - Preserve note timing, frequencies, envelope, amplitude, and WAV layout.
+// - Preserve the two-note identity and WAV layout. The waveform intentionally
+//   uses materially more headroom than the original barely-audible cue because
+//   it must be recognisable over active spoken-word playback.
 // - Do not retain AVAudioPlayer or introduce bundled/network sound dependencies.
 enum PlaybackCueService {
     static func makePlayInstantWarningWAV() -> Data? {
@@ -28,7 +30,7 @@ enum PlaybackCueService {
             let localTime = time < 0.30 ? time : time - 0.30
             let noteDuration = time < 0.30 ? 0.25 : 0.25
             let envelope = frequency == 0 ? 0 : min(1, localTime / 0.025) * min(1, (noteDuration - localTime) / 0.05)
-            let value = Int16((sin(2 * .pi * frequency * time) * max(0, envelope) * 8_000).rounded())
+            let value = Int16((sin(2 * .pi * frequency * time) * max(0, envelope) * 16_000).rounded())
             var littleEndian = value.littleEndian
             withUnsafeBytes(of: &littleEndian) { pcm.append(contentsOf: $0) }
         }

@@ -41,9 +41,10 @@ struct TVBrandBackground: View {
 }
 
 // AI CONTEXT — FOCUS CONTRACT
-// Standard tvOS `.buttonStyle(.card)` still owns directional focus, press
-// behaviour and accessibility. This modifier adds only a cheap, deterministic
-// visual state: no blur, geometry reader or continuously animated effect.
+// Standard tvOS `.buttonStyle(.card)` owns directional focus, its native edge,
+// press behaviour and accessibility. This modifier adds only a cheap brand fill
+// and glow. It MUST NOT draw another stroke: doing so produces the visible
+// double-border defect on every focused card.
 // Keeping selection feedback separate from navigation prevents artwork and
 // material rendering from delaying Siri Remote focus updates.
 private struct TVFocusHighlight: ViewModifier {
@@ -56,14 +57,6 @@ private struct TVFocusHighlight: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(isFocused ? TVTheme.brandPurple.opacity(0.48) : .clear)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(
-                        isFocused ? TVTheme.focusAccent : Color.white.opacity(0.10),
-                        lineWidth: isFocused ? 5 : 1
-                    )
-                    .allowsHitTesting(false)
-            }
             .shadow(
                 color: isFocused ? TVTheme.focusAccent.opacity(0.42) : .clear,
                 radius: isFocused ? 16 : 0

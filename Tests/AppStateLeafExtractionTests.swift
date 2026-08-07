@@ -44,6 +44,17 @@ final class AppStateLeafExtractionTests: XCTestCase {
         XCTAssertEqual(data.count, 24_298)
     }
 
+    func testSleepFadeUsesThirtySecondSmoothMonotonicEnvelope() {
+        XCTAssertEqual(SleepTimerService.gradualFadeDuration, 30)
+        XCTAssertEqual(SleepTimerService.gradualFadeVolume(remaining: 30), 1)
+        XCTAssertEqual(SleepTimerService.gradualFadeVolume(remaining: 15), 0.5)
+        XCTAssertEqual(SleepTimerService.gradualFadeVolume(remaining: 0), 0)
+        XCTAssertGreaterThan(
+            SleepTimerService.gradualFadeVolume(remaining: 20),
+            SleepTimerService.gradualFadeVolume(remaining: 10)
+        )
+    }
+
     private func readUInt16(from data: Data, offset: Int) -> UInt16 {
         data[offset..<(offset + 2)]
             .enumerated()

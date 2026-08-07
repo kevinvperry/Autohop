@@ -71,6 +71,9 @@ public enum CloudKitSync {
     /// 2026-07-04: the synced Up Next queue (Models/QueueSnapshot.swift) —
     /// ONE record per account, whole-record LWW by the payload's updatedAt.
     public static let queueSnapshotRecordType = "QueueSnapshot"
+    /// One-use companion request. Apple TV may author this record; only the
+    /// iPhone turns it into queue state and republishes queue:current.
+    public static let queueCommandRecordType = "QueueCommand"
     /// Atomic Priority Stack ordering — one whole-list record per account.
     public static let subscriptionOrderRecordType = "SubscriptionOrder"
 
@@ -80,6 +83,7 @@ public enum CloudKitSync {
         static let historyPrefix = "history:"
         static let statsPrefix = "stats:"
         static let queuePrefix = "queue:"
+        static let queueCommandPrefix = "queue-command:"
         static let subscriptionOrderPrefix = "subscription-order:"
     }
 
@@ -164,6 +168,7 @@ public enum CloudKitSync {
             || recordName.hasPrefix(RecordName.historyPrefix)
             || recordName.hasPrefix(RecordName.statsPrefix)
             || recordName.hasPrefix(RecordName.queuePrefix)
+            || recordName.hasPrefix(RecordName.queueCommandPrefix)
             || recordName.hasPrefix(RecordName.subscriptionOrderPrefix)
     }
 
@@ -240,6 +245,35 @@ public enum CloudKitSync {
     public static func queueSnapshot(from record: CKRecord) -> QueueSnapshot? {
         guard let data = record[QueueKey.snapshot] as? Data else { return nil }
         return try? jsonDecoder.decode(QueueSnapshot.self, from: data)
+    }
+
+    // MARK: - Companion queue command
+
+    private enum QueueCommandKey {
+        static let request = "request"
+        static let createdAt = "createdAt"
+    }
+
+    public static func queuePlayNextRequestRecordID(_ id: UUID) -> CKRecord.ID {
+        CKRecord.ID(
+            recordName: "\(RecordName.queueCommandPrefix)\(id.uuidString)",
+            zoneID: zoneID
+        )
+    }
+
+    public static func makeRecord(from request: QueuePlayNextRequest) -> CKRecord {
+        let record = CKRecord(
+            recordType: queueCommandRecordType,
+            recordID: queuePlayNextRequestRecordID(request.id)
+        )
+        record[QueueCommandKey.request] = try? jsonEncoder.encode(request)
+        record[QueueCommandKey.createdAt] = request.createdAt
+        return record
+    }
+
+    public static func queuePlayNextRequest(from record: CKRecord) -> QueuePlayNextRequest? {
+        guard let data = record[QueueCommandKey.request] as? Data else { return nil }
+        return try? jsonDecoder.decode(QueuePlayNextRequest.self, from: data)
     }
 
     private static func stripped(_ value: String, prefix: String) -> String? {

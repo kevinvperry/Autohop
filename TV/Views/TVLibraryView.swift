@@ -17,7 +17,7 @@ struct TVLibraryView: View {
     var body: some View {
         NavigationStack(path: $router.libraryPath) {
             Group {
-                if model.libraryTiles.isEmpty {
+                if model.libraryModel.tiles.isEmpty {
                     ContentUnavailableView(
                         "No library yet",
                         systemImage: "square.stack",
@@ -34,7 +34,7 @@ struct TVLibraryView: View {
                             Text("Library")
                                 .font(.largeTitle.bold())
                             LazyVGrid(columns: columns, spacing: 40) {
-                                ForEach(model.libraryTiles) { podcast in
+                                ForEach(model.libraryModel.tiles) { podcast in
                                     if podcast.isMaterializing {
                                         TVSubscriptionCard(podcast: podcast)
                                             .overlay(alignment: .bottomLeading) {

@@ -2,6 +2,18 @@ import XCTest
 @testable import AutohopTV
 import AutohopCore
 
+// AI CONTEXT — TVTests/TVPlaybackRequestPolicyTests.swift
+// PURPOSE: Regression coverage for asynchronous player-presentation ownership
+// and same-media detection across locally reconstructed tvOS episode objects.
+// OWNERSHIP: Tests TVPlaybackRequestOwnership and
+// TVPlaybackPresentationPolicy without constructing AVPlayer or navigation UI.
+// INVARIANTS: Only the newest request generation may present or mutate player
+// state; identical enclosure URLs represent the same playable episode even if
+// local UUID/GUID values were reconstructed; different enclosures must start a
+// new playback session.
+// FAILURE MEANING: A failure risks stale async work reopening the player,
+// restarting video, or losing resume state. Fix the policy boundary rather than
+// adding competing identity checks in TVMainTabView or TVPlayerView.
 final class TVPlaybackRequestPolicyTests: XCTestCase {
     private func episode(
         id: UUID = UUID(),

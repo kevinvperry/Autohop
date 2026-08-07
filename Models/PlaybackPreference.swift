@@ -16,8 +16,12 @@ import Foundation
 //
 // DEFAULTS — read carefully, there are two distinct notions:
 //  - `PlaybackPreference.default` = 1.0x / vocalBoost .off / trim .off. This is
-//    what a NEW subscription is seeded with (via AppSettings.defaultPlayback
-//    Preference, which itself defaults to .default).
+//    the compatibility fallback for an existing/legacy subscription whose
+//    persisted preference is absent or incomplete.
+//  - `PlaybackPreference.newUserDefault` differs only by using Strong Vocal
+//    Boost. AppSettings uses it on a genuinely fresh install and copies it only
+//    into subscriptions created afterwards. Keeping these values separate is
+//    what prevents a factory-default change from rewriting existing shows.
 //  - Pre-existing users were moved to 1.6x / Strong / Low by ONE-SHOT migrations
 //    in AppState.bootstrap (playbackSpeed160Migrated / vocalBoostLevelMigrated /
 //    trimSilenceLowDefaultMigrated). Those are not "the default" — they are a
@@ -111,6 +115,18 @@ public struct PlaybackPreference: Equatable, Codable, Sendable {
         startSkipSeconds: 0,
         endSkipSeconds: 0,
         vocalBoostLevel: .off,
+        trimSilence: .off,
+        audioChannelMode: .stereo,
+        volumeAdjustment: 0
+    )
+
+    /// Factory global preference for a new Autohop user. This is intentionally
+    /// separate from `.default`, which remains the legacy decode fallback.
+    public static let newUserDefault = PlaybackPreference(
+        speed: 1.0,
+        startSkipSeconds: 0,
+        endSkipSeconds: 0,
+        vocalBoostLevel: .strong,
         trimSilence: .off,
         audioChannelMode: .stereo,
         volumeAdjustment: 0

@@ -55,6 +55,7 @@ struct PodcastDetailView: View {
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.rootBackAction) private var rootBackAction
     @Environment(\.displayScale) private var displayScale
 
     // Identity — at most one of these is set per entry point.
@@ -228,7 +229,16 @@ struct PodcastDetailView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+            Button {
+                if let rootBackAction {
+                    rootBackAction()
+                } else {
+                    dismiss()
+                }
+            } label: {
+                Image(systemName: "chevron.left.circle.fill")
+            }
+            .accessibilityLabel("Back")
         }
 
         if isRealSubscription {

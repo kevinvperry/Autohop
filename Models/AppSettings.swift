@@ -138,7 +138,10 @@ struct AppSettings: Equatable, Codable {
         hasSeenDownloadFirstNote: false,
         dismissedGettingStarted: false,
         launchScreen: .player,
-        defaultPlaybackPreference: .default,
+        // Fresh installs start new subscriptions with Strong Vocal Boost.
+        // Saved AppSettings and existing per-subscription preferences remain
+        // authoritative and are never rewritten by this factory value.
+        defaultPlaybackPreference: .newUserDefault,
         defaultAutoArchiveSettings: .default
     )
 
@@ -289,7 +292,13 @@ struct AppSettings: Equatable, Codable {
         hasSeenDownloadFirstNote = try container.decodeIfPresent(Bool.self, forKey: .hasSeenDownloadFirstNote) ?? Self.default.hasSeenDownloadFirstNote
         dismissedGettingStarted = try container.decodeIfPresent(Bool.self, forKey: .dismissedGettingStarted) ?? Self.default.dismissedGettingStarted
         launchScreen = try container.decodeIfPresent(LaunchScreen.self, forKey: .launchScreen) ?? Self.default.launchScreen
-        defaultPlaybackPreference = try container.decodeIfPresent(PlaybackPreference.self, forKey: .defaultPlaybackPreference) ?? Self.default.defaultPlaybackPreference
+        // A missing key means this is an older *existing* settings payload, not
+        // a fresh install. Preserve the historical Off fallback instead of
+        // silently opting that user into the new factory preference.
+        defaultPlaybackPreference = try container.decodeIfPresent(
+            PlaybackPreference.self,
+            forKey: .defaultPlaybackPreference
+        ) ?? PlaybackPreference.default
         defaultAutoArchiveSettings = try container.decodeIfPresent(AutoArchiveSettings.self, forKey: .defaultAutoArchiveSettings) ?? Self.default.defaultAutoArchiveSettings
     }
 }

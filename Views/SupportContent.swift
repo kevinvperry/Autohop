@@ -365,7 +365,7 @@ enum SupportGuide {
             .paragraph("Automatic downloading continues to honour this podcast's Download Feed Filters."),
             .callout(.tip, "**Tip:** The defaults (archive immediately after playing, inactive episodes gone after 1 week, keep 1 episode) are designed for high-volume listeners who want zero maintenance."),
             .heading("Play Instant"),
-            .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a gentle warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
+            .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a clear warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
             .paragraph("If playback or its audio route is temporarily unavailable when the automatic download completes, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker; if playback does not resume in time, the episode simply keeps its normal Up Next position."),
             .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
             .heading("Chapter Filter"),
@@ -386,7 +386,7 @@ enum SupportGuide {
         id: "sleep-timer", icon: "moon.zzz", title: "Sleep Timer",
         summary: "One-shot timer by duration or episode count",
         blocks: [
-            .paragraph("The sleep timer automatically pauses playback after a set duration. Tap the **moon icon** in the player toolbar to open the Sleep Timer sheet."),
+            .paragraph("The sleep timer automatically pauses playback after a set duration, using a gradual 30-second fade so the ending is calm rather than abrupt. Tap the **moon icon** in the player toolbar to open the Sleep Timer sheet."),
             .heading("Setting a timer"),
             .paragraph("Choose a duration — **5 min, 10 min, 15 min, 30 min, 45 min,** or **1 hour** — and tap to start immediately."),
             .paragraph("Or use **End of Episode** mode: set a count (1–10 episodes) using the stepper, then tap **Set**. Autohop pauses after that many episodes finish."),
@@ -412,7 +412,7 @@ enum SupportGuide {
             .paragraph("Start playing anything during your active hours and the schedule arms itself. After the chosen duration, a **soft, meditative chime** plays over your podcast — playback doesn't stop — asking, in effect, \"are you still listening?\""),
             .bullets([
                 "**Still awake?** Tap any control — play/pause on the lock screen, an earbud tap, skip forward or back, the on-screen button, or the **\"Still Listening\" button on the lock-screen notification** (no need to unlock your phone). Playback simply continues and the cycle restarts.",
-                "**Asleep?** If you don't respond within a minute, playback fades out gently, pauses, and **rewinds to the moment the chime began** — so in the morning you resume from the last thing you actually heard.",
+                "**Asleep?** If you don't respond within a minute, playback fades smoothly over 30 seconds, pauses, and **rewinds to the moment the chime began** — so in the morning you resume from the last thing you actually heard.",
                 "**Active Hours ended?** Autohop dismisses any pending check-in and its notification. Your podcast continues normally, but Sleep Schedule will not ask again outside the selected window.",
             ]),
             .callout(.tip, "**Tip:** Setting the regular Sleep Timer from the player overrides the schedule for that session — handy for nights when you want a fixed cutoff instead of check-ins."),

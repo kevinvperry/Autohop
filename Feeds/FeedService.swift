@@ -230,6 +230,7 @@ final class FeedService: FeedServicing {
             configuration.timeoutIntervalForRequest = requestTimeoutSeconds
             configuration.timeoutIntervalForResource = requestTimeoutSeconds + 5
             configuration.waitsForConnectivity = false
+            PodcastUserAgent.configure(configuration)
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -258,6 +259,7 @@ final class FeedService: FeedServicing {
         validators: FeedValidators?
     ) async throws -> FeedRefreshOutcome {
         var request = URLRequest(url: feedURL)
+        PodcastUserAgent.identify(&request)
         request.timeoutInterval = 25
         if let etag = validators?.etag {
             request.setValue(etag, forHTTPHeaderField: "If-None-Match")

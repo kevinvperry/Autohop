@@ -204,6 +204,7 @@ actor PodcastChartsService {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.waitsForConnectivity = false
+        PodcastUserAgent.configure(config)
         session = URLSession(configuration: config)
 
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]

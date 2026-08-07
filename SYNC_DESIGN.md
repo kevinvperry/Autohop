@@ -217,7 +217,7 @@ shows correct settings immediately. Guarded by
   recomputes (`SubscriptionStore.updateLocalQueueSnapshot`, deduped on entry
   equality so no-change recomputes never push); entries carry the stable
   subscription-scoped episode key (`PlaybackPositionStore.key`) + subscriptionID
-  + a display-fallback title. Readers (tvOS `TVAppModel.upNextEpisodes`,
+  + a display-fallback title. Readers (tvOS `TVQueueModel`/queue projector,
   future watch) render `QueueModel.resolvedQueue(from:subscriptions:)` —
   snapshot ORDER is authoritative, unresolvable keys are skipped, and
   locally-known played/archived episodes are stale-filtered (a pre-completion
@@ -228,6 +228,31 @@ shows correct settings immediately. Guarded by
   author's newer pending queue), notify-only `onRemoteQueueSnapshotChanged`.
   Storage: single-row `queue_snapshot` table (migration v8). Tested:
   `Tests/QueueSnapshotSyncTests.swift`.
+
+  **tvOS Pin / Unpin commands (2026-08-02):** Apple TV remains a reader of the
+  phone-authored whole-list `QueueSnapshot`; it never rewrites that snapshot.
+  Selecting Play Next or Unpin on a TV queue row instead writes a separate, one-use
+  private-iCloud `QueueCommand` record containing the authoritative queue-row
+  episode key, subscription ID and command action. It must not derive identity from a
+  reconstructed local `Episode`, whose legacy identity can differ from the
+  phone-authored snapshot. The iPhone consumes that command idempotently, resolves the
+  episode from its local subscription store, invokes the same
+  `QueueCoordinator.playNext` or `QueueCoordinator.unpin` path used by iOS,
+  republishes the
+  authoritative queue snapshot, and deletes the consumed command. tvOS pins
+  or unpins its local projection synchronously before CloudKit I/O and retains
+  that overlay until a phone snapshot confirms the requested pin state. Queue
+  snapshot schema Version 3 carries an optional `pinState` on every entry, so
+  tvOS displays the same blue Play Next and orange Play Last state without
+  guessing from row position. A bounded
+  UserDefaults outbox retries commands that could not be saved before CloudKit
+  activation or during a transient outage. The phone snapshot remains the
+  durable queue authority. This preserves the single-writer queue contract
+  while allowing TV-originated intent. Persisted stage diagnostics distinguish
+  local row matching, CloudKit submission, phone application, and snapshot
+  confirmation. Mapping and record separation are
+  covered by `Tests/QueueSnapshotSyncTests.swift`; immediate presentation order
+  is covered by `TVAppDecompositionTests`.
 
   **Late queued-record rebuild fix (2026-07-12):** CKSyncEngine record construction
   reads the current queue singleton (`queueSnapshot()`), not the pending-only view.
@@ -250,7 +275,8 @@ shows correct settings immediately. Guarded by
   - *Blank:* `CloudSyncEngine.fetchAllSubscriptionsNow` does a targeted
     paginated ZONE query for every current subscription record and applies each
     immediately (kicking off feed materialisation), bypassing CKSyncEngine's
-    cold delta stream. `TVAppModel.primeLibraryFromCloudSoon` (replaces the old
+    cold delta stream. `TVSyncCoordinator` and the compatibility facade
+    `primeLibraryFromCloudSoon` (replace the old
     queue-only `refreshQueueFromCloudSoon`) primes subscriptions + the queue
     snapshot once `engine.isActivated`, at launch and on foreground.
   - *Churn:* the churn was `upNextEpisodes` falling back to the locally-derived
@@ -290,7 +316,8 @@ shows correct settings immediately. Guarded by
     field) when none exists — a materialized-by-identity subscription NEVER
     originates settings; the real values win when the CloudKit record arrives.
     (2) One-shot TV launch repair (`SubscriptionStore.
-    markAllPendingSubscriptionProjectionsClean`, called in TVAppModel.bootstrap
+    markAllPendingSubscriptionProjectionsClean`, called by the decomposed tvOS
+    bootstrap workflow
     BEFORE startCloudSync, UserDefaults-flagged) de-dirties pre-fix default
     projections still in the TV DB so they can't re-push. Safe on TV only —
     the TV never authors subscription settings. (3) Regression tests

@@ -443,12 +443,20 @@ final class PlaybackCoordinator: ObservableObject {
                 self.sleepScheduleFadeTask?.cancel()
                 self.sleepScheduleFadeTask = Task { @MainActor [weak self] in
                     guard let self else { return }
-                    for step in stride(from: 0.9, through: 0, by: -0.1) {
+                    let tickSeconds = 0.5
+                    var remaining = SleepTimerService.gradualFadeDuration
+                    while remaining > 0 {
                         guard !Task.isCancelled else { return }
-                        self.engine.setVolume(Float(step))
-                        try? await Task.sleep(for: .milliseconds(250))
+                        self.engine.setVolume(
+                            SleepTimerService.gradualFadeVolume(
+                                remaining: remaining
+                            )
+                        )
+                        try? await Task.sleep(for: .milliseconds(500))
+                        remaining -= tickSeconds
                     }
                     guard !Task.isCancelled else { return }
+                    self.engine.setVolume(0)
                     self.engine.pause()
                     self.isPlaying = false
                     self.engine.setVolume(1)
@@ -478,6 +486,7 @@ final class PlaybackCoordinator: ObservableObject {
                         "No response to prompt — faded out and rewound to prompt point",
                         metadata: [
                             "atEpisodeBoundary": "\(atEpisodeBoundary)",
+                            "fadeSeconds": "\(Int(SleepTimerService.gradualFadeDuration))",
                             "rewindTarget": "\(Int(rewindTarget))"
                         ]
                     )

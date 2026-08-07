@@ -13,6 +13,54 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### Full episode descriptions on Apple TV — 7 August 2026
+
+- Added one native, scrollable tvOS description sheet with the complete
+  feed-supplied episode notes, podcast context, readable typography and a
+  standard Done action.
+- Added a visible Description control to the audio player and the native video
+  player's Episode menu.
+- Added Episode Description to the standard long-press context menu for Home,
+  Up Next, Library and History episode rows/cards while preserving existing
+  Pin, Unpin and Archive actions.
+- Sanitized feed HTML into stable paragraph/list text without adding WebKit or
+  another network/sync path; unresolved legacy rows remain safely unavailable
+  until their existing detail recovery completes.
+
+### More audible Play Instant warning and calmer sleep fades — 7 August 2026
+
+- Increased the Play Instant transition cue's waveform level and player gain so
+  the warning remains clearly audible over an episode already playing, without
+  altering the user's normal playback volume.
+- Replaced the manual Sleep Timer's abrupt five-second linear fade and Sleep
+  Schedule's roughly 2.5-second stepped fade with one shared, smooth 30-second
+  envelope.
+- Preserved cancellation, extension, pause, rewind and volume-reset semantics;
+  added diagnostics for cue/fade policy and regression coverage for the common
+  monotonic fade curve.
+
+### 2 August 2026 — Apple TV application model decomposed into focused subsystems
+
+- Replaced the former 1,200-plus-line `TVAppModel` implementation file with a
+  249-line composition facade and separate bootstrap, private-iCloud sync,
+  recovery, Library, Up Next, Continue Listening, playback-routing, and
+  diagnostics files.
+- Added focused observable `TVLibraryModel`, `TVQueueModel`, and
+  `TVContinueListeningModel` state owners so unrelated page changes no longer
+  need to invalidate one monolithic root state surface.
+- Added a production/test dependency container, dedicated sync/bootstrap/task
+  coordinators, pure projection helpers, and a bounded episode-detail
+  repository.
+- Preserved `TVPlaybackModel` and `StreamingPlaybackEngine` as the sole player
+  state machine while moving request resolution, checkpoints, and archive
+  write-back behind `TVPlaybackCoordinator`.
+- Migrated tvOS views to focused page state and added a read-only diagnostics
+  snapshot boundary.
+- Added architecture regression tests for bootstrap state, Library ordering,
+  phone-authored queue ordering/placeholders, and state isolation.
+- This is a tvOS-only architecture change. It does not alter iPhone playback,
+  downloads, Release Radar, queue composition, or private-iCloud authority.
+
 ### 1 August 2026 — Apple TV Home stability and episode archiving
 
 - Moved **Updating from iPhone** out of the Home content stack and into a
@@ -735,6 +783,109 @@ complete or the tvOS app is promoted as shipping.
 - Updated generated-project inputs, package membership, release validation and
   canonical product documentation to state that private iCloud is the only
   cross-device synchronization method.
+
+### Apple TV queue consistency and cross-device History — 2 August 2026
+
+- Replaced Home's horizontal Up Next artwork shelf with the exact same
+  full-width, focusable queue rows used by the dedicated Up Next page,
+  including position, duration, video state, detail recovery and Archive.
+- Moved iCloud state into one app-shell status badge shared by Home, Up Next,
+  Library, History, Search and Settings. Status changes no longer insert rows
+  into page content or disturb focus and layout.
+- Added a History tab showing the 50 most recently archived episodes from the
+  existing private-iCloud listening history shared by all devices. Synced
+  metadata remains visible even for legacy entries awaiting local details;
+  resolved audio and video episodes can be replayed directly.
+- Added a bounded recent-archive query and focused observable History model so
+  remote history updates do not require views to scan the full history table.
+- Removed the redundant dedicated Up Next tab after Home became the complete
+  queue surface. Home rows now place priority before artwork, align publisher
+  and duration directly beneath the episode title, and use compact icon-only
+  Archive controls to preserve more space for episode information.
+- Removed Autohop's second custom focus stroke from tvOS cards. Native tvOS card
+  focus now owns the edge while Autohop supplies only its purple fill and glow,
+  eliminating the double border visible on highlighted tiles.
+- Added the iOS-matching blue Play Next control to every Home Up Next row except
+  the first. Apple TV sends a narrow one-use command through the user's private
+  iCloud; the iPhone resolves it through the existing QueueCoordinator pin
+  policy and republishes the authoritative queue snapshot to every device.
+- Play Next now pins the selected Apple TV row synchronously, before any
+  CloudKit work begins. A temporary local overlay protects that immediate
+  result from older snapshots until the phone-authored queue confirms the pin,
+  removing the former round-trip delay and visible reorder reversal.
+- Corrected legacy/reconstructed queue identity handling by pinning with the
+  authoritative row key rather than a potentially different locally-derived
+  episode key. Added durable stage diagnostics for row matching, immediate
+  ordering, iCloud submission, phone application and snapshot confirmation;
+  forced important tvOS evidence to disk so Xcode container captures are not
+  returned as empty open log files.
+- Kept Apple TV structurally unable to overwrite the full Up Next snapshot.
+  Companion commands are uniquely identified, safely repeatable, consumed by
+  the phone, and removed after application so delayed delivery cannot create a
+  second queue authority.
+- Completed a tvOS AI-context audit. Every runtime and tvOS regression-test
+  Swift file now carries an `AI CONTEXT` ownership header; a directory-level
+  architecture map documents target contracts and the strict plist,
+  entitlement and asset formats that cannot safely contain comments. The tvOS
+  release validator now fails if a future TV or TVTests Swift source is added
+  without an AI-readable header.
+- Added explicit cross-device queue pin state to the phone-authored Up Next
+  snapshot. tvOS now displays the same blue Play Next and orange Play Last
+  `pin.fill` badges as iPhone instead of inferring state from row position.
+- Added the iOS-matching teal `pin.slash.fill` Unpin action to pinned tvOS Home
+  rows. Unpin restores the natural Priority Stack position immediately on the
+  Apple TV, then uses the existing one-use private-iCloud QueueCommand channel
+  so iPhone persists the change and republishes it to every device.
+- Preserved compatibility with older queue snapshots and already-uploaded Play
+  Next commands: missing pin state decodes as unpinned, while a legacy command
+  without an action still decodes as Play Next. Added shared CloudKit round-trip
+  and tvOS natural-order regression tests for both Pin and Unpin.
+
+### Standards-compliant podcast client identity — 7 August 2026
+
+- Added one shared, privacy-safe User-Agent identity for iOS and tvOS RSS,
+  artwork, chapter, enclosure-download and streamed-media requests. The format
+  follows current IAB podcast measurement guidance: `Autohop/<version> Apple
+  <device-class> <OS>/<version>`.
+- Applied the identity to foreground, background and recovery URLSession paths
+  and to AVFoundation streaming through Apple's supported
+  `AVURLAssetHTTPUserAgentKey`, so podcast publishers can consistently
+  distinguish genuine Autohop listening from generic Apple networking traffic.
+- Deliberately excluded exact hardware models, serial numbers, account data,
+  installation identifiers and advertising identifiers. Added deterministic
+  iOS/tvOS format and header-preservation regression tests.
+
+### Discover search navigation reliability — 7 August 2026
+
+- Search now requests keyboard focus as soon as its dedicated results page is
+  presented, so one tap on Discover's search control is enough to begin typing.
+  The page owns an iOS 17-compatible focused text field instead of relying on
+  timing-sensitive navigation-bar search-controller installation.
+- Moved Search, subscribed-show and preview-show navigation onto RootView's one
+  typed navigation path. Back now returns from a show to Search without an
+  orphaned blank page, and the mini-player can reliably clear the path and
+  reveal the permanent main Player from every search result.
+- Added narrow navigation diagnostics for mini-player requests and completed
+  returns to the Player root, preserving evidence if a future presentation
+  layer interferes with the shared route.
+- Replaced the mini-player's production NotificationCenter hop and the podcast
+  page's descendant `dismiss()` call with direct actions supplied by RootView.
+  Both controls now mutate the authoritative navigation path synchronously;
+  notification and dismiss behavior remains only as an isolated-preview
+  fallback.
+
+### Strong Vocal Boost for new users — 7 August 2026
+
+- New installations now default the global **Default Playback → Vocal Boost**
+  setting to **Strong**, so every subscription created afterwards begins with
+  clearer, more present spoken audio.
+- Existing subscriptions retain their exact saved audio preferences. Existing
+  saved global defaults are also preserved, and users can change the factory
+  choice at any time from the main Settings page without altering podcasts
+  they already follow.
+- Kept the low-level legacy preference fallback at Off and added regression
+  coverage for fresh installs, explicit saved choices and old settings payloads
+  that predate the global Default Playback setting.
 
 ## Validation still required
 

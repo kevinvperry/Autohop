@@ -28,22 +28,22 @@ struct TVHomeView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
     let onReopenPlayer: () -> Void
+    @State private var descriptionItem: TVEpisodeDescriptionItem?
 
     var body: some View {
         let visibleQueueRows = homeQueueRows
-        ZStack(alignment: .topTrailing) {
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 48) {
                 if model.playbackModel.currentEpisode != nil {
                     nowPlayingSection
-                } else if let continueItem = model.continueListening {
+                } else if let continueItem = model.continueListeningModel.item {
                     continueListeningSection(continueItem)
                 }
                 if !visibleQueueRows.isEmpty {
-                    queueShelf(title: "Up Next", rows: visibleQueueRows)
+                    queueList(title: "Up Next", rows: visibleQueueRows)
                 }
                 if model.playbackModel.currentEpisode == nil,
-                   model.continueListening == nil,
+                   model.continueListeningModel.item == nil,
                    visibleQueueRows.isEmpty {
                     ContentUnavailableView(
                         "Nothing to play yet",
@@ -54,37 +54,21 @@ struct TVHomeView: View {
                 }
                 .padding(.horizontal, 80)
                 .padding(.vertical, 60)
-            }
-
-            if case .updating = model.syncStatus {
-                Label("Updating from iCloud", systemImage: "icloud.and.arrow.down")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
-                    // Status chrome uses the safe viewport edge rather than
-                    // Home's inset content grid.
-                    .padding(.top, 20)
-                    .padding(.trailing, 28)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-                    .accessibilityLabel("Updating from iCloud")
-            }
         }
+        .tvEpisodeDescriptionSheet(item: $descriptionItem)
     }
 
     /// Home is a presentation projection, not a second queue authority. Keep
-    /// the active item available in the dedicated Up Next tab, but avoid
+    /// the active item in the authoritative phone-authored snapshot, but avoid
     /// showing the same episode immediately below its Now Playing hero here.
     /// Use every stable identity available because legacy queue rows may have
     /// been reconstructed from a different object instance than playback.
     private var homeQueueRows: [TVQueueRowModel] {
         guard let current = model.playbackModel.currentEpisode else {
-            return model.queueRows
+            return model.queueModel.rows
         }
         let currentKey = PlaybackPositionStore.key(for: current)
-        return model.queueRows.filter { row in
+        return model.queueModel.rows.filter { row in
             if let episode = row.episode,
                model.playbackModel.isCurrentEpisode(episode) {
                 return false
@@ -137,6 +121,18 @@ struct TVHomeView: View {
                 }
                 .buttonStyle(.card)
                 .tvFocusHighlight(cornerRadius: 20)
+                .contextMenu {
+                    if let episode = playback.currentEpisode {
+                        Button {
+                            showDescription(
+                                episode,
+                                podcastTitle: playback.currentSubscriptionTitle
+                            )
+                        } label: {
+                            Label("Episode Description", systemImage: "text.page")
+                        }
+                    }
+                }
 
                 Button {
                     playback.togglePlayPause()
@@ -234,6 +230,11 @@ struct TVHomeView: View {
             .disabled(item.episode == nil)
             .contextMenu {
                 if let episode = item.episode {
+                    Button {
+                        showDescription(episode, podcastTitle: entry.podcastTitle)
+                    } label: {
+                        Label("Episode Description", systemImage: "text.page")
+                    }
                     Button(role: .destructive) {
                         model.archiveEpisode(episode)
                     } label: {
@@ -252,7 +253,7 @@ struct TVHomeView: View {
         return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
-    // MARK: - Horizontal shelves (TVShelf-Standard pattern, DESIGN.md)
+    // MARK: - Shelves and lists
 
     private func shelf(title: String, episodes: [Episode]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -264,6 +265,12 @@ struct TVHomeView: View {
                             episode: episode,
                             podcastTitle: model.subscription(for: episode)?.title,
                             onPlay: { onPlay(episode) },
+                            onShowDescription: {
+                                showDescription(
+                                    episode,
+                                    podcastTitle: model.subscription(for: episode)?.title
+                                )
+                            },
                             onArchive: { model.archiveEpisode(episode) }
                         )
                     }
@@ -278,49 +285,34 @@ struct TVHomeView: View {
     /// snapshots visible on Home while targeted detail recovery runs. This
     /// prevents video/unresolved entries disappearing from Home even though
     /// their authoritative position is already visible in Up Next.
-    private func queueShelf(title: String, rows: [TVQueueRowModel]) -> some View {
+    /// Home deliberately uses the exact same focusable list-row component as
+    /// the dedicated Up Next page. This removes the former artwork-card shelf
+    /// dialect and makes title, duration, video and archive behaviour match.
+    private func queueList(title: String, rows: [TVQueueRowModel]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(title)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 32) {
-                    ForEach(rows.prefix(25)) { row in
-                        Button {
-                            if let episode = row.episode { onPlay(episode) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                TVArtworkImage(url: row.artworkURL, targetPixels: 520)
-                                    .frame(width: 280, height: 280)
-                                Text(row.title).font(.headline).lineLimit(2)
-                                    .frame(width: 280, alignment: .leading)
-                                Text(row.podcastTitle).font(.subheadline)
-                                    .foregroundStyle(.secondary).lineLimit(1)
-                                    .frame(width: 280, alignment: .leading)
-                                if !row.isPlayable {
-                                    Label(
-                                        model.queueEnrichmentFailed(for: row) ? "Details unavailable" : "Loading details…",
-                                        systemImage: model.queueEnrichmentFailed(for: row) ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath"
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                                }
-                            }
-                        }
-                        .buttonStyle(.card)
-                        .tvFocusHighlight(cornerRadius: 18)
-                        .disabled(!row.isPlayable)
-                        .task { model.enrichQueueRowIfNeeded(row) }
-                        .contextMenu {
+            LazyVStack(spacing: 24) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    TVQueueRow(
+                        row: row,
+                        detailLoadFailed: model.queueEnrichmentFailed(for: row),
+                        allowsPlayNext: index > 0,
+                        onPlay: { if let episode = row.episode { onPlay(episode) } },
+                        onPlayNext: {
+                            Task { await model.requestPlayNext(row) }
+                        },
+                        onUnpin: {
+                            Task { await model.requestUnpin(row) }
+                        },
+                        onShowDescription: {
                             if let episode = row.episode {
-                                Button(role: .destructive) {
-                                    model.archiveEpisode(episode)
-                                } label: {
-                                    Label("Archive Episode", systemImage: "archivebox")
-                                }
+                                showDescription(episode, podcastTitle: row.podcastTitle)
                             }
-                        }
-                    }
+                        },
+                        onArchive: { if let episode = row.episode { model.archiveEpisode(episode) } }
+                    )
+                    .task { model.enrichQueueRowIfNeeded(row) }
                 }
-                .padding(.vertical, 4)
             }
             .focusSection()
         }
@@ -339,6 +331,7 @@ struct TVEpisodeCard: View {
     let episode: Episode
     let podcastTitle: String?
     let onPlay: () -> Void
+    let onShowDescription: () -> Void
     let onArchive: () -> Void
 
     var body: some View {
@@ -362,9 +355,21 @@ struct TVEpisodeCard: View {
         .buttonStyle(.card)
         .tvFocusHighlight(cornerRadius: 18)
         .contextMenu {
+            Button(action: onShowDescription) {
+                Label("Episode Description", systemImage: "text.page")
+            }
             Button(role: .destructive, action: onArchive) {
                 Label("Archive Episode", systemImage: "archivebox")
             }
         }
+    }
+}
+
+private extension TVHomeView {
+    func showDescription(_ episode: Episode, podcastTitle: String?) {
+        descriptionItem = TVEpisodeDescriptionItem(
+            episode: episode,
+            podcastTitle: podcastTitle
+        )
     }
 }

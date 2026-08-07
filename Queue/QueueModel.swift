@@ -56,11 +56,9 @@ public enum QueueModel {
     /// show ever appeared. Interleaving one-per-show across priority order is
     /// what actually reads as "Up Next," not a per-show binge list — browsing
     /// a show's full backlog is Library's job.
-    /// No pin overrides yet: Play Next/Play Last pins are local, per-device,
-    /// un-synced state on iPhone today (queue-pins.json), so a TV/watch
-    /// install has no pin data of its own to apply — this is the honest
-    /// current behavior, not an oversight. If pins are ever synced, layer
-    /// `applyPins` on top here the same way `downloadedQueue` does.
+    /// This locally-derived fallback has no pin overrides. The normal companion
+    /// path is the phone-authored QueueSnapshot, whose Version 3 entries carry
+    /// explicit Play Next / Play Last state as well as authoritative order.
     public static func streamableQueue(from subscriptions: [Subscription]) -> [Episode] {
         subscriptions
             .sorted { $0.priorityRank < $1.priorityRank }
@@ -97,19 +95,25 @@ public enum QueueModel {
         public let podcastTitle: String?
         public let subscriptionID: UUID
         public let episode: Episode?
+        public var pinState: QueuePinState?
+        public let publishedAt: Date?
         public var id: String { episodeKey }
         public init(
             episodeKey: String,
             title: String,
             podcastTitle: String? = nil,
             subscriptionID: UUID,
-            episode: Episode?
+            episode: Episode?,
+            pinState: QueuePinState? = nil,
+            publishedAt: Date? = nil
         ) {
             self.episodeKey = episodeKey
             self.title = title
             self.podcastTitle = podcastTitle
             self.subscriptionID = subscriptionID
             self.episode = episode
+            self.pinState = pinState
+            self.publishedAt = publishedAt
         }
     }
 
@@ -145,7 +149,9 @@ public enum QueueModel {
                     title: episode.title,
                     podcastTitle: entry.podcastTitle,
                     subscriptionID: entry.subscriptionID,
-                    episode: episode
+                    episode: episode,
+                    pinState: entry.pinState,
+                    publishedAt: episode.publishedAt ?? entry.publishedAt
                 )
             }
             // Version 2 can create a streamable episode directly. Legacy v1
@@ -156,7 +162,9 @@ public enum QueueModel {
                 title: entry.episodeTitle,
                 podcastTitle: entry.podcastTitle,
                 subscriptionID: entry.subscriptionID,
-                episode: projectedEpisode
+                episode: projectedEpisode,
+                pinState: entry.pinState,
+                publishedAt: entry.publishedAt
             )
         }
     }
