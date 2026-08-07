@@ -55,7 +55,10 @@ struct TVHomeView: View {
                 .padding(.horizontal, 80)
                 .padding(.vertical, 60)
         }
-        .tvEpisodeDescriptionSheet(item: $descriptionItem)
+        .tvEpisodeDescriptionSheet(
+            item: $descriptionItem,
+            resolveEpisode: { await model.episodeWithResolvedDescription($0) }
+        )
     }
 
     /// Home is a presentation projection, not a second queue authority. Keep

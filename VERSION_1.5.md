@@ -945,6 +945,13 @@ complete or the tvOS app is promoted as shipping.
   record has no show notes. The Description control now displays a loading
   state while resolving up to 250 items, then presents the full cleaned notes
   or an honest unavailable state if the publisher no longer carries them.
+- Rebuilt **Top Episodes** as wide television-first cards with artwork on the
+  left and episode title, show and release date on the right. Reduced all
+  Discover shelf-heading sizes to keep the page hierarchy balanced.
+- Moved missing-note resolution into the shared Description sheet so Home,
+  History, Library lists and the player all use the same publisher-feed path.
+  Title-copy placeholders are rejected as descriptions, and named or
+  double-escaped RSS entities such as `&rsquo;` are decoded correctly.
 
 ## Validation still required
 

@@ -51,7 +51,10 @@ struct TVPlayerView: View {
             playbackModel.togglePlayPause()
         }
         .preferredColorScheme(.dark)
-        .tvEpisodeDescriptionSheet(item: $descriptionItem)
+        .tvEpisodeDescriptionSheet(
+            item: $descriptionItem,
+            resolveEpisode: resolveEpisodeDescription
+        )
         .overlay {
             if isResolvingDescription {
                 VStack(spacing: 16) {

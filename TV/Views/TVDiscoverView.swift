@@ -69,7 +69,7 @@ struct TVDiscoverView: View {
         shelf(title) {
             ForEach(episodes) { episode in
                 NavigationLink(value: TVDiscoverRoute.episode(episode)) {
-                    TVDiscoverEpisodeCard(
+                    TVDiscoverFeaturedEpisodeCard(
                         episode: episode,
                         countryCode: discoverModel.selectedStorefront.code,
                         repository: repository
@@ -97,7 +97,7 @@ struct TVDiscoverView: View {
 
     private func shelf<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(title).font(.title.bold()).padding(.horizontal, 72)
+            Text(title).font(.title2.bold()).padding(.horizontal, 72)
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 28) { content() }
                     .padding(.horizontal, 72).padding(.vertical, 14)
@@ -307,32 +307,60 @@ private struct TVDiscoverShowCard: View {
             .accessibilityLabel("\(show.title), \(show.publisher)")
     }
 }
-private struct TVDiscoverEpisodeCard: View {
+/// Pocket-Casts-inspired horizontal episode card used only for Top Episodes.
+/// Unlike show shelves, ranking an episode needs visible title/show/date
+/// context; artwork-only cards made different episodes from one show
+/// indistinguishable.
+private struct TVDiscoverFeaturedEpisodeCard: View {
     let episode: PodcastChartEpisode
     let countryCode: String
     let repository: TVDiscoverRepository
     @State private var isVideo = false
 
     var body: some View {
-        TVArtworkImage(url: episode.artworkURL, targetPixels: 640)
-            .frame(width: 290, height: 290)
-            .overlay(alignment: .topTrailing) { if isVideo { TVDiscoverVideoPill() } }
-            .task(id: episode.id) {
-                isVideo = await repository.isVideoEpisode(countryCode: countryCode, episode: episode)
+        HStack(spacing: 22) {
+            TVArtworkImage(url: episode.artworkURL, targetPixels: 440)
+                .frame(width: 180, height: 180)
+                .overlay(alignment: .topTrailing) {
+                    if isVideo { TVDiscoverVideoPill(compact: true) }
+                }
+            VStack(alignment: .leading, spacing: 9) {
+                Text(episode.title)
+                    .font(.title3.bold())
+                    .lineLimit(2)
+                Text(episode.showTitle)
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if let releaseDate = episode.releaseDate {
+                    Text(releaseDate, format: .dateTime.day().month(.abbreviated).year())
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                }
             }
-            .accessibilityLabel("\(episode.title), \(episode.showTitle)")
+            .frame(width: 430, alignment: .leading)
+        }
+        .padding(18)
+        .frame(width: 680, height: 216, alignment: .leading)
+        .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 18))
+        .task(id: episode.id) {
+            isVideo = await repository.isVideoEpisode(countryCode: countryCode, episode: episode)
+        }
+        .accessibilityLabel("\(episode.title), \(episode.showTitle)")
     }
 }
 
 private struct TVDiscoverVideoPill: View {
+    var compact = false
+
     var body: some View {
         Label("Video", systemImage: "play.rectangle.fill")
             .font(.caption.bold())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, compact ? 8 : 12)
+            .padding(.vertical, compact ? 6 : 8)
             .foregroundStyle(.white)
             .background(.purple.opacity(0.92), in: Capsule())
-            .padding(12)
+            .padding(compact ? 8 : 12)
     }
 }
 private struct TVDiscoverEpisodeRow: View {

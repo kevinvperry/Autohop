@@ -50,7 +50,10 @@ struct TVHistoryView: View {
         }
         .onAppear { restoreFocus() }
         .onChange(of: model.historyModel.items.map(\.id)) { _, _ in restoreFocus() }
-        .tvEpisodeDescriptionSheet(item: $descriptionItem)
+        .tvEpisodeDescriptionSheet(
+            item: $descriptionItem,
+            resolveEpisode: { await model.episodeWithResolvedDescription($0) }
+        )
     }
 
     private func restoreFocus() {

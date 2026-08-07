@@ -1,4 +1,5 @@
 import XCTest
+import AutohopCore
 @testable import AutohopTV
 
 // AI CONTEXT — Regression coverage for the lightweight RSS-description reader.
@@ -20,6 +21,29 @@ final class TVEpisodeDescriptionTextTests: XCTestCase {
             TVEpisodeDescriptionText.plainText(from: "Episode &#35;12 &#x2014; News"),
             "Episode #12 — News"
         )
+    }
+
+    func testPublisherNamedAndDoubleEscapedEntitiesAreDecoded() {
+        XCTAssertEqual(
+            TVEpisodeDescriptionText.plainText(
+                from: "Billy&amp;rsquo;s Joke &ndash; JB&lsquo;s pick"
+            ),
+            "Billy’s Joke – JB‘s pick"
+        )
+    }
+
+    func testTitleCopiedIntoDescriptionIsNotMeaningfulShowNotes() {
+        var episode = Episode(
+            subscriptionID: UUID(),
+            guid: "description-title-fallback",
+            title: "The Daily Update",
+            audioURL: URL(string: "https://example.com/episode.mp3")!
+        )
+        episode.description = "<p>The Daily Update</p>"
+
+        XCTAssertFalse(TVEpisodeDescriptionText.hasMeaningfulDescription(episode))
+        episode.description = "<p>Today we explain the latest developments.</p>"
+        XCTAssertTrue(TVEpisodeDescriptionText.hasMeaningfulDescription(episode))
     }
 
     func testMissingDescriptionProducesEmptyText() {

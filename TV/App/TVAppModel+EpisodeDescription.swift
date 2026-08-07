@@ -8,11 +8,13 @@ import AutohopCore
 // archive parse that could compromise Apple TV memory.
 extension TVAppModel {
     func episodeWithResolvedDescription(_ source: Episode) async -> Episode {
-        if source.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        if TVEpisodeDescriptionText.hasMeaningfulDescription(source) {
             return source
         }
-        guard let subscription = playbackModel.currentSubscriptionForDescription
-                ?? subscription(id: source.subscriptionID) else {
+        let playbackSubscription = playbackModel.isCurrentEpisode(source)
+            ? playbackModel.currentSubscriptionForDescription
+            : nil
+        guard let subscription = subscription(for: source) ?? playbackSubscription else {
             return source
         }
         do {
@@ -26,9 +28,18 @@ extension TVAppModel {
                 return source
             }
             var resolved = source
-            resolved.description = parsed.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? parsed.description
-                : parsed.subtitle
+            let parsedDescription = TVEpisodeDescriptionText.plainText(from: parsed.description)
+            if !parsedDescription.isEmpty,
+               Self.normalizedDescriptionLookupTitle(parsedDescription)
+                != Self.normalizedDescriptionLookupTitle(parsed.title) {
+                resolved.description = parsed.description
+            } else if let subtitle = parsed.subtitle,
+                      Self.normalizedDescriptionLookupTitle(subtitle)
+                        != Self.normalizedDescriptionLookupTitle(parsed.title) {
+                resolved.description = subtitle
+            } else {
+                resolved.description = nil
+            }
             resolved.subtitle = parsed.subtitle ?? source.subtitle
             AppLogger.shared.info(
                 "tv.description.resolved",

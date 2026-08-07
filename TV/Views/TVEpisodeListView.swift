@@ -28,7 +28,10 @@ struct TVEpisodeListView: View {
             }
         }
         .task { await model.loadEpisodeDetails(subscriptionID: subscriptionID) }
-        .tvEpisodeDescriptionSheet(item: $descriptionItem)
+        .tvEpisodeDescriptionSheet(
+            item: $descriptionItem,
+            resolveEpisode: { await model.episodeWithResolvedDescription($0) }
+        )
     }
 
     @ViewBuilder
