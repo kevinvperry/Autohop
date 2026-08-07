@@ -13,6 +13,36 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### Apple TV Discover navigation and playback repair — 7 August 2026
+
+- Replaced placeholder category, show and episode destinations with focusable
+  navigation backed by publisher RSS feeds.
+- Added expanded category grids, show episode lists, full episode details,
+  Play controls, searchable show routing, safe loading failures and route
+  diagnostics.
+- Added an explicit Discover playback origin: playback contributes to History
+  and Stats but cannot subscribe, alter Up Next, write companion episode state
+  or auto-advance into the phone-authored queue.
+- Added route-depth, feed-resolution and play-request diagnostics so device
+  exports distinguish catalogue, RSS, navigation and playback failures.
+
+### Apple TV Discover foundations — 7 August 2026
+
+- Replaced the standalone Apple TV Search tab with a first-class **Discover**
+  destination containing storefront-aware Top Episodes, New & Notable, Top
+  Podcasts, category browsing and catalogue search entry points.
+- Added a narrow shared charts interface while keeping Apple response parsing,
+  caching and the iPhone Discover view model private to their existing module.
+- Added a dedicated tvOS Discover model and actor-backed repository with
+  cancellation, request generations, local storefront persistence, bounded
+  eager category loading and redacted performance diagnostics.
+- Established immutable catalogue presentation models and a mechanically
+  testable browse-only policy with no subscription, priority, archive or Up
+  Next authority.
+- Removed stale tvOS Search subscription state and inaccurate “add podcast”
+  language. Full publisher-feed show/episode detail and playback integration
+  remain later phases and are not represented as complete.
+
 ### Full episode descriptions on Apple TV — 7 August 2026
 
 - Added one native, scrollable tvOS description sheet with the complete

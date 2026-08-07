@@ -16,6 +16,10 @@ extension TVAppModel {
         )
     }
 
+    func beginDiscoverPlayback(_ episode: Episode, subscription: Subscription) async {
+        await playbackCoordinator.beginDiscoverPlayback(episode, subscription: subscription)
+    }
+
     func archiveEpisode(_ episode: Episode) {
         playbackCoordinator.archiveEpisode(episode)
     }

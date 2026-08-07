@@ -41,6 +41,16 @@ final class TVPlaybackCoordinator {
         )
     }
 
+    func beginDiscoverPlayback(_ episode: Episode, subscription: Subscription) async {
+        await playbackModel.play(
+            episode: episode,
+            subscription: subscription,
+            displayPodcastTitle: subscription.title,
+            verifyVideoIfAmbiguous: episode.mediaKind == .audio,
+            origin: .discover
+        )
+    }
+
     func archiveEpisode(_ episode: Episode) {
         let isCurrent = playbackModel.isCurrentEpisode(episode)
         let canonicalEpisode = TVEpisodeResolver.canonicalized(episode)

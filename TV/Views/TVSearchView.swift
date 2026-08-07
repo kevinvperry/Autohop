@@ -8,7 +8,8 @@ import AutohopCore
 // preview for playback. It never creates a local subscription and cannot push
 // subscription or priority changes to the authoritative iPhone library.
 struct TVSearchView: View {
-    let model: TVAppModel
+    let countryCode: String
+    let onSelect: (PodcastSearchResult) -> Void
     @State private var searchModel = TVSearchModel()
 
     var body: some View {
@@ -17,6 +18,7 @@ struct TVSearchView: View {
         // plus the system search field is self-describing.
         content
             .searchable(text: $searchModel.query, prompt: "Podcast name")
+            .onAppear { searchModel.countryCode = countryCode }
             .onChange(of: searchModel.query) { _, newValue in
                 searchModel.queryChanged(newValue)
             }
@@ -29,7 +31,7 @@ struct TVSearchView: View {
             ContentUnavailableView(
                 "Find a podcast",
                 systemImage: "magnifyingglass",
-                description: Text("Search by name to add a podcast to this Apple TV. Manage your synced subscriptions on iPhone.")
+                description: Text("Search the public podcast catalogue. Manage subscriptions on iPhone.")
             )
         case .loading:
             ProgressView()
@@ -46,11 +48,9 @@ struct TVSearchView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 40)], spacing: 40) {
                     ForEach(results) { result in
-                        TVSearchResultCard(
-                            result: result,
-                            state: .notSubscribed,
-                            onSubscribe: {}
-                        )
+                        Button { onSelect(result) } label: { TVSearchResultCard(result: result) }
+                            .buttonStyle(.card)
+                            .tvFocusHighlight()
                     }
                 }
                 .padding(.horizontal, 64)
@@ -61,12 +61,11 @@ struct TVSearchView: View {
 
 }
 
-/// TVCard-SearchResult pattern (DESIGN.md): square artwork + title/author,
-/// with a Subscribe button whose label reflects subscribeState.
+/// TVCard-SearchResult pattern (DESIGN.md): square artwork + title/author.
+/// Cards route to the canonical browse-only show detail; they never imply a
+/// subscription mutation.
 struct TVSearchResultCard: View {
     let result: PodcastSearchResult
-    let state: TVSearchModel.SubscribeState
-    let onSubscribe: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -86,22 +85,9 @@ struct TVSearchResultCard: View {
         }
     }
 
-    @ViewBuilder
-    private var label: some View {
-        switch state {
-        case .notSubscribed:
-            Text("Add to This Apple TV")
-        case .subscribing:
-            Label("Subscribing…", systemImage: "hourglass")
-        case .subscribed:
-            Label("Subscribed", systemImage: "checkmark")
-        case .failed:
-            Label("Retry", systemImage: "arrow.clockwise")
-        }
-    }
 }
 
-/// Search state + per-result subscribe status, owned by the view (Phase 4).
+/// Search state owned by the view (Phase 0 cleanup).
 /// Kept small and view-local rather than folded into TVAppModel — search is
 /// transient UI state, not library truth.
 @MainActor
@@ -111,32 +97,12 @@ final class TVSearchModel {
         case idle, loading, results([PodcastSearchResult]), empty, failed(String)
     }
 
-    enum SubscribeState: Equatable {
-        case notSubscribed, subscribing, subscribed, failed
-    }
-
     var query = ""
+    var countryCode: String?
     private(set) var phase: Phase = .idle
-    private var subscribeStates: [Int: SubscribeState] = [:]
 
     private let service = PodcastSearchService()
     private var searchTask: Task<Void, Never>?
-
-    func subscribeState(for result: PodcastSearchResult) -> SubscribeState {
-        subscribeStates[result.id] ?? .notSubscribed
-    }
-
-    func setSubscribing(_ result: PodcastSearchResult) {
-        subscribeStates[result.id] = .subscribing
-    }
-
-    func setSubscribed(_ result: PodcastSearchResult) {
-        subscribeStates[result.id] = .subscribed
-    }
-
-    func setSubscribeFailed(_ result: PodcastSearchResult, message: String) {
-        subscribeStates[result.id] = .failed
-    }
 
     func queryChanged(_ newValue: String) {
         searchTask?.cancel()
@@ -155,7 +121,7 @@ final class TVSearchModel {
     private func performSearch(_ term: String) async {
         phase = .loading
         do {
-            let results = try await service.search(query: term)
+            let results = try await service.search(query: term, countryCode: countryCode)
             guard !Task.isCancelled else { return }
             phase = results.isEmpty ? .empty : .results(results)
         } catch {

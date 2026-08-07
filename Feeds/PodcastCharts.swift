@@ -34,12 +34,10 @@ import Foundation
 // arrives. (3) a fresh larger disk-cache entry is a valid ordered superset for
 // a smaller chart request, preventing duplicate Top-8/Top-15 downloads.
 // Consumed by DiscoverViewModel.
-// tvOS Phase 4 (2026-07-04): this file is now IN AutohopCore's Package.swift
-// sources (verified Foundation-only, no UIKit) but its types are still
-// `internal` — deliberately NOT publicized yet (a bigger surface than
-// PodcastSearch.swift's: genre rails, country picker, on-disk chart caching,
-// top-episodes paging). TV's Search tab does not use this file. Publicize
-// when the Discover/charts shelf is actually built for TV.
+// tvOS Discover (2026-08-07): the implementation types below intentionally
+// remain internal. The small public facade at the end of this file exports
+// immutable chart DTOs and only the operations required by another target. Do
+// not expose DiscoverViewModel or make the network/cache implementation public.
 
 // MARK: - Models
 
@@ -1190,5 +1188,143 @@ final class DiscoverViewModel: ObservableObject {
         loaded50CategoryKey = nil
         requested50CategoryKey = nil
         await loadTop50Category(country: country, genre: genre)
+    }
+}
+
+// MARK: - Narrow cross-platform chart facade
+
+/// Immutable chart show exported by AutohopCore. This deliberately does not
+/// expose the internal Apple response/cache models or the iPhone view model.
+public struct PodcastChartShow: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let rank: Int
+    public let title: String
+    public let publisher: String
+    public let artworkURL: URL?
+    public let genre: String
+
+    public init(id: String, rank: Int, title: String, publisher: String, artworkURL: URL?, genre: String) {
+        self.id = id
+        self.rank = rank
+        self.title = title
+        self.publisher = publisher
+        self.artworkURL = artworkURL
+        self.genre = genre
+    }
+}
+
+public struct PodcastChartEpisode: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let rank: Int
+    public let title: String
+    public let showTitle: String
+    public let artworkURL: URL?
+    public let releaseDate: Date?
+    public let collectionID: String?
+
+    public init(id: String, rank: Int, title: String, showTitle: String, artworkURL: URL?, releaseDate: Date?, collectionID: String?) {
+        self.id = id
+        self.rank = rank
+        self.title = title
+        self.showTitle = showTitle
+        self.artworkURL = artworkURL
+        self.releaseDate = releaseDate
+        self.collectionID = collectionID
+    }
+}
+
+public struct PodcastChartCategory: Identifiable, Hashable, Sendable {
+    public let id: Int
+    public let name: String
+
+    public init(id: Int, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+public struct PodcastChartStorefront: Identifiable, Hashable, Sendable {
+    public let code: String
+    public let name: String
+    public let flag: String
+    public var id: String { code }
+
+    public init(code: String, name: String, flag: String) {
+        self.code = code
+        self.name = name
+        self.flag = flag
+    }
+}
+
+/// Small injectable contract shared by tvOS Discover and its tests.
+public protocol PodcastChartsProviding: Sendable {
+    func topShows(countryCode: String, limit: Int) async throws -> [PodcastChartShow]
+    func topEpisodes(countryCode: String, limit: Int) async throws -> [PodcastChartEpisode]
+    func newAndNotable(countryCode: String, limit: Int) async throws -> [PodcastChartShow]
+    func shows(countryCode: String, categoryID: Int, limit: Int) async throws -> [PodcastChartShow]
+    func categories(countryCode: String) async -> [PodcastChartCategory]
+    func resolveShow(id: String, countryCode: String) async throws -> PodcastSearchResult?
+}
+
+/// Public entry point for Apple chart data. Network, parsing and cache details
+/// remain isolated behind PodcastChartsService inside AutohopCore.
+public actor ApplePodcastChartsProvider: PodcastChartsProviding {
+    private let service = PodcastChartsService()
+
+    public init() {}
+
+    public nonisolated static var storefronts: [PodcastChartStorefront] {
+        ChartCountry.all.map(Self.map)
+    }
+
+    public nonisolated static var deviceStorefront: PodcastChartStorefront {
+        map(ChartCountry.deviceDefault)
+    }
+
+    public func topShows(countryCode: String, limit: Int) async throws -> [PodcastChartShow] {
+        try await service.topPodcasts(country: normalized(countryCode), limit: limit).map(Self.map)
+    }
+
+    public func topEpisodes(countryCode: String, limit: Int) async throws -> [PodcastChartEpisode] {
+        try await service.topEpisodes(country: normalized(countryCode), limit: limit).map(Self.map)
+    }
+
+    public func newAndNotable(countryCode: String, limit: Int) async throws -> [PodcastChartShow] {
+        try await service.newAndNotable(country: normalized(countryCode), limit: limit).map(Self.map)
+    }
+
+    public func shows(countryCode: String, categoryID: Int, limit: Int) async throws -> [PodcastChartShow] {
+        guard let genre = ChartGenre.rails.first(where: { $0.id == categoryID }) else { return [] }
+        return try await service.topPodcasts(country: normalized(countryCode), genre: genre, limit: limit).map(Self.map)
+    }
+
+    public func categories(countryCode: String) async -> [PodcastChartCategory] {
+        let names = await service.genreNames(country: normalized(countryCode))
+        return ChartGenre.rails.map { PodcastChartCategory(id: $0.id, name: names[$0.id] ?? $0.name) }
+    }
+
+    public func resolveShow(id: String, countryCode: String) async throws -> PodcastSearchResult? {
+        let placeholder = ChartPodcast(
+            id: id, rank: 0, title: "Podcast", artist: "",
+            artworkURL: nil, genreName: ""
+        )
+        return try await service.resolveFeed(for: placeholder, country: normalized(countryCode))
+    }
+
+    private func normalized(_ code: String) -> String {
+        let candidate = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ChartCountry.all.contains(where: { $0.code == candidate }) ? candidate : ChartCountry.deviceDefault.code
+    }
+
+    private nonisolated static func map(_ value: ChartPodcast) -> PodcastChartShow {
+        PodcastChartShow(id: value.id, rank: value.rank, title: value.title, publisher: value.artist, artworkURL: value.artworkURL, genre: value.genreName)
+    }
+
+    private nonisolated static func map(_ value: ChartEpisode) -> PodcastChartEpisode {
+        PodcastChartEpisode(id: value.id, rank: value.rank, title: value.title, showTitle: value.showName, artworkURL: value.artworkURL, releaseDate: value.releaseDate, collectionID: value.collectionId)
+    }
+
+    private nonisolated static func map(_ value: ChartCountry) -> PodcastChartStorefront {
+        PodcastChartStorefront(code: value.code, name: value.name, flag: value.flag)
     }
 }

@@ -2,13 +2,9 @@ import SwiftUI
 import AutohopCore
 
 // AI CONTEXT — TV/Views/TVMainTabView.swift
-// Phase 2 (tvOS proposal §7 item 1) + Phase 4 (§9 item 1): the
-// Home/Library/History/Search sidebar-adaptable TabView shell, shown once
-// TVAppModel.rootState == .ready. `.search` is built OUTSIDE the ForEach
-// with the dedicated `Tab(value:role: .search)` initializer — it gets
-// tvOS's native search-role treatment (system search field placement, etc.),
-// which the title/systemImage-based `Tab(_:systemImage:value:)` used by the
-// other three does not provide.
+// Home/Library/Discover/History/Settings sidebar-adaptable TabView shell,
+// shown once TVAppModel.rootState == .ready. Search now lives inside Discover
+// so the app has one coherent public-catalogue destination.
 // NAVIGATIONSTACK FOOTGUN (fixed 2026-07-04, found in Kevin's first Simulator
 // run): do NOT wrap every tab's content in its own NavigationStack under
 // `.sidebarAdaptable` — only wrap a tab that actually pushes to another
@@ -36,13 +32,10 @@ struct TVMainTabView: View {
 
     var body: some View {
         TabView(selection: $router.selectedTab) {
-            ForEach(TVTab.allCases.filter { $0 != .search }) { tab in
+            ForEach(TVTab.allCases) { tab in
                 Tab(tab.title, systemImage: tab.systemImage, value: tab) {
                     destination(for: tab)
                 }
-            }
-            Tab(value: TVTab.search, role: .search) {
-                TVSearchView(model: model)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
@@ -105,10 +98,10 @@ struct TVMainTabView: View {
             TVHistoryView(model: model) { episode in
                 play(episode, restartFromBeginning: true)
             }
-        case .search:
-            // Never reached — `.search` is built directly in `body` with the
-            // dedicated search-role Tab initializer, not via this switch.
-            TVSearchView(model: model)
+        case .discover:
+            TVDiscoverView { episode, subscription in
+                playDiscover(episode, subscription: subscription)
+            }
         case .diagnostics:
             TVDiagnosticsView(model: model)
         }
@@ -128,6 +121,19 @@ struct TVMainTabView: View {
             // the resume seek complete. Physical tvOS otherwise retains the
             // cover's interim audio-only hierarchy until it is dismissed and
             // reopened around the same player.
+            if model.playbackModel.currentEpisode != nil,
+               model.playbackModel.errorMessage == nil {
+                isPlayerVisible = true
+            }
+        }
+    }
+
+    private func playDiscover(_ episode: Episode, subscription: Subscription) {
+        guard !isPreparingPlayback else { return }
+        isPreparingPlayback = true
+        Task { @MainActor in
+            await model.beginDiscoverPlayback(episode, subscription: subscription)
+            isPreparingPlayback = false
             if model.playbackModel.currentEpisode != nil,
                model.playbackModel.errorMessage == nil {
                 isPlayerVisible = true

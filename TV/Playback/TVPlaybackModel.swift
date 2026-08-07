@@ -28,6 +28,10 @@ import AutohopCore
 @MainActor
 @Observable
 final class TVPlaybackModel {
+    enum PlaybackOrigin: String {
+        case library
+        case discover
+    }
     private let engine = StreamingPlaybackEngine()
     private let subscriptionStore: SubscriptionStore
     /// TV LISTENING STATS (2026-07-11): every playback tick's forward delta is
@@ -77,6 +81,7 @@ final class TVPlaybackModel {
 
     private var currentSubscriptionID: UUID?
     private var currentSubscription: Subscription?
+    private var playbackOrigin: PlaybackOrigin = .library
     /// Authoritative phone-authored history key for an orphan/recovered row.
     /// Without this override, playback would create a second history record
     /// under the compatibility feed's GUID and future resume would split.
@@ -147,7 +152,8 @@ final class TVPlaybackModel {
         resumePositionOverride: TimeInterval? = nil,
         historyEntryID: String? = nil,
         displayPodcastTitle: String? = nil,
-        verifyVideoIfAmbiguous: Bool = false
+        verifyVideoIfAmbiguous: Bool = false,
+        origin: PlaybackOrigin = .library
     ) async {
         let requestGeneration = requestOwnership.begin()
         playbackRequestGeneration = requestGeneration
@@ -168,6 +174,7 @@ final class TVPlaybackModel {
         currentEpisode = episode
         currentSubscriptionID = subscription.id
         currentSubscription = subscription
+        playbackOrigin = origin
         currentHistoryEntryID = historyEntryID
         currentSubscriptionTitle = displayPodcastTitle ?? subscription.title
         currentTime = 0
@@ -176,10 +183,9 @@ final class TVPlaybackModel {
         lastProgressPushRequestedAt = Date.distantPast
         errorMessage = nil
         currentSpeed = subscription.playbackPreference.speed
-        let catalogStateAuthored = subscriptionStore.markCompanionEpisodePlaying(
-            episode,
-            preferredSubscriptionID: subscription.id
-        )
+        let catalogStateAuthored = origin == .library
+            ? subscriptionStore.markCompanionEpisodePlaying(episode, preferredSubscriptionID: subscription.id)
+            : false
         AppLogger.shared.info("tv.playback.catalogState", "TV authored playing state for cross-device sync", metadata: [
             "episodeID": episode.id.uuidString,
             "subscriptionID": subscription.id.uuidString,
@@ -348,6 +354,7 @@ final class TVPlaybackModel {
         currentEpisode = nil
         currentSubscriptionID = nil
         currentSubscription = nil
+        playbackOrigin = .library
         currentHistoryEntryID = nil
         isPlaying = false
         playbackState = .idle
@@ -452,11 +459,20 @@ final class TVPlaybackModel {
             historyEntryID: currentHistoryEntryID
         )
         sessionListenedSeconds = 0
-        _ = subscriptionStore.markCompanionEpisodePlayed(
-            episode,
-            preferredSubscriptionID: subscription.id
-        )
+        if playbackOrigin == .library {
+            _ = subscriptionStore.markCompanionEpisodePlayed(
+                episode,
+                preferredSubscriptionID: subscription.id
+            )
+        }
         statsStore.recordEpisodeCompleted(subscriptionID: subscription.id)
+
+        // Browse-only Discover playback contributes to local History/Stats but
+        // must never mutate or auto-advance into the phone-authored queue.
+        guard playbackOrigin == .library else {
+            stopAndClear()
+            return
+        }
 
         // Auto-advance through the streaming Priority Stack — same policy
         // shape as iPhone's mark-played-then-advance, minus download gating.

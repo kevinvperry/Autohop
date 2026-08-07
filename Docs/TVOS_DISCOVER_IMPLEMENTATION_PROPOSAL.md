@@ -354,6 +354,14 @@ description bodies or user-entered search text.
 
 ## 10. Phased delivery
 
+Implementation status as of 7 August 2026: Phases 0–2 foundation code is in
+progress. The public chart facade, browse-only mutation policy, immutable TV
+catalogue models, actor-backed landing repository, local storefront selection,
+progressive four-category eager budget, Discover tab/shelves, diagnostics and
+initial regression tests are implemented. Publisher-feed detail resolution,
+Discover-origin playback and interactive search results remain intentionally
+incomplete and must not be described as shipped.
+
 ### Phase 0 — Contracts and safety rails
 
 1. Characterise current iPhone chart order, storefront behaviour and category
@@ -397,6 +405,10 @@ restore focus after tab changes.
 
 ### Phase 3 — Read-only Show and Episode Detail
 
+**Implemented 7 August 2026.** Category and show cards now navigate, chart and
+search shows resolve through publisher RSS, and episode pages provide full
+details and a focusable Play control.
+
 1. Build the Show Detail header and bounded episode list.
 2. Build Episode Detail with full description and Play.
 3. Add long-press Episode Description to Discover episode lists.
@@ -406,6 +418,10 @@ restore focus after tab changes.
 Up Next, subscription count or CloudKit state.
 
 ### Phase 4 — Playback integration
+
+**Implemented 7 August 2026 (core policy and player route).** Discover playback
+has an explicit origin, records genuine History/Stats, and stops at completion
+without changing subscriptions, companion state, Up Next or priority.
 
 1. Convert reconciled RSS episodes through `TVDiscoverPlaybackFactory`, then
    canonicalise them through the existing `TVEpisodeResolver`.
@@ -424,6 +440,9 @@ Up Next, subscription count or CloudKit state.
 History/Stats without becoming subscriptions or queue entries.
 
 ### Phase 5 — Search
+
+**Partially implemented 7 August 2026.** Existing storefront-aware show results
+are focusable and open the canonical read-only show-detail route.
 
 1. Move the existing tvOS search into Discover.
 2. Use independent show and episode providers with correct storefront.

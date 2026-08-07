@@ -3,12 +3,8 @@ import Observation
 
 // AI CONTEXT — TV/Navigation/TVRouter.swift
 // Phase 2 (tvOS proposal §7 item 1) + Phase 4 (§9 item 1, search tab): the
-// typed tab enum + router object for the Home/Library/History/Search
-// sidebar-adaptable TabView (PC MainTabView/MainTabRouter shape, §2.1 there).
-// `.search` is NOT built with `Tab(title:systemImage:value:)` like the other
-// three — it uses the dedicated `Tab(value:role: .search)` initializer
-// (TVMainTabView special-cases it), so `title`/`systemImage` below are unused
-// for `.search` but kept for `CaseIterable`-driven switches elsewhere. The
+// typed tab enum + router object for the Home/Library/Discover/History/Settings
+// sidebar-adaptable TabView. Search is a child route inside Discover. The
 // router also owns per-tab NavigationPath so Library's push-to-episode-list
 // survives tab switches without resetting (a common tvOS TabView footgun —
 // losing the pushed detail when the user glances at another tab and comes back).
@@ -16,7 +12,7 @@ enum TVTab: String, CaseIterable, Identifiable {
     case home
     case library
     case history
-    case search
+    case discover
     case diagnostics
 
     var id: String { rawValue }
@@ -26,7 +22,7 @@ enum TVTab: String, CaseIterable, Identifiable {
         case .home: return "Home"
         case .library: return "Library"
         case .history: return "History"
-        case .search: return "Search"
+        case .discover: return "Discover"
         case .diagnostics: return "Settings"
         }
     }
@@ -36,7 +32,7 @@ enum TVTab: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .library: return "books.vertical"
         case .history: return "clock.arrow.circlepath"
-        case .search: return "magnifyingglass"
+        case .discover: return "safari"
         case .diagnostics: return "gearshape"
         }
     }
