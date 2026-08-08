@@ -128,38 +128,41 @@ struct TVEpisodeActionsMenu: View {
     let onArchive: (() -> Void)?
     let isVisible: Bool
 
-    @ViewBuilder
     var body: some View {
-        if isVisible {
-            Menu {
-                if let onPlayNext {
-                    Button(action: onPlayNext) {
-                        Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                    }
+        Menu {
+            if let onPlayNext {
+                Button(action: onPlayNext) {
+                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
                 }
-                if let onUnpin {
-                    Button(action: onUnpin) {
-                        Label("Unpin", systemImage: "pin.slash.fill")
-                    }
-                }
-                if let onShowDescription {
-                    Button(action: onShowDescription) {
-                        Label("Episode Description", systemImage: "text.page")
-                    }
-                }
-                if let onArchive {
-                    Button(role: .destructive, action: onArchive) {
-                        Label("Archive Episode", systemImage: "archivebox")
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.title2.bold())
-                    .frame(width: 68, height: 92)
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Episode actions")
+            if let onUnpin {
+                Button(action: onUnpin) {
+                    Label("Unpin", systemImage: "pin.slash.fill")
+                }
+            }
+            if let onShowDescription {
+                Button(action: onShowDescription) {
+                    Label("Episode Description", systemImage: "text.page")
+                }
+            }
+            if let onArchive {
+                Button(role: .destructive, action: onArchive) {
+                    Label("Archive Episode", systemImage: "archivebox")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.headline.bold())
+                .frame(width: 52, height: 66)
         }
+        .buttonStyle(.bordered)
+        // Keep the Menu alive while tvOS transfers focus into its presented
+        // menu. Removing the presenting control when FocusState briefly
+        // becomes nil dismisses the menu immediately after it opens.
+        .opacity(isVisible ? 1 : 0)
+        .padding(.leading, 14)
+        .accessibilityLabel("Episode actions")
+        .accessibilityHidden(!isVisible)
     }
 }
 

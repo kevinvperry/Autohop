@@ -970,6 +970,10 @@ complete or the tvOS app is promoted as shipping.
   authority.
 - Removed the permanently visible Up Next pin/unpin and Archive side buttons,
   returning that horizontal space to episode titles and metadata.
+- Fixed the focus-only ellipsis menu closing immediately after opening by
+  keeping its presenting control mounted while tvOS transfers focus into the
+  menu. Reduced the button footprint and increased its separation from the
+  episode card.
 
 ## Validation still required
 
