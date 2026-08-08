@@ -4,12 +4,14 @@ import AutohopCore
 
 // AI CONTEXT — TV/Views/TVDiscoverView.swift
 // Browse-only tvOS Discover navigation. Apple chart identities are resolved to
-// publisher RSS before an episode becomes playable. No route can subscribe,
-// reprioritise, archive, or mutate Up Next. One owned NavigationStack and
-// generation-scoped loaders prevent stale detail tasks updating a popped view.
+// publisher RSS before an episode becomes playable. No route can subscribe or
+// archive; Play Next is the one deliberate queue command and is locally
+// immediate. One owned NavigationStack and generation-scoped loaders prevent
+// stale detail tasks updating a popped view.
 
 struct TVDiscoverView: View {
     let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     @State private var discoverModel = TVDiscoverModel()
     @State private var path: [TVDiscoverRoute] = []
     private let repository = TVDiscoverRepository()
@@ -123,23 +125,23 @@ struct TVDiscoverView: View {
         case .show(let show):
             TVDiscoverShowDetail(
                 source: .chart(show), countryCode: discoverModel.selectedStorefront.code,
-                repository: repository, onPlay: onPlay
+                repository: repository, onPlay: onPlay, onPlayNext: onPlayNext
             )
         case .searchShow(let show):
             TVDiscoverShowDetail(
                 source: .search(show), countryCode: discoverModel.selectedStorefront.code,
-                repository: repository, onPlay: onPlay
+                repository: repository, onPlay: onPlay, onPlayNext: onPlayNext
             )
         case .episode(let episode):
             TVDiscoverChartEpisodeDetail(
                 chartEpisode: episode, countryCode: discoverModel.selectedStorefront.code,
-                repository: repository, onPlay: onPlay
+                repository: repository, onPlay: onPlay, onPlayNext: onPlayNext
             )
         case .category(let category):
             TVDiscoverCategoryView(
                 category: category, countryCode: discoverModel.selectedStorefront.code,
                 initialShows: discoverModel.landing.categoryShelves.first(where: { $0.category.id == category.id })?.shows ?? [],
-                repository: repository, onPlay: onPlay
+                repository: repository, onPlay: onPlay, onPlayNext: onPlayNext
             )
         }
     }
@@ -190,6 +192,7 @@ private enum TVDiscoverShowSource { case chart(PodcastChartShow), search(Podcast
 private struct TVDiscoverShowDetail: View {
     let source: TVDiscoverShowSource; let countryCode: String; let repository: TVDiscoverRepository
     let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     @State private var model = TVDiscoverDetailModel()
     @State private var descriptionItem: TVEpisodeDescriptionItem?
     var body: some View {
@@ -227,6 +230,7 @@ private struct TVDiscoverShowDetail: View {
                         episode: episode,
                         subscription: show.subscription,
                         onPlay: onPlay,
+                        onPlayNext: onPlayNext,
                         onShowDescription: {
                             descriptionItem = TVEpisodeDescriptionItem(
                                 episode: episode,
@@ -243,13 +247,19 @@ private struct TVDiscoverShowDetail: View {
 private struct TVDiscoverChartEpisodeDetail: View {
     let chartEpisode: PodcastChartEpisode; let countryCode: String; let repository: TVDiscoverRepository
     let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     @State private var model = TVDiscoverDetailModel()
     var body: some View {
         Group {
             switch model.phase {
             case .loading: ProgressView("Loading episode details…")
             case .failed(let message): ContentUnavailableView("Episode Unavailable", systemImage: "exclamationmark.triangle", description: Text(message))
-            case .episode(let show, let episode): TVDiscoverEpisodeDetail(episode: episode, subscription: show.subscription, onPlay: onPlay)
+            case .episode(let show, let episode): TVDiscoverEpisodeDetail(
+                episode: episode,
+                subscription: show.subscription,
+                onPlay: onPlay,
+                onPlayNext: onPlayNext
+            )
             case .show: EmptyView()
             }
         }.task { model.loadEpisode(chartEpisode, country: countryCode, repository: repository) }
@@ -257,7 +267,10 @@ private struct TVDiscoverChartEpisodeDetail: View {
 }
 
 private struct TVDiscoverEpisodeDetail: View {
-    let episode: Episode; let subscription: Subscription; let onPlay: (Episode, Subscription) -> Void
+    let episode: Episode
+    let subscription: Subscription
+    let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     var body: some View {
         ScrollView {
             HStack(alignment: .top, spacing: 52) {
@@ -269,6 +282,11 @@ private struct TVDiscoverEpisodeDetail: View {
                         AppLogger.shared.info("tv.discover.playRequested", "Discover play selected", metadata: ["episodeID": episode.id.uuidString], alwaysPersist: true)
                         onPlay(episode, subscription)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
+                    Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        onPlayNext(episode, subscription)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     let description = TVEpisodeDescriptionText.plainText(from: episode.description)
                     if !description.isEmpty {
                         Text(description).font(.callout).lineSpacing(3)
@@ -282,6 +300,7 @@ private struct TVDiscoverEpisodeDetail: View {
 private struct TVDiscoverCategoryView: View {
     let category: PodcastChartCategory; let countryCode: String; let initialShows: [PodcastChartShow]
     let repository: TVDiscoverRepository; let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     @State private var shows: [PodcastChartShow] = []
     @State private var error: String?
     var body: some View {
@@ -290,7 +309,13 @@ private struct TVDiscoverCategoryView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), spacing: 38)], spacing: 42) {
                 ForEach(shows.isEmpty ? initialShows : shows) { show in
                     NavigationLink {
-                        TVDiscoverShowDetail(source: .chart(show), countryCode: countryCode, repository: repository, onPlay: onPlay)
+                        TVDiscoverShowDetail(
+                            source: .chart(show),
+                            countryCode: countryCode,
+                            repository: repository,
+                            onPlay: onPlay,
+                            onPlayNext: onPlayNext
+                        )
                     } label: {
                         TVDiscoverShowCard(show: show, countryCode: countryCode, repository: repository)
                     }
@@ -394,6 +419,7 @@ private struct TVDiscoverEpisodeNavigationRow: View {
     let episode: Episode
     let subscription: Subscription
     let onPlay: (Episode, Subscription) -> Void
+    let onPlayNext: (Episode, Subscription) -> Void
     let onShowDescription: () -> Void
     @FocusState private var focusedElement: TVEpisodeRowFocus?
 
@@ -403,7 +429,8 @@ private struct TVDiscoverEpisodeNavigationRow: View {
                 TVDiscoverEpisodeDetail(
                     episode: episode,
                     subscription: subscription,
-                    onPlay: onPlay
+                    onPlay: onPlay,
+                    onPlayNext: onPlayNext
                 )
             } label: {
                 TVDiscoverEpisodeRow(episode: episode)
@@ -412,13 +439,29 @@ private struct TVDiscoverEpisodeNavigationRow: View {
             .focused($focusedElement, equals: .content)
 
             TVEpisodeActionsMenu(
-                onPlayNext: nil,
+                onPlay: { onPlay(episode, subscription) },
+                onPlayNext: { onPlayNext(episode, subscription) },
                 onUnpin: nil,
                 onShowDescription: onShowDescription,
                 onArchive: nil,
                 isVisible: focusedElement != nil
             )
             .focused($focusedElement, equals: .menu)
+        }
+        .contextMenu {
+            Button {
+                onPlay(episode, subscription)
+            } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            Button {
+                onPlayNext(episode, subscription)
+            } label: {
+                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+            Button(action: onShowDescription) {
+                Label("Episode Description", systemImage: "text.page")
+            }
         }
     }
 }

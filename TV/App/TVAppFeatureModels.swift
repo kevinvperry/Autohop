@@ -37,6 +37,10 @@ final class TVQueueModel {
     // older phone snapshot is still in flight. It is cleared only when the
     // authoritative phone snapshot confirms the same first episode.
     var pendingPlayNextEpisodeKey: String?
+    /// A resolved Discover episode may not exist in the phone-authored queue.
+    /// Keep that explicitly requested Play Next item locally until a later
+    /// authoritative snapshot contains it or playback consumes it.
+    var pendingDiscoverPlayNextItem: QueueModel.ResolvedQueueItem?
     /// Unpin commands are also presented immediately and held across stale
     /// snapshots until the phone republishes the entry with no pin state.
     var pendingUnpinEpisodeKeys: Set<String> = []

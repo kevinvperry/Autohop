@@ -229,6 +229,10 @@ extension TVAppModel {
                 authoritativeUpNextItems,
                 episodeKey: queueModel.pendingPlayNextEpisodeKey
             )
+            if let discoverItem = queueModel.pendingDiscoverPlayNextItem,
+               !newUpNextItems.contains(where: { $0.episodeKey == discoverItem.episodeKey }) {
+                newUpNextItems.insert(discoverItem, at: 0)
+            }
             for key in queueModel.pendingUnpinEpisodeKeys {
                 newUpNextItems = TVQueueProjector.unpin(
                     newUpNextItems,

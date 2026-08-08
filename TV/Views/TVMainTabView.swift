@@ -102,9 +102,14 @@ struct TVMainTabView: View {
                 play(episode, restartFromBeginning: true)
             }
         case .discover:
-            TVDiscoverView { episode, subscription in
-                playDiscover(episode, subscription: subscription)
-            }
+            TVDiscoverView(
+                onPlay: { episode, subscription in
+                    playDiscover(episode, subscription: subscription)
+                },
+                onPlayNext: { episode, subscription in
+                    Task { await model.requestDiscoverPlayNext(episode, subscription: subscription) }
+                }
+            )
         case .diagnostics:
             TVDiagnosticsView(model: model)
         }

@@ -974,6 +974,16 @@ complete or the tvOS app is promoted as shipping.
   keeping its presenting control mounted while tvOS transfers focus into the
   menu. Reduced the button footprint and increased its separation from the
   episode card.
+- Added **Play** as the first action in every tvOS episode ellipsis menu and
+  matching long-press menu, covering Up Next, Library, History and Discover.
+  The action starts the selected episode immediately through the existing
+  generation-safe playback coordinator.
+- Added **Play Next** to every resolved Discover episode row and detail page.
+  Selection pins the episode at the top of Apple TV's Up Next projection
+  immediately. Shows already present in the synced Library reuse their
+  authoritative identity and send the normal cross-device QueueCommand;
+  browse-only shows remain local to Apple TV so browsing never creates or
+  activates an iPhone subscription as a hidden side effect.
 
 ## Validation still required
 

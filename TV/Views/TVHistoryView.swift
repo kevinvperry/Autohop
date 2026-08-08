@@ -118,6 +118,7 @@ private struct TVHistoryRow: View {
 
             if item.episode != nil {
                 TVEpisodeActionsMenu(
+                    onPlay: onReplay,
                     onPlayNext: nil,
                     onUnpin: nil,
                     onShowDescription: onShowDescription,
@@ -129,6 +130,9 @@ private struct TVHistoryRow: View {
         }
         .contextMenu {
             if item.episode != nil {
+                Button(action: onReplay) {
+                    Label("Play", systemImage: "play.fill")
+                }
                 Button(action: onShowDescription) {
                     Label("Episode Description", systemImage: "text.page")
                 }

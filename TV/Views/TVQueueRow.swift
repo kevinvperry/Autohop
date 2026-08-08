@@ -74,6 +74,7 @@ struct TVQueueRow: View {
 
             if episode != nil {
                 TVEpisodeActionsMenu(
+                    onPlay: onPlay,
                     onPlayNext: !row.isPinned && allowsPlayNext ? onPlayNext : nil,
                     onUnpin: row.isPinned ? onUnpin : nil,
                     onShowDescription: onShowDescription,
@@ -85,6 +86,9 @@ struct TVQueueRow: View {
         }
         .contextMenu {
             if episode != nil {
+                Button(action: onPlay) {
+                    Label("Play", systemImage: "play.fill")
+                }
                 Button(action: onShowDescription) {
                     Label("Episode Description", systemImage: "text.page")
                 }
@@ -122,6 +126,7 @@ struct TVQueueRow: View {
 /// established by Apple's TV app and Pocket Casts without permanently spending
 /// horizontal space on destructive or queue-management buttons.
 struct TVEpisodeActionsMenu: View {
+    let onPlay: (() -> Void)?
     let onPlayNext: (() -> Void)?
     let onUnpin: (() -> Void)?
     let onShowDescription: (() -> Void)?
@@ -130,6 +135,11 @@ struct TVEpisodeActionsMenu: View {
 
     var body: some View {
         Menu {
+            if let onPlay {
+                Button(action: onPlay) {
+                    Label("Play", systemImage: "play.fill")
+                }
+            }
             if let onPlayNext {
                 Button(action: onPlayNext) {
                     Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")

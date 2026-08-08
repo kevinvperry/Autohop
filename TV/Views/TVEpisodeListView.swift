@@ -150,6 +150,7 @@ struct TVEpisodeRow: View {
             .focused($focusedElement, equals: .content)
 
             TVEpisodeActionsMenu(
+                onPlay: onPlay,
                 onPlayNext: onPlayNext,
                 onUnpin: onUnpin,
                 onShowDescription: onShowDescription,
@@ -159,6 +160,9 @@ struct TVEpisodeRow: View {
             .focused($focusedElement, equals: .menu)
         }
         .contextMenu {
+            Button(action: onPlay) {
+                Label("Play", systemImage: "play.fill")
+            }
             if let onPlayNext {
                 Button(action: onPlayNext) {
                     Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")

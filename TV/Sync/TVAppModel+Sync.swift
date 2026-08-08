@@ -83,10 +83,23 @@ extension TVAppModel {
         queueModel.pendingUnpinEpisodeKeys.remove(request.episodeKey)
         let previousFirstKey = upNextItems.first?.episodeKey ?? "none"
         let matchedIndex = upNextItems.firstIndex { $0.episodeKey == request.episodeKey }
-        let locallyPinnedItems = TVQueueProjector.pinToFront(
-            upNextItems,
-            episodeKey: request.episodeKey
-        )
+        let locallyPinnedItems: [QueueModel.ResolvedQueueItem]
+        if matchedIndex == nil {
+            locallyPinnedItems = [QueueModel.ResolvedQueueItem(
+                episodeKey: row.id,
+                title: row.title,
+                podcastTitle: row.podcastTitle,
+                subscriptionID: row.subscriptionID,
+                episode: episode,
+                pinState: .playNext,
+                publishedAt: episode.publishedAt
+            )] + upNextItems
+        } else {
+            locallyPinnedItems = TVQueueProjector.pinToFront(
+                upNextItems,
+                episodeKey: request.episodeKey
+            )
+        }
         upNextItems = locallyPinnedItems
         upNextEpisodes = locallyPinnedItems.compactMap(\.episode)
         queueRows = TVQueueProjector.rows(
@@ -121,6 +134,59 @@ extension TVAppModel {
             "requestID": request.id.uuidString,
             "episode": episode.title,
             "requestKey": request.episodeKey
+        ], alwaysPersist: true)
+    }
+
+    /// Pins a fully resolved Discover episode immediately. When the show is
+    /// already part of the synced Library, reuse that authoritative identity
+    /// and send the normal cross-device command. Browse-only Discover content
+    /// remains a local TV queue request; tvOS must never create a subscription
+    /// on the phone as a side effect of browsing.
+    func requestDiscoverPlayNext(_ episode: Episode, subscription: AutohopCore.Subscription) async {
+        if let librarySubscription = subscriptionsByID.values.first(where: {
+            $0.feedURL == subscription.feedURL
+        }), let libraryEpisode = (librarySubscription.episodes + [librarySubscription.latestEpisode].compactMap { $0 })
+            .first(where: {
+                $0.guid == episode.guid || $0.audioURL == episode.audioURL
+            }) {
+            let key = PlaybackPositionStore.key(for: libraryEpisode)
+            let row = TVQueueRowModel(
+                id: key,
+                subscriptionID: librarySubscription.id,
+                position: 1,
+                title: libraryEpisode.title,
+                podcastTitle: librarySubscription.title,
+                artworkURL: libraryEpisode.artworkURL ?? librarySubscription.artworkURL,
+                durationSeconds: libraryEpisode.durationSeconds,
+                mediaKind: libraryEpisode.mediaKind,
+                episode: libraryEpisode,
+                pinState: nil
+            )
+            await requestPlayNext(row)
+            return
+        }
+
+        let key = PlaybackPositionStore.key(for: episode)
+        let item = QueueModel.ResolvedQueueItem(
+            episodeKey: key,
+            title: episode.title,
+            podcastTitle: subscription.title,
+            subscriptionID: episode.subscriptionID,
+            episode: episode,
+            pinState: .playNext,
+            publishedAt: episode.publishedAt
+        )
+        queueModel.pendingDiscoverPlayNextItem = item
+        queueModel.pendingPlayNextEpisodeKey = key
+        var items = upNextItems.filter { $0.episodeKey != key }
+        items.insert(item, at: 0)
+        upNextItems = items
+        upNextEpisodes = items.compactMap(\.episode)
+        queueRows = TVQueueProjector.rows(from: items, subscriptionsByID: subscriptionsByID)
+        AppLogger.shared.info("tv.discover.playNextPinnedLocally", "Pinned browse-only Discover episode on Apple TV", metadata: [
+            "episode": episode.title,
+            "episodeKey": key,
+            "feedHost": subscription.feedURL.host ?? "unknown"
         ], alwaysPersist: true)
     }
 
