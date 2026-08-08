@@ -230,7 +230,11 @@ final class TVAppModel {
             libraryTiles = cached.map {
                 TVPodcastTileModel(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank, isMaterializing: false)
             }
-            rootState = .ready
+            // Cached tiles are only an artwork/title survival projection. They
+            // do not prove that the real store, Up Next or history projections
+            // are ready. Keep the branded launch view visible until bootstrap
+            // rebuilds every Home dependency; otherwise users briefly see an
+            // incorrect "Nothing to play yet" screen on every cold launch.
             syncStatus = .cached(Date(), generation: 0)
         }
 

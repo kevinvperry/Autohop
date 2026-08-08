@@ -985,6 +985,26 @@ complete or the tvOS app is promoted as shipping.
   browse-only shows remain local to Apple TV so browsing never creates or
   activates an iPhone subscription as a hidden side effect.
 
+### Apple TV release preparation — 9 August 2026
+
+- Reorganised Apple TV Settings around everyday users: Discover playback speed
+  remains first, followed by understandable iCloud, Up Next, Now Playing and
+  About information. Technical counters and build provenance now live in a
+  clearly secondary Developer Diagnostics section, with the full diagnostic
+  export deliberately placed at the absolute bottom.
+- Corrected cold-launch readiness so a cached show-artwork projection can no
+  longer expose Home before the real store, Up Next, history and Continue
+  Listening projections are assembled. This removes the misleading transient
+  “Nothing to play yet” frame seen immediately after the system launch screen.
+- Restored the existing 42-message branded startup carousel. First launch now
+  explains private iCloud setup and highlights current features while Autohop
+  prepares the first usable screen; returning launches still finish as soon as
+  their complete local projection is ready rather than waiting artificially.
+- Added a dedicated public **Autohop for Apple TV** website page. Its upper half
+  explains the big-screen philosophy and current benefits; its lower half is a
+  detailed setup, navigation, playback, Discover, iCloud, Settings and
+  troubleshooting guide grounded in the current tvOS implementation.
+
 ## Validation still required
 
 - Run a prolonged unplugged, screen-closed playback capture on a physical

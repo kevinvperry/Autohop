@@ -134,8 +134,6 @@ extension TVAppModel {
         }
         let newTiles = projection.tiles
         if newTiles != libraryTiles { libraryTiles = newTiles }
-        let newRootState: RootState = newTiles.isEmpty ? .empty : .ready
-        if newRootState != rootState { rootState = newRootState }
 
         // PERF FIX (2026-07-10, found investigating a reported memory/CPU bug):
         // subscriptionsByID + upNextItems/upNextEpisodes/
@@ -175,6 +173,13 @@ extension TVAppModel {
         if playbackModel.currentEpisode == nil, let resume = continueListening?.episode {
             playbackModel.preload(episode: resume)
         }
+
+        // AI CONTEXT — Launch readiness is published LAST. Cached/show tiles
+        // alone are not a usable Home screen: queue, history and Continue
+        // Listening must all be projected before TVRootView leaves the branded
+        // launch experience. This prevents a one-frame false empty state.
+        let newRootState: RootState = newTiles.isEmpty ? .empty : .ready
+        if newRootState != rootState { rootState = newRootState }
     }
 
     func recomputeDerivedState(recomputeQueue: Bool, recomputeHistory: Bool) {

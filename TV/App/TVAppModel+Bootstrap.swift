@@ -12,6 +12,14 @@ extension TVAppModel {
         guard !didBootstrap else { return }
         didBootstrap = true
 
+        // Keep the branded launch experience informative while the real store,
+        // queue and history projections are assembled. The task is cancelled
+        // as soon as bootstrap publishes a usable root state.
+        let launchMessageTask = Task { [weak self] in
+            await self?.waitForFirstSyncWithAnimatedStatus()
+        }
+        defer { launchMessageTask.cancel() }
+
         // Finish the deferred store load FIRST (off-main decode — see init's
         // note); everything below reads store.subscriptions.
         let loadStartedAt = CFAbsoluteTimeGetCurrent()
@@ -60,9 +68,9 @@ extension TVAppModel {
         // survived from a previous launch) may already have real content —
         // don't make a returning device sit through the first-sync wait.
         refreshLibrary()
-        // Never hold the focus UI behind a multi-minute carousel. A compact
-        // cached projection renders immediately; a true first install gets a
-        // short connection grace, then an actionable empty/offline state while
+        // A returning device normally becomes ready immediately. A true first
+        // install gets a short iCloud grace while the launch carousel explains
+        // what is happening, then an actionable empty/offline state while
         // CloudKit continues progressively in the background.
         guard rootState != .ready else { return }
         rootState = .loading
@@ -126,12 +134,12 @@ extension TVAppModel {
         "Almost done — your library is nearly all here…"
     ] }
 
-    /// Legacy compatibility helper. Bootstrap no longer calls this carousel;
-    /// first launch gets an eight-second grace and then remains interactive.
+    /// Rotates friendly, factual messages on the branded launch screen while
+    /// bootstrap is building the first usable Home projection.
     func waitForFirstSyncWithAnimatedStatus() async {
         var messageIndex = 0
         for _ in 0..<Self.firstSyncWaitMessages.count {
-            guard rootState == .loading else { return }
+            guard !Task.isCancelled, rootState == .loading else { return }
             statusText = Self.firstSyncWaitMessages[messageIndex % Self.firstSyncWaitMessages.count]
             messageIndex += 1
             try? await Task.sleep(for: .seconds(7))

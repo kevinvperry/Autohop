@@ -1,9 +1,11 @@
 import SwiftUI
 import AutohopCore
 
-// AI CONTEXT — Phase 5 TV Settings/Diagnostics surface. This is intentionally
-// factual and compact: projection health, build identity and a redacted log
-// export. It never claims a silent push guarantees execution.
+// AI CONTEXT — User-facing tvOS Settings followed by a deliberately secondary
+// developer diagnostics area. Everyday controls and understandable library /
+// iCloud health belong first; implementation counters, build provenance and
+// the Xcode-retrieved redacted export belong last. It never claims a silent
+// push guarantees execution.
 struct TVDiagnosticsView: View {
     let model: TVAppModel
     @State private var exportStatus: String?
@@ -14,7 +16,7 @@ struct TVDiagnosticsView: View {
         let snapshot = model.diagnosticsSnapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                Text("Settings & Diagnostics").font(.largeTitle.bold())
+                Text("Settings").font(.largeTitle.bold())
                 HStack(spacing: 24) {
                     Label("Discover Playback Speed", systemImage: "gauge.with.needle")
                         .font(.headline)
@@ -45,20 +47,35 @@ struct TVDiagnosticsView: View {
                 Text("Used when an episode is started from Discover. Library episodes continue to use their podcast-specific speed.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+
+                settingsHeading("iCloud & Library")
+                diagnosticRow("iCloud & Up Next", value: snapshot.syncLabel)
+                diagnosticRow("Up Next episodes", value: "\(snapshot.queueRowCount)")
+                diagnosticRow("Podcasts", value: "\(snapshot.libraryPodcastCount)")
                 Button {
-                    prepareDiagnosticExport()
+                    Task { await model.primeLibraryFromCloudSoon(reason: "tv.manualRetry") }
                 } label: {
-                    Label("Prepare Full Diagnostic Export", systemImage: "doc.badge.gearshape")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Label("Check for Updates", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
-                if let exportStatus {
-                    Text(exportStatus)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                diagnosticRow("iCloud & Up Next", value: snapshot.syncLabel)
-                diagnosticRow("Queue rows", value: "\(snapshot.queueRowCount)")
+                Text("Autohop keeps your Apple TV in step through your private iCloud account. New changes may take a short time to arrive.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                settingsHeading("Now Playing")
+                diagnosticRow("Episode", value: snapshot.playbackTitle)
+                diagnosticRow("Status", value: snapshot.playbackState)
+                diagnosticRow("Position", value: friendlyDuration(TimeInterval(snapshot.playbackPositionSeconds)))
+                diagnosticRow("Speed", value: String(format: "%.2f×", snapshot.configuredSpeed))
+
+                settingsHeading("About")
+                diagnosticRow("Autohop for Apple TV", value: shortVersionIdentity)
+                Text("Your subscriptions and Priority Stack are managed in Autohop on iPhone. Apple TV is designed for comfortable browsing, listening and watching on the big screen.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Divider().padding(.vertical, 12)
+                settingsHeading("Developer Diagnostics")
                 diagnosticRow("Waiting for legacy details", value: "\(snapshot.unresolvedQueue.count)")
                 ForEach(snapshot.unresolvedQueue, id: \.self) { detail in
                     Text(detail)
@@ -66,7 +83,6 @@ struct TVDiagnosticsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 20)
                 }
-                diagnosticRow("Library podcasts", value: "\(snapshot.libraryPodcastCount)")
                 diagnosticRow("Subscriptions awaiting details", value: "\(snapshot.pendingMaterialization.count)")
                 ForEach(snapshot.pendingMaterialization, id: \.self) { detail in
                     Text(detail)
@@ -75,22 +91,6 @@ struct TVDiagnosticsView: View {
                         .padding(.horizontal, 20)
                 }
                 diagnosticRow(
-                    "Current playback",
-                    value: snapshot.playbackTitle
-                )
-                diagnosticRow(
-                    "Playback state",
-                    value: snapshot.playbackState
-                )
-                diagnosticRow(
-                    "Playback position",
-                    value: "\(snapshot.playbackPositionSeconds) sec"
-                )
-                diagnosticRow(
-                    "Playback speed",
-                    value: String(format: "%.2f×", snapshot.configuredSpeed)
-                )
-                diagnosticRow(
                     "Player rate",
                     value: String(format: "%.2f×", snapshot.playerRate)
                 )
@@ -98,18 +98,24 @@ struct TVDiagnosticsView: View {
                     "History uploads pending",
                     value: "\(snapshot.pendingHistoryUploads)"
                 )
-                diagnosticRow("Version", value: versionIdentity)
-                Button {
-                    Task { await model.primeLibraryFromCloudSoon(reason: "tv.manualRetry") }
-                } label: {
-                    Label("Check for Updates", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-                Label("Redacted diagnostic log is being collected", systemImage: "doc.text.magnifyingglass")
+                diagnosticRow("Build identity", value: versionIdentity)
+                Label("Redacted diagnostic logging is active", systemImage: "doc.text.magnifyingglass")
                     .foregroundStyle(.secondary)
-                Text("Apple TV checks for the phone-authored queue through iCloud. Push notifications are wake hints and may be delayed by the system.")
+                Text("The technical export below is intended for troubleshooting with the developer and must be retrieved from the Apple TV app container using Xcode.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                Button {
+                    prepareDiagnosticExport()
+                } label: {
+                    Label("Prepare Full Diagnostic Export", systemImage: "doc.badge.gearshape")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                if let exportStatus {
+                    Text(exportStatus)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 80)
             .padding(.vertical, 60)
@@ -143,6 +149,29 @@ struct TVDiagnosticsView: View {
         HStack { Text(title).font(.headline); Spacer(); Text(value).foregroundStyle(.secondary) }
             .padding(20)
             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func settingsHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.title2.bold())
+            .padding(.top, 12)
+    }
+
+    private func friendlyDuration(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "Not started" }
+        let total = Int(seconds.rounded(.down))
+        let hours = total / 3_600
+        let minutes = (total % 3_600) / 60
+        let remainingSeconds = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+
+    private var shortVersionIdentity: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return "Version \(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?"))"
     }
 
     private var versionIdentity: String {
