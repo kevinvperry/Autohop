@@ -952,6 +952,12 @@ complete or the tvOS app is promoted as shipping.
   History, Library lists and the player all use the same publisher-feed path.
   Title-copy placeholders are rejected as descriptions, and named or
   double-escaped RSS entities such as `&rsquo;` are decoded correctly.
+- Expanded Top Episodes cards to provide more horizontal title space, using a
+  smaller two-line title treatment so long episode names remain recognisable.
+- Replaced the constrained tvOS Description sheet with a full-screen,
+  Siri-Remote-scrollable reader. The wider reading column and substantially
+  smaller title, publisher and body typography expose complete long-form show
+  notes without truncation.
 
 ## Validation still required
 

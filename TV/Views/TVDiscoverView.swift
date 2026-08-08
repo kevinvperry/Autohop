@@ -320,14 +320,15 @@ private struct TVDiscoverFeaturedEpisodeCard: View {
     var body: some View {
         HStack(spacing: 22) {
             TVArtworkImage(url: episode.artworkURL, targetPixels: 440)
-                .frame(width: 180, height: 180)
+                .frame(width: 184, height: 184)
                 .overlay(alignment: .topTrailing) {
                     if isVideo { TVDiscoverVideoPill(compact: true) }
                 }
             VStack(alignment: .leading, spacing: 9) {
                 Text(episode.title)
-                    .font(.title3.bold())
+                    .font(.headline)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(episode.showTitle)
                     .font(.headline)
                     .foregroundStyle(.secondary)
@@ -338,10 +339,10 @@ private struct TVDiscoverFeaturedEpisodeCard: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .frame(width: 430, alignment: .leading)
+            .frame(width: 560, alignment: .leading)
         }
         .padding(18)
-        .frame(width: 680, height: 216, alignment: .leading)
+        .frame(width: 820, height: 220, alignment: .leading)
         .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 18))
         .task(id: episode.id) {
             isVideo = await repository.isVideoEpisode(countryCode: countryCode, episode: episode)

@@ -4,7 +4,7 @@ import AutohopCore
 // AI CONTEXT — One shared Apple TV presentation for full episode show notes.
 // Episode lists raise this through their standard long-press context menu;
 // audio and native-video players expose an explicit Description control. The
-// sheet is intentionally read-only and receives an already-resolved Episode:
+// reader is intentionally read-only and receives an already-resolved Episode:
 // it never fetches a feed, owns playback, or introduces a second sync model.
 
 struct TVEpisodeDescriptionItem: Identifiable, Equatable {
@@ -34,17 +34,30 @@ struct TVEpisodeDescriptionView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 30) {
+                        Text("Episode Description")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        Button("Done") { dismiss() }
+                            .buttonStyle(.borderedProminent)
+                    }
+
                     Text(resolvedEpisode.title)
-                        .font(.title2.bold())
+                        .font(.title3.bold())
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let podcastTitle = item.podcastTitle,
                        !podcastTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text(podcastTitle)
-                            .font(.headline)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
 
@@ -55,7 +68,7 @@ struct TVEpisodeDescriptionView: View {
                             ProgressView()
                             Text("Loading the publisher's episode description…")
                         }
-                        .font(.body)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 300)
                     } else if descriptionText.isEmpty {
@@ -67,22 +80,20 @@ struct TVEpisodeDescriptionView: View {
                         .frame(maxWidth: .infinity, minHeight: 300)
                     } else {
                         Text(descriptionText)
-                            .font(.body)
-                            .lineSpacing(4)
+                            .font(.callout)
+                            .lineSpacing(6)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .frame(maxWidth: 1_250, alignment: .leading)
-                .padding(.horizontal, 90)
-                .padding(.vertical, 70)
+                .frame(maxWidth: 1_520, alignment: .leading)
+                .padding(.horizontal, 70)
+                .padding(.vertical, 55)
                 .frame(maxWidth: .infinity)
             }
-            .navigationTitle("Episode Description")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            // A focusable scroll surface lets the Siri Remote pan through long
+            // notes even when the only visible control (Done) is above them.
+            .focusable()
+            .focusEffectDisabled()
         }
         .preferredColorScheme(.dark)
         .task(id: item.id) {
@@ -101,7 +112,7 @@ extension View {
         item: Binding<TVEpisodeDescriptionItem?>,
         resolveEpisode: @escaping (Episode) async -> Episode
     ) -> some View {
-        sheet(item: item) {
+        fullScreenCover(item: item) {
             TVEpisodeDescriptionView(item: $0, resolveEpisode: resolveEpisode)
         }
     }
