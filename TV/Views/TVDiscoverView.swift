@@ -191,6 +191,7 @@ private struct TVDiscoverShowDetail: View {
     let source: TVDiscoverShowSource; let countryCode: String; let repository: TVDiscoverRepository
     let onPlay: (Episode, Subscription) -> Void
     @State private var model = TVDiscoverDetailModel()
+    @State private var descriptionItem: TVEpisodeDescriptionItem?
     var body: some View {
         Group {
             switch model.phase {
@@ -199,7 +200,12 @@ private struct TVDiscoverShowDetail: View {
             case .show(let show): showBody(show)
             case .episode(let show, _): showBody(show)
             }
-        }.task { model.loadShow(source: source, country: countryCode, repository: repository) }
+        }
+        .task { model.loadShow(source: source, country: countryCode, repository: repository) }
+        .tvEpisodeDescriptionSheet(
+            item: $descriptionItem,
+            resolveEpisode: { $0 }
+        )
     }
     private func showBody(_ show: TVDiscoverResolvedShow) -> some View {
         ScrollView {
@@ -217,10 +223,17 @@ private struct TVDiscoverShowDetail: View {
                 }
                 Text("Episodes").font(.title.bold())
                 ForEach(show.episodes) { episode in
-                    NavigationLink {
-                        TVDiscoverEpisodeDetail(episode: episode, subscription: show.subscription, onPlay: onPlay)
-                    } label: { TVDiscoverEpisodeRow(episode: episode) }
-                    .buttonStyle(.card)
+                    TVDiscoverEpisodeNavigationRow(
+                        episode: episode,
+                        subscription: show.subscription,
+                        onPlay: onPlay,
+                        onShowDescription: {
+                            descriptionItem = TVEpisodeDescriptionItem(
+                                episode: episode,
+                                podcastTitle: show.subscription.title
+                            )
+                        }
+                    )
                 }
             }.padding(70)
         }
@@ -371,4 +384,41 @@ private struct TVDiscoverEpisodeRow: View {
         VStack(alignment: .leading, spacing: 8) { Text(episode.title).font(.title3.bold()); if let date = episode.publishedAt { Text(date, style: .date).foregroundStyle(.secondary) } }
         Spacer(); Image(systemName: "chevron.right")
     }.padding(18) }
+}
+
+/// Discover episodes use the same focus-only ellipsis affordance as Library,
+/// History and Up Next. Browse-only policy deliberately limits this menu to
+/// publisher notes; playback remains the primary row action and Discover never
+/// authors queue/archive state.
+private struct TVDiscoverEpisodeNavigationRow: View {
+    let episode: Episode
+    let subscription: Subscription
+    let onPlay: (Episode, Subscription) -> Void
+    let onShowDescription: () -> Void
+    @FocusState private var focusedElement: TVEpisodeRowFocus?
+
+    var body: some View {
+        HStack(spacing: 20) {
+            NavigationLink {
+                TVDiscoverEpisodeDetail(
+                    episode: episode,
+                    subscription: subscription,
+                    onPlay: onPlay
+                )
+            } label: {
+                TVDiscoverEpisodeRow(episode: episode)
+            }
+            .buttonStyle(.card)
+            .focused($focusedElement, equals: .content)
+
+            TVEpisodeActionsMenu(
+                onPlayNext: nil,
+                onUnpin: nil,
+                onShowDescription: onShowDescription,
+                onArchive: nil,
+                isVisible: focusedElement != nil
+            )
+            .focused($focusedElement, equals: .menu)
+        }
+    }
 }

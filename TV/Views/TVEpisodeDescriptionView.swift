@@ -16,16 +16,18 @@ struct TVEpisodeDescriptionItem: Identifiable, Equatable {
 struct TVEpisodeDescriptionView: View {
     let item: TVEpisodeDescriptionItem
     let resolveEpisode: (Episode) async -> Episode
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
     @State private var resolvedEpisode: Episode
     @State private var isResolving = false
 
     init(
         item: TVEpisodeDescriptionItem,
-        resolveEpisode: @escaping (Episode) async -> Episode
+        resolveEpisode: @escaping (Episode) async -> Episode,
+        onDismiss: @escaping () -> Void
     ) {
         self.item = item
         self.resolveEpisode = resolveEpisode
+        self.onDismiss = onDismiss
         _resolvedEpisode = State(initialValue: item.episode)
     }
 
@@ -46,7 +48,7 @@ struct TVEpisodeDescriptionView: View {
 
                         Spacer()
 
-                        Button("Done") { dismiss() }
+                        Button("Done", action: onDismiss)
                             .buttonStyle(.borderedProminent)
                     }
 
@@ -90,12 +92,9 @@ struct TVEpisodeDescriptionView: View {
                 .padding(.vertical, 55)
                 .frame(maxWidth: .infinity)
             }
-            // A focusable scroll surface lets the Siri Remote pan through long
-            // notes even when the only visible control (Done) is above them.
-            .focusable()
-            .focusEffectDisabled()
         }
         .preferredColorScheme(.dark)
+        .onExitCommand(perform: onDismiss)
         .task(id: item.id) {
             guard !TVEpisodeDescriptionText.hasMeaningfulDescription(resolvedEpisode) else {
                 return
@@ -112,8 +111,12 @@ extension View {
         item: Binding<TVEpisodeDescriptionItem?>,
         resolveEpisode: @escaping (Episode) async -> Episode
     ) -> some View {
-        fullScreenCover(item: item) {
-            TVEpisodeDescriptionView(item: $0, resolveEpisode: resolveEpisode)
+        fullScreenCover(item: item) { presentedItem in
+            TVEpisodeDescriptionView(
+                item: presentedItem,
+                resolveEpisode: resolveEpisode,
+                onDismiss: { item.wrappedValue = nil }
+            )
         }
     }
 }

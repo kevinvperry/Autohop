@@ -958,6 +958,18 @@ complete or the tvOS app is promoted as shipping.
   Siri-Remote-scrollable reader. The wider reading column and substantially
   smaller title, publisher and body typography expose complete long-form show
   notes without truncation.
+- Fixed Description dismissal by letting the presenting item binding own both
+  the Done button and Menu/back action, rather than relying on nested
+  presentation-environment dismissal.
+- Standardised tvOS episode lists on a focus-only ellipsis menu inspired by
+  modern ten-foot podcast interfaces. Up Next now groups Play Next/Unpin,
+  Description and Archive behind one compact control. Library episodes already
+  present in Up Next can issue the same Play Next/Unpin command without
+  inventing queue identity; History uses the menu for its applicable action,
+  and browse-only Discover exposes Description without gaining queue or archive
+  authority.
+- Removed the permanently visible Up Next pin/unpin and Archive side buttons,
+  returning that horizontal space to episode titles and metadata.
 
 ## Validation still required
 

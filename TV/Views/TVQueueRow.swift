@@ -13,6 +13,7 @@ struct TVQueueRow: View {
     let onUnpin: () -> Void
     let onShowDescription: () -> Void
     let onArchive: () -> Void
+    @FocusState private var focusedElement: TVEpisodeRowFocus?
 
     private var episode: Episode? { row.episode }
 
@@ -69,34 +70,17 @@ struct TVQueueRow: View {
             .buttonStyle(.card)
             .tvFocusHighlight(cornerRadius: 16)
             .disabled(episode == nil)
+            .focused($focusedElement, equals: .content)
 
             if episode != nil {
-                if row.isPinned {
-                    Button(action: onUnpin) {
-                        Image(systemName: "pin.slash.fill")
-                            .font(.title2.weight(.semibold))
-                            .frame(width: 76, height: 110)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.teal)
-                    .accessibilityLabel("Unpin")
-                } else if allowsPlayNext {
-                    Button(action: onPlayNext) {
-                        Image(systemName: "text.line.first.and.arrowtriangle.forward")
-                            .font(.title2.weight(.semibold))
-                            .frame(width: 76, height: 110)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.blue)
-                    .accessibilityLabel("Play next")
-                }
-                Button(role: .destructive, action: onArchive) {
-                    Image(systemName: "archivebox")
-                        .font(.title2.weight(.semibold))
-                        .frame(width: 76, height: 110)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityLabel("Archive episode")
+                TVEpisodeActionsMenu(
+                    onPlayNext: !row.isPinned && allowsPlayNext ? onPlayNext : nil,
+                    onUnpin: row.isPinned ? onUnpin : nil,
+                    onShowDescription: onShowDescription,
+                    onArchive: onArchive,
+                    isVisible: focusedElement != nil
+                )
+                .focused($focusedElement, equals: .menu)
             }
         }
         .contextMenu {
@@ -131,4 +115,55 @@ struct TVQueueRow: View {
         let minutes = totalMinutes % 60
         return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
+}
+
+/// One compact secondary-action affordance shared by every tvOS episode list.
+/// It appears only while its row has focus, matching the ten-foot convention
+/// established by Apple's TV app and Pocket Casts without permanently spending
+/// horizontal space on destructive or queue-management buttons.
+struct TVEpisodeActionsMenu: View {
+    let onPlayNext: (() -> Void)?
+    let onUnpin: (() -> Void)?
+    let onShowDescription: (() -> Void)?
+    let onArchive: (() -> Void)?
+    let isVisible: Bool
+
+    @ViewBuilder
+    var body: some View {
+        if isVisible {
+            Menu {
+                if let onPlayNext {
+                    Button(action: onPlayNext) {
+                        Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                }
+                if let onUnpin {
+                    Button(action: onUnpin) {
+                        Label("Unpin", systemImage: "pin.slash.fill")
+                    }
+                }
+                if let onShowDescription {
+                    Button(action: onShowDescription) {
+                        Label("Episode Description", systemImage: "text.page")
+                    }
+                }
+                if let onArchive {
+                    Button(role: .destructive, action: onArchive) {
+                        Label("Archive Episode", systemImage: "archivebox")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.title2.bold())
+                    .frame(width: 68, height: 92)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Episode actions")
+        }
+    }
+}
+
+enum TVEpisodeRowFocus: Hashable {
+    case content
+    case menu
 }

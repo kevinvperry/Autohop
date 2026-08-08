@@ -68,50 +68,65 @@ private struct TVHistoryRow: View {
     let item: TVHistoryItem
     let onReplay: () -> Void
     let onShowDescription: () -> Void
+    @FocusState private var focusedElement: TVEpisodeRowFocus?
 
     var body: some View {
-        Button(action: onReplay) {
-            HStack(spacing: 24) {
-                TVArtworkImage(
-                    url: item.episode?.artworkURL ?? item.entry.artworkURL,
-                    cornerRadius: 12,
-                    targetPixels: 360
-                )
-                .frame(width: 140, height: 140)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(item.entry.episodeTitle)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text(item.entry.podcastTitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
-                        Text(item.entry.lastListenedAt, format: .relative(presentation: .named))
-                        if item.entry.mediaKind == .video {
-                            Label("Video", systemImage: "play.rectangle.fill")
+        HStack(spacing: 20) {
+            Button(action: onReplay) {
+                HStack(spacing: 24) {
+                    TVArtworkImage(
+                        url: item.episode?.artworkURL ?? item.entry.artworkURL,
+                        cornerRadius: 12,
+                        targetPixels: 360
+                    )
+                    .frame(width: 140, height: 140)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(item.entry.episodeTitle)
+                            .font(.headline)
+                            .lineLimit(2)
+                        Text(item.entry.podcastTitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Text(item.entry.lastListenedAt, format: .relative(presentation: .named))
+                            if item.entry.mediaKind == .video {
+                                Label("Video", systemImage: "play.rectangle.fill")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        if item.episode != nil {
+                            Label("Play again", systemImage: "arrow.counterclockwise")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(TVTheme.focusAccent)
+                        } else {
+                            Label("Playback details unavailable", systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
                         }
                     }
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    if item.episode != nil {
-                        Label("Play again", systemImage: "arrow.counterclockwise")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(TVTheme.focusAccent)
-                    } else {
-                        Label("Playback details unavailable", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
+                    Spacer()
                 }
-                Spacer()
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .buttonStyle(.card)
+            .tvFocusHighlight(cornerRadius: 16)
+            .disabled(item.episode == nil)
+            .focused($focusedElement, equals: .content)
+
+            if item.episode != nil {
+                TVEpisodeActionsMenu(
+                    onPlayNext: nil,
+                    onUnpin: nil,
+                    onShowDescription: onShowDescription,
+                    onArchive: nil,
+                    isVisible: focusedElement != nil
+                )
+                .focused($focusedElement, equals: .menu)
+            }
         }
-        .buttonStyle(.card)
-        .tvFocusHighlight(cornerRadius: 16)
-        .disabled(item.episode == nil)
         .contextMenu {
             if item.episode != nil {
                 Button(action: onShowDescription) {

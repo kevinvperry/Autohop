@@ -68,9 +68,12 @@ struct TVEpisodeListView: View {
     private var episodeList: some View {
         LazyVStack(alignment: .leading, spacing: 20) {
             ForEach(model.libraryModel.episodeRows(subscriptionID: subscriptionID)) { row in
+                let queueRow = queueRow(for: row.episode)
                 TVEpisodeRow(
                     episode: row.episode,
                     onPlay: { onPlay(row.episode) },
+                    onPlayNext: playNextAction(for: queueRow),
+                    onUnpin: unpinAction(for: queueRow),
                     onShowDescription: {
                         descriptionItem = TVEpisodeDescriptionItem(
                             episode: row.episode,
@@ -82,6 +85,30 @@ struct TVEpisodeListView: View {
             }
         }
     }
+
+    /// Library episodes can participate in the same queue commands as Home
+    /// only when they already have an authoritative phone-authored queue row.
+    /// Never synthesize queue identity from title alone.
+    private func queueRow(for episode: Episode) -> TVQueueRowModel? {
+        let episodeKey = PlaybackPositionStore.key(for: episode)
+        return model.queueModel.rows.first { row in
+            if row.id == episodeKey { return true }
+            guard let rowEpisode = row.episode else { return false }
+            return PlaybackPositionStore.key(for: rowEpisode) == episodeKey
+        }
+    }
+
+    private func playNextAction(for row: TVQueueRowModel?) -> (() -> Void)? {
+        guard let row,
+              !row.isPinned,
+              model.queueModel.rows.first?.id != row.id else { return nil }
+        return { Task { await model.requestPlayNext(row) } }
+    }
+
+    private func unpinAction(for row: TVQueueRowModel?) -> (() -> Void)? {
+        guard let row, row.isPinned else { return nil }
+        return { Task { await model.requestUnpin(row) } }
+    }
 }
 
 /// TVRow-Episode pattern (DESIGN.md): title + relative date + a text status
@@ -91,32 +118,57 @@ struct TVEpisodeListView: View {
 struct TVEpisodeRow: View {
     let episode: Episode
     let onPlay: () -> Void
+    let onPlayNext: (() -> Void)?
+    let onUnpin: (() -> Void)?
     let onShowDescription: () -> Void
     let onArchive: () -> Void
+    @FocusState private var focusedElement: TVEpisodeRowFocus?
 
     var body: some View {
-        Button(action: onPlay) {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(episode.title)
-                        .font(.headline)
-                        .lineLimit(2)
-                    if let publishedAt = episode.publishedAt {
-                        Text(publishedAt.formatted(date: .abbreviated, time: .omitted))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+        HStack(spacing: 20) {
+            Button(action: onPlay) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(episode.title)
+                            .font(.headline)
+                            .lineLimit(2)
+                        if let publishedAt = episode.publishedAt {
+                            Text(publishedAt.formatted(date: .abbreviated, time: .omitted))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    Spacer()
+                    statusPill
                 }
-                Spacer()
-                statusPill
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+            .buttonStyle(.card)
+            .tvFocusHighlight(cornerRadius: 14)
+            .focused($focusedElement, equals: .content)
+
+            TVEpisodeActionsMenu(
+                onPlayNext: onPlayNext,
+                onUnpin: onUnpin,
+                onShowDescription: onShowDescription,
+                onArchive: onArchive,
+                isVisible: focusedElement != nil
+            )
+            .focused($focusedElement, equals: .menu)
         }
-        .buttonStyle(.card)
-        .tvFocusHighlight(cornerRadius: 14)
         .contextMenu {
+            if let onPlayNext {
+                Button(action: onPlayNext) {
+                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                }
+            }
+            if let onUnpin {
+                Button(action: onUnpin) {
+                    Label("Unpin", systemImage: "pin.slash.fill")
+                }
+            }
             Button(action: onShowDescription) {
                 Label("Episode Description", systemImage: "text.page")
             }
