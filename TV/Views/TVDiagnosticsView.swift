@@ -7,8 +7,13 @@ import AutohopCore
 // the Xcode-retrieved redacted export belong last. It never claims a silent
 // push guarantees execution.
 struct TVDiagnosticsView: View {
+    private enum FocusTarget: Hashable {
+        case discoverPlaybackSpeed
+    }
+
     let model: TVAppModel
     @State private var exportStatus: String?
+    @FocusState private var focusedTarget: FocusTarget?
     @AppStorage(TVDiscoverPlaybackSettings.key)
     private var discoverPlaybackSpeed = TVDiscoverPlaybackSettings.defaultSpeed
 
@@ -41,9 +46,11 @@ struct TVDiagnosticsView: View {
                         .frame(minWidth: 150)
                     }
                     .buttonStyle(.bordered)
+                    .focused($focusedTarget, equals: .discoverPlaybackSpeed)
                 }
                 .padding(20)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                .focusSection()
                 Text("Used when an episode is started from Discover. Library episodes continue to use their podcast-specific speed.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -120,6 +127,10 @@ struct TVDiagnosticsView: View {
             .padding(.horizontal, 80)
             .padding(.vertical, 60)
         }
+        // AI CONTEXT — The speed menu is the first actionable user setting.
+        // Explicit initial focus prevents tvOS from skipping the Menu and
+        // selecting the later "Check for Updates" button instead.
+        .defaultFocus($focusedTarget, .discoverPlaybackSpeed)
     }
 
     /// tvOS has no general-purpose share sheet. Create a redacted, stitched
@@ -154,7 +165,8 @@ struct TVDiagnosticsView: View {
     private func settingsHeading(_ title: String) -> some View {
         Text(title)
             .font(.title2.bold())
-            .padding(.top, 12)
+            .padding(.top, 38)
+            .padding(.bottom, 4)
     }
 
     private func friendlyDuration(_ seconds: TimeInterval) -> String {

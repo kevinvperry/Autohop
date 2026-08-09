@@ -1004,6 +1004,10 @@ complete or the tvOS app is promoted as shipping.
   explains the big-screen philosophy and current benefits; its lower half is a
   detailed setup, navigation, playback, Discover, iCloud, Settings and
   troubleshooting guide grounded in the current tvOS implementation.
+- Made Discover Playback Speed the explicit initial focus target so Settings no
+  longer opens on Check for Updates or leaves the speed menu unreachable.
+- Increased separation around Settings section headings to make the user,
+  playback, About and developer groups easier to distinguish at TV distance.
 
 ## Validation still required
 
