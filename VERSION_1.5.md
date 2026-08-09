@@ -1045,6 +1045,15 @@ complete or the tvOS app is promoted as shipping.
   now start on. Monthly/yearly recaps remain off, per-podcast notification
   choices and iOS system permission still apply, and older saved settings use
   historical false fallbacks so no existing user's choices are rewritten.
+- Corrected App Store packaging for the Apple TV target by populating the
+  layered Home Screen and App Store icon stacks plus standard and wide Top
+  Shelf artwork at every required 1x/2x size. Release compilation now emits
+  `CFBundlePrimaryIcon`, `TVTopShelfPrimaryImage` and
+  `TVTopShelfPrimaryImageWide` in the finished application metadata.
+- Expanded the tvOS archive validator to reject a submission archive when its
+  compiled App Store icon, either Top Shelf image reference, or `Assets.car`
+  is missing. This converts the two App Store validation failures encountered
+  during the first Version 1.5 upload attempt into local preflight failures.
 
 ## Validation still required
 
