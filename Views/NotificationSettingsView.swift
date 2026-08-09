@@ -234,7 +234,7 @@ private struct NotificationPodcastRow: View {
 
 // AI CONTEXT — RecapSettingsView ("Listening Recaps" sheet). Opt-in toggles for
 // the weekly / monthly / yearly stats-summary notifications (AppSettings.recap*
-// Enabled, all OFF by default). Presented as a sheet from the Stats page toolbar
+// Enabled; weekly ON for fresh installs, monthly/yearly OFF). Presented as a sheet from the Stats page toolbar
 // and from Notification Settings. Each toggle change persists the flag, requests
 // notification permission on first opt-in (reusing NotificationService.request
 // Permission), and reconciles the schedule via NotificationService.scheduleRecaps
@@ -278,7 +278,7 @@ struct RecapSettingsView: View {
                 } header: {
                     Text("Send me a recap")
                 } footer: {
-                    Text("Get a friendly summary of your listening when a week, month, or year wraps up — delivered around 9am. Tap a recap to open your stats for that period.\n\nCalculated on your device. Your listening never leaves your phone. All off by default.")
+                    Text("Get a friendly summary of your listening when a week, month, or year wraps up — delivered around 9am. Tap a recap to open your stats for that period.\n\nCalculated on your device. Your listening never leaves your phone. Weekly is on for new users; monthly and yearly are optional.")
                 }
                 .listRowBackground(cardBackground)
             }

@@ -99,7 +99,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
   links, conditional Copy Link, and no automatic media-enclosure or RSS-address
   exposure
 - Global Default Playback panel — set the speed, Vocal Boost, Trim Silence, and start/end skip applied to every new subscription and to playback of not-yet-subscribed feeds, without touching shows you've already tuned; it uses the same trim-control UI as per-podcast settings
-- Optional iCloud sync (off by default) — keeps played/archived state,
+- Private iCloud sync (on by default for new users) — keeps played/archived state,
   per-podcast settings, subscribe/unsubscribe, the atomic Priority Stack order,
   listening history (including your resume position), per-podcast Download
   Filters, and stats in step across your devices over your private CloudKit

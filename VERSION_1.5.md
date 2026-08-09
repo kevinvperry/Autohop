@@ -1008,6 +1008,11 @@ complete or the tvOS app is promoted as shipping.
   longer opens on Check for Updates or leaves the speed menu unreachable.
 - Increased separation around Settings section headings to make the user,
   playback, About and developer groups easier to distinguish at TV distance.
+- Updated fresh-install defaults for the Version 1.5 ecosystem: private iCloud
+  Sync, the global new-episode notification switch and Weekly Listening Recaps
+  now start on. Monthly/yearly recaps remain off, per-podcast notification
+  choices and iOS system permission still apply, and older saved settings use
+  historical false fallbacks so no existing user's choices are rewritten.
 
 ## Validation still required
 

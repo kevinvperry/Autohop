@@ -39,7 +39,9 @@ review of the Pocket Casts iOS sync engine — its conflict-resolution disciplin
 applied on top of CloudKit.
 
 ## Guiding principles
-1. **Opt-in**, off by default (`AppSettings.iCloudSyncEnabled`). On-device privacy
+1. **Enabled for new users by default** (`AppSettings.iCloudSyncEnabled`) so the
+   iPhone and Apple TV experience works without a hidden setup step. Existing
+   saved choices remain authoritative. On-device privacy
    stance holds until the user enables sync.
 2. **Local store is the source of truth** (GRDB/SQLite); CloudKit is a sidecar.
 3. **Sync mutable user-state, never the catalog.** Episode title/description/

@@ -39,8 +39,10 @@ enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
 // the 1.6x speed / Strong boost / Low trim defaults) — never remove a flag
 // once shipped or the migration will re-run. Defaults here must stay in sync
 // with the FEATURES.md "Model Defaults Quick Reference" appendix.
-// recapWeekly/Monthly/YearlyEnabled (all default false) are the opt-in Listening
-// Recap toggles, scheduled via NotificationService.scheduleRecaps (see §14.1).
+// recapWeeklyEnabled defaults true for a fresh Version 1.5 install; monthly and
+// yearly remain false. Older decoded settings with a missing recap field retain
+// the historical false fallback so this product-default change never opts in an
+// existing user.
 // The hasCompletedWelcome / hasSubscribedFirstShow / hasPlayedFirstEpisode /
 // hasSeenDownloadFirstNote / dismissedGettingStarted flags drive the first-run
 // onboarding experience (see ONBOARDING_PLAN.md) — all default false so a fresh
@@ -76,12 +78,13 @@ struct AppSettings: Equatable, Codable {
     var trimSilenceLowDefaultMigrated: Bool
     var playbackSpeed160Migrated: Bool
     var autoArchiveSettingsMigrated: Bool
-    // Cross-device iCloud sync (CloudKit). Opt-in, OFF by default so the
-    // on-device privacy stance holds until the user explicitly enables it.
+    // Cross-device iCloud sync (CloudKit). ON for a fresh install so iPhone and
+    // Apple TV can become useful together without a hidden setup dependency.
+    // Existing saved settings remain authoritative.
     var iCloudSyncEnabled: Bool
-    // Listening Recaps: opt-in periodic stats-summary notifications (Mechanism B —
-    // a teaser notification that deep-links into the Stats "Last" view). All OFF by
-    // default; scheduled/cancelled via NotificationService.scheduleRecaps.
+    // Listening Recaps: periodic stats-summary notifications (Mechanism B — a
+    // teaser notification that deep-links into the Stats "Last" view). Weekly is
+    // ON for new users; monthly/yearly remain OFF.
     var recapWeeklyEnabled: Bool
     var recapMonthlyEnabled: Bool
     var recapYearlyEnabled: Bool
@@ -108,7 +111,7 @@ struct AppSettings: Equatable, Codable {
         podcastPollMinutes: 5,
         downloadOverWifi: true,
         downloadOverCellular: true,
-        notifyNewEpisodes: false,
+        notifyNewEpisodes: true,
         skipBackSeconds: 15,
         skipForwardSeconds: 30,
         keepScreenAwakeDuringPlayback: false,
@@ -128,8 +131,8 @@ struct AppSettings: Equatable, Codable {
         trimSilenceLowDefaultMigrated: false,
         playbackSpeed160Migrated: false,
         autoArchiveSettingsMigrated: false,
-        iCloudSyncEnabled: false,
-        recapWeeklyEnabled: false,
+        iCloudSyncEnabled: true,
+        recapWeeklyEnabled: true,
         recapMonthlyEnabled: false,
         recapYearlyEnabled: false,
         hasCompletedWelcome: false,
@@ -262,7 +265,10 @@ struct AppSettings: Equatable, Codable {
         podcastPollMinutes = try container.decodeIfPresent(Int.self, forKey: .podcastPollMinutes) ?? Self.default.podcastPollMinutes
         downloadOverWifi = try container.decodeIfPresent(Bool.self, forKey: .downloadOverWifi) ?? Self.default.downloadOverWifi
         downloadOverCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular) ?? Self.default.downloadOverCellular
-        notifyNewEpisodes = try container.decodeIfPresent(Bool.self, forKey: .notifyNewEpisodes) ?? Self.default.notifyNewEpisodes
+        // Missing keys identify an older persisted settings payload, not a new
+        // install. Keep the historical false values so changing Version 1.5's
+        // factory defaults cannot alter an existing user's choices.
+        notifyNewEpisodes = try container.decodeIfPresent(Bool.self, forKey: .notifyNewEpisodes) ?? false
         skipBackSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .skipBackSeconds) ?? Self.default.skipBackSeconds
         skipForwardSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .skipForwardSeconds) ?? Self.default.skipForwardSeconds
         keepScreenAwakeDuringPlayback = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwakeDuringPlayback) ?? Self.default.keepScreenAwakeDuringPlayback
@@ -282,8 +288,8 @@ struct AppSettings: Equatable, Codable {
         trimSilenceLowDefaultMigrated = try container.decodeIfPresent(Bool.self, forKey: .trimSilenceLowDefaultMigrated) ?? Self.default.trimSilenceLowDefaultMigrated
         playbackSpeed160Migrated = try container.decodeIfPresent(Bool.self, forKey: .playbackSpeed160Migrated) ?? Self.default.playbackSpeed160Migrated
         autoArchiveSettingsMigrated = try container.decodeIfPresent(Bool.self, forKey: .autoArchiveSettingsMigrated) ?? Self.default.autoArchiveSettingsMigrated
-        iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? Self.default.iCloudSyncEnabled
-        recapWeeklyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapWeeklyEnabled) ?? Self.default.recapWeeklyEnabled
+        iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? false
+        recapWeeklyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapWeeklyEnabled) ?? false
         recapMonthlyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapMonthlyEnabled) ?? Self.default.recapMonthlyEnabled
         recapYearlyEnabled = try container.decodeIfPresent(Bool.self, forKey: .recapYearlyEnabled) ?? Self.default.recapYearlyEnabled
         hasCompletedWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedWelcome) ?? Self.default.hasCompletedWelcome

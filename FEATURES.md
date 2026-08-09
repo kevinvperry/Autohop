@@ -847,7 +847,7 @@ Sum of all four time-saved categories, displayed in purple.
 
 ### 14.1 Listening Recaps (opt-in periodic summaries)
 
-A separate, opt-in family of notifications that summarise the user's listening when a period concludes. Three independent toggles (`AppSettings.recapWeeklyEnabled / recapMonthlyEnabled / recapYearlyEnabled`), **all off by default**, in a **Listening Recaps** sheet (`RecapSettingsView`) reachable from **two places**: the **bell button in the Stats page toolbar**, and a **Listening Recaps row in Notification Settings**.
+A family of notifications that summarise the user's listening when a period concludes. Three independent toggles (`AppSettings.recapWeeklyEnabled / recapMonthlyEnabled / recapYearlyEnabled`), with **weekly on for new users** and monthly/yearly off, in a **Listening Recaps** sheet (`RecapSettingsView`) reachable from **two places**: the **bell button in the Stats page toolbar**, and a **Listening Recaps row in Notification Settings**.
 
 | Recap | Delivered | Covers |
 |---|---|---|
@@ -891,7 +891,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to prioriti
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
-| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **Off**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission is **not** requested at launch — it is prompted only when the user opts in (enabling a notification toggle, or turning on Sleep Schedule). If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle and the podcast's own toggle are both on. |
+| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **On for new users**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission remains a separate system choice and is requested contextually rather than at launch. If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle, the podcast's own toggle, and system permission are all on. |
 
 **Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked at a lower surveillance cadence. Learned windows are an optimisation, never an indefinite gate: background-audio checks impose a 90-minute maximum successful-check age, BGAppRefresh/BGProcessing use a two-hour general ceiling, and recognised hourly/news-bulletin feeds use a 75-minute ceiling even when a synthetic latest-item-only feed learns under another schedule kind.
 
@@ -1031,7 +1031,7 @@ The same dark Speed / Trim Silence / Vocal Boost card used on the per-podcast Pl
 
 ### 15.7 Sync (iCloud)
 
-Opt-in cross-device sync over the user's private iCloud (CloudKit) database. **Off by default** — the on-device privacy stance holds until the user enables it. Stored in `AppSettings.iCloudSyncEnabled`; `App/SyncCoordinator.swift` owns lifecycle, callbacks, remote materialization, and explicit pulls over `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper). AppState only forwards compatibility and lifecycle entry points.
+Cross-device sync over the user's private iCloud (CloudKit) database. **On by default for new users** so iPhone and Apple TV work together without an extra setup dependency; existing users retain their saved setting and anyone can turn it off. Stored in `AppSettings.iCloudSyncEnabled`; `App/SyncCoordinator.swift` owns lifecycle, callbacks, remote materialization, and explicit pulls over `Persistence/CloudSyncEngine.swift` (a `CKSyncEngine` wrapper). AppState only forwards compatibility and lifecycle entry points.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|

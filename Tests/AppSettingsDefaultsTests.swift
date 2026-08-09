@@ -22,12 +22,23 @@ final class AppSettingsDefaultsTests: XCTestCase {
         XCTAssertTrue(settings.downloadOverCellular)
     }
 
-    func testUserFacingGlobalDefaultsStayPrivateAndOptIn() {
+    func testFreshInstallEnablesCloudSyncAndUsefulNotifications() {
         let settings = AppSettings.default
 
-        XCTAssertFalse(settings.iCloudSyncEnabled)
-        XCTAssertFalse(settings.notifyNewEpisodes)
+        XCTAssertTrue(settings.iCloudSyncEnabled)
+        XCTAssertTrue(settings.notifyNewEpisodes)
+        XCTAssertTrue(settings.recapWeeklyEnabled)
+        XCTAssertFalse(settings.recapMonthlyEnabled)
+        XCTAssertFalse(settings.recapYearlyEnabled)
         XCTAssertTrue(settings.showQueueBadge)
+    }
+
+    func testLegacySettingsWithoutNewDefaultFieldsRemainOptedOut() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+
+        XCTAssertFalse(decoded.iCloudSyncEnabled)
+        XCTAssertFalse(decoded.notifyNewEpisodes)
+        XCTAssertFalse(decoded.recapWeeklyEnabled)
     }
 
     func testFreshUserDefaultsNewSubscriptionsToStrongVocalBoost() {

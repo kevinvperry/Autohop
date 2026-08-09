@@ -484,7 +484,7 @@ enum SupportGuide {
         summary: "Keep your listening in step across your devices",
         blocks: [
             .paragraph("iCloud Sync keeps your podcasts and your place in them matched across all the iPhones signed into the same iCloud account. Start an episode on one device and pick it up on another, right where you left off."),
-            .paragraph("It's **off by default**. Autohop is private to your device until you choose to turn it on."),
+            .paragraph("It's **on by default for new users** so iPhone and Apple TV can stay in step without extra setup. Existing users keep their saved choice, and anyone can turn it off at any time."),
             .heading("Turning it on"),
             .steps([
                 "Go to **Settings → Sync**.",
@@ -597,7 +597,7 @@ enum SupportGuide {
             .paragraph("Autohop learns each podcast's release schedule and prioritises its feed when a new episode is expected. Refresh timing depends on whether Autohop is active and when iOS grants background execution, so Release Radar improves the chance of prompt discovery without promising an exact delivery time."),
             .table(headers: nil, rows: [
                 ["Automatic refresh timing", "Release Radar controls its own timing from each feed's learned schedule: about 2–3 minutes in a strong active release window, 5 minutes before a predicted release, 5–10 minutes shortly after a missed release, and 15–60 minutes for random or unreliable feeds. Broader safety checks cover unexpected releases."],
-                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (off by default), Enable All / Disable All, and a per-podcast toggle for every subscription."],
+                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (on for new users), Enable All / Disable All, and a per-podcast toggle for every subscription."],
             ]),
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [
@@ -629,7 +629,7 @@ enum SupportGuide {
             .heading("Default Playback"),
             .paragraph("Sets the speed, Stereo/Mono Audio mode, Vocal Boost, Trim Silence, and start/end skip given to every **new** subscription, and used to play feeds you're only previewing. Stereo is the factory default. Changing these never affects podcasts you've already subscribed to — adjust those from each podcast's own settings."),
             .heading("Sync"),
-            .paragraph("Turn on **iCloud Sync** to sync subscriptions, per-podcast settings, played and archived state, playback positions, Up Next order, history, and stats through your private iCloud database across your iPhones. Downloaded media and global app settings remain local. Off by default. See the iCloud Sync section for the full picture."),
+            .paragraph("**iCloud Sync** keeps subscriptions, per-podcast settings, played and archived state, playback positions, Up Next order, history, and stats in step through your private iCloud database across iPhone and Apple TV. Downloaded media and global app settings remain local. It is on for new users and can be turned off at any time. See the iCloud Sync section for the full picture."),
             .heading("Storage"),
             .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes from Up Next or adjust the Episode Limit in your per-podcast auto-archive settings."),
             .heading("About"),
