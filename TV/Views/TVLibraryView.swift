@@ -19,7 +19,7 @@ struct TVLibraryView: View {
             Group {
                 if model.libraryModel.tiles.isEmpty {
                     ContentUnavailableView(
-                        "No library yet",
+                        "No subscriptions yet",
                         systemImage: "square.stack",
                         description: Text("Subscribe to podcasts in Autohop on your iPhone and turn on iCloud Sync in Settings → Sync.")
                     )
@@ -31,7 +31,7 @@ struct TVLibraryView: View {
                             // fixed title that scrolled grid content slid
                             // BEHIND on tvOS; an in-scroll heading scrolls
                             // away with the content, matching Home).
-                            Text("Library")
+                            Text("Subscriptions")
                                 .font(.largeTitle.bold())
                             LazyVGrid(columns: columns, spacing: 40) {
                                 ForEach(model.libraryModel.tiles) { podcast in

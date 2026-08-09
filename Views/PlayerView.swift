@@ -1141,13 +1141,18 @@ struct PlayerView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
+            .allowsHitTesting(false)
 
-            // The system route picker owns the tap target and opens AirPlay/audio output.
+            // The system route picker owns the full visible selector target and opens
+            // Apple's AirPlay/audio-output sheet. Its UIKit bridge forwards the whole
+            // row to the embedded route button rather than accepting only glyph taps.
             AudioRoutePickerView(tintColor: .clear)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(0.02)
+                .accessibilityLabel("Choose audio output")
+                .accessibilityHint("Opens AirPlay and connected audio devices")
         }
-        .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
+        .frame(minWidth: 48, maxWidth: .infinity, minHeight: 48)
         .contentShape(Rectangle())
     }
 

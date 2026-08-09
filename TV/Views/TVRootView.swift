@@ -13,7 +13,7 @@ struct TVRootView: View {
             emptyLibrary
         case .recoverableFailure(let message):
             ContentUnavailableView(
-                "Library temporarily unavailable",
+                "Subscriptions temporarily unavailable",
                 systemImage: "icloud.slash",
                 description: Text(message)
             )
@@ -25,9 +25,9 @@ struct TVRootView: View {
     private var emptyLibrary: some View {
         VStack(spacing: 16) {
             ContentUnavailableView {
-                Label("No library yet", systemImage: "square.stack")
+                Label("No subscriptions yet", systemImage: "square.stack")
             } description: {
-                Text("Subscribe to podcasts in Autohop on your iPhone and turn on iCloud Sync in Settings → Sync. Your library appears here automatically — this can take several minutes on a fresh install.")
+                Text("Subscribe to podcasts in Autohop on your iPhone and turn on iCloud Sync in Settings → Sync. Your subscriptions appear here automatically — this can take several minutes on a fresh install.")
             }
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)

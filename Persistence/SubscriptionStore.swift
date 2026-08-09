@@ -1479,29 +1479,33 @@ public final class SubscriptionStore: ObservableObject {
             .max { $0.lastListenedAt < $1.lastListenedAt }
     }
 
-    /// Returns the newest cross-device archive events for companion history
-    /// surfaces. Listening history is already merged through the user's
-    /// private iCloud database, so this projection includes archives created
-    /// on iPhone, iPad, Mac, or Apple TV without introducing another sync
-    /// authority. The bounded query keeps tvOS launch and focus work small.
-    public func recentArchivedListeningEntries(limit: Int = 50) -> [ListeningHistoryEntry] {
+    /// Returns the newest cross-device completed episodes for companion history
+    /// surfaces. Natural finishes and Mark Played actions normally remain
+    /// `.played`; manual/archive lifecycle actions can be `.archived`. Both are
+    /// terminal history states and both must be included or a companion page
+    /// becomes biased toward the device that happened to archive content.
+    /// Listening history is already merged through the user's private iCloud
+    /// database, so this projection includes events created on iPhone, iPad,
+    /// Mac, or Apple TV without introducing another sync authority. The bounded
+    /// query keeps tvOS launch and focus work small.
+    public func recentCompletedListeningEntries(limit: Int = 50) -> [ListeningHistoryEntry] {
         guard let database, limit > 0 else { return [] }
         // Read a wider bounded slice because recent in-progress checkpoints
-        // may be interleaved with archive events.
+        // may be interleaved with terminal events.
         let scanLimit = max(limit * 4, 100)
         guard let recent = try? database.historyEntriesNewestFirst(limit: scanLimit) else {
             return []
         }
-        let archived = Array(recent.lazy.filter { $0.status == .archived }.prefix(limit))
-        if archived.count == limit || recent.count < scanLimit { return archived }
+        let completed = Array(recent.lazy.filter(\.shouldAppearInCompletedHistory).prefix(limit))
+        if completed.count == limit || recent.count < scanLimit { return completed }
         // A very active account can have more than `scanLimit` recent
         // in-progress rows. Fall back only in that exceptional case so the
-        // product promise remains an actual 50 archives, not "up to 50 from
+        // product promise remains an actual 50 completions, not "up to 50 from
         // whichever entries happened to fit in the fast window".
-        guard let all = try? database.allHistoryEntries() else { return archived }
+        guard let all = try? database.allHistoryEntries() else { return completed }
         return Array(
             all.lazy
-                .filter { $0.status == .archived }
+                .filter(\.shouldAppearInCompletedHistory)
                 .sorted { $0.lastListenedAt > $1.lastListenedAt }
                 .prefix(limit)
         )

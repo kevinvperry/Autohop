@@ -103,4 +103,4 @@ fi
 echo "Release archive checks passed:"
 echo "  signed APNs environment: production"
 echo "  sync transport: private iCloud only"
-echo "  tvOS app submission gate: disabled"
+echo "  tvOS archive: validated separately with Scripts/validate-tvos-release.sh"

@@ -20,7 +20,8 @@ import AutohopCore
 // onSubscriptionNeedsMaterialization and build the library on first-ever
 // launch. The kit is rewritten (debounced) on every store change.
 // ROOT STATE: loading → ready | empty (PC RootView shape, minus auth).
-// `ready` shows the Home/Library/History/Search TabView (TVMainTabView); Home
+// `ready` shows the Home/Discover/Subscriptions/History/Settings TabView
+// (TVMainTabView); Home
 // owns the complete Up Next queue presentation.
 // FIRST-SYNC WAIT (fixed 2026-07-04, found on Kevin's real Apple TV): a
 // device with no prior CloudKit change token does a full historical fetch of

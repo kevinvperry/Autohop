@@ -32,6 +32,7 @@
 		0F9ED9645CB156B3BE61DEE6 /* Subscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB498E27325745DCAFDCDF5A /* Subscription.swift */; };
 		0FADFBE1AA5EC09CE5213661 /* WidgetSnapshotCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE42D79ECDDA9D6555784A64 /* WidgetSnapshotCoordinator.swift */; };
 		1173F747B11839519A673A85 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5DAC7F5458F913394B197DF /* DownloadManager.swift */; };
+		11CCA105ED98A914C5B806A5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_B3E8EC2B-0A26-457B-A68D-A09B2DFA0358" /* PrivacyInfo.xcprivacy */; };
 		120866928DF34B2E17B9D0C4 /* Synced.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3027D04C8528CF33139935C8 /* Synced.swift */; };
 		134890900BCED9C7127D9A21 /* ShareURLResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB64FD8FF6D5298C18A048B /* ShareURLResolverTests.swift */; };
 		13CA6FD92A6DC4146A360D0E /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4220919178A3ECDE7D03CF /* NotificationSettingsView.swift */; };
@@ -49,6 +50,7 @@
 		1CE8D51E22B4951D1506DC2D /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C4D7E70BDCE93AD183CFD44E /* SwiftUI.framework */; };
 		1DA2735C19269C09D37A6F44 /* BackgroundWakeMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A90938EAF99DE6F58C2E9DC /* BackgroundWakeMonitor.swift */; };
 		1DD2A617647E6CF512A1C6E6 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21BC32637767178331176C36 /* AppState.swift */; };
+		1E106DC77EBA5DB0F473176E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_03821F8F-0F60-47EF-8544-8234C1A9AEA6" /* Assets.xcassets */; };
 		1E678C6F6C451BF5F5A403C9 /* SupportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF7CF11EF28BCAC4E54C4FB /* SupportView.swift */; };
 		225CEA4C21F69E9F9B58347F /* NowPlayingUpNextWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36389D7FDE8C8AE5A0906764 /* NowPlayingUpNextWidget.swift */; };
 		22B3D250B25897C63F64790D /* DownloadTransferWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5C3604149656325C584C5D /* DownloadTransferWorkflow.swift */; };
@@ -67,7 +69,6 @@
 		2C47CFE77A7636AE2E7974C6 /* AutohopWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9950D1FFDFA7CBDF0B0109B3 /* AutohopWidgetsBundle.swift */; };
 		2CB94841CBA3715B633E5332 /* RSSParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EE50021DF85C88351E2E401 /* RSSParserTests.swift */; };
 		2CD005D06B0CE1092CA27907 /* WidgetDeepLinkParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AD47A4B3675EB93940C46B /* WidgetDeepLinkParser.swift */; };
-		2E8097192FBD9E9830BD394C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_3927A1E7-501D-47AB-9BCC-660083DE23E1" /* Assets.xcassets */; };
 		2EF89FEB74E7C7DBC66EEAF5 /* TVDiscoverFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1497BA03E1611427858D740D /* TVDiscoverFoundationTests.swift */; };
 		2FAEA2DD5943080B352420D4 /* TVProjectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77826B5DDC567198B9E41AAE /* TVProjectionStore.swift */; };
 		32612A7A83338C90F88DAB66 /* RSSParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3565F21462B26325EB4EB477 /* RSSParser.swift */; };
@@ -209,7 +210,6 @@
 		ABC4B9D48C6AA4F35B09CC71 /* SyncPushCoalescingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450BDA88CB0B0E060C951D9F /* SyncPushCoalescingTests.swift */; };
 		ABDBFCCA92F2CB288B252618 /* FirstSubscribeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7B98C81B5F1788608DD831A /* FirstSubscribeCard.swift */; };
 		AC13331FD3370E2E3EAA673A /* AI_CONTEXT.md in Resources */ = {isa = PBXBuildFile; fileRef = 52789B5B5D7CD4B0AEB7731C /* AI_CONTEXT.md */; };
-		ADC1A4CEBF8CD34DBF928766 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_A508E8F9-0567-4721-91C3-FBEEBE78F99D" /* PrivacyInfo.xcprivacy */; };
 		AE80D588C2B9F36FCAB9C5B7 /* TVAppModel+History.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C41EBE8D25FE64055F1333D /* TVAppModel+History.swift */; };
 		B0AF83B1F0EB3A7573F5904D /* EpisodeFeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4085481A5FB344177B51FA3 /* EpisodeFeedLoader.swift */; };
 		B0C70D723F8B0C235389E0EA /* AutohopCore in Frameworks */ = {isa = PBXBuildFile; productRef = 07EBEE7316995923E56B8766 /* AutohopCore */; };
@@ -637,13 +637,13 @@
 		FD9E6062F0187E4A0B0A44A3 /* TVEpisodeDescriptionTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVEpisodeDescriptionTextTests.swift; sourceTree = "<group>"; };
 		FE42D79ECDDA9D6555784A64 /* WidgetSnapshotCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotCoordinator.swift; sourceTree = "<group>"; };
 		FF88E9F919B85877D287F42D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_12BD7A36-020F-44C1-969B-3CE62CBF9DCE" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
-		"TEMP_3927A1E7-501D-47AB-9BCC-660083DE23E1" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_4B5C129A-1A0A-4F7D-A992-B0FCAA79ACB4" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
-		"TEMP_77603E3D-B2EF-4DAF-B95B-4DF01FA406E2" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
-		"TEMP_A4A09A89-AFA9-4EBE-975D-132A592A02FD" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
-		"TEMP_A508E8F9-0567-4721-91C3-FBEEBE78F99D" /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		"TEMP_FEF4479F-23B6-4C21-A473-624C1713F408" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_03821F8F-0F60-47EF-8544-8234C1A9AEA6" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_3B09ABB2-C758-46CF-8B50-58B539A2EFF8" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
+		"TEMP_76D9F230-EE3A-491D-AF34-60861E016F4A" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
+		"TEMP_839E3580-E0C1-40E1-BCD5-751A3920E0D5" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
+		"TEMP_B315F1C0-9458-4798-BE06-DE80BADE9D42" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
+		"TEMP_B3E8EC2B-0A26-457B-A68D-A09B2DFA0358" /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		"TEMP_CCBE4AC1-1974-4F43-A2DA-965C4CDD5182" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1306,16 +1306,16 @@
 			path = Queue;
 			sourceTree = "<group>";
 		};
-		"TEMP_DFDF1B50-2DF6-4C0B-88AA-AAD42E3B7FA6" /* . */ = {
+		"TEMP_9988B090-C3CA-47B8-B2F4-0C721CE3DD9B" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_77603E3D-B2EF-4DAF-B95B-4DF01FA406E2" /* LICENSE */,
-				"TEMP_3927A1E7-501D-47AB-9BCC-660083DE23E1" /* Assets.xcassets */,
-				"TEMP_A4A09A89-AFA9-4EBE-975D-132A592A02FD" /* NOTICE */,
-				"TEMP_12BD7A36-020F-44C1-969B-3CE62CBF9DCE" /* .gitignore */,
-				"TEMP_A508E8F9-0567-4721-91C3-FBEEBE78F99D" /* PrivacyInfo.xcprivacy */,
-				"TEMP_4B5C129A-1A0A-4F7D-A992-B0FCAA79ACB4" /* Autohop.entitlements */,
-				"TEMP_FEF4479F-23B6-4C21-A473-624C1713F408" /* Info.plist */,
+				"TEMP_839E3580-E0C1-40E1-BCD5-751A3920E0D5" /* LICENSE */,
+				"TEMP_03821F8F-0F60-47EF-8544-8234C1A9AEA6" /* Assets.xcassets */,
+				"TEMP_76D9F230-EE3A-491D-AF34-60861E016F4A" /* NOTICE */,
+				"TEMP_3B09ABB2-C758-46CF-8B50-58B539A2EFF8" /* .gitignore */,
+				"TEMP_B3E8EC2B-0A26-457B-A68D-A09B2DFA0358" /* PrivacyInfo.xcprivacy */,
+				"TEMP_B315F1C0-9458-4798-BE06-DE80BADE9D42" /* Autohop.entitlements */,
+				"TEMP_CCBE4AC1-1974-4F43-A2DA-965C4CDD5182" /* Info.plist */,
 				7012122AF80BE6512A9C2E7C /* Settings */,
 				880172BFC198BC86B5F2126B /* App */,
 				378B9675C08586D4F929F770 /* CarPlay */,
@@ -1516,8 +1516,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2E8097192FBD9E9830BD394C /* Assets.xcassets in Resources */,
-				ADC1A4CEBF8CD34DBF928766 /* PrivacyInfo.xcprivacy in Resources */,
+				1E106DC77EBA5DB0F473176E /* Assets.xcassets in Resources */,
+				11CCA105ED98A914C5B806A5 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1918,7 +1918,7 @@
 				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
@@ -1927,7 +1927,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -1977,7 +1977,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widgets/AutohopWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Widgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -1986,7 +1986,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.widgets;
 				PRODUCT_NAME = AutohopWidgets;
 				SDKROOT = iphoneos;
@@ -2002,7 +2002,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widgets/AutohopWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Widgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -2011,7 +2011,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.widgets;
 				PRODUCT_NAME = AutohopWidgets;
 				SDKROOT = iphoneos;
@@ -2029,7 +2029,7 @@
 				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
@@ -2038,7 +2038,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -2191,15 +2191,15 @@
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CODE_SIGN_ENTITLEMENTS = TV/AutohopTV.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = TV/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.tv;
+				MARKETING_VERSION = 1.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = appletvos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				TARGETED_DEVICE_FAMILY = 3;
@@ -2214,15 +2214,15 @@
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CODE_SIGN_ENTITLEMENTS = TV/AutohopTV.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = TV/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.tv;
+				MARKETING_VERSION = 1.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = appletvos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				TARGETED_DEVICE_FAMILY = 3;

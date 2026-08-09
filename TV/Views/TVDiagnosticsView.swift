@@ -51,11 +51,11 @@ struct TVDiagnosticsView: View {
                 .padding(20)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                 .focusSection()
-                Text("Used when an episode is started from Discover. Library episodes continue to use their podcast-specific speed.")
+                Text("Used when an episode is started from Discover. Subscription episodes continue to use their podcast-specific speed.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                settingsHeading("iCloud & Library")
+                settingsHeading("iCloud & Subscriptions")
                 diagnosticRow("iCloud & Up Next", value: snapshot.syncLabel)
                 diagnosticRow("Up Next episodes", value: "\(snapshot.queueRowCount)")
                 diagnosticRow("Podcasts", value: "\(snapshot.libraryPodcastCount)")

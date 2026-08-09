@@ -166,4 +166,57 @@ final class TVAppDecompositionTests: XCTestCase {
         XCTAssertTrue(history.needsReload)
         XCTAssertTrue(archiveHistory.needsReload)
     }
+
+    func testCrossDeviceHistoryIncludesPlayedAndArchivedTerminalStates() {
+        func entry(
+            status: ListeningHistoryStatus,
+            listenedSeconds: TimeInterval = 1_800,
+            lastPositionSeconds: TimeInterval = 1_800,
+            completionKind: CompletionKind? = nil
+        ) -> ListeningHistoryEntry {
+            ListeningHistoryEntry(
+                id: UUID().uuidString,
+                subscriptionID: UUID(),
+                episodeID: UUID(),
+                episodeTitle: "Episode",
+                podcastTitle: "Podcast",
+                artworkURL: nil,
+                publishedAt: nil,
+                durationSeconds: 1_800,
+                listenedSeconds: listenedSeconds,
+                lastPositionSeconds: lastPositionSeconds,
+                lastListenedAt: Date(),
+                status: status,
+                completionKind: completionKind
+            )
+        }
+
+        XCTAssertFalse(entry(status: .listened).shouldAppearInCompletedHistory)
+        XCTAssertTrue(entry(status: .played).shouldAppearInCompletedHistory)
+        XCTAssertTrue(entry(status: .archived).shouldAppearInCompletedHistory)
+        XCTAssertTrue(
+            entry(
+                status: .archived,
+                listenedSeconds: 30,
+                lastPositionSeconds: 30,
+                completionKind: .autoArchived
+            ).shouldAppearInCompletedHistory
+        )
+        XCTAssertFalse(
+            entry(
+                status: .archived,
+                listenedSeconds: 0,
+                lastPositionSeconds: 0,
+                completionKind: .autoArchived
+            ).shouldAppearInCompletedHistory
+        )
+        XCTAssertTrue(
+            entry(
+                status: .archived,
+                listenedSeconds: 0,
+                lastPositionSeconds: 0,
+                completionKind: .manuallyArchived
+            ).shouldAppearInCompletedHistory
+        )
+    }
 }

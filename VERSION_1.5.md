@@ -13,6 +13,38 @@ and diagnostic or performance-policy changes.
 
 ## Completed
 
+### Combined iPhone and Apple TV release identity — 9 August 2026
+
+- Set the iPhone app, widget extension, and Apple TV app to marketing version
+  1.5 and build 6 for the paired App Store submission.
+- Kept both application targets on the same App Store identity, development
+  team, and private CloudKit container while retaining separate iOS and tvOS
+  archives and release validation gates.
+
+### Apple TV navigation and cross-device History — 9 August 2026
+
+- Moved Discover directly below Home in the Apple TV sidebar.
+- Renamed the Apple TV Library destination to Subscriptions to match iPhone.
+- Corrected Apple TV History to show the newest 50 completed or archived
+  episodes from the shared private-iCloud history, including natural finishes
+  completed on iPhone, iPad, Mac or Apple TV.
+- Excluded episodes that were automatically archived before playback ever
+  commenced, while retaining manual archives and auto-archived episodes that
+  contain genuine listening progress.
+
+### Apple TV page-chrome alignment — 9 August 2026
+
+- Aligned the shared iCloud status badge with the system page-menu pill at the
+  opposite corner, using the same top position and mirrored screen-edge margin
+  on Home, Library, History, Discover and Settings.
+
+### Player audio-output selector reliability — 9 August 2026
+
+- Expanded the main player's audio-output selector to a reliable full-row tap
+  target instead of relying on the small internal AirPlay glyph hit region.
+- Preserved Apple's native audio-route sheet while improving VoiceOver naming
+  and ensuring decorative route text cannot intercept taps.
+
 ### Apple TV Discover navigation and playback repair — 7 August 2026
 
 - Replaced placeholder category, show and episode destinations with focusable

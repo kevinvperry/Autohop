@@ -29,7 +29,7 @@ extension TVAppModel {
     }
 
     func computeRecentHistory() -> [TVHistoryItem] {
-        subscriptionStore.recentArchivedListeningEntries(limit: 50).map { entry in
+        subscriptionStore.recentCompletedListeningEntries(limit: 50).map { entry in
             TVHistoryItem(entry: entry, episode: episodeResolver.resolveEpisode(from: entry))
         }
     }

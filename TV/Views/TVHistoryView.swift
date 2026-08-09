@@ -1,10 +1,13 @@
 import SwiftUI
 import AutohopCore
 
-// AI CONTEXT — Cross-device archive history. Rows come from the last 50
-// `.archived` ListeningHistoryEntry records already merged through private
-// iCloud. The denormalized history entry always renders; replay is enabled
-// when TVEpisodeResolver can materialize a safe streamable Episode.
+// AI CONTEXT — Cross-device completion history. Rows come from the last 50
+// `.played` OR `.archived` ListeningHistoryEntry records already merged through
+// private iCloud. iPhone natural finishes normally remain `.played`, while
+// explicit archive actions can be `.archived`; excluding either state produces
+// an incomplete device-biased list. The denormalized history entry always
+// renders; replay is enabled when TVEpisodeResolver can materialize a safe
+// streamable Episode.
 struct TVHistoryView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
@@ -15,9 +18,9 @@ struct TVHistoryView: View {
         Group {
             if model.historyModel.items.isEmpty {
                 ContentUnavailableView(
-                    "No archived episodes yet",
+                    "No completed episodes yet",
                     systemImage: "clock.arrow.circlepath",
-                    description: Text("The last 50 episodes archived across your devices will appear here.")
+                    description: Text("The last 50 episodes completed or archived across your devices will appear here.")
                 )
             } else {
                 ScrollView {

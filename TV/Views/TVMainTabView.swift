@@ -2,7 +2,7 @@ import SwiftUI
 import AutohopCore
 
 // AI CONTEXT — TV/Views/TVMainTabView.swift
-// Home/Library/Discover/History/Settings sidebar-adaptable TabView shell,
+// Home/Discover/Subscriptions/History/Settings sidebar-adaptable TabView shell,
 // shown once TVAppModel.rootState == .ready. Search now lives inside Discover
 // so the app has one coherent public-catalogue destination.
 // NAVIGATIONSTACK FOOTGUN (fixed 2026-07-04, found in Kevin's first Simulator
@@ -11,7 +11,7 @@ import AutohopCore
 // screen. Home and Queue are flat (no push destination), so nesting a second
 // navigation container inside them fought the TabView's own sidebar chrome:
 // the sidebar auto-collapsed into a small pill after a few seconds and could
-// not be reliably re-expanded from the Simulator. Only Library gets a
+// not be reliably re-expanded from the Simulator. Only Subscriptions gets a
 // NavigationStack (for its grid → episode-list push), and it already
 // provides its own internally (TVLibraryView). Home/Queue show their own
 // plain heading text instead of relying on `.navigationTitle`, which has no
@@ -51,6 +51,11 @@ struct TVMainTabView: View {
             TVCloudSyncBadge(status: model.syncStatus)
                 .padding(.top, 20)
                 .padding(.trailing, 28)
+                // The system tab pill is positioned outside the ordinary tvOS
+                // content safe area. Mirror that chrome position: the status
+                // badge's top edge and physical-screen margin now match the
+                // leading Home/Discover/etc. pill rather than the page content.
+                .offset(x: 72, y: -28)
         }
         .overlay {
             if isPreparingPlayback {

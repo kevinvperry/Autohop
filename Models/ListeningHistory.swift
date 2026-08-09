@@ -179,3 +179,16 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
         return true
     }
 }
+
+public extension ListeningHistoryEntry {
+    /// Shared eligibility rule for completed-history surfaces. Natural
+    /// completions (`played`) and deliberate archives (`archived`) remain
+    /// visible across devices. A confirmed automatic archive is hidden only
+    /// when no playback was ever recorded; legacy rows with no completion kind
+    /// remain visible because they cannot be classified safely.
+    var shouldAppearInCompletedHistory: Bool {
+        guard status == .played || status == .archived else { return false }
+        let wasNeverStarted = listenedSeconds <= 0 && lastPositionSeconds <= 0
+        return completionKind != .autoArchived || !wasNeverStarted
+    }
+}
