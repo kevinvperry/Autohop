@@ -58,6 +58,9 @@ top_shelf="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimar
 top_shelf_wide="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimaryImageWide' "$info_plist" 2>/dev/null || true)"
 [[ -n "$top_shelf_wide" ]] || fail "wide Top Shelf image is missing from the compiled tvOS asset catalogue"
 [[ -f "$app/Assets.car" ]] || fail "compiled tvOS asset catalogue is missing from archive"
+asset_info="$(xcrun assetutil --info "$app/Assets.car" 2>/dev/null || true)"
+[[ "$asset_info" == *'App Icon - App Store'* ]] \
+  || fail "1280x768 App Store icon was not compiled into the tvOS asset catalogue"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 codesign -d --entitlements :- "$app" >"$tmp" 2>/dev/null || fail "cannot read signed entitlements"
 env="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$tmp" 2>/dev/null || true)"

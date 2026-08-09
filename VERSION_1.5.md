@@ -1054,6 +1054,12 @@ complete or the tvOS app is promoted as shipping.
   compiled App Store icon, either Top Shelf image reference, or `Assets.car`
   is missing. This converts the two App Store validation failures encountered
   during the first Version 1.5 upload attempt into local preflight failures.
+- Corrected the App Store icon layer membership after the first repair exposed
+  a nested asset-catalogue requirement: tvOS reads an image-stack layer's
+  `Content.imageset`, not an image reference attached to the containing layer.
+  The 1280×768 artwork now resides in that compiler-recognised set, and archive
+  validation inspects `Assets.car` for the actual App Store rendition rather
+  than accepting only the surrounding Info.plist declaration.
 
 ## Validation still required
 
