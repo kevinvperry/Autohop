@@ -1057,6 +1057,12 @@ complete or the tvOS app is promoted as shipping.
 - Corrected the App Store icon layer membership after the first repair exposed
   a nested asset-catalogue requirement: tvOS reads an image-stack layer's
   `Content.imageset`, not an image reference attached to the containing layer.
+- Completed the tvOS App Store icon as a true layered marketing asset after
+  archive validation exposed a second catalogue-format defect. Each
+  `.imagestacklayer` now declares its 1280×768 source directly, allowing Xcode
+  to compile the flattened `marketing` rendition Apple validates. The release
+  gate now parses `Assets.car` and requires that exact flattened rendition;
+  raw layer images can no longer produce a false pass before submission.
   The 1280×768 artwork now resides in that compiler-recognised set, and archive
   validation inspects `Assets.car` for the actual App Store rendition rather
   than accepting only the surrounding Info.plist declaration.

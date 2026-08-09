@@ -58,9 +58,31 @@ top_shelf="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimar
 top_shelf_wide="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimaryImageWide' "$info_plist" 2>/dev/null || true)"
 [[ -n "$top_shelf_wide" ]] || fail "wide Top Shelf image is missing from the compiled tvOS asset catalogue"
 [[ -f "$app/Assets.car" ]] || fail "compiled tvOS asset catalogue is missing from archive"
-asset_info="$(xcrun assetutil --info "$app/Assets.car" 2>/dev/null || true)"
-[[ "$asset_info" == *'App Icon - App Store'* ]] \
-  || fail "1280x768 App Store icon was not compiled into the tvOS asset catalogue"
+asset_json="$(mktemp)"
+xcrun assetutil --info "$app/Assets.car" >"$asset_json" 2>/dev/null \
+  || fail "cannot inspect the compiled tvOS asset catalogue"
+# Apple validates the flattened 1280x768 marketing rendition of the primary
+# icon. A raw layer named "App Icon - App Store/Front/Content" is insufficient
+# and was the reason multiple archives passed the old substring check but failed
+# App Store validation with error 90471.
+python3 - "$asset_json" "$primary_icon" <<'PY' \
+  || fail "flattened 1280x768 App Store marketing icon is missing from Assets.car"
+import json
+import sys
+
+entries = json.load(open(sys.argv[1], encoding="utf-8"))
+primary_icon = sys.argv[2]
+valid = any(
+    entry.get("Name") == primary_icon
+    and entry.get("Idiom") == "marketing"
+    and entry.get("PixelWidth") == 1280
+    and entry.get("PixelHeight") == 768
+    and str(entry.get("RenditionName", "")).startswith("ZZZZFlattenedImage")
+    for entry in entries
+)
+raise SystemExit(0 if valid else 1)
+PY
+rm -f "$asset_json"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 codesign -d --entitlements :- "$app" >"$tmp" 2>/dev/null || fail "cannot read signed entitlements"
 env="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$tmp" 2>/dev/null || true)"
