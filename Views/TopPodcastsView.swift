@@ -26,9 +26,11 @@ import SwiftUI
 // resolves the show's RSS feed (viewModel.resolve) and pushes PodcastDetailView
 // on the ambient stack via pendingRoute — same routing rule as Discover (real
 // subscription, including Inactive, → episodes; else browse preview). NavRules:
-// pushed page, brand back chevron top-left, MiniPlayerBar docked. The inner
-// editorial stack is centred and width-capped on expansive viewports while the
-// outer ScrollView retains full-width scrolling chrome and background.
+// pushed page, brand back chevron top-left, MiniPlayerBar docked. RESPONSIVE:
+// the outer ScrollView remains full width while its centred inner stack uses
+// the shared AdaptiveEditorialMetrics vocabulary. Feature height, artwork sizes
+// and gutters derive from the immediate container width; do not add device-
+// family branches or independent breakpoints here.
 struct TopPodcastsView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
@@ -154,13 +156,15 @@ struct TopPodcastsView: View {
     // MARK: - List
 
     private var listContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
+        GeometryReader { proxy in
+            let metrics = AdaptiveEditorialMetrics(containerWidth: proxy.size.width)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
                 Text(genre.map { "Apple Podcasts · \($0.name) · \(selectedCountry.name)" }
                     ?? "Apple Podcasts · \(selectedCountry.name)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, metrics.horizontalGutter)
                     .padding(.top, 4)
 
                 ForEach(podcasts) { podcast in
@@ -169,13 +173,13 @@ struct TopPodcastsView: View {
                     // category pages run to 100: ranks 1, 8, 15, 22, 29, 36,
                     // 43, 50, 57, 64, 71, 78, 85, 92, 99.
                     if (podcast.rank - 1) % 7 == 0 {
-                        featureCard(podcast)
-                            .padding(.horizontal, 20)
+                        featureCard(podcast, metrics: metrics)
+                            .padding(.horizontal, metrics.horizontalGutter)
                             .padding(.top, podcast.rank == 1 ? 4 : 24)
                             .padding(.bottom, 14)
                     } else {
-                        compactRow(podcast)
-                            .padding(.horizontal, 20)
+                        compactRow(podcast, metrics: metrics)
+                            .padding(.horizontal, metrics.horizontalGutter)
                     }
                 }
 
@@ -191,15 +195,17 @@ struct TopPodcastsView: View {
                 }
 
                 Spacer(minLength: 24)
+                }
+                .padding(.top, 8)
+                .frame(maxWidth: metrics.availableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(.top, 8)
-            .adaptiveContentWidth(.editorial)
         }
     }
 
     // MARK: - Feature card (one per tier of seven)
 
-    private func featureCard(_ podcast: ChartPodcast) -> some View {
+    private func featureCard(_ podcast: ChartPodcast, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             openPodcast(podcast)
         } label: {
@@ -218,7 +224,7 @@ struct TopPodcastsView: View {
                     .allowsHitTesting(false)
 
                 HStack(alignment: .bottom, spacing: 16) {
-                    artwork(podcast.artworkURL, size: 140, cornerRadius: 18, placeholderIconSize: 34)
+                    artwork(podcast.artworkURL, size: metrics.featureArtworkSize, cornerRadius: 18, placeholderIconSize: 34)
 
                     VStack(alignment: .leading, spacing: 6) {
                         rankCapsule(podcast.rank)
@@ -250,8 +256,7 @@ struct TopPodcastsView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(1.65, contentMode: .fit)
-            .frame(minHeight: 200, maxHeight: 260)
+            .frame(height: metrics.featureCardHeight)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }
@@ -261,7 +266,7 @@ struct TopPodcastsView: View {
 
     // MARK: - Compact ranked row
 
-    private func compactRow(_ podcast: ChartPodcast) -> some View {
+    private func compactRow(_ podcast: ChartPodcast, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             openPodcast(podcast)
         } label: {
@@ -272,11 +277,11 @@ struct TopPodcastsView: View {
                     .frame(width: 28, alignment: .center)
 
                 ZStack {
-                    artwork(podcast.artworkURL, size: 84, cornerRadius: 13, placeholderIconSize: 24)
+                    artwork(podcast.artworkURL, size: metrics.compactArtworkSize, cornerRadius: 13, placeholderIconSize: 24)
                     if resolvingPodcastID == podcast.id {
                         resolvingOverlay
                             .clipShape(RoundedRectangle(cornerRadius: 13))
-                            .frame(width: 84, height: 84)
+                            .frame(width: metrics.compactArtworkSize, height: metrics.compactArtworkSize)
                     }
                 }
 

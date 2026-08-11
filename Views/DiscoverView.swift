@@ -54,6 +54,12 @@ import SwiftUI
 // three rails of that boundary. Anchored to rails, not a hero, because any hero
 // can be absent. Net effect: a cold open costs about what the old 10-rail feed
 // did, and the deep categories cost nothing for users who never scroll.
+// RESPONSIVE: one GeometryReader at the page root constructs
+// AdaptiveEditorialMetrics from the width offered by the immediate container.
+// Heroes, shelf artwork, spacing and page gutters share those measurements so
+// the standard iPhone composition remains the baseline while wider windows gain
+// useful scale without stretching a single card. Do not reintroduce UIScreen
+// checks, device-family branches or local fixed card sizes here.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
@@ -248,34 +254,36 @@ struct DiscoverView: View {
     // MARK: - Page body
 
     private var chartsContent: some View {
-        ScrollView {
+        GeometryReader { proxy in
+            let metrics = AdaptiveEditorialMetrics(containerWidth: proxy.size.width)
+            ScrollView {
                 // LazyVStack so the ~10 image-heavy genre rails + hero carousels
                 // build only as they scroll into view (was a plain VStack, which
                 // laid them all out eagerly and stuttered the vertical scroll).
                 LazyVStack(alignment: .leading, spacing: 60) {
                     VStack(alignment: .leading, spacing: 16) {
                         searchShortcut
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, metrics.horizontalGutter)
                             .padding(.top, 4)
 
                         if onboardingCoordinator.realSubscriptionCount == 0 {
                             starterPacksBanner
-                                .padding(.horizontal, 20)
+                                .padding(.horizontal, metrics.horizontalGutter)
                         }
 
                         if !viewModel.topEpisodes.isEmpty {
-                            episodeHeroSection
+                            episodeHeroSection(metrics: metrics)
                         }
 
                         if !viewModel.rails.isEmpty {
-                            categoryChips
+                            categoryChips(metrics: metrics)
                         }
                     }
 
                     ForEach(feedSections) { section in
                         switch section {
                         case .rail(let rail):
-                            genreRail(rail)
+                            genreRail(rail, metrics: metrics)
                                 .id("rail-\(rail.id)")
                                 .onAppear { prefetchRemainingRails(after: rail) }
                         case .newNotableHero:
@@ -286,23 +294,28 @@ struct DiscoverView: View {
                             heroCarousel(title: "New & Notable · \(country.name)",
                                          podcasts: viewModel.newAndNotable,
                                          index: $newNotableIndex,
-                                         resolveCountry: country.code)
+                                         resolveCountry: country.code,
+                                         metrics: metrics)
                         case .podcastHero:
                             heroCarousel(title: "Top Podcasts · \(country.name)",
                                          podcasts: viewModel.heroPodcasts,
                                          index: $podcastHeroIndex,
                                          resolveCountry: country.code,
-                                         seeAllRoute: .topPodcasts)
+                                         seeAllRoute: .topPodcasts,
+                                         metrics: metrics)
                         case .spotlightA(let spotlight):
-                            spotlightHero(spotlight, index: $spotlightAIndex)
+                            spotlightHero(spotlight, index: $spotlightAIndex, metrics: metrics)
                         case .spotlightB(let spotlight):
-                            spotlightHero(spotlight, index: $spotlightBIndex)
+                            spotlightHero(spotlight, index: $spotlightBIndex, metrics: metrics)
                         }
                     }
 
                     Spacer(minLength: 24)
                 }
                 .padding(.top, 8)
+                .frame(maxWidth: metrics.availableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
         .refreshable {
             await viewModel.reload(country: country.code)
@@ -364,13 +377,14 @@ struct DiscoverView: View {
 
     // MARK: - Episode hero (top slot — Top 8 Episodes)
 
-    private var episodeHeroSection: some View {
+    private func episodeHeroSection(metrics: AdaptiveEditorialMetrics) -> some View {
         episodeHeroCarousel(title: "Top Episodes · \(country.name)",
                             episodes: viewModel.topEpisodes,
-                            index: $episodeHeroIndex)
+                            index: $episodeHeroIndex,
+                            metrics: metrics)
     }
 
-    private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>) -> some View {
+    private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>, metrics: AdaptiveEditorialMetrics) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
@@ -389,20 +403,19 @@ struct DiscoverView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, metrics.horizontalGutter)
 
             TabView(selection: index) {
                 ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, episode in
-                    heroEpisodeCard(episode)
-                        .padding(.horizontal, 20)
+                    heroEpisodeCard(episode, metrics: metrics)
+                        .padding(.horizontal, metrics.horizontalGutter)
                         .padding(.bottom, 36)
                         .tag(idx)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .never))
-            .aspectRatio(1.28, contentMode: .fit)
-            .frame(minHeight: 250, maxHeight: 320)
+            .frame(height: metrics.heroCarouselHeight)
             .onReceive(heroTimer) { _ in
                 let count = episodes.count
                 guard count > 1, resolvingEpisodeID == nil else { return }
@@ -413,7 +426,7 @@ struct DiscoverView: View {
         }
     }
 
-    private func heroEpisodeCard(_ episode: ChartEpisode) -> some View {
+    private func heroEpisodeCard(_ episode: ChartEpisode, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             openEpisode(episode)
         } label: {
@@ -433,7 +446,7 @@ struct DiscoverView: View {
                     .allowsHitTesting(false)
 
                 HStack(alignment: .bottom, spacing: 14) {
-                    chartArtwork(episode.artworkURL, size: 148, cornerRadius: 18,
+                    chartArtwork(episode.artworkURL, size: metrics.heroArtworkSize, cornerRadius: 18,
                                  placeholderIconSize: 36)
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -471,8 +484,7 @@ struct DiscoverView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(1.38, contentMode: .fit)
-            .frame(minHeight: 230, maxHeight: 300)
+            .frame(height: metrics.heroCardHeight)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }
@@ -505,17 +517,18 @@ struct DiscoverView: View {
 
     /// A secondary country spotlight hero (Top 8 for a fixed storefront),
     /// mirroring the top hero's design.
-    private func spotlightHero(_ spotlight: DiscoverViewModel.CountrySpotlight, index: Binding<Int>) -> some View {
+    private func spotlightHero(_ spotlight: DiscoverViewModel.CountrySpotlight, index: Binding<Int>, metrics: AdaptiveEditorialMetrics) -> some View {
         heroCarousel(title: "Top Podcasts · \(spotlight.country.name)",
                      podcasts: spotlight.podcasts,
                      index: index,
-                     resolveCountry: spotlight.country.code)
+                     resolveCountry: spotlight.country.code,
+                     metrics: metrics)
     }
 
     /// Shared paging hero carousel used by both the top hero and the country
     /// spotlights. Each instance keeps its own selection index and auto-advances
     /// on the shared cadence (paused while a tap is resolving a feed).
-    private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String, seeAllRoute: Route? = nil) -> some View {
+    private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String, seeAllRoute: Route? = nil, metrics: AdaptiveEditorialMetrics) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
@@ -539,20 +552,19 @@ struct DiscoverView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, metrics.horizontalGutter)
 
             TabView(selection: index) {
                 ForEach(Array(podcasts.enumerated()), id: \.element.id) { idx, podcast in
-                    heroCard(podcast, resolveCountry: resolveCountry)
-                        .padding(.horizontal, 20)
+                    heroCard(podcast, resolveCountry: resolveCountry, metrics: metrics)
+                        .padding(.horizontal, metrics.horizontalGutter)
                         .padding(.bottom, 36)   // clear the page dots
                         .tag(idx)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .never))
-            .aspectRatio(1.28, contentMode: .fit)
-            .frame(minHeight: 250, maxHeight: 320)
+            .frame(height: metrics.heroCarouselHeight)
             .onReceive(heroTimer) { _ in
                 let count = podcasts.count
                 guard count > 1, resolvingPodcastID == nil else { return }
@@ -589,7 +601,7 @@ struct DiscoverView: View {
         1511: "building.columns",        // Government
     ]
 
-    private var categoryChips: some View {
+    private func categoryChips(metrics: AdaptiveEditorialMetrics) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(viewModel.rails) { rail in
@@ -611,11 +623,11 @@ struct DiscoverView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, metrics.horizontalGutter)
         }
     }
 
-    private func heroCard(_ podcast: ChartPodcast, resolveCountry: String) -> some View {
+    private func heroCard(_ podcast: ChartPodcast, resolveCountry: String, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             open(podcast, country: resolveCountry)
         } label: {
@@ -634,7 +646,7 @@ struct DiscoverView: View {
                     .allowsHitTesting(false)
 
                 HStack(alignment: .bottom, spacing: 14) {
-                    chartArtwork(podcast.artworkURL, size: 148, cornerRadius: 18, placeholderIconSize: 36)
+                    chartArtwork(podcast.artworkURL, size: metrics.heroArtworkSize, cornerRadius: 18, placeholderIconSize: 36)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("#\(podcast.rank)")
@@ -673,8 +685,7 @@ struct DiscoverView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(1.38, contentMode: .fit)
-            .frame(minHeight: 230, maxHeight: 300)
+            .frame(height: metrics.heroCardHeight)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }
@@ -683,7 +694,7 @@ struct DiscoverView: View {
 
     // MARK: - Genre rails
 
-    private func genreRail(_ rail: DiscoverViewModel.GenreRail) -> some View {
+    private func genreRail(_ rail: DiscoverViewModel.GenreRail, metrics: AdaptiveEditorialMetrics) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
                 pendingRoute = .category(rail.genre)
@@ -703,28 +714,28 @@ struct DiscoverView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, metrics.horizontalGutter)
             .accessibilityLabel("Open Top 50 \(rail.genre.name)")
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 14) {
+                LazyHStack(alignment: .top, spacing: metrics.shelfSpacing) {
                     ForEach(rail.podcasts) { podcast in
-                        railTile(podcast)
+                        railTile(podcast, metrics: metrics)
                     }
-                    seeAllTile(rail.genre)
+                    seeAllTile(rail.genre, metrics: metrics)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, metrics.horizontalGutter)
             }
         }
     }
 
-    private func railTile(_ podcast: ChartPodcast) -> some View {
+    private func railTile(_ podcast: ChartPodcast, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             open(podcast, country: country.code)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 ZStack(alignment: .topLeading) {
-                    chartArtwork(podcast.artworkURL, size: 124, cornerRadius: 14, placeholderIconSize: 26)
+                    chartArtwork(podcast.artworkURL, size: metrics.shelfArtworkSize, cornerRadius: 14, placeholderIconSize: 26)
 
                     Text("\(podcast.rank)")
                         .font(.caption2.bold())
@@ -736,7 +747,7 @@ struct DiscoverView: View {
 
                     if resolvingPodcastID == podcast.id {
                         resolvingOverlay
-                            .frame(width: 124, height: 124)
+                            .frame(width: metrics.shelfArtworkSize, height: metrics.shelfArtworkSize)
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
@@ -752,7 +763,7 @@ struct DiscoverView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .frame(width: 124)
+            .frame(width: metrics.shelfArtworkSize)
         }
         .buttonStyle(.plain)
     }
@@ -770,7 +781,7 @@ struct DiscoverView: View {
     /// lost its affordance would be worse than one that occasionally offers a
     /// short list. Wording is "See All" to match the Top Episodes / Top Podcasts
     /// hero buttons — one phrase for one action across the whole page.
-    private func seeAllTile(_ genre: ChartGenre) -> some View {
+    private func seeAllTile(_ genre: ChartGenre, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             pendingRoute = .category(genre)
         } label: {
@@ -778,7 +789,7 @@ struct DiscoverView: View {
                 Image(systemName: "arrow.forward")
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(.purple)
-                    .frame(width: 124, height: 124)
+                    .frame(width: metrics.shelfArtworkSize, height: metrics.shelfArtworkSize)
                     .glassCard(cornerRadius: 14, highlighted: true)
 
                 Text("See All")
@@ -786,7 +797,7 @@ struct DiscoverView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
-            .frame(width: 124)
+            .frame(width: metrics.shelfArtworkSize)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("See all \(genre.localizedName(from: viewModel.genreNames)) podcasts")

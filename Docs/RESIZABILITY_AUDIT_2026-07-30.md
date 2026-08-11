@@ -352,7 +352,8 @@ native container chrome remains correct, and phone layouts do not regress.
 **Current status:** initial custom-scroll adoption is code-complete for
 `TopEpisodesView`, `TopPodcastsView`, `AutoArchiveActivityView` and
 `DiagnosticLogView`. Visual verification remains pending. Native `Form`/`List`
-surfaces, `PodcastsView` and the EW-07 Discover work are not yet changed.
+surfaces and `PodcastsView` are not yet changed. Discover and the two chart
+pages now continue under Work Group 3 rather than this generic width-cap group.
 
 ### 5.4 Work group 3 — EW-07 editorial surfaces
 
@@ -371,6 +372,13 @@ Episodes and Top Podcasts:
 
 **Exit condition:** editorial cards remain legible and visually balanced from
 narrow phone layouts through full-width iPad layouts.
+
+**Current status:** code-complete for Discover, Top Episodes and Top Podcasts.
+`AdaptiveEditorialMetrics` now supplies one container-derived vocabulary for
+responsive heroes, shelf artwork, feature/compact card artwork, spacing and
+gutters while retaining the standard iPhone baseline and horizontal-shelf
+navigation. The canonical viewport and loading/empty/error visual matrix is
+still pending; iPad and Mac targets remain disabled.
 
 ### 5.5 Work group 4 — EW-08 Podcast Detail header
 

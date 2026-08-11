@@ -43,6 +43,15 @@ Use `.editorial` for chart/card collections and `.list` for dense activity or
 diagnostic rows. Native `List` and `Form` require an inner section/row strategy;
 do not narrow those containers wholesale.
 
+`Editorial-Viewport-Metrics` is the shared responsive vocabulary for Discover,
+Top Episodes and Top Podcasts. A single page-root container measurement creates
+`AdaptiveEditorialMetrics`; heroes, shelf artwork, feature cards, compact rows,
+gutters and spacing derive from that value. Standard-width iPhone geometry is
+the visual baseline. Wider viewports gain controlled scale inside the editorial
+readable-width cap, while horizontal shelves and navigation remain unchanged.
+Do not replace this pattern with `UIScreen`, device-name checks or unrelated
+page-local breakpoints.
+
 The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and **Individual Episode** pages are the canonical design references for Autohop. All other pages must match the patterns defined here. Each pattern has a **label** so it can be referenced directly in future instructions (e.g. "apply `EpisodeStatusPill` to the History page").
 
 ---

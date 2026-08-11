@@ -24,6 +24,15 @@ of the implementation definition of done.
 
 ## Completed
 
+- **Responsive Package 2 — editorial viewport system:** Added a shared
+  container-derived editorial layout vocabulary across Discover, Top Episodes
+  and Top Podcasts. Hero cards, shelf artwork, feature and compact chart cards,
+  page gutters and spacing now scale within clamped limits from narrow phones
+  through expansive windows, while preserving the established standard-iPhone
+  composition, artwork proportions, horizontal shelves and navigation. Updated
+  AI context and canonical design/resizability documentation. iPad and Mac
+  targets remain disabled and visual matrix verification is still required.
+
 - **Responsive Package 2 — first easy-win adoption:** Corrected the stale
   responsive proposal status and began Package 2 on a dedicated Version 1.6
   branch. Top Episodes, Top Podcasts, Auto Archive Activity and Diagnostic Log
@@ -45,9 +54,12 @@ of the implementation definition of done.
 
 ## Validation still required
 
-- Visually verify the first responsive Package 2 surfaces on a standard iPhone,
+- Visually verify the responsive Package 2 surfaces on a standard iPhone,
   compact iPhone, large-iPhone landscape, iPad portrait/landscape, half-width
   Split View and a near-square expansive viewport, including Dynamic Type XL.
+  Exercise Discover, Top Episodes and Top Podcasts in loaded, loading, empty and
+  error states and confirm editorial shelves retain useful focus/scroll
+  behaviour at every width.
 
 - Add validation requirements alongside each implemented Version 1.6 change,
   then remove or resolve them as testing is completed.

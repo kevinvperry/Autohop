@@ -18,9 +18,10 @@ import SwiftUI
 // including Inactive, → episodes; else browse preview). NavRules: pushed page,
 // brand back chevron top-left,
 // MiniPlayerBar docked. Mirrors heroEpisodeCard styling from DiscoverView.swift.
-// The inner editorial stack is centred and width-capped on expansive viewports;
-// the outer ScrollView remains full width so scrolling chrome and backgrounds
-// are not narrowed.
+// RESPONSIVE: the outer ScrollView remains full width while its centred inner
+// stack uses the same AdaptiveEditorialMetrics vocabulary as Discover. Feature
+// height, artwork sizes and gutters derive from the immediate container width;
+// do not add device-family branches or independent breakpoints here.
 struct TopEpisodesView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
@@ -101,37 +102,41 @@ struct TopEpisodesView: View {
     // MARK: - List
 
     private var listContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
+        GeometryReader { proxy in
+            let metrics = AdaptiveEditorialMetrics(containerWidth: proxy.size.width)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
                 Text("Apple Podcasts · \(selectedCountry.name)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, metrics.horizontalGutter)
                     .padding(.top, 4)
 
                 ForEach(viewModel.top50Episodes) { episode in
                     // Large feature card every 7th entry (ranks 1, 8, 15, 22, 29, 36, 43).
                     if (episode.rank - 1) % 7 == 0 {
-                        featureCard(episode)
-                            .padding(.horizontal, 20)
+                        featureCard(episode, metrics: metrics)
+                            .padding(.horizontal, metrics.horizontalGutter)
                             .padding(.top, episode.rank == 1 ? 4 : 24)
                             .padding(.bottom, 14)
                     } else {
-                        compactRow(episode)
-                            .padding(.horizontal, 20)
+                        compactRow(episode, metrics: metrics)
+                            .padding(.horizontal, metrics.horizontalGutter)
                     }
                 }
 
                 Spacer(minLength: 24)
+                }
+                .padding(.top, 8)
+                .frame(maxWidth: metrics.availableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(.top, 8)
-            .adaptiveContentWidth(.editorial)
         }
     }
 
     // MARK: - Feature card (one per tier of ten)
 
-    private func featureCard(_ episode: ChartEpisode) -> some View {
+    private func featureCard(_ episode: ChartEpisode, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             openEpisode(episode)
         } label: {
@@ -150,7 +155,7 @@ struct TopEpisodesView: View {
                     .allowsHitTesting(false)
 
                 HStack(alignment: .bottom, spacing: 16) {
-                    artwork(episode.artworkURL, size: 140, cornerRadius: 18, placeholderIconSize: 34)
+                    artwork(episode.artworkURL, size: metrics.featureArtworkSize, cornerRadius: 18, placeholderIconSize: 34)
 
                     VStack(alignment: .leading, spacing: 6) {
                         rankCapsule(episode.rank)
@@ -182,8 +187,7 @@ struct TopEpisodesView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(1.65, contentMode: .fit)
-            .frame(minHeight: 200, maxHeight: 260)
+            .frame(height: metrics.featureCardHeight)
             .clipShape(RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
         }
@@ -193,7 +197,7 @@ struct TopEpisodesView: View {
 
     // MARK: - Compact ranked row
 
-    private func compactRow(_ episode: ChartEpisode) -> some View {
+    private func compactRow(_ episode: ChartEpisode, metrics: AdaptiveEditorialMetrics) -> some View {
         Button {
             openEpisode(episode)
         } label: {
@@ -204,11 +208,11 @@ struct TopEpisodesView: View {
                     .frame(width: 28, alignment: .center)
 
                 ZStack {
-                    artwork(episode.artworkURL, size: 84, cornerRadius: 13, placeholderIconSize: 24)
+                    artwork(episode.artworkURL, size: metrics.compactArtworkSize, cornerRadius: 13, placeholderIconSize: 24)
                     if resolvingEpisodeID == episode.id {
                         resolvingOverlay
                             .clipShape(RoundedRectangle(cornerRadius: 13))
-                            .frame(width: 84, height: 84)
+                            .frame(width: metrics.compactArtworkSize, height: metrics.compactArtworkSize)
                     }
                 }
 
