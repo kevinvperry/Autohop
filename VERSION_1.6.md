@@ -24,6 +24,15 @@ of the implementation definition of done.
 
 ## Completed
 
+- **Responsive Package 2 — first easy-win adoption:** Corrected the stale
+  responsive proposal status and began Package 2 on a dedicated Version 1.6
+  branch. Top Episodes, Top Podcasts, Auto Archive Activity and Diagnostic Log
+  now centre and cap their inner content on expansive viewports while retaining
+  full-width scrolling backgrounds and chrome. Updated the design system and
+  authoritative resizability audit with the implemented pattern and accurate
+  code-complete versus visual-verification status. iPad and Mac targets remain
+  disabled; no navigation or playback behaviour changed.
+
 - **De-Esser implementation proposal:** Added the AI-oriented phased
   specification `Docs/DE_ESSER_IMPLEMENTATION_PROPOSAL.md`. The proposed
   feature is deliberately scoped to locally downloaded audio playback on iOS,
@@ -35,6 +44,10 @@ of the implementation definition of done.
   been implemented.
 
 ## Validation still required
+
+- Visually verify the first responsive Package 2 surfaces on a standard iPhone,
+  compact iPhone, large-iPhone landscape, iPad portrait/landscape, half-width
+  Split View and a near-square expansive viewport, including Dynamic Type XL.
 
 - Add validation requirements alongside each implemented Version 1.6 change,
   then remove or resolve them as testing is completed.

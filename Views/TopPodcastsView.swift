@@ -26,7 +26,9 @@ import SwiftUI
 // resolves the show's RSS feed (viewModel.resolve) and pushes PodcastDetailView
 // on the ambient stack via pendingRoute — same routing rule as Discover (real
 // subscription, including Inactive, → episodes; else browse preview). NavRules:
-// pushed page, brand back chevron top-left, MiniPlayerBar docked.
+// pushed page, brand back chevron top-left, MiniPlayerBar docked. The inner
+// editorial stack is centred and width-capped on expansive viewports while the
+// outer ScrollView retains full-width scrolling chrome and background.
 struct TopPodcastsView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
@@ -191,6 +193,7 @@ struct TopPodcastsView: View {
                 Spacer(minLength: 24)
             }
             .padding(.top, 8)
+            .adaptiveContentWidth(.editorial)
         }
     }
 

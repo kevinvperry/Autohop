@@ -263,6 +263,12 @@ blast radii and remain in later phases of the governing proposal.
 
 ## 5. Consolidated Package 2 implementation plan — recorded 11 August 2026
 
+**Implementation status (11 August 2026): commenced.** The stale governing
+proposal status has been corrected and the first four low-risk custom
+ScrollView surfaces in Work group 2 now use centred readable inner-content
+widths. These changes are code-complete but still require the preview/simulator
+and device verification matrix before the work group can be marked complete.
+
 ### 5.1 Objective and scope boundary
 
 Package 2 completes the next responsive-layout work that static inspection
@@ -308,6 +314,9 @@ Package 2 must not:
 
 **Exit condition:** the matrix is reproducible and baseline captures exist.
 
+**Current status:** governing status language corrected. Baseline captures and
+the full preview/screenshot matrix remain pending Kevin's visual verification.
+
 ### 5.3 Work group 2 — safe readable-width adoption
 
 Apply readable inner-content widths first to custom scrolling pages where the
@@ -339,6 +348,11 @@ classification.
 
 **Exit condition:** long-form content remains readable at expansive widths,
 native container chrome remains correct, and phone layouts do not regress.
+
+**Current status:** initial custom-scroll adoption is code-complete for
+`TopEpisodesView`, `TopPodcastsView`, `AutoArchiveActivityView` and
+`DiagnosticLogView`. Visual verification remains pending. Native `Form`/`List`
+surfaces, `PodcastsView` and the EW-07 Discover work are not yet changed.
 
 ### 5.4 Work group 3 — EW-07 editorial surfaces
 

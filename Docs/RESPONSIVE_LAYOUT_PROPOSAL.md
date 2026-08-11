@@ -12,10 +12,11 @@ official framing (WWDC26, June 2026) is the **iOS 27 app resizability push**:
 design for "a dynamic range of sizes and aspect ratios", fluid reflow — not
 letterboxing — as the default. This doc uses "resizability" throughout.
 
-STATUS: PHASE 0 AUDIT COMPLETE (2026-07-30); implementation not started.
-`Docs/RESIZABILITY_AUDIT_2026-07-30.md` contains the current full visual
-inventory and ranked easy-win implementation package. Phase status lines below
-track code progress.
+STATUS: PACKAGE 1 LANDED (2026-07-30); PACKAGE 2 IMPLEMENTATION STARTED
+(2026-08-11). `Docs/RESIZABILITY_AUDIT_2026-07-30.md` contains the current
+full visual inventory, authoritative Package 2 execution plan and per-work-group
+status. Phase status lines below track code progress; iPad and Mac support have
+not yet been enabled.
 
 RELATED:
 - Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md — its Phase 5 (iPad enablement)

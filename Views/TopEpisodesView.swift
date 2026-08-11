@@ -18,6 +18,9 @@ import SwiftUI
 // including Inactive, → episodes; else browse preview). NavRules: pushed page,
 // brand back chevron top-left,
 // MiniPlayerBar docked. Mirrors heroEpisodeCard styling from DiscoverView.swift.
+// The inner editorial stack is centred and width-capped on expansive viewports;
+// the outer ScrollView remains full width so scrolling chrome and backgrounds
+// are not narrowed.
 struct TopEpisodesView: View {
     @ObservedObject var viewModel: DiscoverViewModel
     let country: ChartCountry
@@ -122,6 +125,7 @@ struct TopEpisodesView: View {
                 Spacer(minLength: 24)
             }
             .padding(.top, 8)
+            .adaptiveContentWidth(.editorial)
         }
     }
 

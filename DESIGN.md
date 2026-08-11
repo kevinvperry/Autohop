@@ -35,6 +35,14 @@ These are implementation tokens, not device categories. They support small
 iPhones and landscape today and prepare the same views for future iPad and Mac
 window sizes without changing navigation or enabling those targets yet.
 
+`Readable-Inner-Content` is the canonical wide-viewport pattern: attach
+`.adaptiveContentWidth(...)` to the content stack *inside* a custom
+`ScrollView`, never to the outer scrolling container. This keeps safe areas,
+backgrounds and scrolling chrome full width while centring readable content.
+Use `.editorial` for chart/card collections and `.list` for dense activity or
+diagnostic rows. Native `List` and `Form` require an inner section/row strategy;
+do not narrow those containers wholesale.
+
 The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and **Individual Episode** pages are the canonical design references for Autohop. All other pages must match the patterns defined here. Each pattern has a **label** so it can be referenced directly in future instructions (e.g. "apply `EpisodeStatusPill` to the History page").
 
 ---
