@@ -37,9 +37,11 @@ window sizes without changing navigation or enabling those targets yet.
 
 `Readable-Inner-Content` is the canonical wide-viewport pattern. Page-level
 content inside a custom `ScrollView` uses `.adaptivePageContent(...)`, which
-reads the nearest container through `containerRelativeFrame`, applies the
-shared width-band gutter and caps the readable measure without publishing
-geometry into view state. Use `.adaptiveContentWidth(...)` when the caller
+uses the width proposed by its parent, applies the shared width-band gutter and
+caps the readable measure without publishing geometry into view state. The
+proposal-driven layout deliberately avoids `containerRelativeFrame`, which can
+collapse inner vertical-scroll content to zero width. Use
+`.adaptiveContentWidth(...)` when the caller
 already owns the outer inset or only requires a centred width cap. Never apply
 either pattern to the outer scrolling container: safe areas, backgrounds and
 scrolling chrome must remain full width. Use `.editorial` for chart/card

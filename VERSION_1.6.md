@@ -29,7 +29,11 @@ of the implementation definition of done.
   current SwiftUI container and combines them with the existing readable-width
   caps without geometry state or physical-screen assumptions. Adopted it on
   Downloads, Stats, Auto Archive Activity, Diagnostic Log and Support section
-  detail, keeping outer scrolling backgrounds and chrome full width. Native
+  detail, keeping outer scrolling backgrounds and chrome full width. Replaced
+  the initial `containerRelativeFrame` implementation after iPhone simulator
+  testing exposed a zero-width collapse inside vertical scroll views; the
+  corrected custom SwiftUI `Layout` preserves content under missing proposals
+  and uses the live parent width when available. Native
   List/Form pages remain unchanged pending a section-level design decision;
   iPad and Mac targets remain disabled and visual matrix verification is still
   required.

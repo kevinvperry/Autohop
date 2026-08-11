@@ -150,19 +150,70 @@ private struct AdaptiveContentWidthModifier: ViewModifier {
 }
 
 /// Applies both a readable-width cap and an outer gutter derived from the
-/// width offered by the nearest SwiftUI container. `containerRelativeFrame`
-/// avoids storing geometry in view state, so resizing cannot create a
-/// measurement/publish feedback loop. Use this on the inner content of custom
-/// scrolling pages; native List/Form surfaces need a section-level design.
+/// width proposed by the parent. A custom Layout is required here because
+/// `containerRelativeFrame` can report a zero horizontal length when attached
+/// to content inside a vertical ScrollView, collapsing an otherwise valid page.
+/// The proposal-driven layout avoids geometry state and remains live-resizable.
+/// Use this on the inner content of custom scrolling pages; native List/Form
+/// surfaces still need a section-level design.
+private struct AdaptivePageLayout: Layout {
+    let style: AdaptiveContentStyle
+
+    private func contentWidth(for availableWidth: CGFloat) -> CGFloat {
+        let safeWidth = max(availableWidth, 0)
+        let gutter = AdaptiveLayoutMetrics.horizontalGutter(for: safeWidth)
+        return min(style.maximumWidth, max(safeWidth - (gutter * 2), 0))
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+
+        guard let availableWidth = proposal.width, availableWidth > 0 else {
+            // A missing proposal must preserve content rather than turn the
+            // page into a zero-width layout. The parent can constrain this
+            // fallback during its next layout pass.
+            return subview.sizeThatFits(proposal)
+        }
+
+        let width = contentWidth(for: availableWidth)
+        let contentSize = subview.sizeThatFits(
+            ProposedViewSize(width: width, height: proposal.height)
+        )
+        return CGSize(width: availableWidth, height: contentSize.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+
+        let width = contentWidth(for: bounds.width)
+        let contentSize = subview.sizeThatFits(
+            ProposedViewSize(width: width, height: proposal.height)
+        )
+        subview.place(
+            at: CGPoint(x: bounds.midX, y: bounds.minY),
+            anchor: .top,
+            proposal: ProposedViewSize(width: width, height: contentSize.height)
+        )
+    }
+}
+
 private struct AdaptivePageContentModifier: ViewModifier {
     let style: AdaptiveContentStyle
 
     func body(content: Content) -> some View {
-        content
-            .containerRelativeFrame(.horizontal, alignment: .center) { length, _ in
-                let gutter = AdaptiveLayoutMetrics.horizontalGutter(for: length)
-                return min(style.maximumWidth, max(length - (gutter * 2), 0))
-            }
+        AdaptivePageLayout(style: style) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
