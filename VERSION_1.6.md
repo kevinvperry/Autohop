@@ -24,6 +24,17 @@ of the implementation definition of done.
 
 ## Completed
 
+- **Responsive Package 2 — adaptive Podcast Detail header:** Reworked the
+  Podcast Detail identity header into semantic side-by-side and stacked
+  alternatives selected from the width offered by its container. Narrow
+  layouts no longer squeeze artwork, titles and status pills; expansive
+  layouts remain bounded by the shared readable-width policy. Replaced the
+  nested description-overflow measurement with a stable Show More/Show Less
+  control, preserving podcast identity, subscription state, navigation and
+  episode-list behaviour. Updated AI context and the canonical design and
+  resizability documentation. iPad and Mac targets remain disabled and visual
+  matrix verification is still required.
+
 - **Responsive Package 2 — editorial viewport system:** Added a shared
   container-derived editorial layout vocabulary across Discover, Top Episodes
   and Top Podcasts. Hero cards, shelf artwork, feature and compact chart cards,
@@ -59,7 +70,9 @@ of the implementation definition of done.
   Split View and a near-square expansive viewport, including Dynamic Type XL.
   Exercise Discover, Top Episodes and Top Podcasts in loaded, loading, empty and
   error states and confirm editorial shelves retain useful focus/scroll
-  behaviour at every width.
+  behaviour at every width. Verify Podcast Detail in side-by-side and stacked
+  forms, including live resizing while its description is expanded, and
+  confirm the selected podcast, list position and navigation state persist.
 
 - Add validation requirements alongside each implemented Version 1.6 change,
   then remove or resolve them as testing is completed.

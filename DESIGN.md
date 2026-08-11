@@ -1623,11 +1623,11 @@ For an unsubscribed preview, a browse subscription is created automatically in t
 - Share button (`square.and.arrow.up`) — trailing, always.
 - **Refresh Feed** (`arrow.clockwise`) and **Show Settings** (`gearshape` → `SubscriptionSettingsView`, `.primaryAction`) — shown for real subscriptions (`browseDate == nil`), including Inactive ones; absent on unsubscribed previews and browse pages.
 
-**Header** — matches `Header-SubscriptionPage` with a Subscribe⇄Unsubscribe button appended:
-1. **Artwork** — 120×120 pt, `cornerRadius 20`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
-2. **Title** — `.title3.weight(.bold)`, `.primary`, `multilineTextAlignment(.center)`
+**Header** — responsive `Header-SubscriptionPage` with a Subscribe⇄Unsubscribe button appended. `ViewThatFits(in: .horizontal)` selects the established side-by-side identity band when at least 300 pt of useful header width is available, otherwise it uses a centred stacked alternative. The header remains inside the page's `AdaptiveContentWidth.list` cap on expansive windows; it never reads the physical screen width.
+1. **Artwork** — 128×128 pt in the side-by-side alternative or 144×144 pt in the narrow stacked alternative, `cornerRadius 18`, 0.5pt white/8% stroke overlay, `Artwork-Placeholder` fallback
+2. **Title** — `.title2.weight(.bold)`, `.primary`, leading-aligned beside artwork or centre-aligned in the stacked alternative; receives layout priority so secondary content yields first
 3. **Video / Explicit pills** — `Badge-VideoPillLarge` + `Badge-ExplicitPillLarge`, shown when applicable, centred between title and description
-4. **Description** — `.footnote`, `.secondary`, `multilineTextAlignment(.center)`, HTML-stripped. Collapsed to `lineLimit(3)` with a trailing **"…more"** toggle; a hidden measurement probe (`DescriptionTruncationKey` preference) only shows the toggle when the text actually overflows 3 lines, and tapping it expands to the full untruncated description.
+4. **Description** — `.footnote`, `.secondary`, leading aligned and HTML-stripped. Collapsed to `lineLimit(3)` with a semantic **Show More / Show Less** button for substantial descriptions. This deliberately avoids nested geometry-based overflow probes, keeping live resizing stable.
 5. **Author · Categories** — `.caption`, `.secondary`, `fontWeight(.bold)`, separated by `·`
 6. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (height `50 pt`, `.borderedProminent`; not subscribed: `.purple` tint, `Label("Subscribe", systemImage: "plus.circle.fill")`; subscribed or Inactive: `.gray` tint, `Label("Unsubscribe", systemImage: "checkmark.circle.fill")` → confirmation dialog before removing; `ProgressView` while subscribing) laid out beside a **notification bell** button (`bell.fill`/`bell.slash`, purple-tinted iOS-glass capsule) shown for real subscriptions, including Inactive ones, toggling `Subscription.notificationsEnabled` in place. See FEATURES.md §2.2/§2.3.
 

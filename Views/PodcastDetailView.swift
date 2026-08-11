@@ -7,8 +7,14 @@ import SwiftUI
 //   • a browse-only preview subscription (init(browseSubscription:))
 //   • a real subscription (init(subscriptionID:)), including Inactive podcasts
 //     whose auto feed refresh is paused
-// Layout: centred Header-SubscriptionPage (artwork · title · VideoPillLarge/
-// ExplicitPillLarge · expandable "…more" description · author/categories) ·
+// Layout: responsive Header-SubscriptionPage. `ViewThatFits` preserves the
+// established side-by-side artwork/title composition while it has useful
+// width, then selects a centred stacked alternative in narrow containers.
+// The HTML-stripped description uses a deterministic expandable control rather
+// than nested geometry probes, so resizing does not create measurement churn.
+// Header content remains capped by the page's shared readable-width policy.
+// Structure: artwork · title · VideoPillLarge/ExplicitPillLarge · expandable
+// description · author/categories ·
 // subscribeRow (Subscribe⇄Unsubscribe button, plus a per-podcast new-episode
 // notification bell shown beside it for real subscriptions, bound to
 // Subscription.notificationsEnabled)
@@ -72,9 +78,6 @@ struct PodcastDetailView: View {
     @State private var showUnsubscribeConfirm = false
     /// Whether the header show-description is expanded to its full untruncated text.
     @State private var descriptionExpanded = false
-    /// True only when the show-description is long enough to be truncated at 3
-    /// lines — drives whether the "…more" toggle is shown at all.
-    @State private var descriptionTruncated = false
     /// The episode whose row is tap-expanded to show its full title + description.
     @State private var expandedEpisodeID: UUID?
     @State private var prefetchedArtworkURLs: Set<URL> = []
@@ -370,86 +373,37 @@ struct PodcastDetailView: View {
         let showVideo: Bool = sub?.newestEpisode?.mediaKind == .video
         let showExplicit: Bool = sub?.isExplicit == true
 
+        let cleanedDescription = description.map(stripHTML)
+
         return VStack(alignment: .leading, spacing: 16) {
-            // Top band: artwork on the left, title + pills stacked to its right.
-            HStack(alignment: .top, spacing: 16) {
-                CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: 128, height: 128)) {
-                    ZStack {
-                        LinearGradient(
-                            colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                        Image(systemName: "waveform")
-                            .font(.system(size: 30, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.65))
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    headerArtwork(url: artworkURL, size: 128)
+                    headerIdentity(
+                        title: title,
+                        showVideo: showVideo,
+                        showExplicit: showExplicit,
+                        centered: false
+                    )
                 }
-                .frame(width: 128, height: 128)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-                .onTapGesture { showExpandedArtwork = true }
-                .sheet(isPresented: $showExpandedArtwork) {
-                    ExpandedArtworkSheet(url: artworkURL)
+                // Below this useful content width the title and badges become
+                // visibly squeezed, so ViewThatFits selects the stacked form.
+                .frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
+
+                VStack(spacing: 12) {
+                    headerArtwork(url: artworkURL, size: 144)
+                    headerIdentity(
+                        title: title,
+                        showVideo: showVideo,
+                        showExplicit: showExplicit,
+                        centered: true
+                    )
                 }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title)
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(.primary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    // Video / Explicit pills below the title.
-                    if showVideo || showExplicit {
-                        HStack(spacing: 6) {
-                            if showVideo { VideoPillLarge() }
-                            if showExplicit { ExplicitPillLarge() }
-                        }
-                    }
-
-                    // Description sits in the right column beside the artwork, with
-                    // an inline purple "…more"/"…less" toggle.
-                    if let desc = description.map(stripHTML), !desc.isEmpty {
-                        Group {
-                            if descriptionExpanded {
-                                // Full text with an inline "…less" toggle.
-                                Text(desc)
-                                    .foregroundColor(.secondary)
-                                + Text("  …less")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundColor(.purple)
-                            } else {
-                                // Truncated to 3 lines. The inline "…more" is only
-                                // overlaid when the text actually overflows.
-                                Text(desc)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(3)
-                                    .overlay(alignment: .bottomTrailing) {
-                                        if descriptionTruncated {
-                                            Text("…more")
-                                                .font(.footnote.weight(.semibold))
-                                                .foregroundStyle(Color.purple)
-                                                .padding(.leading, 28)
-                                                .background(Color.black)
-                                        }
-                                    }
-                            }
-                        }
-                        .font(.footnote)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .background(descriptionTruncationProbe(desc))
-                        .onPreferenceChange(DescriptionTruncationKey.self) { descriptionTruncated = $0 }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard descriptionTruncated else { return }
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                                descriptionExpanded.toggle()
-                            }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let desc = cleanedDescription, !desc.isEmpty {
+                headerDescription(desc)
             }
 
             VStack(spacing: 2) {
@@ -472,6 +426,82 @@ struct PodcastDetailView: View {
             subscribeRow
         }
         .frame(maxWidth: .infinity)
+        // One presentation owner must sit outside `ViewThatFits`. Attaching a
+        // sheet to both candidate artwork views can leave two hidden modifiers
+        // observing the same binding while SwiftUI measures alternatives.
+        .sheet(isPresented: $showExpandedArtwork) {
+            ExpandedArtworkSheet(url: artworkURL)
+        }
+    }
+
+    private func headerArtwork(url: URL?, size: CGFloat) -> some View {
+        CachedArtworkImage(url: url, targetSize: CGSize(width: size, height: size)) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(systemName: "waveform")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .onTapGesture { showExpandedArtwork = true }
+    }
+
+    @ViewBuilder
+    private func headerIdentity(
+        title: String,
+        showVideo: Bool,
+        showExplicit: Bool,
+        centered: Bool
+    ) -> some View {
+        VStack(alignment: centered ? .center : .leading, spacing: 8) {
+            Text(title)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(centered ? .center : .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+
+            if showVideo || showExplicit {
+                HStack(spacing: 6) {
+                    if showVideo { VideoPillLarge() }
+                    if showExplicit { ExplicitPillLarge() }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+    }
+
+    private func headerDescription(_ description: String) -> some View {
+        let canExpand = description.count > 180
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(description)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(descriptionExpanded ? nil : 3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if canExpand {
+                Button(descriptionExpanded ? "Show Less" : "Show More") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        descriptionExpanded.toggle()
+                    }
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.purple)
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -508,31 +538,6 @@ struct PodcastDetailView: View {
         }
         .buttonStyle(.plain)
         .disabled(isSubscribing)
-    }
-
-    /// Hidden probe that reports whether `desc` overflows 3 lines at the current
-    /// width, by comparing the 3-line-limited height to the full height.
-    private func descriptionTruncationProbe(_ desc: String) -> some View {
-        Text(desc)
-            .font(.footnote)
-            .lineLimit(3)
-            .background(
-                GeometryReader { limited in
-                    Text(desc)
-                        .font(.footnote)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .background(
-                            GeometryReader { full in
-                                Color.clear.preference(
-                                    key: DescriptionTruncationKey.self,
-                                    value: full.size.height > limited.size.height + 1
-                                )
-                            }
-                        )
-                        .hidden()
-                }
-            )
-            .hidden()
     }
 
     /// New-episode notification toggle, shown beside the Subscribe button for a
@@ -940,14 +945,6 @@ private func stripHTML(_ html: String) -> String {
         .components(separatedBy: .whitespacesAndNewlines)
         .filter { !$0.isEmpty }
         .joined(separator: " ")
-}
-
-/// Reports whether the show-description overflows its 3-line limit.
-private struct DescriptionTruncationKey: PreferenceKey {
-    static var defaultValue: Bool = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = value || nextValue()
-    }
 }
 
 private func decodeHTMLEntities(_ text: String) -> String {

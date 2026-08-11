@@ -398,6 +398,16 @@ space offered by its container:
 **Exit condition:** the header neither squeezes on narrow layouts nor stretches
 unnaturally on wide layouts.
 
+**Current status:** code-complete. `PodcastDetailView` now uses
+`ViewThatFits(in: .horizontal)` to retain the established 128 pt side-by-side
+identity header while at least 300 pt of useful width is available and select a
+centred 144 pt stacked alternative below that threshold. The title has layout
+priority, the page's existing list-width cap bounds expansive presentation, and
+the description now uses a deterministic Show More/Show Less control instead
+of two nested `GeometryReader` probes. Podcast identity, subscription state,
+navigation and episode-list behaviour are unchanged. Narrow/standard/expansive
+visual verification and live-resize state checks remain pending.
+
 ### 5.6 Work group 5 — container-aware adaptive gutters
 
 Turn `AdaptiveLayoutMetrics.horizontalGutter(for:)` into an adoptable,
