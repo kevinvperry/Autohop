@@ -8,10 +8,11 @@ component, identifying low-risk layout changes that improve use of the
 available viewport before iPad and Mac support are enabled. This is the audit
 artifact required by Phase 0 of RESPONSIVE_LAYOUT_PROPOSAL.md.
 
-STATUS: AUDIT COMPLETE; EASY-WIN IMPLEMENTATION PACKAGE LANDED 2026-07-30.
-The target family and navigation model remain unchanged. Visual simulator and
-device testing is still required; later macro-layout work remains in the
-governing proposal.
+STATUS: AUDIT COMPLETE; PACKAGE 1 LANDED 2026-07-30; PACKAGE 2 PLANNED
+2026-08-11 AND NOT YET IMPLEMENTED. The target family and navigation model
+remain unchanged. Package 2 must pass the documented preview, simulator and
+device matrix before iPad support is enabled. Mac support remains a separate
+later phase.
 
 SCOPE: 40 iOS SwiftUI files in `Views/`, including sheets, overlays, player
 chrome, onboarding and shared cards, plus the UIKit video surface. The widget
@@ -260,7 +261,228 @@ Do not combine this package with:
 Those changes have wider navigation, playback, release and state-restoration
 blast radii and remain in later phases of the governing proposal.
 
-## 5. Complete surface audit
+## 5. Consolidated Package 2 implementation plan — recorded 11 August 2026
+
+### 5.1 Objective and scope boundary
+
+Package 2 completes the next responsive-layout work that static inspection
+identifies as valuable and reasonably contained. It prepares Autohop's iOS
+views for iPhone, iPad and resizable-window layouts without yet changing the
+supported device family.
+
+This package includes the deferred EW-07, EW-08, EW-10 and targeted EW-11
+work, completion of the safe parts of EW-05, wide-presentation refinements,
+and the verification infrastructure required before iPad is advertised as a
+supported platform.
+
+Package 2 must not:
+
+- constrain the outer chrome, background or separators of a native `Form` or
+  `List` merely to obtain a readable content width;
+- derive layout from `UIScreen.main.bounds`, device names or assumed physical
+  screen dimensions;
+- mechanically replace every fixed horizontal padding or point-sized font;
+- change playback ownership, navigation state or orientation policy;
+- enable the iPad device family before the acceptance matrix passes; or
+- claim Mac support. Mac windowing, commands, navigation and lifecycle need a
+  separate assessment after iPad support is stable.
+
+### 5.2 Work group 1 — documentation and regression baseline
+
+1. Correct stale status language in `RESPONSIVE_LAYOUT_PROPOSAL.md` so it
+   records that Package 1 landed on 30 July 2026 and Package 2 is planned but
+   not implemented.
+2. Preserve this section as the authoritative Package 2 scope and update each
+   work group only when its code and verification are complete.
+3. Create a repeatable preview/screenshot matrix covering:
+   - a compact/narrow iPhone viewport;
+   - a standard portrait iPhone;
+   - a large iPhone in portrait and landscape;
+   - iPad portrait and landscape;
+   - approximately half-width iPad Split View;
+   - a near-square 700 pt-class resizable viewport; and
+   - accessibility text sizes, including at least Dynamic Type XL and one
+     accessibility category.
+4. Capture a standard-iPhone baseline before visual changes so Package 2 does
+   not accidentally redesign the existing phone experience.
+
+**Exit condition:** the matrix is reproducible and baseline captures exist.
+
+### 5.3 Work group 2 — safe readable-width adoption
+
+Apply readable inner-content widths first to custom scrolling pages where the
+modifier cannot alter native list chrome. Initial low-risk candidates are:
+
+- `TopEpisodesView`;
+- `TopPodcastsView`;
+- `AutoArchiveActivityView`; and
+- `DiagnosticLogView`.
+
+`DiscoverView` is also a custom scrolling surface, but it belongs to EW-07 and
+must be changed with its card and hero system rather than treated as a trivial
+one-line width cap.
+
+For the nine native `Form`/`List` candidates — Settings, Notification
+Settings, Feed Refresh Schedule, Sleep Schedule, Add Feed, Queue Sheet, Menu
+Sheet, Acknowledgements and Subscription Radar Diagnostics — choose and test
+an inner-content strategy per surface. Acceptable approaches include
+constraining custom section content, introducing a reusable responsive form
+row/section wrapper, or deliberately retaining native full-width behaviour
+when that produces the most platform-appropriate result.
+
+Do not place `.adaptiveContentWidth()` on the outer native scrolling container
+if doing so also narrows its background, separators, scrolling chrome or safe
+area.
+
+`PodcastsView` requires individual inspection rather than automatic
+classification.
+
+**Exit condition:** long-form content remains readable at expansive widths,
+native container chrome remains correct, and phone layouts do not regress.
+
+### 5.4 Work group 3 — EW-07 editorial surfaces
+
+Create one responsive editorial-card vocabulary shared by Discover, Top
+Episodes and Top Podcasts:
+
+- replace fixed 124×124 shelf assumptions with clamped artwork/card sizing
+  derived from the width offered by the immediate container;
+- replace fixed hero height ranges with an aspect- and viewport-aware clamp;
+- tune gutters and spacing so wide layouts reveal a useful number of complete
+  cards without shrinking text or stretching one feature excessively;
+- retain horizontal shelves during this package unless the expansive layout
+  can be introduced without changing navigation or focus behaviour;
+- preserve artwork aspect ratio and avoid unnecessary image upscaling; and
+- verify loading, empty and error states at every canonical width.
+
+**Exit condition:** editorial cards remain legible and visually balanced from
+narrow phone layouts through full-width iPad layouts.
+
+### 5.5 Work group 4 — EW-08 Podcast Detail header
+
+Refactor the Podcast Detail header into semantic alternatives selected by the
+space offered by its container:
+
+- retain a side-by-side artwork/text header when both regions have useful
+  width;
+- use a stacked header when the horizontal arrangement would squeeze titles,
+  metadata or actions;
+- cap artwork and readable text widths on expansive layouts;
+- remove avoidable nested geometry/truncation probes where `ViewThatFits`,
+  wrapping and layout priority can express the intent; and
+- ensure resizing preserves the selected podcast, scroll position and
+  navigation state.
+
+**Exit condition:** the header neither squeezes on narrow layouts nor stretches
+unnaturally on wide layouts.
+
+### 5.6 Work group 5 — container-aware adaptive gutters
+
+Turn `AdaptiveLayoutMetrics.horizontalGutter(for:)` into an adoptable,
+container-aware interface. The modifier must receive the width offered by the
+current container, not the physical device screen. Prefer a single
+container-level measurement distributed through environment/layout values
+over repeated nested `GeometryReader` instances.
+
+Adopt it selectively on page-level content and editorial rails. Do not
+mechanically replace all fixed `.padding(.horizontal, 20)` declarations:
+compact controls, intentionally fixed canvases and nested cards may correctly
+retain fixed internal padding.
+
+`metadataColumns(for:)` may be consolidated where it removes duplicated
+logic, but that housekeeping is not itself a responsive-behaviour milestone.
+
+**Exit condition:** outer gutters respond consistently to container width
+without layout feedback loops, screen-width assumptions or nested-measurement
+churn.
+
+### 5.7 Work group 6 — wide presentation and Stats
+
+1. Review sheets that become unnecessarily large or visually detached on
+   expansive layouts. Use anchored popovers where the action and platform
+   convention justify them, while retaining sheets where modal focus is
+   appropriate.
+2. Introduce an expansive two-column Stats composition so related charts and
+   summaries use wide space without making individual charts excessively
+   tall or broad.
+3. Keep one-column Stats behaviour at compact and standard widths and verify
+   that changing width does not reset the selected date range or filters.
+
+**Exit condition:** expansive layouts use additional width meaningfully while
+preserving compact behaviour and state.
+
+### 5.8 Work group 7 — EW-10 coach-mark clamping
+
+Coach marks must derive placement from the current container and safe-area
+insets. For every anchor:
+
+- choose a viable side when sufficient space exists;
+- fall back to a centred presentation when no anchored side is safe;
+- keep the complete card and dismissal control within the visible safe area;
+- reposition live when the window changes size; and
+- do not restart the tour or lose the current step during resize.
+
+**Exit condition:** every coach mark remains fully visible at every canonical
+width and tested text size.
+
+### 5.9 Work group 8 — EW-11 targeted Dynamic Type
+
+Classify typography by role rather than applying a repository-wide mechanical
+rewrite:
+
+- migrate ordinary body, headline, subheadline, caption and metadata text to
+  semantic SwiftUI text styles;
+- use `@ScaledMetric(relativeTo:)` where a custom numeric display size must
+  scale with a semantic role;
+- deliberately retain fixed sizing for glyphs, compact badges, export
+  canvases and decorative elements where scaling would be incorrect;
+- pair each typography change with wrapping, truncation and compact-layout
+  verification; and
+- do not use a nonexistent `Font.system(size:relativeTo:)` API. SwiftUI's
+  relative custom-font API and `@ScaledMetric` have different purposes.
+
+**Exit condition:** primary text remains readable without overlapping or
+hiding actions at the tested Dynamic Type categories.
+
+### 5.10 Work group 9 — keyboard and pointer readiness
+
+Add and verify keyboard/pointer interaction only after the visual hierarchy is
+stable:
+
+- predictable focus order for page actions, rows and search;
+- visible hover/focus feedback that does not rely only on colour;
+- keyboard activation for primary actions and dismissal where appropriate;
+- no invisible or duplicate focus targets created by compact fallbacks; and
+- preserved focus when a resizable window changes dimensions.
+
+**Exit condition:** core navigation and playback-management flows can be
+completed with keyboard/pointer input on an iPad-class environment.
+
+### 5.11 Work group 10 — device-family release gate
+
+Changing `TARGETED_DEVICE_FAMILY` is a release gate, not an early
+implementation step. Enable iPad only after all Package 2 work groups pass:
+
+- the complete screenshot/preview matrix;
+- simulator checks for supported orientations and Split View;
+- physical-device checks for Player, Mini Player, sheets/popovers, keyboard,
+  search and video playback;
+- state-preservation checks during resize and rotation; and
+- a standard-iPhone regression pass.
+
+After enabling iPad, repeat the release checks against the actual iPad target
+before declaring support complete. Begin a separate Mac/Catalyst assessment
+only after that release is stable.
+
+### 5.12 Package 2 completion definition
+
+Package 2 is complete only when every work group above is either implemented
+and verified or explicitly deferred with a recorded reason. Documentation must
+distinguish code-complete work from simulator-tested and device-tested work.
+The presence of adaptive helpers alone does not qualify a surface as
+responsive.
+
+## 6. Complete surface audit
 
 | Surface | Current viewport behaviour | Easy-win action | Priority |
 |---|---|---|---|
@@ -305,7 +527,7 @@ blast radii and remain in later phases of the governing proposal.
 | `AutohopProSettingsView` | Development-only Form | No release work; apply shared width pattern if re-enabled | P3 |
 | `NowPlayingUpNextWidget` | Explicit small/medium/large and accessory render paths already respond to WidgetKit families | Preserve family-specific compositions; verify iPad widget families and Dynamic Type during Phase 1 QA | Verify |
 
-## 6. Verification and acceptance criteria
+## 7. Verification and acceptance criteria
 
 An easy-win conversion is complete only when:
 

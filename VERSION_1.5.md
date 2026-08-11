@@ -2,14 +2,22 @@
 
 <!--
 AI CONTEXT — VERSION_1.5.md
-Canonical running ledger for code, behaviour, diagnostics, and user-visible
-changes implemented after Version 1.4 was submitted to Apple on 25 July 2026.
-Add every accepted Version 1.5 change here when implemented. Do not describe
-planned work as complete. Public release notes must be derived from completed
-entries and omit internal implementation detail. Updating this ledger is part
-of the implementation definition of done, including for small user-facing fixes
-and diagnostic or performance-policy changes.
+Closed ledger for code, behaviour, diagnostics, and user-visible changes in
+Version 1.5. The paired iOS and tvOS Version 1.5 builds were submitted to Apple
+for App Review on 9 August 2026. Do not append later implementation work here.
+All changes made after submission belong in VERSION_1.6.md. Public Version 1.5
+release notes must be derived only from completed entries in this closed ledger
+and omit internal implementation detail.
 -->
+
+## Release status
+
+- **iOS Version 1.5:** submitted to Apple for approval on 9 August 2026.
+- **tvOS Version 1.5:** submitted to Apple for approval on 9 August 2026 as the
+  paired Apple TV release.
+- This ledger is now closed. All subsequent improvements, fixes, diagnostics,
+  design changes and documentation updates must be recorded in
+  `VERSION_1.6.md`.
 
 ## Completed
 
