@@ -24,6 +24,16 @@ of the implementation definition of done.
 
 ## Completed
 
+- **Responsive Package 2 — expansive Stats composition:** Added a responsive
+  two-column Stats presentation for wide iPad and Mac-sized viewports while
+  retaining the established single-column iPhone layout and section order.
+  The date range, current/previous-period selection and expanded-show state
+  remain owned by one view and survive live width changes; the two-column
+  alternative is chosen only when the readable page has enough usable width.
+  Listening Recaps remains a modal sheet because it is a focused settings
+  workflow rather than lightweight contextual information. iPad and Mac
+  targets remain disabled and visual matrix verification is still required.
+
 - **Responsive Package 2 — container-aware page gutters:** Added a shared
   `adaptivePageContent` layout primitive that derives page gutters from the
   current SwiftUI container and combines them with the existing readable-width

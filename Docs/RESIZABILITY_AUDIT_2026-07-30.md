@@ -444,6 +444,16 @@ decision. Narrow, standard and expansive visual verification remains pending.
 
 ### 5.7 Work group 6 — wide presentation and Stats
 
+**Implementation status (11 August 2026):** Stats now provides a two-column
+composition when its readable content area can sustain two useful columns and
+falls back to the original one-column ordering at narrower widths. Both
+compositions share one state owner, so changing width preserves the selected
+range, current/previous-period mode and expanded-show state. The Listening
+Recaps presentation was reviewed and deliberately remains a sheet because it
+is a focused settings workflow. Broad sheet-to-popover conversion is not being
+performed mechanically; each remaining presentation requires a surface-level
+interaction review. Visual matrix verification remains outstanding.
+
 1. Review sheets that become unnecessarily large or visually detached on
    expansive layouts. Use anchored popovers where the action and platform
    convention justify them, while retaining sheets where modal focus is

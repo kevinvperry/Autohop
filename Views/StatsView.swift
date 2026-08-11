@@ -244,20 +244,7 @@ private struct StatsContentView: View {
             VStack(alignment: .leading, spacing: 32) {
                 rangeSelector
 
-                heroCard(summary)
-
-                topShowsSection(summary)
-                driftingShowsSection(summary)
-
-                if range.usesHeatmap {
-                    heatmapSection(summary)
-                } else {
-                    trendSection(summary)
-                }
-
-                clockSection(summary)
-                dataDownloadedSection(summary)
-                timeSavedSection(summary)
+                responsiveStatsSections(summary)
 
                 privacyFooter
             }
@@ -300,6 +287,68 @@ private struct StatsContentView: View {
 
     private var rangeSelector: some View {
         StatsRangeSelector(range: $range, showingLast: $showingLast, canShowLast: canShowLast)
+    }
+
+    /// AI CONTEXT: Stats uses one state owner and two purely visual compositions.
+    /// `ViewThatFits` selects the two-column arrangement only when the readable
+    /// page really has enough horizontal room. Both alternatives read the same
+    /// range/filter/expanded-row state, so resizing a window cannot reset the
+    /// user's selected period or expanded show.
+    @ViewBuilder
+    private func responsiveStatsSections(_ summary: ListeningStatsSummary) -> some View {
+        ViewThatFits(in: .horizontal) {
+            expansiveStatsSections(summary)
+                .frame(minWidth: 760)
+
+            compactStatsSections(summary)
+        }
+    }
+
+    /// Expansive iPad and Mac composition. The hero and show rankings form the
+    /// narrative column; patterns and efficiency metrics form the analysis
+    /// column. The columns deliberately remain equal width so cards and charts
+    /// do not acquire unpredictable geometry as a window is resized.
+    private func expansiveStatsSections(_ summary: ListeningStatsSummary) -> some View {
+        HStack(alignment: .top, spacing: 28) {
+            VStack(alignment: .leading, spacing: 32) {
+                heroCard(summary)
+                topShowsSection(summary)
+                driftingShowsSection(summary)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            VStack(alignment: .leading, spacing: 32) {
+                listeningPatternSection(summary)
+                clockSection(summary)
+                dataDownloadedSection(summary)
+                timeSavedSection(summary)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// Compact and standard-width composition retained for iPhone and narrow
+    /// windows. Its order matches the pre-responsive Stats screen exactly.
+    private func compactStatsSections(_ summary: ListeningStatsSummary) -> some View {
+        VStack(alignment: .leading, spacing: 32) {
+            heroCard(summary)
+            topShowsSection(summary)
+            driftingShowsSection(summary)
+            listeningPatternSection(summary)
+            clockSection(summary)
+            dataDownloadedSection(summary)
+            timeSavedSection(summary)
+        }
+    }
+
+    @ViewBuilder
+    private func listeningPatternSection(_ summary: ListeningStatsSummary) -> some View {
+        if range.usesHeatmap {
+            heatmapSection(summary)
+        } else {
+            trendSection(summary)
+        }
     }
 
     // MARK: - Hero card
