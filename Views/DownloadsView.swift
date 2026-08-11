@@ -13,6 +13,9 @@ import SwiftUI
 // version floated over the Downloading/Paused status pill). Progress publishes
 // are coalesced in AppState.onProgressUpdate (≥1% steps) so several concurrent
 // downloads don't re-invalidate this page multiple times per second (scroll jank).
+// The page-level stack uses adaptivePageContent; keep that modifier on the inner
+// custom-scroll content so system chrome/backgrounds remain full width and the
+// outer gutter follows the live container rather than assuming a phone screen.
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var downloadCoordinator: DownloadCoordinator
@@ -37,9 +40,8 @@ struct DownloadsView: View {
 
                 archivedSection
             }
-            .adaptiveContentWidth(.list)
-            .padding(.horizontal, 20)
             .padding(.vertical, 18)
+            .adaptivePageContent(.list)
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Downloads")

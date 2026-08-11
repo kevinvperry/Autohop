@@ -261,9 +261,8 @@ private struct StatsContentView: View {
 
                 privacyFooter
             }
-            .adaptiveContentWidth(.editorial)
-            .padding(.horizontal, 20)
             .padding(.vertical, 18)
+            .adaptivePageContent(.editorial)
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Stats")

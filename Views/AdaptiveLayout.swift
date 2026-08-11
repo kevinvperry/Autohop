@@ -149,10 +149,35 @@ private struct AdaptiveContentWidthModifier: ViewModifier {
     }
 }
 
+/// Applies both a readable-width cap and an outer gutter derived from the
+/// width offered by the nearest SwiftUI container. `containerRelativeFrame`
+/// avoids storing geometry in view state, so resizing cannot create a
+/// measurement/publish feedback loop. Use this on the inner content of custom
+/// scrolling pages; native List/Form surfaces need a section-level design.
+private struct AdaptivePageContentModifier: ViewModifier {
+    let style: AdaptiveContentStyle
+
+    func body(content: Content) -> some View {
+        content
+            .containerRelativeFrame(.horizontal, alignment: .center) { length, _ in
+                let gutter = AdaptiveLayoutMetrics.horizontalGutter(for: length)
+                return min(style.maximumWidth, max(length - (gutter * 2), 0))
+            }
+    }
+}
+
 extension View {
     /// Caps the inner reading measure while leaving its parent background,
     /// safe-area treatment and scroll container free to fill the viewport.
     func adaptiveContentWidth(_ style: AdaptiveContentStyle) -> some View {
         modifier(AdaptiveContentWidthModifier(style: style))
+    }
+
+    /// Centres page-level custom content, caps its readable measure and keeps
+    /// its outer gutter proportional to the current container. Do not apply
+    /// this to the outer native List/Form because doing so narrows system
+    /// backgrounds, separators and scrolling chrome.
+    func adaptivePageContent(_ style: AdaptiveContentStyle) -> some View {
+        modifier(AdaptivePageContentModifier(style: style))
     }
 }

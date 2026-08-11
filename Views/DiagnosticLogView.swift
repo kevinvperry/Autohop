@@ -3,8 +3,9 @@ import SwiftUI
 // AI CONTEXT — Views/DiagnosticLogView.swift ("Diagnostic Log" page, hidden
 // dev/support tool unlocked via Settings → About → tap version 5×). Renders
 // AppLogger's log file lines with share/clear actions. No feature logic. The
-// log's inner monospaced line stack is centred and width-capped on expansive
-// viewports; the ScrollView and page background remain full width.
+// log's inner monospaced line stack uses adaptivePageContent so its readable
+// width and outer gutter respond to the offered container; the ScrollView and
+// page background remain full width.
 struct DiagnosticLogView: View {
     @ObservedObject private var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss
@@ -36,8 +37,8 @@ struct DiagnosticLogView: View {
                                 .textSelection(.enabled)
                         }
                     }
-                    .padding()
-                    .adaptiveContentWidth(.list)
+                    .padding(.vertical, 16)
+                    .adaptivePageContent(.list)
                 }
             }
         }

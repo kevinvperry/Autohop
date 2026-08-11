@@ -24,6 +24,16 @@ of the implementation definition of done.
 
 ## Completed
 
+- **Responsive Package 2 — container-aware page gutters:** Added a shared
+  `adaptivePageContent` layout primitive that derives page gutters from the
+  current SwiftUI container and combines them with the existing readable-width
+  caps without geometry state or physical-screen assumptions. Adopted it on
+  Downloads, Stats, Auto Archive Activity, Diagnostic Log and Support section
+  detail, keeping outer scrolling backgrounds and chrome full width. Native
+  List/Form pages remain unchanged pending a section-level design decision;
+  iPad and Mac targets remain disabled and visual matrix verification is still
+  required.
+
 - **Responsive Package 2 — adaptive Podcast Detail header:** Reworked the
   Podcast Detail identity header into semantic side-by-side and stacked
   alternatives selected from the width offered by its container. Narrow

@@ -35,13 +35,17 @@ These are implementation tokens, not device categories. They support small
 iPhones and landscape today and prepare the same views for future iPad and Mac
 window sizes without changing navigation or enabling those targets yet.
 
-`Readable-Inner-Content` is the canonical wide-viewport pattern: attach
-`.adaptiveContentWidth(...)` to the content stack *inside* a custom
-`ScrollView`, never to the outer scrolling container. This keeps safe areas,
-backgrounds and scrolling chrome full width while centring readable content.
-Use `.editorial` for chart/card collections and `.list` for dense activity or
-diagnostic rows. Native `List` and `Form` require an inner section/row strategy;
-do not narrow those containers wholesale.
+`Readable-Inner-Content` is the canonical wide-viewport pattern. Page-level
+content inside a custom `ScrollView` uses `.adaptivePageContent(...)`, which
+reads the nearest container through `containerRelativeFrame`, applies the
+shared width-band gutter and caps the readable measure without publishing
+geometry into view state. Use `.adaptiveContentWidth(...)` when the caller
+already owns the outer inset or only requires a centred width cap. Never apply
+either pattern to the outer scrolling container: safe areas, backgrounds and
+scrolling chrome must remain full width. Use `.editorial` for chart/card
+collections and `.list` for dense activity or diagnostic rows. Native `List`
+and `Form` require an inner section/row strategy; do not narrow those containers
+wholesale.
 
 `Editorial-Viewport-Metrics` is the shared responsive vocabulary for Discover,
 Top Episodes and Top Podcasts. A single page-root container measurement creates

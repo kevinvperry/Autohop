@@ -6,8 +6,9 @@ import SwiftUI
 // device-local AutoArchiveActivityStore and is newest-first. Each row must expose
 // all decision evidence: episode, podcast, exact archive timestamp, rule,
 // configured threshold, and measured age when the rule fired. The inner card
-// stack is centred and width-capped on expansive viewports while the ScrollView
-// and page background continue to fill the available window.
+// stack uses adaptivePageContent so its readable width and screen-edge gutter
+// respond to the offered container while the ScrollView and background remain
+// full width.
 
 struct AutoArchiveActivityView: View {
     @EnvironmentObject private var activityStore: AutoArchiveActivityStore
@@ -29,9 +30,8 @@ struct AutoArchiveActivityView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
             .padding(.vertical, 18)
-            .adaptiveContentWidth(.list)
+            .adaptivePageContent(.list)
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Auto Archive Activity")

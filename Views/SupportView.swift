@@ -103,8 +103,8 @@ private struct SupportSectionView: View {
                     SupportBlockView(block: block)
                 }
             }
-            .adaptiveContentWidth(.prose)
-            .padding(20)
+            .padding(.vertical, 20)
+            .adaptivePageContent(.prose)
             .padding(.bottom, 24)
         }
         .background(pageBackground.ignoresSafeArea())

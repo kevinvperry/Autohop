@@ -428,6 +428,17 @@ logic, but that housekeeping is not itself a responsive-behaviour milestone.
 without layout feedback loops, screen-width assumptions or nested-measurement
 churn.
 
+**Current status:** the shared container-aware modifier and its first safe
+custom-scroll adoption are code-complete. `adaptivePageContent` uses
+`containerRelativeFrame` to combine the existing width-band gutter with the
+selected readable-width cap without geometry state. Downloads, Stats, Auto
+Archive Activity, Diagnostic Log and Support section detail now use it at their
+inner page-content boundary; outer scroll views and backgrounds remain full
+width. Discover and chart rails continue to use the shared
+`AdaptiveEditorialMetrics` vocabulary delivered by work group 2. Native
+`List`/`Form` pages are intentionally unchanged pending a section-level design
+decision. Narrow, standard and expansive visual verification remains pending.
+
 ### 5.7 Work group 6 — wide presentation and Stats
 
 1. Review sheets that become unnecessarily large or visually detached on
