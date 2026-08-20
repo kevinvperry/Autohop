@@ -147,7 +147,7 @@ struct AutohopTVApp: App {
                 // for the change stream to drain.
                 if phase == .active {
                     Task { await model.primeLibraryFromCloudSoon(reason: "foreground") }
-                } else {
+                } else if phase == .background {
                     // Leaving the foreground: persist + force-push the
                     // current position so it reaches the phone promptly.
                     model.handleBackgrounded()

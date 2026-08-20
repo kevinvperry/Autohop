@@ -74,7 +74,7 @@ extension TVAppModel {
         }
         kit.entries.sort { $0.priorityRank < $1.priorityRank }
         survivalKitStore.save(kit)
-        refreshLibrary()
+        scheduleLibraryRefresh()
     }
 
     func forgetMaterializationCandidate(id: UUID) {
@@ -84,7 +84,7 @@ extension TVAppModel {
         materializationAttempts[id] = nil
         materializationRetryTasks[id]?.cancel()
         materializationRetryTasks[id] = nil
-        refreshLibrary()
+        scheduleLibraryRefresh()
     }
 
     /// Retries indefinitely with a capped delay while the app remains alive.

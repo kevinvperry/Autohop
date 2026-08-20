@@ -35,16 +35,32 @@ final class TVDiscoverFoundationTests: XCTestCase {
 
         XCTAssertTrue(landing.newAndNotable.isEmpty)
     }
+
+    func testFailedVideoProbeUsesBoundedNegativeBackoff() async {
+        let provider = FakeChartsProvider(categoryCount: 1, notableCount: 0, resolveFails: true)
+        let repository = TVDiscoverRepository(charts: provider)
+
+        let first = await repository.isVideoShow(countryCode: "au", id: "show")
+        let second = await repository.isVideoShow(countryCode: "au", id: "show")
+        let requestCount = await provider.resolveRequestCount()
+
+        XCTAssertFalse(first)
+        XCTAssertFalse(second)
+        XCTAssertEqual(requestCount, 1)
+    }
 }
 
 private actor FakeChartsProvider: PodcastChartsProviding {
     let categoryCount: Int
     let notableCount: Int
+    let resolveFails: Bool
     private var requestedCategories: [Int] = []
+    private var resolveRequests = 0
 
-    init(categoryCount: Int, notableCount: Int) {
+    init(categoryCount: Int, notableCount: Int, resolveFails: Bool = false) {
         self.categoryCount = categoryCount
         self.notableCount = notableCount
+        self.resolveFails = resolveFails
     }
 
     func topShows(countryCode: String, limit: Int) async throws -> [PodcastChartShow] {
@@ -69,10 +85,13 @@ private actor FakeChartsProvider: PodcastChartsProviding {
     }
 
     func resolveShow(id: String, countryCode: String) async throws -> PodcastSearchResult? {
-        nil
+        resolveRequests += 1
+        if resolveFails { throw URLError(.timedOut) }
+        return nil
     }
 
     func requestedCategoryIDs() -> [Int] { requestedCategories }
+    func resolveRequestCount() -> Int { resolveRequests }
 
     private func show(id: String) -> PodcastChartShow {
         PodcastChartShow(id: id, rank: 1, title: "Show", publisher: "Publisher", artworkURL: nil, genre: "Genre")

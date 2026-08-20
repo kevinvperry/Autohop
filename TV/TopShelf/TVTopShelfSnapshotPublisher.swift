@@ -1,3 +1,5 @@
+import CloudKit
+import CryptoKit
 import Foundation
 import TVServices
 import AutohopCore
@@ -40,6 +42,7 @@ struct TVTopShelfHealthDiagnostics: Equatable {
 final class TVTopShelfSnapshotPublisher {
     private let storage: TVTopShelfSharedStorage
     private let defaults: UserDefaults?
+    private let accountScopeProvider: @Sendable () async throws -> String
     private var scheduledTask: Task<Void, Never>?
     private var requestGeneration: UInt64 = 0
     private var lastCandidate: TVTopShelfSnapshotCandidate?
@@ -52,10 +55,16 @@ final class TVTopShelfSnapshotPublisher {
 
     init(
         storage: TVTopShelfSharedStorage = .init(),
-        defaults: UserDefaults? = UserDefaults(suiteName: TVTopShelfSharedConfiguration.appGroupIdentifier)
+        defaults: UserDefaults? = UserDefaults(suiteName: TVTopShelfSharedConfiguration.appGroupIdentifier),
+        accountScopeProvider: @escaping @Sendable () async throws -> String = {
+            let recordID = try await CKContainer(identifier: "iCloud.com.kevinperry.autohop").userRecordID()
+            let digest = SHA256.hash(data: Data(recordID.recordName.utf8))
+            return "ck:" + digest.map { String(format: "%02x", $0) }.joined()
+        }
     ) {
         self.storage = storage
         self.defaults = defaults
+        self.accountScopeProvider = accountScopeProvider
         self.writeProbe = storage.probeWriteAccess()
         AppLogger.shared.info("tv.topShelf.storageProbe", "Probed shared Top Shelf storage", metadata: [
             "containerAvailable": "\(writeProbe.containerAvailable)",
@@ -133,7 +142,39 @@ final class TVTopShelfSnapshotPublisher {
         diagnostics.phase = "Preparing artwork"
 
         let nextGeneration = Int64(defaults?.integer(forKey: "topShelfGeneration") ?? 0) + 1
-        let accountScope = resolvedAccountScope()
+        let accountScope: String
+        do {
+            accountScope = try await resolvedAccountScope()
+        } catch {
+            // Account identity is a privacy boundary. Never retain content
+            // whose ownership cannot be established for the current process.
+            try? storage.removeManifest()
+            diagnostics.phase = "Waiting for iCloud account"
+            diagnostics.lastErrorCode = "accountScopeUnavailable"
+            diagnostics.lastPublishMilliseconds = elapsedMilliseconds(since: startedAt)
+            TVTopShelfContentProvider.topShelfContentDidChange()
+            return
+        }
+        guard ownedGeneration == requestGeneration, !Task.isCancelled else { return }
+        if let previous = defaults?.string(forKey: "topShelfAccountScope"),
+           previous.hasPrefix("ck:"), previous != accountScope {
+            // A real account transition must fail closed. Clear the old
+            // manifest and wait for the new account's CloudKit prime to drive
+            // a fresh candidate rather than relabelling old titles.
+            defaults?.set(accountScope, forKey: "topShelfAccountScope")
+            defaults?.set(0, forKey: "topShelfGeneration")
+            try? storage.removeManifest()
+            lastCandidate = nil
+            preparedArtworkCache.removeAll()
+            diagnostics.phase = "Account changed — awaiting refresh"
+            diagnostics.lastErrorCode = nil
+            diagnostics.lastPublishMilliseconds = elapsedMilliseconds(since: startedAt)
+            TVTopShelfContentProvider.topShelfContentDidChange()
+            return
+        }
+        // This also migrates the former random installation UUID. That legacy
+        // value never represented an account and is safe to replace in place.
+        defaults?.set(accountScope, forKey: "topShelfAccountScope")
         var preparedByID: [String: TVTopShelfPreparedArtwork] = [:]
         let items = candidate.sections.flatMap(\.items)
         for chunkStart in stride(from: 0, to: items.count, by: 2) {
@@ -282,13 +323,12 @@ final class TVTopShelfSnapshotPublisher {
         )
     }
 
-    private func resolvedAccountScope() -> String {
-        if let existing = defaults?.string(forKey: "topShelfAccountScope"), !existing.isEmpty {
-            return existing
+    private func resolvedAccountScope() async throws -> String {
+        let scope = try await accountScopeProvider()
+        guard scope.hasPrefix("ck:"), scope.count > 3 else {
+            throw TVTopShelfAccountScopeError.invalidScope
         }
-        let created = UUID().uuidString
-        defaults?.set(created, forKey: "topShelfAccountScope")
-        return created
+        return scope
     }
 
 
@@ -309,4 +349,8 @@ final class TVTopShelfSnapshotPublisher {
         }
         return String(describing: type(of: error))
     }
+}
+
+private enum TVTopShelfAccountScopeError: Error {
+    case invalidScope
 }

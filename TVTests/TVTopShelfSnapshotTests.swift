@@ -190,6 +190,53 @@ final class TVTopShelfSnapshotTests: XCTestCase {
         XCTAssertEqual(probe.libraryCaches, "Writable")
     }
 
+    @MainActor
+    func testAccountScopeChangeClearsPriorManifestBeforeRepublishing() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let suite = "TVTopShelfSnapshotTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let storage = TVTopShelfSharedStorage(containerURL: root)
+        let oldScope = "ck:" + String(repeating: "a", count: 64)
+        let newScope = "ck:" + String(repeating: "b", count: 64)
+        defaults.set(oldScope, forKey: "topShelfAccountScope")
+        let oldItem = TVTopShelfSnapshot.Item(
+            id: "old", subscriptionID: UUID(), episodeKey: "old-key",
+            episodeTitle: "Previous account title", podcastTitle: "Previous account show",
+            artworkFilename1x: "old.jpg", artworkFilename2x: nil,
+            playbackProgress: nil, expiresAt: nil
+        )
+        try storage.write(
+            .init(
+                generation: 1, publishedAt: Date(), accountScope: oldScope,
+                sections: [.init(kind: .upNext, title: "Up Next", items: [oldItem])]
+            ),
+            artwork: ["old.jpg": Data([1])]
+        )
+        let publisher = TVTopShelfSnapshotPublisher(
+            storage: storage,
+            defaults: defaults,
+            accountScopeProvider: { newScope }
+        )
+        let candidate = TVTopShelfSnapshotCandidate(sections: [
+            .init(kind: .upNext, title: "Up Next", items: [.init(
+                stableID: "new", subscriptionID: UUID(), episodeKey: "new-key",
+                episodeTitle: "New title", podcastTitle: "New show", artworkURL: nil,
+                playbackProgress: nil, expiresAt: nil
+            )])
+        ])
+
+        await publisher.publishImmediately(candidate: candidate, reason: "test.accountChanged")
+
+        XCTAssertNil(try storage.read())
+        XCTAssertEqual(defaults.string(forKey: "topShelfAccountScope"), newScope)
+        XCTAssertEqual(publisher.diagnostics.phase, "Account changed — awaiting refresh")
+    }
+
     private func episode(subscriptionID: UUID, title: String, guid: String) -> Episode {
         var value = Episode(
             id: UUID(), subscriptionID: subscriptionID, guid: guid, title: title,

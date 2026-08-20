@@ -417,3 +417,19 @@ of the implementation definition of done.
   remaining-time projection.
 - Advanced all targets to Version 1.6 build 10 so physical-device evidence is
   unambiguously attributable to this repair set.
+
+### Independent tvOS audit repairs — build 10
+
+- Bound Top Shelf manifests to a one-way hash of the current private CloudKit
+  user record. Account transitions now clear prior titles and artwork before
+  waiting for the new account's sync projection.
+- Made old Top Shelf generation pruning best-effort after manifest commit, so
+  cleanup failure cannot delete artwork referenced by the live manifest.
+- Routed survival-kit materialisation changes through the library refresh
+  coalescer instead of rebuilding projections once per CloudKit record.
+- Gave Discover one stable repository shared by landing state, cards and
+  destinations. Failed media-kind probes now use a five-minute retry backoff.
+- Restricted playback checkpointing and decoded-artwork eviction to a true
+  background transition; transient inactive phases no longer purge the cache.
+- Added regression coverage for account-scope clearing and Discover probe
+  backoff.

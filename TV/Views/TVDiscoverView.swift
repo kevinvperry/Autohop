@@ -12,9 +12,20 @@ import AutohopCore
 struct TVDiscoverView: View {
     let onPlay: (Episode, Subscription) -> Void
     let onPlayNext: (Episode, Subscription) -> Void
-    @State private var discoverModel = TVDiscoverModel()
+    @State private var discoverModel: TVDiscoverModel
     @State private var path: [TVDiscoverRoute] = []
-    private let repository = TVDiscoverRepository()
+    @State private var repository: TVDiscoverRepository
+
+    init(
+        onPlay: @escaping (Episode, Subscription) -> Void,
+        onPlayNext: @escaping (Episode, Subscription) -> Void
+    ) {
+        let repository = TVDiscoverRepository()
+        self.onPlay = onPlay
+        self.onPlayNext = onPlayNext
+        _repository = State(initialValue: repository)
+        _discoverModel = State(initialValue: TVDiscoverModel(repository: repository))
+    }
 
     var body: some View {
         NavigationStack(path: $path) {

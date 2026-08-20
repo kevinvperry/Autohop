@@ -116,12 +116,14 @@ struct TVTopShelfSharedStorage {
             }
             do { try encoded.write(to: manifestURL(), options: [.atomic]) }
             catch { throw TVTopShelfStorageError(.writeManifest, underlying: error) }
-            do { try removeOldGenerations(keeping: [snapshot.generation, max(0, snapshot.generation - 1)]) }
-            catch { throw TVTopShelfStorageError(.pruneGenerations, underlying: error) }
         } catch {
             try? fileManager.removeItem(at: generation)
             throw error
         }
+        // The manifest is now committed and may already be visible to the
+        // extension. Old-generation cleanup is best effort: a prune failure
+        // must never roll back artwork referenced by the live manifest.
+        try? removeOldGenerations(keeping: [snapshot.generation, max(0, snapshot.generation - 1)])
     }
 
     func removeManifest() throws {

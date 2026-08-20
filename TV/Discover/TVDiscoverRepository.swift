@@ -10,6 +10,7 @@ actor TVDiscoverRepository {
     private let charts: any PodcastChartsProviding
     private let feedLoader = EpisodeFeedLoader()
     private var videoShowCache: [String: Bool] = [:]
+    private var failedVideoProbeRetryAfter: [String: Date] = [:]
     private var activeVideoProbes = 0
     private var videoProbeWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -110,9 +111,11 @@ actor TVDiscoverRepository {
     func isVideoShow(countryCode: String, id: String) async -> Bool {
         let key = "\(countryCode.lowercased()):\(id)"
         if let cached = videoShowCache[key] { return cached }
+        if let retryAfter = failedVideoProbeRetryAfter[key], retryAfter > Date() { return false }
         await acquireVideoProbePermit()
         defer { releaseVideoProbePermit() }
         if let cached = videoShowCache[key] { return cached }
+        if let retryAfter = failedVideoProbeRetryAfter[key], retryAfter > Date() { return false }
         do {
             guard let catalogue = try await charts.resolveShow(id: id, countryCode: countryCode) else {
                 videoShowCache[key] = false
@@ -121,8 +124,13 @@ actor TVDiscoverRepository {
             let feed = try await feedLoader.fetch(feedURL: catalogue.feedURL, limit: 3)
             let value = feed.episodes.contains(where: { $0.mediaKind == .video })
             videoShowCache[key] = value
+            failedVideoProbeRetryAfter[key] = nil
             return value
         } catch {
+            // Treat transport/parser failures as unknown, not permanently
+            // audio. A short backoff prevents card recycling from creating a
+            // request storm while still allowing the badge to self-heal.
+            failedVideoProbeRetryAfter[key] = Date().addingTimeInterval(5 * 60)
             return false
         }
     }
