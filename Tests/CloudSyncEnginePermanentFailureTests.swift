@@ -1,6 +1,7 @@
 // AI CONTEXT — Tests/CloudSyncEnginePermanentFailureTests.swift. Pure tests for
 // CloudSyncEngine's permanent CloudKit push-failure and retired-pending-change
-// classifiers. CKSyncEngine itself is not run in unit tests; these cases protect
+// classifiers plus the targeted queue empty-state classifier. CKSyncEngine
+// itself is not run in unit tests; these cases protect
 // the Phase-1 quarantine guard and the Phase-2 namespace repair guard that
 // discards restored pre-namespace saves before they can collide again. Keep the
 // classifiers narrow: unrelated CK errors must stay retryable, and legacy
@@ -14,6 +15,27 @@ import CloudKit
 #endif
 
 final class CloudSyncEnginePermanentFailureTests: XCTestCase {
+
+    func testMissingQueueRecordIsHealthyNotAuthoredState() {
+        XCTAssertEqual(
+            CloudSyncEngine.queueSnapshotFetchResult(forCloudKitErrorCode: .unknownItem),
+            .notAuthored
+        )
+    }
+
+    func testMissingProductionZoneIsHealthyNotAuthoredState() {
+        XCTAssertEqual(
+            CloudSyncEngine.queueSnapshotFetchResult(forCloudKitErrorCode: .zoneNotFound),
+            .notAuthored
+        )
+    }
+
+    func testQueueNetworkFailureRemainsFailure() {
+        XCTAssertEqual(
+            CloudSyncEngine.queueSnapshotFetchResult(forCloudKitErrorCode: .networkUnavailable),
+            .failed
+        )
+    }
 
     private let collisionDescription =
         "Error saving record to server: invalid attempt to update record from type 'HistoryEntry' to 'EpisodeState'"

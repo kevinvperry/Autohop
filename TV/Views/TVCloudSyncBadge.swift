@@ -2,7 +2,9 @@ import SwiftUI
 
 // AI CONTEXT — One app-shell-owned iCloud status treatment shared by every
 // tvOS tab. It is an overlay, never an in-flow row, so status changes cannot
-// move page content or disturb Siri Remote focus.
+// move page content or disturb Siri Remote focus. A healthy account with no
+// phone-authored queue snapshot uses `connected`; absence of that optional
+// record must never render as an iCloud outage.
 struct TVCloudSyncBadge: View {
     let status: TVSyncStatus
 
@@ -20,7 +22,7 @@ struct TVCloudSyncBadge: View {
     private var systemImage: String {
         switch status {
         case .updating: "icloud.and.arrow.down"
-        case .upToDate: "checkmark.icloud"
+        case .upToDate, .connected: "checkmark.icloud"
         case .cached: "icloud"
         case .unavailable, .failed: "exclamationmark.icloud"
         }

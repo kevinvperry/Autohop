@@ -7,7 +7,9 @@ import AutohopCore
 // product policy; this extension is tvOS-only and coordinated through focused
 // observable state owners defined in TVAppFeatureModels.swift. Populated launch
 // avoids a full membership sweep; freshness polls always end in a terminal
-// status, and Discover queue commands prefer phone-authored row keys.
+// status, and Discover queue commands prefer phone-authored row keys. Queue
+// snapshot absence is a healthy clean-account state (`iCloud connected`), not
+// evidence that the account or CloudKit transport is unavailable.
 
 extension TVAppModel {
     // MARK: - Sync
@@ -292,7 +294,7 @@ extension TVAppModel {
             // observer).
             syncStatus = .updating
             retryPendingMaterializationsNow()
-            let fetched = await engine.fetchQueueSnapshotNow(reason: reason)
+            let queueFetchResult = await engine.fetchQueueSnapshotNow(reason: reason)
             refreshLibrary()
             // Queue truth is independent of the much larger first-time Library
             // and history queries. Report Up Next current as soon as its
@@ -300,7 +302,9 @@ extension TVAppModel {
             // ten-minute cold-zone materialization.
             if let snapshot = subscriptionStore.syncedQueueSnapshot() {
                 syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
-            } else if !fetched {
+            } else if queueFetchResult == .notAuthored {
+                syncStatus = .connected
+            } else if queueFetchResult == .failed {
                 syncStatus = .unavailable
             }
 
@@ -437,8 +441,9 @@ extension TVAppModel {
         guard shouldFetchQueue || shouldFetchHistory else { return }
 
         syncStatus = .updating
+        var queueFetchResult: CloudSyncEngine.QueueSnapshotFetchResult = .notAuthored
         if shouldFetchQueue {
-            _ = await engine.fetchQueueSnapshotNow(reason: "tv.freshnessPoll")
+            queueFetchResult = await engine.fetchQueueSnapshotNow(reason: "tv.freshnessPoll")
         }
         if shouldFetchHistory {
             _ = await syncCoordinator.sharedRecentHistoryPrime(reason: "tv.freshnessPoll")?.value
@@ -448,6 +453,8 @@ extension TVAppModel {
         scheduleLibraryRefresh()
         if let snapshot = subscriptionStore.syncedQueueSnapshot() {
             syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
+        } else if queueFetchResult == .notAuthored {
+            syncStatus = .connected
         } else {
             syncStatus = .unavailable
         }

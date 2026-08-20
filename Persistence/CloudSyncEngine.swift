@@ -13,6 +13,10 @@ import Combine
 // endChangeNotificationCoalescing so a fetch burst (e.g. 18 records after cold
 // launch) fires ONE objectWillChange instead of one per record — the per-record
 // version showed as a main-thread hang burst right after launch.
+// TARGETED QUEUE READ: missing `queue:current` and a never-created private zone
+// are healthy clean-account outcomes, distinct from transport/auth failures.
+// Preserve QueueSnapshotFetchResult so tvOS cannot regress to presenting record
+// absence as “iCloud unavailable.”
 //
 // Push: observes SubscriptionStore changes (debounced 1 s), scans the database
 // for pending sync-state rows (dirty fields/partitions), and queues saves in two
@@ -400,27 +404,53 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     /// the whole change stream has drained (Kevin's real-device finding: the
     /// TV queue cycled through stale episodes for ~10 min before the snapshot
     /// surfaced). Requires an active account; a `.unknownItem` (nothing
-    /// authored yet) is expected and silent. Returns true when a snapshot was
-    /// fetched and applied.
+    /// authored yet) and `.zoneNotFound` (a new production account whose
+    /// private zone has not been established yet) are both healthy empty-state
+    /// outcomes. Keep them distinct from a transport/authentication failure so
+    /// callers never mislabel an available iCloud account as unavailable.
+    public enum QueueSnapshotFetchResult: Equatable, Sendable {
+        case fetched
+        case notAuthored
+        case failed
+    }
+
+    /// Pure regression seam for the targeted queue read. CloudKit reports a
+    /// never-created custom zone differently from a missing record even though
+    /// both mean the optional phone-authored queue does not exist yet.
+    static func queueSnapshotFetchResult(forCloudKitErrorCode code: CKError.Code) -> QueueSnapshotFetchResult {
+        switch code {
+        case .unknownItem, .zoneNotFound: .notAuthored
+        default: .failed
+        }
+    }
+
     @discardableResult
-    public func fetchQueueSnapshotNow(reason: String) async -> Bool {
-        guard engine != nil else { return false }
+    public func fetchQueueSnapshotNow(reason: String) async -> QueueSnapshotFetchResult {
+        guard engine != nil else { return .failed }
         do {
             let record = try await container.privateCloudDatabase.record(for: CloudKitSync.queueSnapshotRecordID)
             await applyRemote(record: record)
             logger.info("sync.queueSnapshotFetched", "Targeted queue-snapshot fetch applied", metadata: [
                 "reason": reason
             ])
-            return true
-        } catch let error as CKError where error.code == .unknownItem {
-            // No queue authored yet — normal on a fresh account.
-            return false
+            return .fetched
+        } catch let error as CKError {
+            let result = Self.queueSnapshotFetchResult(forCloudKitErrorCode: error.code)
+            if result == .notAuthored {
+                // No queue/zone authored yet — normal on a fresh production account.
+                return result
+            }
+            logger.warning("sync.queueSnapshotFetchFailed", "Targeted queue-snapshot fetch failed (will still arrive via the change stream)", metadata: [
+                "reason": reason,
+                "error": "\(error)"
+            ])
+            return result
         } catch {
             logger.warning("sync.queueSnapshotFetchFailed", "Targeted queue-snapshot fetch failed (will still arrive via the change stream)", metadata: [
                 "reason": reason,
                 "error": "\(error)"
             ])
-            return false
+            return .failed
         }
     }
 

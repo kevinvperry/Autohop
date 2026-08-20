@@ -7,6 +7,8 @@ import AutohopCore
 // action payload; playbackPositionSeconds is projected once from synced history.
 // TVHomeQueueProjector is the single presentation-only exclusion boundary for
 // hero episodes: it never mutates the phone-authored queue snapshot.
+// TVSyncStatus.connected means CloudKit is healthy but the optional phone-owned
+// queue snapshot has not been authored; only genuine failures use unavailable.
 
 struct TVQueueRowModel: Identifiable, Equatable {
     let id: String
@@ -86,6 +88,7 @@ struct TVEpisodeRowModel: Identifiable, Equatable {
 
 enum TVSyncStatus: Equatable {
     case upToDate(Date, generation: Int64)
+    case connected
     case updating
     case cached(Date, generation: Int64)
     case unavailable
@@ -94,6 +97,7 @@ enum TVSyncStatus: Equatable {
     var label: String {
         switch self {
         case .upToDate: return "Up to date"
+        case .connected: return "iCloud connected"
         case .updating: return "Updating from iCloud…"
         case .cached(let date, _): return "Cached · updated \(date.formatted(.relative(presentation: .named)))"
         case .unavailable: return "iCloud unavailable"

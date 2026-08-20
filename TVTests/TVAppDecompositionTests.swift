@@ -4,9 +4,14 @@ import AutohopCore
 
 // AI CONTEXT — Architecture regression tests for the decomposed tvOS root.
 // They verify focused state/projector behaviour without constructing CloudKit,
-// networking, or the iPhone application.
+// networking, or the iPhone application, including the invariant that a healthy
+// account with no optional queue snapshot reports “iCloud connected.”
 @MainActor
 final class TVAppDecompositionTests: XCTestCase {
+    func testHealthyAccountWithoutQueueSnapshotUsesConnectedStatus() {
+        XCTAssertEqual(TVSyncStatus.connected.label, "iCloud connected")
+    }
+
     func testBootstrapStateOwnsLoadingMessageAndTerminalState() {
         let coordinator = TVBootstrapCoordinator()
 
