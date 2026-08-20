@@ -5,6 +5,8 @@ import AutohopCore
 extension TVAppModel {
     func handleBackgrounded() {
         playbackCoordinator.checkpoint()
+        let candidate = topShelfCandidate()
+        Task { await topShelfPublisher.publishImmediately(candidate: candidate, reason: "backgroundCheckpoint") }
     }
 
     func beginPlayback(_ episode: Episode, restartFromBeginning: Bool = false) async {
@@ -15,11 +17,13 @@ extension TVAppModel {
             resolver: episodeResolver,
             restartFromBeginning: restartFromBeginning
         )
+        scheduleTopShelfPublication(reason: "playbackStarted")
     }
 
     func beginDiscoverPlayback(_ episode: Episode, subscription: Subscription) async {
         consumePendingDiscoverPlayNextIfNeeded(episode)
         await playbackCoordinator.beginDiscoverPlayback(episode, subscription: subscription)
+        scheduleTopShelfPublication(reason: "discoverPlaybackStarted")
     }
 
     func archiveEpisode(_ episode: Episode) {
@@ -39,10 +43,9 @@ extension TVAppModel {
         }
         upNextItems.removeAll { $0.episodeKey == key }
         upNextEpisodes = upNextItems.compactMap(\.episode)
-        queueRows = TVQueueProjector.rows(from: upNextItems, subscriptionsByID: subscriptionsByID)
+        queueRows = projectQueueRows(from: upNextItems)
         AppLogger.shared.info("tv.discover.playNextConsumed", "Consumed browse-only Discover Play Next request", metadata: [
-            "episode": episode.title,
-            "episodeKey": key
+            "queueRows": "\(queueRows.count)"
         ], alwaysPersist: true)
     }
 }

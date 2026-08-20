@@ -12,7 +12,7 @@ import Foundation
 // IDENTITY / FORMAT:
 // Entries are keyed by subscription-scoped episode GUID/URL (`historyKey`) so a
 // re-fetched episode merges into one row without colliding across feeds. The JSON
-// path, Codable payload, 500-entry cap, sorting, repair behavior, batching, and
+// path, Codable payload, bounded retention, sorting, repair behavior, batching, and
 // sync-row writes are unchanged by the move.
 //
 // CONCURRENCY:
@@ -40,7 +40,11 @@ final class ListeningHistoryStore: ObservableObject {
     @Published private(set) var entries: [ListeningHistoryEntry] = []
 
     private var lastSavedAt: Date?
-    private let maxEntries = 500
+    // Stats uses history for outcome/cadence details that predate durable
+    // per-show daily counters. Five hundred entries could represent only weeks
+    // for a heavy listener and silently falsified yearly/lifetime show details.
+    // Keep a generous bounded history while daily Stats remain the count source.
+    private let maxEntries = 5_000
     private let progressFlushInterval: TimeInterval = 30
     private var lastProgressFlushAt: Date?
     private var lastProgressDiagnosticAt: Date?

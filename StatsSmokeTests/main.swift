@@ -61,7 +61,7 @@ func runSmokeTest() throws {
     let today = store.summary(for: .last(days: 1))
     require(today.days.count == 1, "Expected exactly one day bucket for .last(days: 1)")
     require(approx(today.wallClockSeconds, 60), "Expected 60s wall clock, got \(today.wallClockSeconds)")
-    require(approx(today.timeSavedVariableSpeed, 30), "Expected 30s speed saving at 2.0x, got \(today.timeSavedVariableSpeed)")
+    require(approx(today.timeSavedVariableSpeed, 60), "Expected 60s speed saving from 60s wall time at 2.0x, got \(today.timeSavedVariableSpeed)")
     require(approx(today.timeSavedTrimSilence, 12), "Expected 12s trim saving")
     require(approx(today.timeSavedManualSkip, 30), "Expected 30s manual skip saving")
     require(approx(today.timeSavedAutoSkip, 45), "Expected 45s auto skip saving")
@@ -71,9 +71,9 @@ func runSmokeTest() throws {
     require(today.bytesDownloaded == 50_000_000, "Expected 50 MB downloaded, got \(today.bytesDownloaded)")
     require(approx(today.hourSeconds.reduce(0, +), 60), "Hour histogram should sum to wall clock")
     require(approx(today.perShowSeconds[showA.uuidString] ?? 0, 60), "Expected per-show attribution")
-    // Per-show time saved: 30s variable speed + 12s trim + 30s manual skip; the
+    // Per-show time saved: 60s variable speed + 12s trim + 30s manual skip; the
     // unattributed 45s auto skip stays out of the per-show map.
-    require(approx(today.perShowTimeSaved[showA.uuidString] ?? 0, 72), "Expected 72s per-show time saved, got \(today.perShowTimeSaved[showA.uuidString] ?? 0)")
+    require(approx(today.perShowTimeSaved[showA.uuidString] ?? 0, 102), "Expected 102s per-show time saved, got \(today.perShowTimeSaved[showA.uuidString] ?? 0)")
     require(store.showTitles[showA.uuidString] == "Show A", "Expected show title captured")
 
     // Day buckets saved before perShowTimeSaved existed must still decode.
@@ -127,7 +127,11 @@ func runSmokeTest() throws {
     let migratedStatsURL = migratedDir.appendingPathComponent("listening-stats.json")
     let migratedLegacyURL = migratedDir.appendingPathComponent("playback-stats.json")
 
-    let legacyStartedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let legacyStartedAt = Calendar.current.date(
+        byAdding: .day,
+        value: -1,
+        to: Date()
+    )!
     let legacy = PlaybackStats(
         totalListeningSeconds: 1000,
         timeSavedVariableSpeed: 200,
@@ -139,6 +143,14 @@ func runSmokeTest() throws {
     let migrated = ListeningStatsStore(fileURL: migratedStatsURL, legacyFileURL: migratedLegacyURL)
     require(approx(migrated.lifetime.totalListeningSeconds, 1000), "Expected legacy listening total imported")
     require(approx(migrated.lifetime.totalTimeSaved, 300), "Expected legacy time saved imported")
+    let migratedSummary = migrated.summary(for: .lifetime)
+    require(approx(migratedSummary.wallClockSeconds, 1000), "Expected legacy listening in Lifetime summary")
+    require(approx(migratedSummary.totalTimeSaved, 300), "Expected legacy savings in Lifetime summary")
+    require(approx(migratedSummary.legacyUnbucketedListeningSeconds, 1000), "Expected legacy unbucketed disclosure")
+    require(
+        approx(migrated.summary(for: .currentYear).wallClockSeconds, 1000),
+        "Expected wholly contained legacy listening in current-year summary"
+    )
     require(approx(migrated.startedAt.timeIntervalSince1970, legacyStartedAt.timeIntervalSince1970), "Expected legacy startedAt carried over")
 
     migrated.addListeningTime(10, speed: 1.6, subscriptionID: showA, showTitle: "Show A")

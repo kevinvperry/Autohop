@@ -66,6 +66,10 @@ import Foundation
 // is semantically unchanged performs comparison work but authors no persistence,
 // narrow-domain invalidation, broad objectWillChange, queue projection, or sync
 // work. Do not remove these guards: unchanged feeds are the dominant refresh case.
+// FEED IDENTITY: SQLite requires feedURL uniqueness while CloudKit records are
+// UUID-keyed. Remote identities can therefore collide after legacy migrations.
+// The store canonicalises feed URLs, retains an already-persisted identity, and
+// absorbs duplicate remote settings instead of materialising a second row.
 // DOWNLOAD TIMESTAMPS: markEpisodeDownloaded sets Episode.downloadedAt to now
 // if not already set (preserves the original date on re-download). This is the
 // clock used by Auto Archive "After Inactive" — do not clear downloadedAt when
@@ -225,7 +229,9 @@ public final class SubscriptionStore: ObservableObject {
     // MARK: - Add
 
     public func add(parsedFeed: ParsedFeed, feedURL: URL) throws -> Subscription {
-        guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
+        guard !subscriptions.contains(where: {
+            Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(feedURL)
+        }) else {
             throw SubscriptionStoreError.duplicateFeed
         }
 
@@ -279,6 +285,14 @@ public final class SubscriptionStore: ObservableObject {
         priorityRank: Int? = nil
     ) -> Subscription {
         if let existing = subscriptions.first(where: { $0.id == subscriptionID }) {
+            return existing
+        }
+        if let existing = subscriptions.first(where: {
+            Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(feedURL)
+        }) {
+            AppLogger.shared.warning("subscriptions.duplicateRemoteFeedSuppressed", "Suppressed a second remote identity for an existing feed", metadata: [
+                "feedHost": feedURL.host ?? "unknown"
+            ], alwaysPersist: true)
             return existing
         }
 
@@ -1424,6 +1438,26 @@ public final class SubscriptionStore: ObservableObject {
         return normalized > 0 ? normalized : nil
     }
 
+    /// AI CONTEXT — Bounded bulk read for immutable queue projections. tvOS
+    /// calls this once while rebuilding Up Next so every row can mirror iOS's
+    /// remaining-time metadata without querying persistence during SwiftUI
+    /// rendering or Siri Remote focus movement. Only resumable `.listened`
+    /// records contribute; terminal history must never appear partly played.
+    public func savedListeningPositions(forEpisodeKeys episodeKeys: [String]) -> [String: TimeInterval] {
+        guard let database, !episodeKeys.isEmpty else { return [:] }
+        var result: [String: TimeInterval] = [:]
+        result.reserveCapacity(episodeKeys.count)
+        for key in Set(episodeKeys) {
+            guard let entry = try? database.historyEntry(id: key),
+                  entry.status == .listened,
+                  entry.lastPositionSeconds.isFinite,
+                  entry.lastPositionSeconds > 0
+            else { continue }
+            result[key] = entry.lastPositionSeconds
+        }
+        return result
+    }
+
     /// Finds the authoritative existing history record for a companion
     /// projection. The direct history key remains the fast path; the bounded
     /// recent scan repairs reinstall/legacy rows whose local UUID changed but
@@ -1782,6 +1816,7 @@ public final class SubscriptionStore: ObservableObject {
         guard let location else { return false }
 
         var episode = subscriptions[location.sub].episodes[location.ep]
+        let originalEpisode = episode
         episode.playedState = merged.playedState
         episode.wasCompleted = merged.wasCompleted
         episode.lastPlayedAt = merged.lastPlayedAt
@@ -1810,6 +1845,7 @@ public final class SubscriptionStore: ObservableObject {
             episode.isManualDownloadProtected = false
         }
 
+        guard episode != originalEpisode else { return false }
         subscriptions[location.sub].episodes[location.ep] = episode
         if subscriptions[location.sub].latestEpisode?.id == episode.id {
             subscriptions[location.sub].latestEpisode = episode
@@ -1822,6 +1858,8 @@ public final class SubscriptionStore: ObservableObject {
     public enum RemoteSubscriptionOutcome {
         /// Handled locally (settings applied, unsubscribe processed, or no-op).
         case applied
+        /// The server record was valid but produced no visible/domain change.
+        case unchanged
         /// The podcast isn't present on this device and needs to be created by
         /// fetching its feed — the caller (AppState, which has FeedService)
         /// materialises it, then re-applies this state.
@@ -1844,7 +1882,11 @@ public final class SubscriptionStore: ObservableObject {
         guard let database else { return .applied }
 
         let localProjection = try? database.subscriptionSyncState(id: remote.subscriptionID)
-        let existingIndex = subscriptions.firstIndex { $0.id == remote.subscriptionID }
+        let identityIndex = subscriptions.firstIndex { $0.id == remote.subscriptionID }
+        let feedIndex = subscriptions.firstIndex {
+            Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(remote.feedURL)
+        }
+        let existingIndex = identityIndex ?? feedIndex
 
         let baseline: SubscriptionSyncState
         if let localProjection {
@@ -1861,23 +1903,46 @@ public final class SubscriptionStore: ObservableObject {
                 try? database.saveSubscriptionSyncState(adopted)
                 return .needsMaterialization(remote)
             }
-            return .applied // unsubscribe for something we never had
+            return .unchanged // unsubscribe for something we never had
         }
 
         let merged = baseline.merged(withRemote: remote)
         try? database.saveSubscriptionSyncState(merged)
 
+        if identityIndex == nil, let feedIndex {
+            // A legacy CloudKit UUID points at a feed already owned by another
+            // local identity. Apply user settings to that row, but never insert
+            // a second feedURL or author an unsubscribe tombstone for either ID.
+            var sub = subscriptions[feedIndex]
+            sub.title = merged.title
+            sub.notificationsEnabled = merged.notificationsEnabled
+            sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
+            sub.autoFeedRefreshReturnPriorityRank = merged.autoFeedRefreshReturnPriorityRank
+            sub.playbackPreference = merged.playbackPreference
+            sub.autoArchiveSettings = merged.autoArchiveSettings
+            sub.chapterFilter = merged.chapterFilter
+            sub.downloadFilterSettings = merged.downloadFilterSettings
+            if sub != subscriptions[feedIndex] {
+                subscriptions[feedIndex] = sub
+                save(authorSubscriptionOrder: false)
+                return .applied
+            }
+            return .unchanged
+        }
+
         // Remote unsubscribe wins → remove locally.
         if !merged.subscribed {
             if let existingIndex {
                 remove(subscriptionID: subscriptions[existingIndex].id)
+                return .applied
             }
-            return .applied
+            return .unchanged
         }
 
-        guard let existingIndex else { return .applied }
+        guard let existingIndex else { return .unchanged }
 
         var sub = subscriptions[existingIndex]
+        let originalSubscription = sub
         sub.title = merged.title
         if priorityReorderSessionInitialIDs == nil {
             sub.priorityRank = merged.priorityRank
@@ -1894,6 +1959,7 @@ public final class SubscriptionStore: ObservableObject {
         sub.autoArchiveSettings = merged.autoArchiveSettings
         sub.chapterFilter = merged.chapterFilter
         sub.downloadFilterSettings = merged.downloadFilterSettings
+        guard sub != originalSubscription else { return .unchanged }
         subscriptions[existingIndex] = sub
         if priorityReorderSessionInitialIDs == nil {
             // Legacy per-subscription rank compatibility. Atomic
@@ -2194,6 +2260,7 @@ public final class SubscriptionStore: ObservableObject {
         notifyObservers: Bool = true,
         authorSubscriptionOrder: Bool = true
     ) {
+        reconcileDuplicateFeedsInMemory()
         if notifyObservers {
             publishNarrowDomainChangesIfNeeded()
             publishChange()
@@ -2260,6 +2327,42 @@ public final class SubscriptionStore: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func canonicalFeedKey(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString.lowercased()
+        }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if components.path.count > 1, components.path.hasSuffix("/") { components.path.removeLast() }
+        if components.scheme == "http", components.port == 80 { components.port = nil }
+        if components.scheme == "https", components.port == 443 { components.port = nil }
+        components.fragment = nil
+        return components.string?.lowercased() ?? url.absoluteString.lowercased()
+    }
+
+    private func reconcileDuplicateFeedsInMemory() {
+        guard subscriptions.count > 1 else { return }
+        let persistedIDs = Set(persistedSnapshot.keys)
+        var winnerByFeed: [String: Int] = [:]
+        var duplicateIndexes: [Int] = []
+        for index in subscriptions.indices {
+            let key = Self.canonicalFeedKey(subscriptions[index].feedURL)
+            guard let winner = winnerByFeed[key] else { winnerByFeed[key] = index; continue }
+            if persistedIDs.contains(subscriptions[index].id), !persistedIDs.contains(subscriptions[winner].id) {
+                duplicateIndexes.append(winner)
+                winnerByFeed[key] = index
+            } else {
+                duplicateIndexes.append(index)
+            }
+        }
+        guard !duplicateIndexes.isEmpty else { return }
+        for index in duplicateIndexes.sorted(by: >) { subscriptions.remove(at: index) }
+        resortByCurrentPriorityRank()
+        AppLogger.shared.warning("subscriptions.duplicateFeedsReconciled", "Removed duplicate feed identities before persistence", metadata: [
+            "count": "\(duplicateIndexes.count)"
+        ], alwaysPersist: true)
     }
 
     /// Computes only the fields capable of changing downloaded queue identity or

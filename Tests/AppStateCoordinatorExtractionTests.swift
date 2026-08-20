@@ -6,6 +6,8 @@
 // onboarding single-vs-bulk milestone behavior, and typed routing commands.
 // BackgroundWakeMonitor characterization verifies the one-summary contract and
 // its cross-domain counters without launching an OS-owned BGTask.
+// Settings ownership coverage includes Shared Listening's live sheet-facing
+// snapshot, guarding against controls that persist but remain visually stale.
 // They use isolated temporary persistence paths and no live CloudKit, Relay,
 // network, or audio endpoints. Stage 10's device-only CloudKit/Relay gates are
 // deliberately covered by their existing mapping and staging suites.
@@ -65,7 +67,8 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
             at: 10.5,
             isPlaying: true,
             episode: episode,
-            subscription: subscription
+            subscription: subscription,
+            effectiveSpeed: 2
         )
         subject.recordPlaybackProgress(
             at: 15,
@@ -92,6 +95,9 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertTrue(syncObservedDurableFiles)
         XCTAssertEqual(history.entries.count, 1)
         XCTAssertEqual(history.entries[0].listenedSeconds, 0.5, accuracy: 0.001)
+        let statsSummary = stats.summary(for: .lifetime)
+        XCTAssertEqual(statsSummary.wallClockSeconds, 0.75, accuracy: 0.001)
+        XCTAssertEqual(statsSummary.timeSavedVariableSpeed, 0.5, accuracy: 0.001)
 
         subject.mark(
             episode,
@@ -173,6 +179,13 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         store.appSettings = external
 
         XCTAssertEqual(subject.appSettings.skipForwardSeconds, 45)
+
+        external.sharedListeningActive = true
+        external.sharedListeningSpeed = 1.2
+        store.appSettings = external
+
+        XCTAssertTrue(subject.appSettings.sharedListeningActive)
+        XCTAssertEqual(subject.appSettings.sharedListeningSpeed, 1.2, accuracy: 0.001)
     }
 
     func testQueueCoordinatorUsesNarrowInvalidationAndQueueReadsDoNotWrite() throws {

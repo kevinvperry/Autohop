@@ -89,6 +89,20 @@ struct PodcastSearchView: View {
         }
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // AI CONTEXT — A visible search action provides one pointer and
+                // keyboard focus target. Do not add an invisible Cmd-F button:
+                // that would create a duplicate accessibility/focus destination.
+                Button {
+                    isSearchFieldFocused = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .accessibilityLabel("Focus search field")
+            }
+        }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
     }
@@ -177,6 +191,7 @@ struct PodcastSearchView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .hoverEffect(.highlight)
                                 .padding(.horizontal, 20)
                                 .padding(.vertical, 6)
                                 if sub.id != recentlyViewed.last?.id {
@@ -301,6 +316,7 @@ struct PodcastSearchView: View {
                                 libraryEpisodeResultRow(episode)
                             }
                             .buttonStyle(.plain)
+                            .hoverEffect(.highlight)
                             if episode.id != results.last?.id { Divider().padding(.leading, 72) }
                         }
                     }
@@ -325,6 +341,7 @@ struct PodcastSearchView: View {
                             episodeResultRow(episode)
                         }
                         .buttonStyle(.plain)
+                        .hoverEffect(.highlight)
                         if episode.id != results.last?.id { Divider().padding(.leading, 72) }
                     }
                 }
@@ -363,6 +380,7 @@ struct PodcastSearchView: View {
                                 .glassCard(cornerRadius: 14)
                             }
                             .buttonStyle(.plain)
+                            .hoverEffect(.highlight)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -394,6 +412,7 @@ struct PodcastSearchView: View {
                             .glassCard(cornerRadius: 16)
                     }
                     .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
                 }
             }
             .padding(.horizontal, 16)
@@ -612,6 +631,7 @@ private struct PodcastCreatorResultsView: View {
                         .glassCard(cornerRadius: 16)
                     }
                     .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
                 }
             }
             .padding(16)

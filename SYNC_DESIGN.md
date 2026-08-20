@@ -663,3 +663,68 @@ Related diagnostic keys outside CloudKit:
   Playing card, so an
   AirPods stem-press resumes Autohop instead of falling through to Apple
   Music. `nowPlaying.reasserted` also fires on scene foreground.
+# tvOS Demo Isolation (Version 1.6)
+
+<!-- AI CONTEXT — Hard negative sync contract for the App Review demo. -->
+
+The tvOS demonstration mode is not a CloudKit client and is not a new sync
+authority. `TVDemoSession` owns synthetic library, queue, history, archive and
+progress mutations in memory. Its player uses bundled media and does not call
+`SubscriptionStore`, `ListeningStatsStore`, `CloudSyncEngine`, survival-kit or
+queue-command APIs. Reset/Exit discards demo state. Personal iCloud records are
+never merged with demo fixtures, and demo activity never appears on iPhone.
+
+# Dynamic Top Shelf Publication Boundary (Version 1.6)
+
+<!-- AI CONTEXT — Presentation replication only; this is not a new sync
+authority, queue store or CloudKit consumer. -->
+
+The tvOS containing app projects its already-resolved Home state into a small
+App Group snapshot after meaningful library, queue, history or playback events.
+Artwork is prepared before the manifest is atomically replaced, and only then
+does the app notify TVServices. The publisher preserves the iPhone-authored
+Up Next order and never writes queue state.
+
+The extension performs one bounded local read and validates schema version,
+age, account scope, item counts, unique identities, progress and safe artwork
+basenames. It never opens CloudKit, GRDB, RSS, `TVAppModel`, statistics or a
+network session. Account-scope mismatch returns no dynamic content, preventing
+one Apple TV user's cached presentation from being shown to another. Demo mode
+has no path to the production publisher.
+
+The extension may atomically replace one maximum-4 KB operational heartbeat
+used only by local diagnostics. It contains outcome, generation, counts and
+duration—never content or identity—and is not sync/domain state. This exception
+does not grant authority to mutate the manifest, queue, history or user models.
+
+## tvOS pull ownership and observability
+
+CKSyncEngine remains the sole owner of its serialized change state. On tvOS the
+serialization is stored under the app's Caches/Autohop directory, matching the
+purgeable local database projection and avoiding an unreliable Application
+Support write boundary. A missing token may cause one full recovery fetch but
+cannot lose authoritative CloudKit data.
+
+Fetched events coalesce store/history notifications for the complete event.
+Their routine diagnostic is one summary containing total modifications,
+deletions and counts for episode, history, subscription and queue types.
+Individual record traces are verbose-only. TV projection refreshes triggered by
+materialization or freshness recovery use the existing duty-cycle scheduler;
+only bootstrap/queue sequencing points that immediately inspect the projection
+retain synchronous refreshes.
+
+Version 1.6 build 9 adds a privacy-safe audit layer around that ownership.
+`sync.fetchCycleStarted`, `sync.fetchPageCompleted`, `sync.fetched` and
+`sync.fetchCycleCompleted` correlate each CKSyncEngine cycle/page with an opaque
+fingerprint of the serialized state and whether atomic persistence succeeded.
+The fingerprint proves advancement or replay without exposing the token.
+Summaries distinguish received, materially changed, unchanged and rejected
+records; malformed `QueueCommand` records therefore remain visible without
+implying that application-level decoding owns token acknowledgement.
+
+No-op remote episode/subscription merges do not save the visible store again,
+and identical history records still cache server system fields but do not notify
+tvOS projections. When the TV scene is inactive, notification-driven projection
+refreshes collapse into one deferred request. Activation drains that request
+through the normal duty-cycle scheduler and logs aggregate deferred/coalesced
+counts rather than one line per callback.

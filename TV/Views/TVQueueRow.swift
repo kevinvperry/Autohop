@@ -3,7 +3,9 @@ import AutohopCore
 
 // AI CONTEXT — Canonical Up Next row for the tvOS Home page. Home is now the
 // sole queue surface: priority occupies a fixed leading column, artwork is the
-// second column, and title/publisher/duration share one aligned text column.
+// second column, and title/publisher/time share one aligned text column. Time
+// mirrors iOS Up Next: partial episodes show remaining time, untouched episodes
+// show total runtime.
 struct TVQueueRow: View {
     let row: TVQueueRowModel
     let detailLoadFailed: Bool
@@ -38,7 +40,10 @@ struct TVQueueRow: View {
                                     .accessibilityLabel(pinState == .playNext ? "Pinned to play next" : "Pinned to play last")
                             }
                             Text(row.podcastTitle).lineLimit(1)
-                            if let duration = row.durationSeconds {
+                            if let remaining = row.remainingSeconds {
+                                Text("•")
+                                Text("\(formattedDuration(remaining)) left")
+                            } else if let duration = row.durationSeconds {
                                 Text("•")
                                 Text(formattedDuration(duration))
                             }

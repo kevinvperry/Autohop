@@ -22,7 +22,8 @@ import Foundation
 // episode changes.
 //
 // PERSISTENCE / SYNC INVARIANTS:
-// - Valid listening deltas are >0 and <=3 seconds, matching legacy AppState.
+// - Valid listening deltas are >0 and <=3 media seconds. History receives the
+//   media delta; Stats receives media delta / effective speed as elapsed time.
 // - History progress is buffered by ListeningHistoryStore at its existing
 //   30-second cadence; Stats retains its existing throttles.
 // - Terminal marks flush buffered history before changing completion status.
@@ -149,7 +150,8 @@ final class HistoryStatsCoordinator: ObservableObject {
         at time: TimeInterval,
         isPlaying: Bool,
         episode: Episode?,
-        subscription: Subscription?
+        subscription: Subscription?,
+        effectiveSpeed: Double = 1.0
     ) {
         guard isPlaying, let episode, let subscription else {
             resetPlaybackTracking()
@@ -173,6 +175,15 @@ final class HistoryStatsCoordinator: ObservableObject {
             listenedSeconds: delta,
             positionSeconds: time,
             durationSeconds: episode.durationSeconds
+        )
+        // `time` is media position, so faster playback produces callbacks more
+        // frequently. Stats stores elapsed wall time; divide the natural media
+        // delta by speed to keep every chart and total independent of rate.
+        statsStore.addListeningTime(
+            delta / max(effectiveSpeed, 0.01),
+            speed: effectiveSpeed,
+            subscriptionID: subscription.id,
+            showTitle: subscription.title
         )
     }
 

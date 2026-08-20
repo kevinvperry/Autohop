@@ -16,4 +16,12 @@ struct TVDiagnosticsSnapshot: Equatable {
     var configuredSpeed: Double
     var playerRate: Double
     var pendingHistoryUploads: Int
+    var rootState: String
+    var appUptimeSeconds: Int
+    var memoryFootprintMegabytes: Int?
+    var thermalState: String
+    var mainThreadHangCount: Int
+    var maximumMainThreadHangMilliseconds: Int
+    var inactiveWatchdogGapCount: Int
+    var topShelf: TVTopShelfHealthDiagnostics
 }

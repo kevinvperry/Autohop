@@ -18,6 +18,9 @@
 //  callback ownership here one coherent group at a time. Every
 //  episode-scoped async operation must capture `generation` and verify it before
 //  applying chapters, completion, restoration, or delayed UI state.
+//  The media-position callback delegates time accounting to
+//  HistoryStatsCoordinator; never restore a fixed-per-callback Stats credit,
+//  because AVPlayer callback frequency scales with playback rate.
 //
 //  This type does not own queue ordering, downloads, history/Stats, sync,
 //  Auto Archive, or feed refresh. Stage 14 also places read-only chapter/video
@@ -577,12 +580,16 @@ final class PlaybackCoordinator: ObservableObject {
                 // tick so clock/Now Playing updates and audio controls are not
                 // held hostage by storage or CloudKit bookkeeping.
                 let historyIsPlaying = self.isPlaying
+                let historyEffectiveSpeed = tickSubscription.map {
+                    preferenceWorkflow.effectiveSpeed(for: $0)
+                } ?? 1.0
                 Task { @MainActor in
                     historyStatsCoordinator.recordPlaybackProgress(
                         at: time,
                         isPlaying: historyIsPlaying,
                         episode: tickEpisode,
-                        subscription: tickSubscription
+                        subscription: tickSubscription,
+                        effectiveSpeed: historyEffectiveSpeed
                     )
                 }
                 measure("positionSave") {
@@ -592,18 +599,10 @@ final class PlaybackCoordinator: ObservableObject {
                         positionSaved = true
                     }
                 }
-                measure("stats") {
-                    if self.isPlaying, tickEpisode != nil, let tickSubscription {
-                        historyStatsCoordinator.recordListeningTime(
-                            0.5,
-                            speed: preferenceWorkflow.effectiveSpeed(
-                                for: tickSubscription
-                            ),
-                            subscription: tickSubscription
-                        )
-                        statsCredited = true
-                    }
-                }
+                // HistoryStatsCoordinator derives both heard-media and elapsed
+                // wall time from the same natural media-position delta. A fixed
+                // 0.5 credit here over-counted AVPlayer listening at >1x speed.
+                statsCredited = historyIsPlaying && tickEpisode != nil && tickSubscription != nil
                 self.recordTickDiagnostics(
                     startedAt: tickStartedAt,
                     playbackTime: time,

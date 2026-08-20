@@ -23,6 +23,15 @@ shelf. Up Next is the authoritative phone-authored ordered queue. Library is a
 secondary browsing surface. Search is browse-only; subscriptions are managed on
 iPhone. Settings exposes truthful sync state and redacted diagnostics.
 
+Dynamic Top Shelf extends that hierarchy onto the Home Screen: live Currently
+Playing/Watching owns the first slot, idle Continue content is its fallback,
+and Up Next follows in exact order. The featured identity is deduplicated from
+the queue even when it originally falls below the ten-item cap. Both Select and
+Play/Pause start or resume exact-identity playback. The extension reads a
+bounded prebuilt snapshot; the containing app owns all network and image work,
+commits immutable artwork before atomically replacing the manifest, and reuses
+prepared artwork after a failed publication attempt.
+
 ## Layout and typography
 
 - Primary safe-content guides: 80 points horizontal and 60 points vertical.
@@ -33,6 +42,12 @@ iPhone. Settings exposes truthful sync state and redacted diagnostics.
   is constrained. Focus must never change card dimensions or surrounding layout.
 - Lists use stable IDs and lazy containers. Views render immutable display
   models rather than traversing full subscription graphs during focus updates.
+- Up Next metadata mirrors iOS: a partially played episode shows remaining time
+  and an untouched episode shows total runtime. Synced positions enter the
+  immutable row projection in one bounded read, never from the view.
+- Tall Settings content relies on automatic focus-driven scrolling. Nearby
+  read-only health rows are deliberate focus stops, preventing jumps between
+  actionable controls separated by several screens.
 
 ## Materials and artwork
 
@@ -69,6 +84,20 @@ iPhone. Settings exposes truthful sync state and redacted diagnostics.
 - Legacy Version 1 queue rows say `Loading episode details…`; a bounded,
   per-podcast fetch enriches only those rows. Never leave the indefinite and
   ambiguous label `Syncing…`.
+
+## Diagnostic operations
+
+- Full Diagnostic Export is an asynchronous Settings operation: focus and
+  scrolling remain responsive, the button immediately changes to a progress
+  label, and repeat activation is disabled until completion.
+- Log stitching, privacy redaction and file writing run at utility priority,
+  never on the main actor. Completion records duration and output size without
+  exposing episode or account identity.
+- Invisible CloudKit projection requests are coalesced while the scene is
+  inactive and produce one scheduled refresh when focus returns to the app.
+- Top Shelf artwork dimensions are pixel contracts, not UIKit point sizes. The
+  renderer always uses scale 1; separate 404×608 and 808×1216 outputs provide
+  the four-across poster layout without inheriting the television's screen scale.
 
 ## Accessibility
 

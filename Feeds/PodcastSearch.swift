@@ -15,6 +15,12 @@ import Foundation
 // TV/Views/TVSearchView.swift can consume them directly as a library import.
 // Keep this file UIKit-free; the ViewModels below (iOS-only consumers) stay
 // internal, they just happen to live in the same file.
+// `ApplePodcastsReviewResolver` is the iOS-family bridge from Autohop's
+// RSS-owned show identity to Apple's catalogue. It accepts a known Apple show
+// ID when Search already supplied one; legacy/manual subscriptions are resolved
+// by title and then require an exact normalized feed-URL match. Never open a
+// fuzzy title-only match: sending a listener to the wrong show's review page is
+// worse than withholding the action.
 
 // MARK: - Model
 
@@ -477,6 +483,60 @@ public actor PodcastSearchService {
             query: query,
             countryCode: PodcastSearchStorefront.normalized(countryCode)
         )
+    }
+}
+
+// MARK: - Apple Podcasts review destination
+
+public actor ApplePodcastsReviewResolver {
+    public static let shared = ApplePodcastsReviewResolver()
+
+    private let provider = PodcastShowSearchProvider()
+    private var cachedIDsByFeed: [String: Int] = [:]
+
+    public func reviewURL(
+        showTitle: String,
+        feedURL: URL,
+        knownApplePodcastID: Int? = nil,
+        countryCode: String? = nil
+    ) async -> URL? {
+        let storefront = PodcastSearchStorefront.normalized(countryCode)
+        if let knownApplePodcastID, knownApplePodcastID > 0 {
+            return Self.showURL(id: knownApplePodcastID, storefront: storefront)
+        }
+
+        let feedKey = Self.normalizedFeedKey(feedURL)
+        if let cachedID = cachedIDsByFeed[feedKey] {
+            return Self.showURL(id: cachedID, storefront: storefront)
+        }
+
+        let query = showTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              let results = try? await provider.search(query: query, countryCode: storefront, limit: 50),
+              let exactMatch = results.first(where: {
+                  Self.normalizedFeedKey($0.feedURL) == feedKey
+              })
+        else { return nil }
+
+        cachedIDsByFeed[feedKey] = exactMatch.id
+        return Self.showURL(id: exactMatch.id, storefront: storefront)
+    }
+
+    private static func showURL(id: Int, storefront: String) -> URL? {
+        URL(string: "https://podcasts.apple.com/\(storefront.lowercased())/podcast/id\(id)")
+    }
+
+    private static func normalizedFeedKey(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString.lowercased()
+        }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if components.path.count > 1, components.path.hasSuffix("/") {
+            components.path.removeLast()
+        }
+        components.fragment = nil
+        return components.string ?? url.absoluteString.lowercased()
     }
 }
 

@@ -77,6 +77,13 @@ struct AutohopTVApp: App {
     // off-main via completeDeferredLoad(), keeping the main actor free so
     // the splash actually animates.
     @State private var model: TVAppModel?
+    // AI CONTEXT — Presentation watchdog only. It never cancels or races the
+    // mutable bootstrap task. Clean installs expose setup/demo after ten
+    // seconds; durable returning-library evidence receives a separate 45-second
+    // branded recovery grace while the one bootstrap may still publish ready.
+    @State private var launchDeadlineReached = false
+    @State private var returningRecoveryDeadlineReached = false
+    @State private var pendingRouteCoordinator = TVPendingRouteCoordinator()
     @Environment(\.scenePhase) private var scenePhase
     // CKSyncEngine uses the app delegate's remote-notification registration
     // to receive private-iCloud change notifications while the app is installed.
@@ -86,12 +93,18 @@ struct AutohopTVApp: App {
         WindowGroup {
             Group {
                 if let model {
-                    TVRootView(model: model)
+                    TVRootView(
+                        model: model,
+                        launchDeadlineReached: launchDeadlineReached,
+                        returningRecoveryDeadlineReached: returningRecoveryDeadlineReached,
+                        pendingRouteCoordinator: pendingRouteCoordinator
+                    )
                 } else {
                     TVLaunchLoadingView(statusText: "Loading your library…")
                 }
             }
             .preferredColorScheme(.dark)
+            .onOpenURL { pendingRouteCoordinator.accept($0) }
             .task {
                 guard model == nil else { return }
                 // Give the splash one rendered frame before the heavy
@@ -99,9 +112,32 @@ struct AutohopTVApp: App {
                 try? await Task.sleep(for: .milliseconds(50))
                 let created = TVAppModel()
                 model = created
+                Task { @MainActor in
+                    try? await Task.sleep(for: TVLaunchAccessPolicy.firstUsableScreenDeadline)
+                    guard created.bootstrapCoordinator.isLoading else { return }
+                    launchDeadlineReached = true
+                    AppLogger.shared.warning(
+                        "tv.bootstrap.presentationDeadline",
+                        "Bootstrap exceeded the first-usable-screen deadline; setup actions exposed while work continues",
+                        alwaysPersist: true
+                    )
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: TVLaunchAccessPolicy.returningLibraryRecoveryDeadline)
+                    guard created.bootstrapCoordinator.isLoading,
+                          created.hasReturningLibraryEvidence
+                    else { return }
+                    returningRecoveryDeadlineReached = true
+                    AppLogger.shared.warning(
+                        "tv.bootstrap.returningRecoveryDeadline",
+                        "Returning library evidence remained unavailable after extended recovery grace",
+                        alwaysPersist: true
+                    )
+                }
                 await created.bootstrap()
             }
             .onChange(of: scenePhase) { _, phase in
+                TVHangWatchdog.shared.setSceneActive(phase == .active)
                 guard let model else { return }
                 model.isSceneActive = (phase == .active)
                 // Returning to the foreground: re-prime the library + queue

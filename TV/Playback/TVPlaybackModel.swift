@@ -177,9 +177,7 @@ final class TVPlaybackModel {
         guard requestOwnership.owns(requestGeneration) else { return }
         AppLogger.shared.info("tv.playback", "Playback requested", metadata: [
             "episodeID": episode.id.uuidString,
-            "host": episode.audioURL.host ?? "unknown",
             "mediaKind": String(describing: episode.mediaKind),
-            "podcast": displayPodcastTitle ?? subscription.title,
             "speed": String(format: "%.2f", subscription.playbackPreference.speed),
             "resumeOverride": resumePositionOverride.map { String(format: "%.1f", $0) } ?? "none",
             "assetExtension": episode.audioURL.pathExtension.lowercased()
@@ -392,7 +390,10 @@ final class TVPlaybackModel {
             if TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta),
                let subscriptionID = currentSubscriptionID {
                 statsStore.addListeningTime(
-                    delta,
+                    // StreamingPlaybackEngine reports media-position deltas.
+                    // ListeningStatsStore's cross-platform contract is elapsed
+                    // wall time, matching iOS's fixed 0.5-second tick credit.
+                    delta / max(currentSpeed, 0.01),
                     speed: currentSpeed,
                     subscriptionID: subscriptionID,
                     showTitle: currentSubscriptionTitle

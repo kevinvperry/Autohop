@@ -20,10 +20,17 @@ final class TVAppModel {
     }
 
     let bootstrapCoordinator = TVBootstrapCoordinator()
+    let diagnosticStartedAt = Date()
+    // AI CONTEXT — Durable/cache evidence distinguishes a returning Apple TV
+    // from a true clean install before CloudKit finishes its first response.
+    // It affects presentation grace only; it never bypasses bootstrap or sync.
+    private(set) var hasReturningLibraryEvidence = false
     let libraryModel = TVLibraryModel()
     let queueModel = TVQueueModel()
     let continueListeningModel = TVContinueListeningModel()
     let historyModel = TVHistoryModel()
+    @ObservationIgnored
+    lazy var topShelfPublisher = TVTopShelfSnapshotPublisher()
 
     var rootState: RootState = .loading {
         didSet {
@@ -32,6 +39,14 @@ final class TVAppModel {
             case .ready: bootstrapCoordinator.state = .ready
             case .empty: bootstrapCoordinator.state = .empty
             }
+            guard oldValue.diagnosticEventLabel != rootState.diagnosticEventLabel else { return }
+            AppLogger.shared.info("tv.launch.rootStateChanged", "Apple TV root presentation changed", metadata: [
+                "from": oldValue.diagnosticEventLabel,
+                "to": rootState.diagnosticEventLabel,
+                "elapsedMs": "\(max(0, Int(Date().timeIntervalSince(diagnosticStartedAt) * 1_000)))",
+                "podcasts": "\(libraryTiles.count)",
+                "queueRows": "\(queueRows.count)"
+            ], alwaysPersist: true)
         }
     }
     var statusText = "Loading your library…" {
@@ -139,6 +154,12 @@ final class TVAppModel {
     }
     var episodeFeedLoader: EpisodeFeedLoader { materializationCoordinator.feedLoader }
     var pendingLibraryRefresh: Task<Void, Never>?
+    // AI CONTEXT — Remote CloudKit callbacks may arrive while tvOS is inactive.
+    // Remember one refresh request instead of rebuilding invisible projections;
+    // scene activation drains it through the normal duty-cycle coalescer.
+    var hasDeferredInactiveLibraryRefresh = false
+    var coalescedLibraryRefreshRequestCount = 0
+    var deferredInactiveLibraryRefreshRequestCount = 0
     var lastLibraryRefreshAt = Date.distantPast
     var lastLibraryRefreshDuration: TimeInterval = 0
     @ObservationIgnored
@@ -204,7 +225,6 @@ final class TVAppModel {
             "gitWorkingTreeDirty": info["GitWorkingTreeDirty"] as? String ?? "unknown",
             "sourceFingerprint": info["SourceFingerprint"] as? String ?? "unknown",
             "buildTimestampUTC": info["BuildTimestampUTC"] as? String ?? "unknown",
-            "container": FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "unknown",
             "session": UUID().uuidString
         ], alwaysPersist: true)
 
@@ -217,6 +237,8 @@ final class TVAppModel {
             feedLoader: dependencies.episodeFeedLoader
         )
 
+        hasReturningLibraryEvidence = survivalKitStore.load()?.entries.isEmpty == false
+
         playbackModel.upNextProvider = { [weak self] in self?.upNextEpisodes ?? [] }
         playbackModel.subscriptionProvider = { [weak self] id in self?.subscription(id: id) }
         // Force-push a just-written position immediately (pause / player exit),
@@ -224,9 +246,11 @@ final class TVAppModel {
         // the engine's ~60 s slow-lane debounce.
         playbackModel.onPlaybackCheckpoint = { [weak self] in
             self?.syncCoordinator.flush(reason: "tv.playbackCheckpoint")
+            self?.scheduleTopShelfPublication(reason: "playbackCheckpoint")
         }
 
         if let cached = try? projectionStore?.loadLibrary(), !cached.isEmpty {
+            hasReturningLibraryEvidence = true
             libraryTiles = cached.map {
                 TVPodcastTileModel(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank, isMaterializing: false)
             }
@@ -242,6 +266,16 @@ final class TVAppModel {
 
     }
 
+}
+
+private extension TVAppModel.RootState {
+    var diagnosticEventLabel: String {
+        switch self {
+        case .loading: return "loading"
+        case .ready: return "ready"
+        case .empty: return "empty"
+        }
+    }
 }
 
 

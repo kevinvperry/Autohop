@@ -469,6 +469,18 @@ preserving compact behaviour and state.
 
 ### 5.8 Work group 7 — EW-10 coach-mark clamping
 
+**Implementation status (11 August 2026): code-complete.** The current product
+does not use control-anchored coach marks: `CoachMarkOverlay` has one stable,
+centred bottom-card presentation mounted by `RootView`. Package 2 therefore
+does not add an anchor-placement system that the product does not need. The
+existing card retains its prose width cap and current-tip identity while the
+overlay now uses a viewport-relative, size-aware vertical scroller. Ordinary
+cards remain bottom aligned; short windows and accessibility text categories
+can scroll the complete card and its dismissal action into view. This responds
+live to container resizing without restarting the tour or changing the active
+tip. Canonical viewport and accessibility-size visual verification remains
+pending.
+
 Coach marks must derive placement from the current container and safe-area
 insets. For every anchor:
 
@@ -482,6 +494,24 @@ insets. For every anchor:
 width and tested text size.
 
 ### 5.9 Work group 8 — EW-11 targeted Dynamic Type
+
+**Status (2026-08-11): TARGETED CODE PASS COMPLETE; VISUAL MATRIX PENDING.**
+
+The first deliberately scoped typography pass is now implemented on the
+responsive surfaces changed by Package 2. Ordinary starter-pack copy in
+Discover now uses semantic `subheadline` and `caption` roles. The two custom
+statistics values whose visual hierarchy requires numeric display sizing now
+use `@ScaledMetric(relativeTo:)`, so they respect the user's text-size setting
+without pretending SwiftUI provides a `Font.system(size:relativeTo:)` API.
+
+Discover subsequently received a complete viewport-scaling pass: its ordinary
+copy, headings, shelf metadata and badges now step through semantic font roles,
+while its artwork, symbols, decorative ranks and supporting geometry scale from
+the same container-derived editorial metrics. Native navigation-bar controls
+retain platform sizing. This is not a claim that all typography across the
+repository has been migrated: broader native Form/List and legacy-page
+typography remains deferred until each surface can be verified with its
+controls and wrapping behaviour.
 
 Classify typography by role rather than applying a repository-wide mechanical
 rewrite:
@@ -502,6 +532,17 @@ hiding actions at the tested Dynamic Type categories.
 
 ### 5.10 Work group 9 — keyboard and pointer readiness
 
+**Targeted code pass complete; hardware-keyboard/pointer matrix pending.**
+Native lists, forms, buttons and navigation links retain their platform focus
+behaviour rather than receiving competing custom focus state. Informational
+sheet close controls and custom Back controls now support the standard Cancel
+keyboard action. Search exposes a visible toolbar action with Command-F to
+focus its real text field, avoiding an invisible duplicate focus target.
+Custom plain-style search result links provide pointer hover feedback in
+addition to colour. No global single-key playback shortcuts were introduced,
+because they could intercept typing and require a broader command-ownership
+design.
+
 Add and verify keyboard/pointer interaction only after the visual hierarchy is
 stable:
 
@@ -517,7 +558,9 @@ completed with keyboard/pointer input on an iPad-class environment.
 ### 5.11 Work group 10 — device-family release gate
 
 Changing `TARGETED_DEVICE_FAMILY` is a release gate, not an early
-implementation step. Enable iPad only after all Package 2 work groups pass:
+implementation step. Native iPad was enabled on 2026-08-11 after the Package 2
+code passes reached the device-matrix stage. Release remains blocked until all
+of the following visual and interaction checks pass:
 
 - the complete screenshot/preview matrix;
 - simulator checks for supported orientations and Split View;
@@ -526,9 +569,21 @@ implementation step. Enable iPad only after all Package 2 work groups pass:
 - state-preservation checks during resize and rotation; and
 - a standard-iPhone regression pass.
 
-After enabling iPad, repeat the release checks against the actual iPad target
+Now that iPad is enabled, repeat the release checks against the actual iPad target
 before declaring support complete. Begin a separate Mac/Catalyst assessment
 only after that release is stable.
+
+**Implemented 2026-08-11 — navigation presentation sizing:** Native iPad
+testing exposed that Menu and pages pushed inside it inherited the compact
+centred form-sheet frame, making Stats and other full pages appear as small
+windows against the expansive app canvas. A shared adaptive navigation
+presentation modifier now keeps sheets on compact-width iPhone layouts and
+uses a full-screen navigation canvas on regular-width iPad/Mac layouts. It is
+adopted by the Menu entry points in Subscriptions and Player, plus the Player's
+Up Next, podcast-settings and podcast-detail routes. Small confirmations,
+pickers and share workflows deliberately retain their existing sheet or
+popover presentation. Simulator and physical-device matrix verification
+remain required.
 
 ### 5.12 Package 2 completion definition
 

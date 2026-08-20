@@ -41,10 +41,14 @@ enum TVTab: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class TVRouter {
-    var selectedTab: TVTab = .home
+    var selectedTab: TVTab
     /// Subscriptions tab's push stack, by subscription UUID (not the Subscription
     /// value itself) — the destination view resolves the live subscription
     /// from TVAppModel on each render, so it never shows a stale snapshot if
     /// sync updates the podcast while its episode list is on screen.
     var libraryPath: [UUID] = []
+
+    init(selectedTab: TVTab = .home) {
+        self.selectedTab = selectedTab
+    }
 }

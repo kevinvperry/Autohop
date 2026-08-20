@@ -6,6 +6,8 @@
 // protects the 2026-07-12 UI optimization: continuous playback may mutate the
 // authoritative bucket every tick, but must not publish a revision every tick
 // or publish the first tick twice when its initial persistence checkpoint runs.
+// Discrete outcome tests also protect durable per-show attribution, which is the
+// source of truth for long-range expanded Top Shows counts.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -92,5 +94,39 @@ final class StatsWriteCoalescingTests: XCTestCase {
             1,
             "A lifecycle checkpoint must persist deferred download accounting"
         )
+    }
+
+    @MainActor
+    func testEpisodeOutcomesAreAttributedToTheirShow() {
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        let showA = UUID()
+        let showB = UUID()
+
+        store.recordEpisodeStarted(subscriptionID: showA, showTitle: "Show A")
+        store.recordEpisodeCompleted(subscriptionID: showA)
+        store.recordEpisodeCompleted(subscriptionID: showA)
+        store.recordEpisodeStarted(subscriptionID: showB, showTitle: "Show B")
+        store.recordEpisodeCompleted(subscriptionID: showB)
+
+        let summary = store.summary(for: .lifetime)
+        XCTAssertEqual(summary.episodesStarted, 2)
+        XCTAssertEqual(summary.episodesCompleted, 3)
+        XCTAssertEqual(summary.perShowEpisodesStarted[showA.uuidString], 1)
+        XCTAssertEqual(summary.perShowEpisodesCompleted[showA.uuidString], 2)
+        XCTAssertEqual(summary.perShowEpisodesStarted[showB.uuidString], 1)
+        XCTAssertEqual(summary.perShowEpisodesCompleted[showB.uuidString], 1)
+    }
+
+    @MainActor
+    func testVariableSpeedSavingsUseWallClockContract() {
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        let show = UUID()
+
+        store.addListeningTime(100, speed: 1.4, subscriptionID: show, showTitle: "Show")
+
+        let summary = store.summary(for: .lifetime)
+        XCTAssertEqual(summary.wallClockSeconds, 100, accuracy: 0.001)
+        XCTAssertEqual(summary.timeSavedVariableSpeed, 40, accuracy: 0.001)
+        XCTAssertEqual(summary.perShowTimeSaved[show.uuidString] ?? 0, 40, accuracy: 0.001)
     }
 }

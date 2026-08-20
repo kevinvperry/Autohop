@@ -168,7 +168,7 @@ private enum TVDiscoverShowSource { case chart(PodcastChartShow), search(Podcast
                 case .search(let show): value = try await repository.show(catalogue: show)
                 }
                 guard !Task.isCancelled else { return }; phase = .show(value)
-                AppLogger.shared.info("tv.discover.showResolved", "Discover show feed resolved", metadata: ["episodes": "\(value.episodes.count)", "title": value.subscription.title], alwaysPersist: true)
+                AppLogger.shared.info("tv.discover.showResolved", "Discover show feed resolved", metadata: ["episodes": "\(value.episodes.count)"], alwaysPersist: true)
             } catch { fail(error) }
         }
     }
@@ -178,7 +178,7 @@ private enum TVDiscoverShowSource { case chart(PodcastChartShow), search(Podcast
             do {
                 let (show, value) = try await repository.episode(countryCode: country, chartEpisode: episode)
                 guard !Task.isCancelled else { return }; phase = .episode(show, value)
-                AppLogger.shared.info("tv.discover.episodeResolved", "Discover episode resolved", metadata: ["episodeID": value.id.uuidString, "title": value.title], alwaysPersist: true)
+                AppLogger.shared.info("tv.discover.episodeResolved", "Discover episode resolved", metadata: ["mediaKind": value.mediaKind.rawValue], alwaysPersist: true)
             } catch { fail(error) }
         }
     }
@@ -279,7 +279,7 @@ private struct TVDiscoverEpisodeDetail: View {
                     Text(episode.title).font(.largeTitle.bold())
                     Text(subscription.title).font(.title2).foregroundStyle(.secondary)
                     Button("Play", systemImage: "play.fill") {
-                        AppLogger.shared.info("tv.discover.playRequested", "Discover play selected", metadata: ["episodeID": episode.id.uuidString], alwaysPersist: true)
+                        AppLogger.shared.info("tv.discover.playRequested", "Discover play selected", metadata: ["mediaKind": episode.mediaKind.rawValue], alwaysPersist: true)
                         onPlay(episode, subscription)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
                     Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {

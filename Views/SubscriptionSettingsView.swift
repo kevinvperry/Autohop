@@ -36,6 +36,9 @@ import UIKit
 // settings (struct-level LWW on the SubscriptionState record). Play Instant is
 // stored in the same synced automation payload: only a newly auto-downloaded,
 // filter-eligible episode can interrupt active playback; manual downloads cannot.
+// FINAL-MINUTE POLICY (2026-08-14): an arrival remains armed rather than
+// interrupting when the current episode has a known 60 seconds or less left.
+// PlayInstantWorkflow owns and revalidates this rule; this page only explains it.
 // Version 1.3 footer copy is also a website claim source: keep filter-aware
 // Auto Archive, live chapter changes, and Download Feed Filter integration
 // aligned with FEATURES.md and kevmarl-site/support.html.
@@ -437,7 +440,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Automation")
         } footer: {
-            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
+            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. It waits instead if the current episode has 60 seconds or less remaining. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
         }
 
         Section {

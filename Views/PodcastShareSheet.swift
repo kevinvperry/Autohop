@@ -7,7 +7,74 @@ import UIKit
 // podcast card plus descriptive text only: Subscription currently has no
 // separately parsed publisher homepage and its feedURL may be private. Never
 // substitute newestEpisode and never expose feedURL. A later sharing stage can
-// add a validated channel webpage without changing these call sites.
+// add a validated channel webpage without changing these call sites. The shared
+// ApplePodcastsReviewButton is iOS-family UI: it opens the verified Apple
+// Podcasts show page (Apple has no supported direct review-composer URL) and
+// tells the listener where the Ratings & Reviews control lives.
+
+struct ApplePodcastsReviewButton: View {
+    @Environment(\.openURL) private var openURL
+
+    let showTitle: String
+    let feedURL: URL
+    var knownApplePodcastID: Int? = nil
+
+    @State private var isResolving = false
+    @State private var resolutionFailed = false
+
+    var body: some View {
+        Button {
+            openReviewPage()
+        } label: {
+            HStack(spacing: 9) {
+                if isResolving {
+                    ProgressView().tint(.white).scaleEffect(0.8)
+                } else {
+                    Image(systemName: "star.bubble")
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isResolving ? "Finding Podcast…" : "Review in Apple Podcasts")
+                        .font(.system(size: 16, weight: .bold))
+                    Text(resolutionFailed ? "This show wasn't found in Apple Podcasts" : "Open the show, then scroll to Ratings & Reviews")
+                        .font(.caption)
+                        .foregroundStyle(resolutionFailed ? Color.orange : Color.white.opacity(0.65))
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.bold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .glassCard(cornerRadius: 14)
+        }
+        .buttonStyle(.plain)
+        .disabled(isResolving)
+        .accessibilityHint("Opens this show's page in Apple Podcasts; scroll to Ratings and Reviews to write a review")
+    }
+
+    private func openReviewPage() {
+        isResolving = true
+        resolutionFailed = false
+        Task {
+            let url = await ApplePodcastsReviewResolver.shared.reviewURL(
+                showTitle: showTitle,
+                feedURL: feedURL,
+                knownApplePodcastID: knownApplePodcastID,
+                countryCode: Locale.current.region?.identifier
+            )
+            await MainActor.run {
+                isResolving = false
+                guard let url else {
+                    resolutionFailed = true
+                    return
+                }
+                openURL(url)
+            }
+        }
+    }
+}
 
 struct PodcastShareSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -81,6 +148,12 @@ struct PodcastShareSheet: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isSharing)
+                .padding(.horizontal, 20)
+
+                ApplePodcastsReviewButton(
+                    showTitle: subscription.title,
+                    feedURL: subscription.feedURL
+                )
                 .padding(.horizontal, 20)
 
                 Button("Cancel") { dismiss() }

@@ -33,6 +33,11 @@ repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
 The iPhone and Apple TV targets use only the user's private iCloud account for
 cross-device sync. The abandoned Autohop Pro and Cloudflare relay prototypes
 have been removed from the project.
+Apple TV dynamic Top Shelf is a pre-materialised App Group projection: the main
+app selects Up Next/Continue content and prepares bounded artwork, while the
+memory-constrained extension performs only a local read and TVServices mapping.
+Feed membership is unique by canonical feed URL even when legacy CloudKit UUIDs
+collide; the already-established local identity is retained.
 Section 19 documents CarPlay support. Keep it aligned with the approved audio
 entitlement scope: Now Playing, downloaded-only Up Next, Subscriptions, explicit
 download-before-play confirmation for subscription episodes, Play Now, Play Next,
@@ -40,6 +45,11 @@ Play Last, Archive, playback speed, and Shared Listening. CarPlay must not grow
 search, podcast discovery, feed refresh, settings, sleep controls, stats, OPML,
 notifications, or other non-driving workflows.
 -->
+
+> Version 1.6 build 9: Apple TV diagnostics exports are prepared away from the
+> user-interface thread with visible progress. iCloud diagnostics report
+> privacy-safe fetch cycles, state advancement and material-change counts;
+> inactive Apple TV scenes defer projection rebuilding until they become active.
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
@@ -328,7 +338,12 @@ Both use the same "replace the queue" pattern: the subscriptionID is staged, the
 
 **Panels:** Three horizontally swipeable panels:
 1. **Now Playing** — artwork, episode title, podcast name, scrubber, transport controls (skip back, play/pause, skip forward), audio controls button, sleep timer button, queue peek.
-2. **Details** — episode description and metadata.
+2. **Details** — episode description and metadata, followed by the iOS-family
+   **Review in Apple Podcasts** action beneath the metadata-card grid. The show
+   must pass an exact normalized RSS feed match in the selected Apple storefront;
+   a failure is explained inline and never opens a similarly named show. Apple
+   provides no supported direct review-composer URL, so the control instructs
+   the listener to scroll to Ratings & Reviews.
 3. **Chapters** — chapter list. Only shown if the current episode has chapters.
 
 **Top bar:** leading nav icon (pushes Subscriptions) · **Sleep Schedule indicator** · panel tab strip · Queue count pill. The Sleep Schedule indicator (`bed.double.fill` purple pill, matching the audio-row action buttons) appears next to the nav icon **only while inside the Sleep Schedule active-hours window**. It shows the whole minutes remaining until the next "still listening?" prompt while a countdown is running, and the icon alone when not counting (paused, idle, or End-of-Episode mode). Tapping it pushes the Sleep Schedule page (`AppRoute.sleepSchedule`).
@@ -355,6 +370,9 @@ When no safe public page exists, it shares the card and descriptive text only.
 **Copy Link** appears only for a safe resolved page. Podcast Detail and Podcast
 Settings use `PodcastShareSheet`, which shares the podcast's own artwork, title,
 creator and description rather than silently substituting its newest episode.
+Both iOS-family share sheets also offer **Review in Apple Podcasts** for the
+show; the Player therefore exposes the action without adding another permanent
+button to its compact five-control audio row. This action is absent from tvOS.
 
 **Archive:** Opens a confirmation sheet; on confirm, archives the currently playing episode, deletes its downloaded file, and advances to the next queued episode.
 
@@ -435,7 +453,7 @@ While active, **every** podcast plays at the chosen Shared Listening speed with 
 | Default on activation | **1x** (always resets to 1x each time it is switched on) |
 | Persistence | Survives app relaunch until explicitly switched off |
 
-**UI:** Top row of the Audio Controls sheet — toggle plus animated segmented speed picker when on. While active, the per-podcast Speed and Trim Silence rows below are greyed out (disabled), and the sound-controls button in the player's audio row renders **white** (mirroring the active Sleep Timer button). Changes apply live to the playing episode through `PlaybackPreferenceWorkflow.effectivePreference(for:)`, which all playback paths read instead of raw `playbackPreference`.
+**UI:** Top row of the Audio Controls sheet — toggle plus animated segmented speed picker when on. Both read the observable `SettingsViewModel.appSettings` snapshot so their switch/selection visuals update immediately; commands still route through AppState/`PlaybackPreferenceWorkflow` for live engine side effects. While active, the per-podcast Speed and Trim Silence rows below are greyed out (disabled), and the sound-controls button in the player's audio row reads the same observable snapshot and renders **white** (mirroring the active Sleep Timer button). Changes apply live to the playing episode through `PlaybackPreferenceWorkflow.effectivePreference(for:)`, which all playback paths read instead of raw `playbackPreference`.
 
 ---
 
@@ -581,7 +599,18 @@ ratio.
 
 **Playback path:** Video episodes always use AVPlayer (the video UI requires it). Vocal Boost can still be applied to video as an AVPlayer `audioMix`; Trim Silence is audio-only because it depends on the AVAudioEngine buffer-processing path.
 
-**Landscape:** Full-screen video unlocks landscape orientation via `VideoOrientationController`, which uses the iOS scene-geometry orientation APIs.
+**Full-screen playback:** Entering full-screen video preserves the exact
+effective playback speed and whether playback was playing or paused. The AVPlayer
+default rate remains aligned with the per-podcast preference so AVKit cannot
+silently reset a preferred speed such as 1.4x to 1x during presentation.
+Full-screen presentation unlocks user-driven landscape rotation before the
+transition begins; it does not force a geometry change while UIKit is presenting
+the player. SwiftUI owns `AVPlayerViewController` containment, avoiding conflicting
+parent-controller state while retaining the explicit Picture in Picture fallback.
+
+**Platform parity:** tvOS uses the shared streaming AVPlayer engine, which follows
+the same persistent `defaultRate` policy. The custom iOS full-screen transition is
+phone/tablet-specific; the underlying playback-speed behaviour stays unified.
 
 **Chapters:** Chapter navigation works on video episodes.
 
@@ -633,9 +662,9 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 |---|---|---|
 | New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
-| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing during an active Instant session, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
+| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. It does not interrupt when the current episode has exactly 60 seconds or less remaining; the arrival stays armed and may trigger after natural advancement. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing during an active Instant session, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
 
-**Play Instant footer note (shown in app):** Play Instant interrupts active playback after an automatic download. A temporarily unavailable route arms the episode for up to 30 minutes; it triggers only after safe playback resumes and never autoplays through the phone speaker.
+**Play Instant footer note (shown in app):** Play Instant interrupts active playback after an automatic download, except when the current episode has 60 seconds or less remaining. A temporarily unavailable route arms the episode for up to 30 minutes; it triggers only after safe playback resumes and never autoplays through the phone speaker.
 
 ---
 
@@ -762,7 +791,7 @@ Filters by episode title or podcast name. Results update as the user types. Same
 **What it is:** A lifetime summary of the user's listening activity and time saved by Autohop's audio processing features. Data is persisted in `ListeningStatsStore` → `listening-stats.json`.
 
 ### Data collection (June 2026)
-All listening activity is bucketed per local calendar day in `DayStats` records (a few hundred bytes each, so lifetime retention is cheap). Each day records: wall-clock seconds, per-hour histogram (24 buckets), per-show seconds (keyed by subscription UUID, with a title map that survives unsubscribes), the four time-saved categories, episodes started/completed, and manual skip-forward count. Totals accumulated under the previous lifetime-only store (`playback-stats.json`) are imported once as a baseline so existing users keep their history; the legacy file is left in place.
+All listening activity is bucketed per local calendar day in `DayStats` records (a few hundred bytes each, so lifetime retention is cheap). Each day records: elapsed wall-clock seconds, per-hour histogram (24 buckets), per-show seconds (keyed by subscription UUID, with a title map that survives unsubscribes), per-show episode starts/completions, the four time-saved categories, global episodes started/completed, and manual skip-forward count. iOS and tvOS both convert playback progress to elapsed wall time before recording. Variable-speed saving is elapsed time × (speed − 1), i.e. the extra media consumed in that elapsed interval. Totals accumulated under the previous lifetime-only store (`playback-stats.json`) are imported once as a baseline so existing users keep their history; the legacy file is left in place.
 
 Hooks: playback tick (0.5 s) → listening time + hour + show attribution; `SilenceDetector` callbacks → exact trimmed seconds; `startPlayback` from a fresh position → episode started; `handleEpisodeFinished` → episode completed. Saves are throttled to 30 s during playback and flushed on pause and when the app leaves the foreground.
 
@@ -784,10 +813,10 @@ Each is near-empty at the start of its period and fills in as it progresses.
 
 **This / Last toggle.** Below the pill row, a distinct **solid segmented bar** (a purple sliding chip on a flat track — deliberately styled differently from the glass pills) switches the selected Week / Month / Year between the current period and the **previous concluded one**, with contextual labels inside it (**This Week / Last Week**, This Month / Last Month, This Year / Last Year). Selecting "Last" drives the whole page — hero numbers, heatmap (laying out the prior week/month grid), trend chart, clock, top shows (with rank-movement vs. the period before *that*), time-saved, and data-downloaded — from the concluded period (`StatsPeriod.previousWeek/.previousMonth/.previousYear`). The bar is **hidden entirely** when **Lifetime** is selected, or when **the previous period has no listening** (`store.summary(for: previous).wallClockSeconds == 0`), except when opened from a Listening Recap notification, where the intended Last period is shown even if empty. Per-show detail cards are upper-bounded so a concluded period doesn't bleed into the present, and the present-tense "Shows You're Drifting From" section is hidden in Last mode. This toggle is the in-app surface the weekly/monthly/yearly **Listening Recap** notifications deep-link into.
 
-1. **Hero card** — big "Time listened" number (purple; Lifetime adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening).
-2. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous comparable period — the previous week, calendar month, or calendar year (teal ▲n, grey ▼n, or purple NEW; no badges on Lifetime, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; periods made up entirely of pre-tracking days fall back to apportioning the period total by listening share, labelled "est."), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Episode outcomes come from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period. Tap again to collapse.
+1. **Hero card** — big "Time listened" number (purple; Lifetime adds "since [date]"), plus three columns: time saved by Autohop (teal), episodes finished, and current streak (a day counts at ≥ 60 s of listening). Listening is elapsed wall time derived from natural media progress divided by effective playback speed on both iOS and tvOS, so faster playback cannot inflate any time-based statistic. The imported pre-daily-bucket baseline is included in Lifetime and in any calendar period that wholly contains its known start-to-cutover interval; it is never partially guessed across a boundary.
+2. **Top Shows** — up to 8 ranked rows: rank · 44 pt artwork (`Artwork-Placeholder` fallback) · show title with a purple bar relative to the #1 show · time listened. Titles resolve from the stats store's title map, so unsubscribed shows still appear. When more shows than fit have listening time, a **Show All ›** link in the section header pushes a full **Top Shows** screen (top 50, same row design and period selector). There, each row also shows a rank-movement badge vs. the previous comparable period — the previous week, calendar month, or calendar year (teal ▲n, grey ▼n, or purple NEW; no badges on Lifetime, which has no previous period; previous ranks are computed across all shows, not just the top 50, via `ListeningStatsStore.previousPeriodShowSeconds(for:)`). Tapping any Top Shows row (main section or Show All) expands an inline **per-show detail card** (`ShowStatsExpandedCard`): episodes finished, time saved (real per-show value from `DayStats.perShowTimeSaved` — variable speed, trim silence, and skips are attributed to the playing episode's subscription; each pre-tracking day falls back to apportioning that day's total by listening share, labelled "est.", including within mixed legacy/current ranges), share of all listening, average completion %, episodes stopped partway, last-listened date, and listening cadence ("typical wait after release" — median delay between an episode's publish date and the last listen). Finished counts use durable per-show daily counters; days recorded before those counters existed are recovered from retained history and sticky completed episode state, deduplicated by media URL, with the greater independently evidenced count used to avoid migration overlap. Remaining completion-detail and abandonment evidence comes from `ListeningHistoryStore` entries classified by `ShowEngagementAnalyzer.classify`, filtered to the selected period; bounded history retention is 5,000 entries. Tap again to collapse.
 3. **Shows You're Drifting From** (7 Days and the current month only, and only in **This** mode — hidden when the This/Last bar is on "Last", since it's a present-tense signal) — up to 5 currently-subscribed shows the user appears to be struggling with, computed by `Stats/ShowEngagementAnalyzer.swift` (pure functions, smoke-tested in `StatsSmokeTests`) over `ListeningHistoryStore` entries. Episodes currently shown as **Skipped** by Download Feed Filters (filter-rejected and not downloaded) are removed before analysis, because deliberately declining an episode is not evidence of drifting from its show; manually downloaded/played episodes remain eligible because manual actions intentionally bypass filters. Each remaining entry is classified as completed (finished naturally or ≥ 90%), abandoned (≥ 60 s listened, ended < 80%), or archived unplayed (< 60 s; deliberate vs. auto-archive); in-progress and ambiguous legacy entries are skipped. Struggle score = (abandoned + deliberate archives + 0.5 × auto archives) / resolved episodes. A show qualifies via **either** path: **drift** — ≥ 4 resolved episodes, a score ≥ 0.4, **and ≥ 2 genuine drift signals** (abandoned mid-listen or deliberately archived unplayed); or **neglect** — a "ghost subscription" with **zero completions and ≥ 4 auto-archived unplayed episodes**, i.e. new episodes keep arriving and aging out of the episode limit while the user never once finishes one. The **completion count** (not the auto-archive rate) is what separates a ghost sub from healthy high-volume use, where the user finishes some episodes and lets the rest cycle — those stay out of the list, so a daily news feed you actually dip into is never flagged (thresholds are constants in the analyzer). Rows: artwork · title · a blunt insight line ("Archived 6 of the last 8 unplayed", "Downloaded 7, never played" for a ghost sub, "You usually stop around the 12-minute mark" from the median abandon position) · a stacked completion bar (`Chart-CompletionBar`: teal finished / orange partial / dim unplayed) · finished/total fraction. Tapping a row expands an inline detail card (see below) with a **Podcast Settings** link; long-press offers Hide From This List (persisted in `UserDefaults` key `stats.hiddenDriftShowIDs`) and Unsubscribe. Only real, active subscriptions appear: `StatsView` filters out shows the user has unsubscribed from **and** invisible browse/preview subscriptions (`browseDate != nil`, auto-created when previewing a podcast in search) — without the latter filter, a previewed-but-never-subscribed show could surface via the neglect path. The section is omitted entirely when nothing qualifies — no empty state. Not shown on the year / Lifetime views (the 500-entry history cap truncates long ranges). The listening-history value types (`ListeningHistoryEntry`, `ListeningHistoryStatus`, `CompletionKind`) moved from `App/AppState.swift` to `Models/ListeningHistory.swift` so AutohopCore and the smoke tests can use them.
-4. **Listening Heatmap** (7 Days and month) — GitHub-style grid, columns are Monday-aligned weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On the year and Lifetime views this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart.
+4. **Listening Heatmap** (7 Days and month) — GitHub-style grid, columns are Monday-aligned weeks and rows are weekdays, purple intensity scales with that day's listening (√-scaled so light days stay visible). Caption shows the busiest day. On the year and Lifetime views this is replaced by **Listening Over Time**, a Swift Charts monthly bar chart. Imported legacy totals predate daily attribution, so an enclosing year/Lifetime includes them in its headline while the chart displays the attributable buckets and explains the difference.
 5. **Listening Clock** — 24-hour rose chart (Canvas): midnight at top, noon at bottom, each hour a wedge whose radius scales with listening in that hour. Caption shows the peak hour range.
 6. **Data Downloaded** — a card showing the total data Autohop downloaded in the selected period (`ByteCountFormatter` `.file` style, e.g. "1.2 GB"), with a context line "N episodes · avg X each". Recorded per calendar day in `DayStats.bytesDownloaded` / `episodesDownloaded` (summed per period and cross-device sync-merged like the other stats), incremented by `DownloadTransferWorkflow` and the background-settlement path using the actual on-disk file size. **Forward-only** — tracking began June 2026, so there is no backfill: only successful downloads count (re-downloads count again as real traffic; cancelled/failed/partial do not), and Lifetime accrues from this build onward.
 7. **Time Saved By** — breakdown card (rows below) plus a purple Total row.
@@ -799,7 +828,7 @@ Four rows showing how much time has been saved by each feature in the selected p
 | Stat | How it's calculated |
 |---|---|
 | **Skipping** | Sum of all manual skip-forward taps (skip amount, not wall clock). Backward skips are not counted. |
-| **Variable Speed** | Each playback tick: `tickInterval × (speed − 1.0) / speed`. Represents the difference between listening at 1× vs. the user's set speed. |
+| **Variable Speed** | Natural media-position delta is converted to elapsed time as `mediaDelta / speed`; saved time is then `elapsed × (speed − 1)`. Represents the media time avoided versus listening at 1× without allowing callback frequency to inflate listening time. |
 | **Trim Silence** | Frames dropped by `SilenceDetector` per buffer chunk, converted to seconds. Accumulated during the buffer-read loop. |
 | **Auto Skipping** | Start skip and end skip amounts at the moment they fire (real file time, not wall clock). |
 
@@ -1418,3 +1447,66 @@ artwork preparation, App Group writes, and WidgetKit reloads are suppressed.
 Change reasons are coalesced and publish once only when foreground or active
 audio provides a safe execution opportunity; otherwise they remain pending
 until the next foreground/domain event.
+# tvOS Clean-Install Access and Offline Demo (Version 1.6)
+
+<!-- AI CONTEXT — tvOS-only App Review and first-install capability. This does
+not change iPhone authority or create an Autohop account system. -->
+
+- Apple TV now guarantees an actionable first screen after a ten-second launch
+  presentation deadline, even if local bootstrap or iCloud does not return.
+- A completed setup screen explains the private-iCloud companion workflow and
+  offers Explore Demo Library, Open Discover, Check iCloud Again and Settings.
+- The Release build contains an offline, clearly labelled demo library with
+  four synthetic shows, Up Next, Continue Listening, History, audio playback,
+  video playback, speed/seek controls, Play Next, Archive, Reset and Exit.
+- Demo media is first-party and bundled. Demo changes are in memory only and
+  cannot write to the user's subscriptions, queue, history, CloudKit or Stats.
+
+# Dynamic Apple TV Top Shelf (Version 1.6)
+
+<!-- AI CONTEXT — tvOS-only system Home Screen projection. The containing app
+publishes; the extension only renders content and records bounded operational
+health without user content. -->
+
+- When Autohop is placed in the Apple TV Dock, Top Shelf presents native poster
+  cards grouped as Currently Playing/Watching (or idle Continue Listening) and
+  Up Next.
+- The live playing episode is always first regardless of queue rank, carries
+  progress and is deduplicated from Up Next. While idle, Continue Listening is
+  excluded when effectively finished and receives the same treatment.
+- Both Select and Play/Pause start or resume the exact selected identity through
+  normal playback. Deep links contain identity only; descriptions remain
+  available inside the app's episode actions.
+- Prepared 404×608/808×1216 artwork and progress come from an atomically replaced,
+  bounded App Group snapshot. The extension performs no network, CloudKit,
+  GRDB, RSS, statistics or queue work.
+- Invalid, stale, empty or scope-mismatched data uses redesigned static artwork.
+  Demo Library data is structurally excluded from publication.
+
+# Apple TV Diagnostic Health (Version 1.6)
+
+<!-- AI CONTEXT — Local, bounded and privacy-safe support evidence; Autohop
+does not upload this data. -->
+
+- Settings separates Top Shelf publisher, App Group, manifest and extension
+  health and provides a safe manual refresh.
+- Developer diagnostics show launch state/uptime, memory footprint, thermal
+  state and session main-thread hang count/maximum.
+- The redacted export correlates launch, sync, queue, playback, Discover, Demo,
+  Top Shelf and performance events without podcast or episode titles.
+- Settings caches expensive health inspection during focus movement and makes
+  every health row a stable Siri Remote focus stop for progressive scrolling.
+- Returning Apple TVs with durable library evidence retain the branded refresh
+  presentation during ordinary iCloud catch-up instead of showing first-time
+  setup; clean installs still receive prompt Demo/Discover access.
+- Dynamic Top Shelf storage is a regenerable App Group cache with independent
+  permission probes and bounded retry behaviour. Diagnostics show exact
+  privacy-safe outcomes rather than repeatedly attempting a permanent failure.
+- tvOS performance evidence excludes scene suspension, and CloudKit pull logs
+  use compact per-type batch counts instead of thousands of record traces.
+- Dynamic Top Shelf presents four narrower poster cards across HD layouts. Each
+  card carries the purple Autohop brand backdrop and reuses locally cached
+  podcast artwork before downloading or falling back to the waveform treatment.
+- Apple TV Home Up Next mirrors iOS time metadata: partially played episodes
+  show remaining time; untouched episodes show their total runtime. Synced
+  positions are projected before rendering, never read during focus movement.

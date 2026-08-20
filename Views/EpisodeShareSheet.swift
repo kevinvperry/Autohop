@@ -11,6 +11,8 @@ import LinkPresentation
 // card + episode details only. Share-card artwork is
 // fetched through ArtworkImageCache at the rendered card-art size so sharing
 // reuses validated disk source bytes and avoids full-size cover decodes.
+// When the RSS show can be matched exactly in Apple's directory, the same sheet
+// also offers the iOS-family-only Review in Apple Podcasts action.
 
 // MARK: - Episode share sheet
 
@@ -139,6 +141,15 @@ struct EpisodeShareSheet: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
                     .accessibilityHint("Copies the public episode page, not the media download")
+                }
+
+                if let subscription {
+                    ApplePodcastsReviewButton(
+                        showTitle: subscription.title,
+                        feedURL: subscription.feedURL
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
                 }
 
             // Cancel

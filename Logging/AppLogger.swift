@@ -38,6 +38,9 @@ import Foundation
 // metadata; the next accepted line reports the dropped count. Errors and forced
 // lifecycle evidence bypass that routine limit. Scalar metadata avoids regex work,
 // while all free-form/URL values still use the complete security redactor.
+// Manual exports redact each bounded log line independently before joining the
+// result. This avoids repeatedly copying a multi-megabyte String for every
+// regular-expression pass while preserving deterministic UUID/URL correlation.
 // PUBLIC logging surface since tvOS Phase 1: the TV target imports AutohopCore
 // as a library and must reach the shared diagnostic log. Internals stay internal.
 public final class AppLogger: ObservableObject {
@@ -217,7 +220,7 @@ public final class AppLogger: ObservableObject {
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? "unknown"
         let header = "# Autohop Diagnostic Export version=\(version) build=\(build) normalEnabled=\(state.enabled) detailedRefreshTrace=\(state.verbose) routineEntriesDropped=\(state.dropped) exportedAt=\(dateFormatter.string(from: Date()))\n"
-        return header + Self.redactSensitiveText(combinedContents())
+        return header + Self.redactDiagnosticLog(combinedContents())
     }
 
     public func redactedExportURL() -> URL {
@@ -440,7 +443,57 @@ public final class AppLogger: ObservableObject {
                 withTemplate: replacement
             )
         }
+        redacted = pseudonymizeMatches(in: redacted, pattern: #"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"#, label: "id")
+        redacted = pseudonymizeMatches(in: redacted, pattern: #"https?://[^\s]+"#, label: "url")
         return redacted
+    }
+
+    /// AI CONTEXT — Export-only bounded redaction. Structured log entries are
+    /// one physical line, so no sensitive token can span this boundary. Running
+    /// the existing conservative redactor per line prevents each rule from
+    /// allocating another 5–10 MB whole-file intermediate on Apple TV.
+    private static func redactDiagnosticLog(_ text: String) -> String {
+        guard !text.isEmpty else { return "" }
+        var result = ""
+        result.reserveCapacity(text.utf8.count)
+        text.enumerateLines { line, _ in
+            result.append(contentsOf: redactSensitiveText(line))
+            result.append("\n")
+        }
+        return result
+    }
+
+    private static func pseudonymizeMatches(in text: String, pattern: String, label: String) -> String {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return text }
+        let source = text as NSString
+        let matches = expression.matches(in: text, range: NSRange(location: 0, length: source.length))
+        guard !matches.isEmpty else { return text }
+
+        // AI CONTEXT — Build the replacement in one forward pass. Replacing
+        // thousands of matches backwards in a multi-megabyte export repeatedly
+        // shifted the remaining String storage and made tvOS diagnostics take
+        // ~46 seconds. This is linear in the source size and preserves the same
+        // deterministic privacy-safe hashes.
+        var result = ""
+        result.reserveCapacity(text.utf8.count)
+        var cursor = 0
+        for match in matches {
+            guard match.range.location >= cursor else { continue }
+            result += source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            let value = source.substring(with: match.range)
+            result += "[\(label):\(stableDiagnosticHash(value))]"
+            cursor = match.range.location + match.range.length
+        }
+        if cursor < source.length {
+            result += source.substring(from: cursor)
+        }
+        return result
+    }
+
+    private static func stableDiagnosticHash(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+        return String(String(hash, radix: 16).suffix(12))
     }
 
     private static func redactedMetadataValue(_ value: String, key: String) -> String {

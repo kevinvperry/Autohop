@@ -62,8 +62,7 @@ extension TVAppModel {
     func requestPlayNext(_ row: TVQueueRowModel) async {
         guard let episode = row.episode else {
             AppLogger.shared.warning("tv.playNextRejected", "Play Next row has no resolved episode", metadata: [
-                "rowKey": row.id,
-                "title": row.title
+                "rowKey": row.id
             ], alwaysPersist: true)
             return
         }
@@ -102,10 +101,7 @@ extension TVAppModel {
         }
         upNextItems = locallyPinnedItems
         upNextEpisodes = locallyPinnedItems.compactMap(\.episode)
-        queueRows = TVQueueProjector.rows(
-            from: locallyPinnedItems,
-            subscriptionsByID: subscriptionsByID
-        )
+        queueRows = projectQueueRows(from: locallyPinnedItems)
         AppLogger.shared.info("tv.playNextPinnedLocally", "Pinned Play Next immediately on Apple TV", metadata: [
             "afterFirstKey": locallyPinnedItems.first?.episodeKey ?? "none",
             "beforeFirstKey": previousFirstKey,
@@ -116,13 +112,11 @@ extension TVAppModel {
             "requestKey": request.episodeKey,
             "rowSubscriptionID": row.subscriptionID.uuidString,
             "matchedIndex": matchedIndex.map(String.init) ?? "none",
-            "episode": episode.title,
             "rowCount": "\(locallyPinnedItems.count)"
         ], alwaysPersist: true)
 
         guard let engine = cloudSyncEngine, engine.isActivated else {
             AppLogger.shared.warning("tv.playNextUnavailable", "Play Next is pinned locally but iCloud is not active", metadata: [
-                "episode": episode.title,
                 "requestID": request.id.uuidString,
                 "requestKey": request.episodeKey
             ], alwaysPersist: true)
@@ -132,7 +126,6 @@ extension TVAppModel {
         removePendingPlayNextRequest(id: request.id)
         AppLogger.shared.info("tv.playNextRequested", "Requested Play Next from Apple TV", metadata: [
             "requestID": request.id.uuidString,
-            "episode": episode.title,
             "requestKey": request.episodeKey
         ], alwaysPersist: true)
     }
@@ -158,6 +151,7 @@ extension TVAppModel {
                 podcastTitle: librarySubscription.title,
                 artworkURL: libraryEpisode.artworkURL ?? librarySubscription.artworkURL,
                 durationSeconds: libraryEpisode.durationSeconds,
+                playbackPositionSeconds: subscriptionStore.savedListeningPosition(for: libraryEpisode),
                 mediaKind: libraryEpisode.mediaKind,
                 episode: libraryEpisode,
                 pinState: nil
@@ -182,11 +176,9 @@ extension TVAppModel {
         items.insert(item, at: 0)
         upNextItems = items
         upNextEpisodes = items.compactMap(\.episode)
-        queueRows = TVQueueProjector.rows(from: items, subscriptionsByID: subscriptionsByID)
+        queueRows = projectQueueRows(from: items)
         AppLogger.shared.info("tv.discover.playNextPinnedLocally", "Pinned browse-only Discover episode on Apple TV", metadata: [
-            "episode": episode.title,
-            "episodeKey": key,
-            "feedHost": subscription.feedURL.host ?? "unknown"
+            "episodeKey": key
         ], alwaysPersist: true)
     }
 
@@ -196,8 +188,7 @@ extension TVAppModel {
     func requestUnpin(_ row: TVQueueRowModel) async {
         guard row.episode != nil, row.pinState != nil else {
             AppLogger.shared.warning("tv.unpinRejected", "Unpin row has no resolved pinned episode", metadata: [
-                "rowKey": row.id,
-                "title": row.title
+                "rowKey": row.id
             ], alwaysPersist: true)
             return
         }
@@ -220,21 +211,16 @@ extension TVAppModel {
         )
         upNextItems = locallyUnpinnedItems
         upNextEpisodes = locallyUnpinnedItems.compactMap(\.episode)
-        queueRows = TVQueueProjector.rows(
-            from: locallyUnpinnedItems,
-            subscriptionsByID: subscriptionsByID
-        )
+        queueRows = projectQueueRows(from: locallyUnpinnedItems)
         AppLogger.shared.info("tv.unpinAppliedLocally", "Unpinned episode immediately on Apple TV", metadata: [
             "afterIndex": locallyUnpinnedItems.firstIndex { $0.episodeKey == row.id }.map(String.init) ?? "none",
             "beforeIndex": previousIndex.map(String.init) ?? "none",
-            "episode": row.title,
             "requestID": request.id.uuidString,
             "requestKey": request.episodeKey
         ], alwaysPersist: true)
 
         guard let engine = cloudSyncEngine, engine.isActivated else {
             AppLogger.shared.warning("tv.unpinUnavailable", "Episode is unpinned locally but iCloud is not active", metadata: [
-                "episode": row.title,
                 "requestID": request.id.uuidString
             ], alwaysPersist: true)
             return
@@ -242,7 +228,6 @@ extension TVAppModel {
         guard await engine.submitPlayNextRequest(request) else { return }
         removePendingPlayNextRequest(id: request.id)
         AppLogger.shared.info("tv.unpinRequested", "Requested Unpin from Apple TV", metadata: [
-            "episode": row.title,
             "requestID": request.id.uuidString,
             "requestKey": request.episodeKey
         ], alwaysPersist: true)
@@ -266,7 +251,7 @@ extension TVAppModel {
         } else {
             scheduleMaterializationRetry(entry)
         }
-        refreshLibrary()
+        scheduleLibraryRefresh()
     }
 
     /// Targeted library prime, retried until the engine has finished its async
@@ -331,7 +316,7 @@ extension TVAppModel {
                 if needsDurableMaterializationMigration {
                     UserDefaults.standard.set(true, forKey: migrationKey)
                 }
-                self?.refreshLibrary()
+                self?.scheduleLibraryRefresh()
             } : nil
             // A foreground queue/history recovery must not re-download and
             // reapply the complete subscription zone. Bootstrap owns the full
@@ -398,8 +383,7 @@ extension TVAppModel {
             removePendingPlayNextRequest(id: request.id)
             AppLogger.shared.info("tv.queueCommandOutboxFlushed", "Delivered pending Apple TV queue command", metadata: [
                 "action": request.action.rawValue,
-                "requestID": request.id.uuidString,
-                "episode": request.episodeTitle
+                "requestID": request.id.uuidString
             ], alwaysPersist: true)
         }
     }
@@ -410,7 +394,13 @@ extension TVAppModel {
     /// freshness poll below so a backgrounded TV app isn't fetching.
     var isSceneActive: Bool {
         get { syncCoordinator.isSceneActive }
-        set { syncCoordinator.isSceneActive = newValue }
+        set {
+            let wasActive = syncCoordinator.isSceneActive
+            syncCoordinator.isSceneActive = newValue
+            if newValue, !wasActive {
+                resumeDeferredLibraryRefreshIfNeeded()
+            }
+        }
     }
 
     /// CONTINUE-LISTENING FRESHNESS SAFETY NET. CloudKit changes are the primary
@@ -444,7 +434,7 @@ extension TVAppModel {
             historyNeedsReload = true
             historyModel.invalidate()
         }
-        refreshLibrary()
+        scheduleLibraryRefresh()
         if let snapshot = subscriptionStore.syncedQueueSnapshot() {
             syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
         }

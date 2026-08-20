@@ -120,8 +120,7 @@ extension TVAppModel {
                 if succeeded { break }
                 AppLogger.shared.info("tv.materializeRetryScheduled", "Subscription materialisation remains pending", metadata: [
                     "subscriptionID": entry.subscriptionID.uuidString,
-                    "attempt": "\(attempt)",
-                    "feedHost": entry.feedURL.host ?? "unknown"
+                    "attempt": "\(attempt)"
                 ], alwaysPersist: true)
             }
             self.materializationRetryTasks[entry.subscriptionID] = nil

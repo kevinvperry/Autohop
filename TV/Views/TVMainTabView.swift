@@ -19,7 +19,8 @@ import AutohopCore
 // Home and intentionally has no duplicate tab.
 struct TVMainTabView: View {
     let model: TVAppModel
-    @State private var router = TVRouter()
+    let pendingRouteCoordinator: TVPendingRouteCoordinator
+    @State private var router: TVRouter
     /// Cover visibility is a PURE navigation concern, deliberately decoupled
     /// from whether the model is playing (audio keeps going in the background
     /// after the user dismisses — UIBackgroundModes: audio). Do not derive
@@ -29,6 +30,18 @@ struct TVMainTabView: View {
     /// user had deliberately backed out of it.
     @State private var isPlayerVisible = false
     @State private var isPreparingPlayback = false
+    @State private var deepLinkDescriptionItem: TVEpisodeDescriptionItem?
+    @State private var deepLinkErrorMessage: String?
+
+    init(
+        model: TVAppModel,
+        initialTab: TVTab = .home,
+        pendingRouteCoordinator: TVPendingRouteCoordinator
+    ) {
+        self.model = model
+        self.pendingRouteCoordinator = pendingRouteCoordinator
+        _router = State(initialValue: TVRouter(selectedTab: initialTab))
+    }
 
     var body: some View {
         TabView(selection: $router.selectedTab) {
@@ -88,6 +101,21 @@ struct TVMainTabView: View {
                     isPlayerVisible = false
                 }
             )
+        }
+        .tvEpisodeDescriptionSheet(
+            item: $deepLinkDescriptionItem,
+            resolveEpisode: { await model.episodeWithResolvedDescription($0) }
+        )
+        .alert("Episode unavailable", isPresented: Binding(
+            get: { deepLinkErrorMessage != nil },
+            set: { if !$0 { deepLinkErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { deepLinkErrorMessage = nil }
+        } message: {
+            Text(deepLinkErrorMessage ?? "That episode is no longer in Up Next.")
+        }
+        .task(id: pendingRouteCoordinator.generation) {
+            await consumePendingTopShelfRoute()
         }
     }
 
@@ -152,5 +180,30 @@ struct TVMainTabView: View {
                 isPlayerVisible = true
             }
         }
+    }
+
+    private func consumePendingTopShelfRoute() async {
+        guard let route = pendingRouteCoordinator.route else { return }
+        let owned = pendingRouteCoordinator.generation
+        router.selectedTab = .home
+        guard let resolution = await model.resolveTopShelfRoute(route),
+              owned == pendingRouteCoordinator.generation
+        else {
+            if owned == pendingRouteCoordinator.generation {
+                deepLinkErrorMessage = "That episode is no longer in Up Next. Autohop has opened Home instead."
+                pendingRouteCoordinator.clear(ifGeneration: owned)
+            }
+            return
+        }
+        switch route.action {
+        case .episode:
+            deepLinkDescriptionItem = .init(
+                episode: resolution.episode,
+                podcastTitle: resolution.podcastTitle
+            )
+        case .play:
+            play(resolution.episode)
+        }
+        pendingRouteCoordinator.clear(ifGeneration: owned)
     }
 }

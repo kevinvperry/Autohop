@@ -17,6 +17,9 @@ import Foundation
 // - Active playback triggers immediately. A qualifying arrival while playback is
 //   inactive remains armed for 30 minutes and triggers only after safe playback
 //   becomes active again; it never starts through an unavailable route/speaker.
+// - Never interrupt a current episode with 60 seconds or less remaining. Keep
+//   the arrival armed so it may trigger after natural advancement; unknown
+//   durations preserve the established behaviour instead of disabling Instant.
 // - The interrupted episode/position is captured once per Instant session.
 // - A two-second gentle warning precedes every forced switch.
 // - Eligibility and local-file availability are revalidated after the delay.
@@ -31,6 +34,7 @@ import Foundation
 @MainActor
 final class PlayInstantWorkflow {
     static let pendingLifetime: TimeInterval = 30 * 60
+    static let minimumInterruptedRuntimeRemaining: TimeInterval = 60
 
     static func expiryDate(forQueuedAt queuedAt: Date) -> Date {
         queuedAt.addingTimeInterval(pendingLifetime)
@@ -41,6 +45,15 @@ final class PlayInstantWorkflow {
         now: Date
     ) -> Bool {
         candidate.expiresAt <= now
+    }
+
+    static func mayInterruptCurrentEpisode(
+        duration: TimeInterval?,
+        position: TimeInterval
+    ) -> Bool {
+        guard let duration, duration.isFinite, duration > 0 else { return true }
+        let safePosition = position.isFinite ? max(0, position) : 0
+        return duration - safePosition > minimumInterruptedRuntimeRemaining
     }
 
     private let playback: PlaybackCoordinator
@@ -119,7 +132,8 @@ final class PlayInstantWorkflow {
         playback.playInstantQueue.append(candidate)
         let playbackActive = playback.isPlaying || playback.engine.isPlaying
         let routeSafe = hasPrivateOrExternalAudioRoute
-        let canTriggerImmediately = playbackActive && routeSafe
+        let enoughRuntimeRemaining = mayInterruptCurrentEpisode
+        let canTriggerImmediately = playbackActive && routeSafe && enoughRuntimeRemaining
         logger.info(canTriggerImmediately ? "playInstant.queued" : "playInstant.armed", canTriggerImmediately
             ? "Queued automatically downloaded episode for instant playback"
             : "Armed automatically downloaded episode until safe playback resumes", metadata: [
@@ -128,6 +142,7 @@ final class PlayInstantWorkflow {
             "queueDepth": "\(playback.playInstantQueue.count)",
             "playbackActive": "\(playbackActive)",
             "routeSafe": "\(routeSafe)",
+            "enoughRuntimeRemaining": "\(enoughRuntimeRemaining)",
             "outputs": currentOutputNames,
             "expiresInSeconds": "\(Int(Self.pendingLifetime))"
         ])
@@ -216,6 +231,14 @@ final class PlayInstantWorkflow {
               hasPrivateOrExternalAudioRoute else {
             return
         }
+        guard mayInterruptCurrentEpisode else {
+            logger.info(
+                "playInstant.awaitingNaturalAdvance",
+                "Kept Play Instant armed because the current episode has 60 seconds or less remaining",
+                metadata: currentRuntimeMetadata
+            )
+            return
+        }
 
         if playback.interruptedSession == nil {
             playback.interruptedSession = PlaybackCoordinator.InterruptedSession(
@@ -242,6 +265,16 @@ final class PlayInstantWorkflow {
                 self.cancel(reason: "playbackChangedDuringWarning")
                 return
             }
+            guard self.mayInterruptCurrentEpisode else {
+                self.playback.interruptedSession = nil
+                self.logger.info(
+                    "playInstant.deferredAtRuntimeBoundary",
+                    "Kept Play Instant armed after playback reached the final 60 seconds during its warning",
+                    metadata: self.currentRuntimeMetadata
+                )
+                self.scheduleExpiryCheck()
+                return
+            }
             self.playback.interruptedSession?.position = self.playback.clock.time
             self.mediaWorkflow.saveCurrentPosition()
             await self.startNextCandidate()
@@ -263,6 +296,24 @@ final class PlayInstantWorkflow {
     private var currentOutputNames: String {
         let names = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portName)
         return names.isEmpty ? "none" : names.joined(separator: ",")
+    }
+
+    private var mayInterruptCurrentEpisode: Bool {
+        Self.mayInterruptCurrentEpisode(
+            duration: playback.currentEpisode?.durationSeconds,
+            position: playback.clock.time
+        )
+    }
+
+    private var currentRuntimeMetadata: [String: String] {
+        let duration = playback.currentEpisode?.durationSeconds
+        let remaining = duration.map { max(0, $0 - playback.clock.time) }
+        return [
+            "positionSeconds": String(format: "%.1f", playback.clock.time),
+            "durationSeconds": duration.map { String(format: "%.1f", $0) } ?? "unknown",
+            "remainingSeconds": remaining.map { String(format: "%.1f", $0) } ?? "unknown",
+            "thresholdSeconds": "\(Int(Self.minimumInterruptedRuntimeRemaining))"
+        ]
     }
 
     private func startNextCandidate() async {

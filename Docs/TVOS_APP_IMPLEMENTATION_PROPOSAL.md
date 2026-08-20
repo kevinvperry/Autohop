@@ -791,7 +791,9 @@ sources (same Foundation-only verification) but its types are still
 country picker, on-disk chart caching, top-episodes paging) deliberately not
 attempted in the same pass as Search. Wire the Discover shelf when that's
 done. Top Shelf extension (item 2) and the polish pass (item 3) are
-untouched — see the phase table for the running status.
+untouched. Item 2 is now superseded by the implementation-ready
+`Docs/TVOS_DYNAMIC_TOP_SHELF_IMPLEMENTATION_PROPOSAL.md`; its sectioned-row,
+shared-snapshot, identity-route, privacy and multiuser gates govern future work.
 
 1. **Search tab** (search role) + **subscribe on TV**: reuse
    `Feeds/PodcastSearch.swift` + `Feeds/PodcastCharts.swift` (plain URLSession —

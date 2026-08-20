@@ -38,6 +38,11 @@ import Foundation
 //     peak limiter (the Pocket Casts-derived vocal boost chain; stages are
 //     bypassed per VocalBoostLevel). Changing a setting mid-play rebuilds the
 //     path while preserving position.
+// AVPLAYER RATE INVARIANT: Keep defaultRate equal to the effective podcast
+// speed whenever the standard path is configured. AVKit presentation changes
+// can call plain play(), which resumes at defaultRate rather than retaining a
+// transient playImmediately(atRate:) value. StreamingPlaybackEngine follows
+// the same invariant for tvOS, preserving cross-platform playback semantics.
 // BUFFER BACKPRESSURE DIAGNOSTICS: an ordinary 4096-frame/48 kHz buffer spans
 // ~85 ms, so waits are warned only above 250 ms (~3 buffers). The 2-second
 // semaphore timeout remains the actual stuck-engine recovery boundary. Do not
@@ -297,6 +302,7 @@ final class PlaybackEngine: PlaybackControlling {
 
             let newPlayer = AVPlayer(playerItem: item)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
+            newPlayer.defaultRate = validPlayerRate(preference.speed)
             player = newPlayer
 
             currentEpisode = episode
@@ -319,7 +325,7 @@ final class PlaybackEngine: PlaybackControlling {
                     toleranceAfter: .zero
                 )
             }
-            newPlayer.playImmediately(atRate: Float(preference.speed))
+            newPlayer.playImmediately(atRate: validPlayerRate(preference.speed))
 
             logger.info("playback.started", "AVPlayer playback started", metadata: [
                 "backend": "AVPlayer",
@@ -492,7 +498,9 @@ final class PlaybackEngine: PlaybackControlling {
             resumedAt = now
             lastRenderedAt = now
         } else {
-            player?.playImmediately(atRate: Float(currentPreference?.speed ?? 1.0))
+            let rate = validPlayerRate(currentPreference?.speed ?? 1.0)
+            player?.defaultRate = rate
+            player?.playImmediately(atRate: rate)
         }
         logger.info("playback.resume", "Playback resumed", metadata: [
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
@@ -553,7 +561,9 @@ final class PlaybackEngine: PlaybackControlling {
             self.pausedAtSeconds = target
             self.onTimeUpdate?(target)
             if wasPlaying {
-                self.player?.playImmediately(atRate: Float(self.currentPreference?.speed ?? 1.0))
+                let rate = self.validPlayerRate(self.currentPreference?.speed ?? 1.0)
+                self.player?.defaultRate = rate
+                self.player?.playImmediately(atRate: rate)
             }
         }
         logger.info("playback.seek", "Playback seek requested", metadata: [
@@ -572,13 +582,25 @@ final class PlaybackEngine: PlaybackControlling {
             // the next render cycle. No buffer loop restart needed or wanted.
             audioTimePitch?.rate = Float(speed)
         } else {
-            player?.playImmediately(atRate: Float(speed))
+            let rate = validPlayerRate(speed)
+            player?.defaultRate = rate
+            if player?.rate != 0 {
+                player?.rate = rate
+            }
         }
         logger.info("playback.speed", "Playback speed updated", metadata: [
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
             "episode": currentEpisode?.title ?? "none",
             "speed": PlaybackPreference.speedLabel(speed)
         ])
+    }
+
+    /// AVPlayer's plain `play()` resumes at `defaultRate`. AVKit can call it
+    /// while changing presentation mode, so keep the persistent and live rates
+    /// aligned instead of relying only on transient `playImmediately(atRate:)`.
+    private func validPlayerRate(_ speed: Double) -> Float {
+        let rate = Float(speed)
+        return rate.isFinite && rate > 0 ? rate : 1
     }
 
     func updateVocalBoost(_ level: VocalBoostLevel) {

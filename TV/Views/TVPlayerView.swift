@@ -330,6 +330,10 @@ private struct TVPlayerPage: View {
 
 private final class TVNativePlayerViewController: AVPlayerViewController {
     var onReadyForCustomMenu: (() -> Void)?
+    /// AI CONTEXT — SwiftUI may update the representable on every observed
+    /// playback tick. Rebuilding AVKit's transport menus each time caused
+    /// expensive main-thread layout/focus work during video startup.
+    var installedMenuSpeed: Double?
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -371,7 +375,9 @@ private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
             guard let controller else { return }
             applyTransportBarMenu(to: controller)
         }
-        if controller.viewIfLoaded?.window != nil, controller.view.bounds.width > 0 {
+        if controller.viewIfLoaded?.window != nil,
+           controller.view.bounds.width > 0,
+           controller.installedMenuSpeed.map({ abs($0 - playbackSpeed) >= 0.001 }) ?? true {
             applyTransportBarMenu(to: controller)
         }
     }
@@ -405,7 +411,7 @@ private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
         ], alwaysPersist: true)
     }
 
-    private func applyTransportBarMenu(to controller: AVPlayerViewController) {
+    private func applyTransportBarMenu(to controller: TVNativePlayerViewController) {
         let menu = UIMenu(
             title: "Speed · \(PlaybackPreference.speedLabel(playbackSpeed))",
             image: UIImage(systemName: "gauge.with.needle"),
@@ -437,6 +443,7 @@ private struct TVAVPlayerRepresentable: UIViewControllerRepresentable {
             children: [description, archive]
         )
         controller.transportBarCustomMenuItems = [menu, archiveMenu]
+        controller.installedMenuSpeed = playbackSpeed
     }
 }
 

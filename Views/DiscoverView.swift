@@ -218,7 +218,11 @@ struct DiscoverView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left.circle.fill")
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel("Back")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
@@ -260,14 +264,14 @@ struct DiscoverView: View {
                 // LazyVStack so the ~10 image-heavy genre rails + hero carousels
                 // build only as they scroll into view (was a plain VStack, which
                 // laid them all out eagerly and stuttered the vertical scroll).
-                LazyVStack(alignment: .leading, spacing: 60) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        searchShortcut
+                LazyVStack(alignment: .leading, spacing: metrics.pageSectionSpacing) {
+                    VStack(alignment: .leading, spacing: metrics.introSectionSpacing) {
+                        searchShortcut(metrics: metrics)
                             .padding(.horizontal, metrics.horizontalGutter)
-                            .padding(.top, 4)
+                            .padding(.top, metrics.scaled(4))
 
                         if onboardingCoordinator.realSubscriptionCount == 0 {
-                            starterPacksBanner
+                            starterPacksBanner(metrics: metrics)
                                 .padding(.horizontal, metrics.horizontalGutter)
                         }
 
@@ -310,9 +314,9 @@ struct DiscoverView: View {
                         }
                     }
 
-                    Spacer(minLength: 24)
+                    Spacer(minLength: metrics.scaled(24))
                 }
-                .padding(.top, 8)
+                .padding(.top, metrics.pageTopPadding)
                 .frame(maxWidth: metrics.availableWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -326,48 +330,48 @@ struct DiscoverView: View {
 
     /// First-run nudge (shown only while the user has no real subscriptions):
     /// a one-tap route into chart-derived starter packs. ONBOARDING_PLAN.md Phase 6/7.
-    private var starterPacksBanner: some View {
+    private func starterPacksBanner(metrics: AdaptiveEditorialMetrics) -> some View {
         Button { showStarterPacks = true } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: metrics.scaled(12)) {
                 Image(systemName: "square.grid.2x2.fill")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: metrics.scaled(17), weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
+                    .frame(width: metrics.scaled(38), height: metrics.scaled(38))
                     .background(Circle().fill(Color.purple))
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: metrics.scaled(2)) {
                     Text("New here? Try a starter pack")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(metrics.bannerTitleFont)
                         .foregroundStyle(.white)
                     Text("Subscribe to a curated set in one tap.")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(metrics.bannerDetailFont)
                         .foregroundStyle(Color(white: 0.62))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: metrics.scaled(13), weight: .semibold))
                     .foregroundStyle(Color(white: 0.5))
             }
-            .padding(14)
+            .padding(metrics.scaled(14))
             .background(
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: metrics.scaled(16))
                     .fill(Color.purple.opacity(0.12))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.3), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: metrics.scaled(16)).stroke(Color.purple.opacity(0.3), lineWidth: metrics.scaled(1)))
             )
         }
         .buttonStyle(.plain)
     }
 
-    private var searchShortcut: some View {
+    private func searchShortcut(metrics: AdaptiveEditorialMetrics) -> some View {
         NavigationLink(value: AppRoute.podcastSearch(countryCode: country.code)) {
-            HStack(spacing: 8) {
+            HStack(spacing: metrics.scaled(8)) {
                 Image(systemName: "magnifyingglass")
                 Text("Search podcasts…")
                 Spacer()
             }
-            .font(.subheadline)
+            .font(metrics.searchFont)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
+            .padding(.horizontal, metrics.scaled(14))
+            .frame(height: metrics.scaled(40))
             .glassCapsule()
         }
         .buttonStyle(.plain)
@@ -385,19 +389,19 @@ struct DiscoverView: View {
     }
 
     private func episodeHeroCarousel(title: String, episodes: [ChartEpisode], index: Binding<Int>, metrics: AdaptiveEditorialMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: metrics.scaled(8)) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
-                    .font(.title3.weight(.bold))
+                    .font(metrics.sectionTitleFont)
                 Spacer()
                 Button {
                     pendingRoute = .topEpisodes
                 } label: {
-                    HStack(spacing: 2) {
+                    HStack(spacing: metrics.scaled(2)) {
                         Text("See All")
-                            .font(.subheadline.weight(.semibold))
+                            .font(metrics.seeAllFont)
                         Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.bold))
+                            .font(metrics.seeAllSymbolFont)
                     }
                     .foregroundStyle(.purple)
                 }
@@ -409,7 +413,7 @@ struct DiscoverView: View {
                 ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, episode in
                     heroEpisodeCard(episode, metrics: metrics)
                         .padding(.horizontal, metrics.horizontalGutter)
-                        .padding(.bottom, 36)
+                        .padding(.bottom, metrics.carouselDotClearance)
                         .tag(idx)
                 }
             }
@@ -439,45 +443,46 @@ struct DiscoverView: View {
 
                 // Ghosted rank numeral — matches the podcast hero treatment.
                 Text("\(episode.rank)")
-                    .font(.system(size: 230, weight: .black, design: .rounded))
+                    .font(.system(size: metrics.heroGhostRankSize, weight: .black, design: .rounded))
                     .foregroundStyle(.white.opacity(0.07))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .offset(x: 18, y: -34)
+                    .offset(metrics.heroGhostRankOffset)
                     .allowsHitTesting(false)
 
-                HStack(alignment: .bottom, spacing: 14) {
-                    chartArtwork(episode.artworkURL, size: metrics.heroArtworkSize, cornerRadius: 18,
-                                 placeholderIconSize: 36)
+                HStack(alignment: .center, spacing: metrics.heroContentSpacing) {
+                    chartArtwork(episode.artworkURL, size: metrics.heroArtworkSize,
+                                 cornerRadius: metrics.heroArtworkCornerRadius,
+                                 placeholderIconSize: metrics.heroPlaceholderIconSize)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: metrics.heroTextSpacing) {
                         Text("#\(episode.rank)")
-                            .font(.caption.bold())
+                            .font(metrics.heroRankFont)
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, metrics.heroRankHorizontalPadding)
+                            .padding(.vertical, metrics.heroRankVerticalPadding)
                             .glassCapsule(highlighted: true)
 
                         Text(episode.title)
-                            .font(.headline.weight(.bold))
+                            .font(metrics.heroTitleFont)
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
-                            .lineLimit(3)
+                            .lineLimit(metrics.heroTitleLineLimit)
 
                         Text(episode.showName)
-                            .font(.caption)
+                            .font(metrics.heroMetadataFont)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
 
                         if let date = episode.releaseDate {
                             Text(relativePublishedLabel(date))
-                                .font(.caption2.weight(.semibold))
+                                .font(metrics.heroDetailFont)
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(18)
+                .padding(metrics.heroContentPadding)
 
                 if resolvingEpisodeID == episode.id {
                     resolvingOverlay
@@ -485,8 +490,8 @@ struct DiscoverView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: metrics.heroCardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius).stroke(Color.white.opacity(0.08), lineWidth: metrics.scaled(0.5)))
         }
         .buttonStyle(.plain)
         .disabled(resolvingEpisodeID != nil)
@@ -529,10 +534,10 @@ struct DiscoverView: View {
     /// spotlights. Each instance keeps its own selection index and auto-advances
     /// on the shared cadence (paused while a tap is resolving a feed).
     private func heroCarousel(title: String, podcasts: [ChartPodcast], index: Binding<Int>, resolveCountry: String, seeAllRoute: Route? = nil, metrics: AdaptiveEditorialMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: metrics.scaled(8)) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
-                    .font(.title3.weight(.bold))
+                    .font(metrics.sectionTitleFont)
                 // "See All" only on the first Top Podcasts hero (podcastHero) — the
                 // fixed-country spotlight heroes call this without a route, so they
                 // render the title alone, exactly as before.
@@ -541,11 +546,11 @@ struct DiscoverView: View {
                     Button {
                         pendingRoute = seeAllRoute
                     } label: {
-                        HStack(spacing: 2) {
+                        HStack(spacing: metrics.scaled(2)) {
                             Text("See All")
-                                .font(.subheadline.weight(.semibold))
+                                .font(metrics.seeAllFont)
                             Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.bold))
+                                .font(metrics.seeAllSymbolFont)
                         }
                         .foregroundStyle(.purple)
                     }
@@ -558,7 +563,7 @@ struct DiscoverView: View {
                 ForEach(Array(podcasts.enumerated()), id: \.element.id) { idx, podcast in
                     heroCard(podcast, resolveCountry: resolveCountry, metrics: metrics)
                         .padding(.horizontal, metrics.horizontalGutter)
-                        .padding(.bottom, 36)   // clear the page dots
+                        .padding(.bottom, metrics.carouselDotClearance)
                         .tag(idx)
                 }
             }
@@ -603,21 +608,21 @@ struct DiscoverView: View {
 
     private func categoryChips(metrics: AdaptiveEditorialMetrics) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+            HStack(spacing: metrics.scaled(10)) {
                 ForEach(viewModel.rails) { rail in
                     Button {
                         pendingRoute = .category(rail.genre)
                     } label: {
-                        HStack(spacing: 6) {
+                        HStack(spacing: metrics.scaled(6)) {
                             Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
-                                .font(.caption.weight(.semibold))
+                                .font(metrics.chipSymbolFont)
                                 .foregroundStyle(.purple)
                             Text(rail.genre.localizedName(from: viewModel.genreNames))
-                                .font(.subheadline.weight(.semibold))
+                                .font(metrics.chipFont)
                                 .foregroundStyle(.primary)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
+                        .padding(.horizontal, metrics.scaled(14))
+                        .padding(.vertical, metrics.scaled(9))
                         .glassCapsule(highlighted: true)
                     }
                     .buttonStyle(.plain)
@@ -639,46 +644,48 @@ struct DiscoverView: View {
 
                 // Oversized ghosted rank numeral behind the artwork.
                 Text("\(podcast.rank)")
-                    .font(.system(size: 230, weight: .black, design: .rounded))
+                    .font(.system(size: metrics.heroGhostRankSize, weight: .black, design: .rounded))
                     .foregroundStyle(.white.opacity(0.07))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .offset(x: 18, y: -34)
+                    .offset(metrics.heroGhostRankOffset)
                     .allowsHitTesting(false)
 
-                HStack(alignment: .bottom, spacing: 14) {
-                    chartArtwork(podcast.artworkURL, size: metrics.heroArtworkSize, cornerRadius: 18, placeholderIconSize: 36)
+                HStack(alignment: .center, spacing: metrics.heroContentSpacing) {
+                    chartArtwork(podcast.artworkURL, size: metrics.heroArtworkSize,
+                                 cornerRadius: metrics.heroArtworkCornerRadius,
+                                 placeholderIconSize: metrics.heroPlaceholderIconSize)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: metrics.heroTextSpacing) {
                         Text("#\(podcast.rank)")
-                            .font(.caption.bold())
+                            .font(metrics.heroRankFont)
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, metrics.heroRankHorizontalPadding)
+                            .padding(.vertical, metrics.heroRankVerticalPadding)
                             .glassCapsule(highlighted: true)
 
                         Text(podcast.title)
-                            .font(.headline.weight(.bold))
+                            .font(metrics.heroTitleFont)
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
-                            .lineLimit(3)
+                            .lineLimit(metrics.heroTitleLineLimit)
 
                         if !podcast.artist.isEmpty {
                             Text(podcast.artist)
-                                .font(.caption)
+                                .font(metrics.heroMetadataFont)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
 
                         if !podcast.genreName.isEmpty {
                             Text(podcast.genreName)
-                                .font(.caption2.weight(.semibold))
+                                .font(metrics.heroDetailFont)
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(18)
+                .padding(metrics.heroContentPadding)
 
                 if resolvingPodcastID == podcast.id {
                     resolvingOverlay
@@ -686,8 +693,8 @@ struct DiscoverView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: metrics.heroCardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius).stroke(Color.white.opacity(0.08), lineWidth: metrics.scaled(0.5)))
         }
         .buttonStyle(.plain)
     }
@@ -695,20 +702,20 @@ struct DiscoverView: View {
     // MARK: - Genre rails
 
     private func genreRail(_ rail: DiscoverViewModel.GenreRail, metrics: AdaptiveEditorialMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: metrics.scaled(10)) {
             Button {
                 pendingRoute = .category(rail.genre)
             } label: {
-                HStack(spacing: 9) {
+                HStack(spacing: metrics.scaled(9)) {
                     Image(systemName: Self.genreSymbols[rail.genre.id] ?? "waveform")
-                        .font(.title3.weight(.semibold))
+                        .font(metrics.railHeadingSymbolFont)
                         .foregroundStyle(.purple)
                     Text(rail.genre.localizedName(from: viewModel.genreNames))
-                        .font(.title3.weight(.bold))
+                        .font(metrics.railHeadingFont)
                         .foregroundStyle(.primary)
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
+                        .font(metrics.seeAllSymbolFont)
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
@@ -733,33 +740,35 @@ struct DiscoverView: View {
         Button {
             open(podcast, country: country.code)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: metrics.shelfTextSpacing) {
                 ZStack(alignment: .topLeading) {
-                    chartArtwork(podcast.artworkURL, size: metrics.shelfArtworkSize, cornerRadius: 14, placeholderIconSize: 26)
+                    chartArtwork(podcast.artworkURL, size: metrics.shelfArtworkSize,
+                                 cornerRadius: metrics.shelfCornerRadius,
+                                 placeholderIconSize: metrics.shelfPlaceholderIconSize)
 
                     Text("\(podcast.rank)")
-                        .font(.caption2.bold())
+                        .font(metrics.shelfRankFont)
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, metrics.shelfRankHorizontalPadding)
+                        .padding(.vertical, metrics.shelfRankVerticalPadding)
                         .glassCapsule()
-                        .padding(6)
+                        .padding(metrics.shelfRankInset)
 
                     if resolvingPodcastID == podcast.id {
                         resolvingOverlay
                             .frame(width: metrics.shelfArtworkSize, height: metrics.shelfArtworkSize)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .clipShape(RoundedRectangle(cornerRadius: metrics.shelfCornerRadius))
                     }
                 }
 
                 Text(podcast.title)
-                    .font(.caption.weight(.semibold))
+                    .font(metrics.shelfTitleFont)
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
 
                 Text(podcast.artist)
-                    .font(.caption2)
+                    .font(metrics.shelfMetadataFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -785,15 +794,15 @@ struct DiscoverView: View {
         Button {
             pendingRoute = .category(genre)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: metrics.shelfTextSpacing) {
                 Image(systemName: "arrow.forward")
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(.system(size: metrics.seeAllTileSymbolSize, weight: .semibold))
                     .foregroundStyle(.purple)
                     .frame(width: metrics.shelfArtworkSize, height: metrics.shelfArtworkSize)
-                    .glassCard(cornerRadius: 14, highlighted: true)
+                    .glassCard(cornerRadius: metrics.shelfCornerRadius, highlighted: true)
 
                 Text("See All")
-                    .font(.caption.weight(.semibold))
+                    .font(metrics.shelfTitleFont)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }

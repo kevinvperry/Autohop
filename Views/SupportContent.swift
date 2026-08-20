@@ -21,6 +21,10 @@ import SwiftUI
 // Listening History documentation must describe its historical event semantics:
 // its pill and timestamp record why/when the history entry was created, rather
 // than being rewritten to mirror a later episode-library state.
+// Play Instant guidance must state its final-minute protection: a qualifying
+// arrival waits when the current episode has 60 seconds or less remaining.
+// Apple TV setup guidance must describe the finite clean-install screen and
+// keep the offline Demo Library explicitly separate from private iCloud data.
 
 // MARK: - Block model
 
@@ -367,7 +371,7 @@ enum SupportGuide {
             .heading("Play Instant"),
             .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a clear warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
             .paragraph("If playback or its audio route is temporarily unavailable when the automatic download completes, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker; if playback does not resume in time, the episode simply keeps its normal Up Next position."),
-            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
+            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. It also waits rather than interrupting when the current episode has 60 seconds or less remaining. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
             .heading("Chapter Filter"),
             .paragraph("When an episode contains chapters, toggle chapter positions that Autohop should skip for this podcast. The choices apply to future episodes with the same chapter positions and update active playback immediately. While this podcast is playing, its current chapter is protected from accidental changes on this settings page."),
             .heading("Download Feed Filters"),
@@ -491,6 +495,11 @@ enum SupportGuide {
                 "Turn on **iCloud Sync**.",
                 "Do the same on your other devices, signed into the same iCloud account.",
             ]),
+            .heading("Starting on Apple TV"),
+            .paragraph("If Apple TV does not find an Autohop library during its first check, it shows a setup screen instead of waiting indefinitely. From there you can **Check iCloud Again**, open **Discover**, review **Settings**, or choose **Explore Demo Library** to try the main Apple TV experience without an account or an iPhone library."),
+            .callout(.note, "**Demo stays separate:** The Apple TV Demo Library uses bundled sample shows and media. Demo playback, history and queue changes remain temporary on that Apple TV and are never written to your real library, listening stats or private iCloud database."),
+            .paragraph("Place Autohop in the top row of the Apple TV Home Screen to see **Continue Listening** and **Up Next** in Top Shelf. Select an episode to view its details, or press Play/Pause while it is focused to start or resume it. Until a personal library is available, Apple TV shows Autohop's static purple artwork instead."),
+            .callout(.tip, "**Only seeing purple artwork?** Open **Settings → Apple TV Home Screen** on Apple TV. It now checks eligible episodes, shared storage, the dynamic snapshot and the Top Shelf extension separately. Choose **Refresh Top Shelf Now**, return Home, then focus Autohop again."),
             .heading("What syncs"),
             .bullets([
                 "Your subscriptions, and the order you ranked them in",

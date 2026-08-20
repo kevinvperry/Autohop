@@ -81,6 +81,38 @@ final class TVAppDecompositionTests: XCTestCase {
         XCTAssertEqual(rows[0].podcastTitle, "Projected Show")
     }
 
+    func testQueueProjectionMirrorsIOSRemainingTimeRules() throws {
+        let subscriptionID = UUID()
+        var episode = Episode(
+            subscriptionID: subscriptionID,
+            guid: "partial",
+            title: "Partial",
+            audioURL: URL(string: "https://example.com/partial.mp3")!
+        )
+        episode.durationSeconds = 3_600
+        let key = PlaybackPositionStore.key(for: episode)
+        let item = QueueModel.ResolvedQueueItem(
+            episodeKey: key,
+            title: episode.title,
+            subscriptionID: subscriptionID,
+            episode: episode
+        )
+
+        let partial = try XCTUnwrap(TVQueueProjector.rows(
+            from: [item],
+            subscriptionsByID: [:],
+            playbackPositionsByEpisodeKey: [key: 900]
+        ).first)
+        XCTAssertEqual(partial.remainingSeconds, 2_700)
+
+        let untouched = try XCTUnwrap(TVQueueProjector.rows(
+            from: [item],
+            subscriptionsByID: [:]
+        ).first)
+        XCTAssertNil(untouched.remainingSeconds)
+        XCTAssertEqual(untouched.durationSeconds, 3_600)
+    }
+
     func testQueueProjectorPinsRequestedEpisodeImmediatelyWithoutLosingRows() {
         let subscriptionID = UUID()
         let items = ["first", "second", "third"].map { key in

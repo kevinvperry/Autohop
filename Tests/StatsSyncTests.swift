@@ -24,6 +24,8 @@ final class StatsSyncTests: XCTestCase {
         d.wallClockSeconds = seconds
         d.episodesCompleted = 1
         d.perShowSeconds["show1"] = seconds
+        d.perShowEpisodesStarted["show1"] = 1
+        d.perShowEpisodesCompleted["show1"] = 1
         return d
     }
 
@@ -34,6 +36,8 @@ final class StatsSyncTests: XCTestCase {
         XCTAssertEqual(m.wallClockSeconds, 900)
         XCTAssertEqual(m.episodesCompleted, 2)
         XCTAssertEqual(m.perShowSeconds["show1"], 900)
+        XCTAssertEqual(m.perShowEpisodesStarted["show1"], 2)
+        XCTAssertEqual(m.perShowEpisodesCompleted["show1"], 2)
     }
 
     func testStatsRecordRoundTripAndDeviceID() {

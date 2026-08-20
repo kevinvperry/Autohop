@@ -100,4 +100,29 @@ final class SubscriptionPersistenceFailureTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.appendingPathExtension("migrated").path),
                       "Retired legacy file should be kept as .migrated for recoverability")
     }
+
+    // A CloudKit/redirect spelling difference must not enter the in-memory
+    // store and later trip SQLite's unique feedURL constraint.
+    @MainActor
+    func testCanonicalFeedDuplicateIsRejectedBeforePersistence() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SubscriptionStore(fileURL: dir.appendingPathComponent("subscriptions.json"))
+        let firstID = UUID()
+        _ = try store.addSubscription(
+            id: firstID,
+            feedURL: URL(string: "https://EXAMPLE.com/feed/")!,
+            title: "Original", author: nil, artworkURL: nil,
+            latestEpisode: episode("one", subID: firstID)
+        )
+        let duplicateID = UUID()
+        XCTAssertThrowsError(try store.addSubscription(
+            id: duplicateID,
+            feedURL: URL(string: "https://example.com/feed")!,
+            title: "Duplicate", author: nil, artworkURL: nil,
+            latestEpisode: episode("two", subID: duplicateID)
+        ))
+        await store.flushPendingSaves()
+        XCTAssertEqual(store.subscriptions.count, 1)
+    }
 }

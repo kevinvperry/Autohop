@@ -7,27 +7,28 @@ import SwiftUI
 // global orientation gate — portrait-only app-wide, unlocked to landscape
 // only while full-screen video is active (queried by AppDelegate's
 // supportedInterfaceOrientationsFor). Orientation changes use the iOS 16+
-// scene geometry API plus setNeedsUpdateOfSupportedInterfaceOrientations() on
-// the active controller; do not reintroduce deprecated static rotation calls.
+// setNeedsUpdateOfSupportedInterfaceOrientations() on the active controller.
+// Entering full screen unlocks rotation but never forces a geometry update
+// during SwiftUI's presentation transaction: doing both simultaneously can
+// make UIKit abort on an inconsistent presentation/orientation state.
 //
 // BACKGROUND VIDEO / PIP: Two complementary mechanisms prevent AVPlayer from
 // pausing when the app resigns active during inline video playback:
-//   1. Coordinator.attachIfNeeded — establishes the parent-child UIViewController
-//      relationship (addChild/didMove) so canStartPictureInPictureAutomaticallyFromInline
-//      actually fires. SwiftUI's UIViewControllerRepresentable does NOT call addChild
-//      automatically, orphaning the controller and silently disabling auto-PiP.
+//   1. AVPlayerViewController enables automatic PiP from inline playback.
+//      UIViewControllerRepresentable owns its containment; never manually add its
+//      controller to another parent because that corrupts fullscreen presentation.
 //   2. PlayerView observes scenePhase: when the scene goes .inactive during inline
 //      video playback, it increments pictureInPictureStartToken, which triggers
 //      VideoPictureInPictureHost.startIfNeeded → AVPictureInPictureController.startPictureInPicture().
-// Do not remove either mechanism — they are complementary, not redundant: (1) makes
-// the AVPlayerViewController's own auto-PiP work; (2) is the explicit fallback via
-// the PlayerLayerView-backed controller for devices / scenarios where (1) isn't enough.
+// The explicit PlayerLayerView-backed controller remains the fallback for devices /
+// scenarios where AVPlayerViewController's automatic PiP is not sufficient.
+@MainActor
 enum VideoOrientationController {
     static var supportedOrientations: UIInterfaceOrientationMask = .portrait
 
     static func allowVideoOrientations() {
         supportedOrientations = .allButUpsideDown
-        requestOrientation(.landscapeRight)
+        notifySupportedOrientationsChanged()
     }
 
     static func restorePortrait() {
@@ -44,6 +45,11 @@ enum VideoOrientationController {
                 "error": String(describing: error)
             ])
         }
+    }
+
+    private static func notifySupportedOrientationsChanged() {
+        guard let scene = activeWindowScene else { return }
+        notifySupportedOrientationsChanged(in: scene)
     }
 
     private static var activeWindowScene: UIWindowScene? {
@@ -112,31 +118,10 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
             controller.player = desiredPlayer
             context.coordinator.recordAttachment(attached, surface: "AVPlayerViewController")
         }
-        // Establish the parent-child UIViewController relationship so
-        // canStartPictureInPictureAutomaticallyFromInline actually fires on background.
-        // SwiftUI's UIViewControllerRepresentable hosting does not call addChild /
-        // didMove automatically; without it the AVPlayerViewController is orphaned
-        // and iOS won't trigger auto-PiP on resign-active.
-        context.coordinator.attachIfNeeded(controller)
     }
 
     final class Coordinator {
-        private weak var attached: AVPlayerViewController?
         private var lastAttachmentState: Bool?
-
-        func attachIfNeeded(_ controller: AVPlayerViewController) {
-            guard attached !== controller else { return }
-            guard let parent = controller.view.window?.rootViewController
-                    ?? findHostingController(for: controller.view)
-            else { return }
-            guard controller.parent == nil else {
-                attached = controller
-                return
-            }
-            parent.addChild(controller)
-            controller.didMove(toParent: parent)
-            attached = controller
-        }
 
         func recordAttachment(_ isAttached: Bool, surface: String) {
             guard lastAttachmentState != isAttached else { return }
@@ -146,15 +131,6 @@ struct NativeVideoPlayerView: UIViewControllerRepresentable {
                 isAttached ? "Video surface attached to AVPlayer" : "Video surface detached from AVPlayer",
                 metadata: ["surface": surface]
             )
-        }
-
-        private func findHostingController(for view: UIView?) -> UIViewController? {
-            var responder: UIResponder? = view
-            while let r = responder {
-                if let vc = r as? UIViewController { return vc }
-                responder = r.next
-            }
-            return nil
         }
     }
 }

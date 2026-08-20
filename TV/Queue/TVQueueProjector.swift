@@ -2,7 +2,8 @@ import Foundation
 import AutohopCore
 
 // AI CONTEXT — Pure conversion from resolved queue items into immutable tvOS
-// rows. Phone-authored ordering is preserved exactly.
+// rows. Phone-authored ordering is preserved exactly. Synced resume positions
+// are injected as one bulk-read map so views remain persistence-free.
 struct TVQueueProjector {
     static func pinToFront(
         _ items: [QueueModel.ResolvedQueueItem],
@@ -58,7 +59,8 @@ struct TVQueueProjector {
 
     static func rows(
         from items: [QueueModel.ResolvedQueueItem],
-        subscriptionsByID: [UUID: AutohopCore.Subscription]
+        subscriptionsByID: [UUID: AutohopCore.Subscription],
+        playbackPositionsByEpisodeKey: [String: TimeInterval] = [:]
     ) -> [TVQueueRowModel] {
         items.enumerated().map { index, item in
             TVQueueRowModel(
@@ -73,6 +75,7 @@ struct TVQueueProjector {
                 artworkURL: item.episode?.artworkURL
                     ?? subscriptionsByID[item.subscriptionID]?.artworkURL,
                 durationSeconds: item.episode?.durationSeconds,
+                playbackPositionSeconds: playbackPositionsByEpisodeKey[item.episodeKey],
                 mediaKind: item.episode?.mediaKind ?? .audio,
                 episode: item.episode,
                 pinState: item.pinState

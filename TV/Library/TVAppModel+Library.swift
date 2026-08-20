@@ -15,10 +15,16 @@ extension TVAppModel {
     /// was blocking during a stutter.
     @discardableResult
     func timed<T>(_ stage: String, thresholdMs: Double = 40, _ body: () -> T) -> T {
+        let beganActive = isSceneActive
         let startedAt = CFAbsoluteTimeGetCurrent()
         let result = body()
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-        if elapsedMs >= thresholdMs {
+        if !beganActive || !isSceneActive || elapsedMs >= 30_000 {
+            AppLogger.shared.info("tv.perf.inactiveGapExcluded", "Excluded inactive or suspension gap from performance timing", metadata: [
+                "stage": stage,
+                "elapsedBucket": elapsedMs >= 300_000 ? "5m+" : elapsedMs >= 30_000 ? "30s+" : "sceneInactive"
+            ])
+        } else if elapsedMs >= thresholdMs {
             AppLogger.shared.info("tv.perf", "Main-actor stage was slow", metadata: [
                 "stage": stage,
                 "ms": String(format: "%.0f", elapsedMs)
@@ -77,7 +83,15 @@ extension TVAppModel {
     // 500 ms window no matter how fast callbacks arrive. Direct callers with
     // sequencing needs (bootstrap/prime tails) still call refreshLibrary().
     func scheduleLibraryRefresh() {
-        guard pendingLibraryRefresh == nil else { return }
+        guard isSceneActive else {
+            hasDeferredInactiveLibraryRefresh = true
+            deferredInactiveLibraryRefreshRequestCount += 1
+            return
+        }
+        guard pendingLibraryRefresh == nil else {
+            coalescedLibraryRefreshRequestCount += 1
+            return
+        }
         // DUTY-CYCLE BOUND (round-8b second log): a fixed 500 ms window still
         // let ~300 ms passes eat ~60% of the main thread while the cold sync
         // stream churned. Spacing is now ≥6× the LAST pass's own duration, so
@@ -90,15 +104,36 @@ extension TVAppModel {
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
             self.pendingLibraryRefresh = nil
+            guard self.isSceneActive else {
+                self.hasDeferredInactiveLibraryRefresh = true
+                self.deferredInactiveLibraryRefreshRequestCount += 1
+                return
+            }
             self.refreshLibrary()
         }
+    }
+
+    /// Drains at most one projection rebuild after an inactive period. The
+    /// counters make high-volume CloudKit bursts measurable without logging
+    /// every suppressed callback.
+    func resumeDeferredLibraryRefreshIfNeeded() {
+        guard isSceneActive, hasDeferredInactiveLibraryRefresh else { return }
+        hasDeferredInactiveLibraryRefresh = false
+        AppLogger.shared.info("tv.libraryRefresh.resumed", "Resumed one coalesced library refresh after scene activation", metadata: [
+            "inactiveRequests": "\(deferredInactiveLibraryRefreshRequestCount)",
+            "coalescedRequests": "\(coalescedLibraryRefreshRequestCount)"
+        ], alwaysPersist: true)
+        deferredInactiveLibraryRefreshRequestCount = 0
+        coalescedLibraryRefreshRequestCount = 0
+        scheduleLibraryRefresh()
     }
 
     func refreshLibrary() {
         lastLibraryRefreshAt = Date()
         let startedAt = CFAbsoluteTimeGetCurrent()
         timed("refreshLibrary") { refreshLibraryBody() }
-        lastLibraryRefreshDuration = CFAbsoluteTimeGetCurrent() - startedAt
+        let duration = CFAbsoluteTimeGetCurrent() - startedAt
+        if isSceneActive, duration < 30 { lastLibraryRefreshDuration = duration }
     }
 
     func refreshLibraryBody() {
@@ -180,6 +215,36 @@ extension TVAppModel {
         // launch experience. This prevents a one-frame false empty state.
         let newRootState: RootState = newTiles.isEmpty ? .empty : .ready
         if newRootState != rootState { rootState = newRootState }
+        scheduleTopShelfPublication(reason: "libraryRefresh")
+    }
+
+    func scheduleTopShelfPublication(reason: String) {
+        topShelfPublisher.schedule(candidate: topShelfCandidate(), reason: reason)
+    }
+
+    // AI CONTEXT — This is the single presentation projection used by both
+    // coalesced foreground updates and the immediate background checkpoint.
+    func topShelfCandidate() -> TVTopShelfSnapshotCandidate? {
+        let currentEpisodeKey = playbackModel.currentEpisode.map(PlaybackPositionStore.key(for:))
+        // AI CONTEXT — Top Shelf gets live playback explicitly, unlike Home's
+        // idle-only Continue projection. Reserve it ahead of the ten-item cap
+        // and remove the matching queue row so a lower-ranked playing episode
+        // cannot disappear and a top-ranked one cannot be duplicated.
+        let projectedQueueRows = queueRows.filter { $0.id != currentEpisodeKey }
+        let nowPlaying = playbackModel.currentEpisode.map {
+            TVTopShelfNowPlaying(
+                episode: $0,
+                podcastTitle: playbackModel.currentSubscriptionTitle,
+                positionSeconds: playbackModel.currentTime
+            )
+        }
+        return rootState == .ready
+            ? TVTopShelfSnapshotBuilder.build(
+                nowPlaying: nowPlaying,
+                continueListening: continueListening,
+                queueRows: projectedQueueRows
+            )
+            : nil
     }
 
     func recomputeDerivedState(recomputeQueue: Bool, recomputeHistory: Bool) {
@@ -248,10 +313,7 @@ extension TVAppModel {
             if newUpNextItems != upNextItems {
                 upNextItems = newUpNextItems
                 upNextEpisodes = newUpNextItems.compactMap(\.episode)
-                queueRows = TVQueueProjector.rows(
-                    from: newUpNextItems,
-                    subscriptionsByID: subscriptionsByID
-                )
+                queueRows = projectQueueRows(from: newUpNextItems)
             }
         }
         guard recomputeHistory else { return }
@@ -267,6 +329,11 @@ extension TVAppModel {
             historyNeedsReload = true
             if continueListening != nil { continueListening = nil }
         }
+        // A history-only CloudKit delta can change remaining-time metadata
+        // without changing queue identity or order. Refresh the immutable rows
+        // here so tvOS mirrors the iOS Up Next label immediately.
+        let refreshedQueueRows = projectQueueRows(from: upNextItems)
+        if refreshedQueueRows != queueRows { queueRows = refreshedQueueRows }
     }
 
     func episodeRows(subscriptionID: UUID) -> [TVEpisodeRowModel] {

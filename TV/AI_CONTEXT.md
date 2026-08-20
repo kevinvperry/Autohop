@@ -35,6 +35,10 @@ enforces that rule.
 - `Views/`: presentation and focus only; views must not become sync, identity,
   persistence or playback-policy owners.
 - `Navigation/`: tab/path/player presentation state.
+- `Demo/`: Release-build, offline App Review demonstration. It owns synthetic
+  fixtures, bundled first-party media, ephemeral queue/history/progress and its
+  private AVPlayer. It must never import or receive production persistence,
+  CloudKit, sync, statistics or subscription writers.
 
 ## Structured files that cannot contain comments
 
@@ -45,9 +49,26 @@ therefore documented here and in the tvOS section of `project.yml`:
 
 - `Info.plist`: generated target metadata, CloudKit background notification and
   audio playback declarations.
-- `AutohopTV.entitlements`: private CloudKit container and APNs entitlement.
+- `AutohopTV.entitlements`: Debug/private CloudKit container and development
+  APNs entitlement. `AutohopTV.Release.entitlements`: the matching distribution
+  container plus production APNs. `project.yml` selects them by configuration;
+  the signed archive remains the final authority and must be inspected.
 - `Media.xcassets`: App Store icon stack and Top Shelf artwork metadata/assets;
   it contains no runtime logic.
+- Dynamic Top Shelf is implemented by `TV/TopShelf`, `TVTopShelf` and the typed
+  routes in `TV/Navigation`. The extension is a bounded renderer of an atomic
+  App Group presentation snapshot and may write only its 4 KB content-free
+  diagnostic heartbeat; it must never open CloudKit, GRDB, RSS or production
+  model state. Live playback is projected separately from Home's idle-only
+  Continue Listening item, owns the first slot and is deduplicated from Up Next.
+  Both system actions use exact-identity playback. Queue rows carry bulk-read
+  synced position metadata so rendering and focus remain persistence-free.
+  Its canonical design and remaining physical release gates are in
+  `Docs/TVOS_DYNAMIC_TOP_SHELF_IMPLEMENTATION_PROPOSAL.md`.
+- `Diagnostics/` and Settings expose compact local health for launch, memory,
+  thermal pressure, hangs and Top Shelf. The extension's maximum-4 KB
+  content-free heartbeat is its sole operational write; the canonical audit is
+  `Docs/TVOS_DIAGNOSTICS_AUDIT_2026-08-15.md`.
 
 ## Non-negotiable invariants
 
@@ -64,3 +85,8 @@ therefore documented here and in the tvOS section of `project.yml`:
 6. Queue snapshot schema v3 carries optional Play Next/Play Last pin state.
    Keep decoding compatible with older snapshots and treat the latest durable
    Pin/Unpin outbox command for an episode as the user's authoritative intent.
+7. Launch presentation has a ten-second first-usable-screen deadline. The
+   deadline exposes setup/demo without cancelling or racing mutable bootstrap
+   work; a late genuine library may still become ready normally.
+8. Demo media and mutations remain bundle/in-memory only. Never merge demo and
+   personal projections or allow demo actions to reach CloudKit/stats.

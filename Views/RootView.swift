@@ -107,6 +107,9 @@ struct SheetCloseButton: View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill")
         }
+        // AI CONTEXT — Escape closes informational sheets when an iPad hardware
+        // keyboard is attached. The visible button remains the sole focus target.
+        .keyboardShortcut(.cancelAction)
         .accessibilityLabel("Close")
     }
 }

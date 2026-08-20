@@ -13,7 +13,7 @@ while IFS= read -r source_file; do
     if ! grep -q "AI CONTEXT" "$source_file"; then
         missing+=("$source_file")
     fi
-done < <(find TV TVTests -type f -name '*.swift' -print | sort)
+done < <(find TV TVTopShelf TVTests -type f -name '*.swift' -print | sort)
 
 if (( ${#missing[@]} > 0 )); then
     echo "Missing AI CONTEXT headers in tvOS Swift files:"

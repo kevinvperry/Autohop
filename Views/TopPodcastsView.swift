@@ -223,33 +223,33 @@ struct TopPodcastsView: View {
                     .offset(x: 18, y: -22)
                     .allowsHitTesting(false)
 
-                HStack(alignment: .bottom, spacing: 16) {
+                HStack(alignment: .center, spacing: metrics.featureContentSpacing) {
                     artwork(podcast.artworkURL, size: metrics.featureArtworkSize, cornerRadius: 18, placeholderIconSize: 34)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        rankCapsule(podcast.rank)
+                    VStack(alignment: .leading, spacing: metrics.featureTextSpacing) {
+                        rankCapsule(podcast.rank, font: metrics.featureRankFont)
 
                         Text(podcast.title)
-                            .font(.title3.weight(.bold))
+                            .font(metrics.featureTitleFont)
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
-                            .lineLimit(2)
+                            .lineLimit(metrics.featureTitleLineLimit)
 
                         Text(podcast.artist)
-                            .font(.subheadline)
+                            .font(metrics.featureMetadataFont)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
 
                         if !podcast.genreName.isEmpty {
                             Text(podcast.genreName)
-                                .font(.caption.weight(.semibold))
+                                .font(metrics.featureDetailFont)
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(20)
+                .padding(metrics.featureContentPadding)
 
                 if resolvingPodcastID == podcast.id {
                     resolvingOverlay
@@ -314,9 +314,9 @@ struct TopPodcastsView: View {
 
     // MARK: - Pieces
 
-    private func rankCapsule(_ rank: Int) -> some View {
+    private func rankCapsule(_ rank: Int, font: Font = .caption.bold()) -> some View {
         Text("#\(rank)")
-            .font(.caption.bold())
+            .font(font)
             .foregroundStyle(.white)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)

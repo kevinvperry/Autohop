@@ -38,8 +38,27 @@ project="$repo_root/project.yml"
 checklist="$repo_root/Docs/TVOS_PHASE6_VALIDATION.md"
 
 grep -Eq '^[[:space:]]*AutohopTV:' "$project" || fail "AutohopTV target missing"
+grep -Eq '^[[:space:]]*AutohopTVTopShelf:' "$project" || fail "Top Shelf extension target missing"
 grep -Eq '^[[:space:]]*deploymentTarget: "18\.0"' "$project" || fail "tvOS minimum must be explicit"
 grep -Eq '^[[:space:]]*aps-environment: development' "$project" || fail "source APNs entitlement missing"
+grep -q 'com.apple.tv-top-shelf' "$project" || fail "Top Shelf extension point missing"
+grep -q 'com.kevinperry.autohop.tv-navigation' "$project" || fail "tvOS Top Shelf URL route declaration missing"
+grep -q 'group.com.kevinperry.autohop' "$repo_root/TV/AutohopTV.entitlements" || fail "Debug tvOS App Group missing"
+grep -q 'group.com.kevinperry.autohop' "$repo_root/TV/AutohopTV.Release.entitlements" || fail "Release tvOS App Group missing"
+grep -q 'group.com.kevinperry.autohop' "$repo_root/TVTopShelf/AutohopTVTopShelf.entitlements" || fail "extension App Group missing"
+if rg -n 'import (AutohopCore|GRDB|CloudKit|AVKit)|URLSession|TVAppModel|SubscriptionStore' "$repo_root/TVTopShelf" --glob '*.swift' >/dev/null; then
+  fail "Top Shelf extension crossed its domain/network dependency boundary"
+fi
+[[ -f "$repo_root/TV/TopShelf/Shared/TVTopShelfExtensionDiagnostic.swift" ]] \
+  || fail "Top Shelf extension diagnostic heartbeat schema missing"
+grep -q 'maximumEncodedBytes = 4_096' "$repo_root/TV/TopShelf/Shared/TVTopShelfExtensionDiagnostic.swift" \
+  || fail "Top Shelf extension diagnostic heartbeat is not bounded"
+for outcome in dynamicContentReturned appGroupUnavailable manifestMissing manifestInvalid accountScopeMismatch noRenderableContent; do
+  grep -q "$outcome" "$repo_root/TV/TopShelf/Shared/TVTopShelfExtensionDiagnostic.swift" \
+    || fail "Top Shelf diagnostic outcome missing: $outcome"
+done
+grep -q 'Refresh Top Shelf Now' "$repo_root/TV/Views/TVDiagnosticsView.swift" \
+  || fail "on-device Top Shelf diagnostic refresh missing"
 [[ -f "$checklist" ]] || fail "physical-device validation checklist missing"
 
 if [[ "${1:---configuration-only}" == "--configuration-only" ]]; then
@@ -58,6 +77,13 @@ top_shelf="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimar
 top_shelf_wide="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimaryImageWide' "$info_plist" 2>/dev/null || true)"
 [[ -n "$top_shelf_wide" ]] || fail "wide Top Shelf image is missing from the compiled tvOS asset catalogue"
 [[ -f "$app/Assets.car" ]] || fail "compiled tvOS asset catalogue is missing from archive"
+appex="$app/PlugIns/AutohopTVTopShelf.appex"
+[[ -d "$appex" ]] || fail "embedded AutohopTVTopShelf.appex missing"
+appex_info="$appex/Info.plist"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex_info" 2>/dev/null || true)" == "com.apple.tv-top-shelf" ]] \
+  || fail "embedded extension has the wrong extension point"
+[[ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPrincipalClass' "$appex_info" 2>/dev/null || true)" ]] \
+  || fail "embedded extension principal class missing"
 asset_json="$(mktemp)"
 xcrun assetutil --info "$app/Assets.car" >"$asset_json" 2>/dev/null \
   || fail "cannot inspect the compiled tvOS asset catalogue"
@@ -87,5 +113,12 @@ tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 codesign -d --entitlements :- "$app" >"$tmp" 2>/dev/null || fail "cannot read signed entitlements"
 env="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$tmp" 2>/dev/null || true)"
 [[ "$env" == production ]] || fail "signed APNs environment is '${env:-missing}', expected production"
+app_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$tmp" 2>/dev/null || true)"
+[[ "$app_group" == group.com.kevinperry.autohop ]] || fail "signed tvOS app App Group is missing"
+appex_entitlements="$(mktemp)"
+codesign -d --entitlements :- "$appex" >"$appex_entitlements" 2>/dev/null || fail "cannot read extension entitlements"
+appex_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$appex_entitlements" 2>/dev/null || true)"
+rm -f "$appex_entitlements"
+[[ "$appex_group" == group.com.kevinperry.autohop ]] || fail "signed extension App Group is missing or mismatched"
 grep -Eq '^- \[x\] Product owner physical-device sign-off' "$checklist" || fail "physical-device sign-off is incomplete"
 echo "tvOS archive checks passed."

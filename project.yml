@@ -32,7 +32,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    TARGETED_DEVICE_FAMILY: "1"          # iPhone only
+    TARGETED_DEVICE_FAMILY: "1"          # Default for ancillary iOS targets; app overrides below
     ALWAYS_SEARCH_USER_PATHS: false
     CLANG_ENABLE_MODULES: true
 
@@ -101,6 +101,7 @@ targets:
           - "Tests/**"                       # picked up by AutohopTests target instead
           - "TV/**"                          # tvOS target sources — never in the iPhone app
           - "TVTests/**"                     # tvOS-only XCTest sources — never in the iPhone app
+          - "TVTopShelf/**"                  # tvOS extension sources/plist — never in the iPhone app
           - "Widgets/**"                     # widget extension sources — shared contract is re-added below
       # AI CONTEXT — The widget display/storage contract is deliberately compiled
       # into both the app and extension. Nothing else under Widgets enters the app
@@ -111,12 +112,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
-        TARGETED_DEVICE_FAMILY: "1"          # iPhone only — explicit on the app target
+        TARGETED_DEVICE_FAMILY: "1,2"        # Native iPhone + iPad — explicit on the app target
         # iPhone and Apple TV use only the user's private iCloud account for
         # cross-device synchronization. No subscription or relay feature gates
         # exist in either configuration.
-        MARKETING_VERSION: "1.5"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.6"
+        CURRENT_PROJECT_VERSION: "10"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG          # Kevin Perry — keeps signing through regen
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -163,10 +164,16 @@ targets:
         # ── Device / orientation ───────────────────────────────────────────
         UIRequiredDeviceCapabilities:
           - arm64
-        # AppDelegate keeps normal screens portrait and opens video in landscape.
-        # v1 is iPhone-only (TARGETED_DEVICE_FAMILY = 1); no ~ipad variants.
+        # AppDelegate keeps compact iPhone screens portrait and opens video in
+        # landscape. Native iPad supports every orientation so Stage Manager,
+        # Split View and hardware-keyboard use are not artificially constrained.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
@@ -217,7 +224,6 @@ targets:
 
         # ── App Store ──────────────────────────────────────────────────────
         ITSAppUsesNonExemptEncryption: false
-
         # ── CarPlay ────────────────────────────────────────────────────────
         # CarPlay Audio App entitlement approved June 2026. The CarPlay scene
         # uses Apple's template application scene and is implemented in Phase 1
@@ -307,8 +313,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.widgets
         PRODUCT_NAME: AutohopWidgets
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.5"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.6"
+        CURRENT_PROJECT_VERSION: "10"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -369,8 +375,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "3"          # Apple TV
-        MARKETING_VERSION: "1.5"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.6"
+        CURRENT_PROJECT_VERSION: "10"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         # Set 2026-07-04 once Kevin created the tvOS App Icon & Top Shelf
@@ -381,8 +387,13 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          # Development devices use APNs sandbox. Release has a separate
+          # distribution entitlement file so an App Store archive cannot claim
+          # the sandbox environment even if source generation/signing drifts.
+          CODE_SIGN_ENTITLEMENTS: TV/AutohopTV.entitlements
         Release:
           SWIFT_COMPILATION_MODE: wholemodule
+          CODE_SIGN_ENTITLEMENTS: TV/AutohopTV.Release.entitlements
     info:
       path: TV/Info.plist
       properties:
@@ -404,6 +415,10 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.kevinperry.autohop.tv-navigation
+            CFBundleURLSchemes:
+              - autohop
     # Declared explicitly (2026-07-11) after the AutohopTV scheme vanished from
     # Xcode's scheme picker: it was only ever an Xcode-AUTOCREATED scheme living
     # in the project's user data, and any `xcodegen generate` that rewrites the
@@ -414,21 +429,56 @@ targets:
       testTargets:
         - AutohopTVTests
 
-    entitlements:
-      path: TV/AutohopTV.entitlements
-      properties:
-        # Same private CloudKit container as iPhone — the TV reads the user's
-        # existing synced library.
-        com.apple.developer.icloud-container-identifiers:
-          - iCloud.com.kevinperry.autohop
-        com.apple.developer.icloud-services:
-          - CloudKit
-        aps-environment: development
     dependencies:
       - package: AutohopCore
         product: AutohopCore
       - sdk: CloudKit.framework
       - sdk: AVFoundation.framework
+      - sdk: TVServices.framework
+      - target: AutohopTVTopShelf
+        embed: true
+
+  # ── Dynamic Apple TV Top Shelf extension ──────────────────────────────────
+  # AI CONTEXT — Read-only TVServices renderer of the atomic App Group
+  # presentation snapshot prepared by AutohopTV. It deliberately does not link
+  # AutohopCore, GRDB, CloudKit, AVKit or any production persistence service.
+  AutohopTVTopShelf:
+    type: app-extension
+    platform: tvOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: TVTopShelf
+        excludes:
+          - AutohopTVTopShelf.entitlements
+      - path: TV/TopShelf/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.TopShelf
+        PRODUCT_NAME: AutohopTVTopShelf
+        TARGETED_DEVICE_FAMILY: "3"
+        MARKETING_VERSION: "1.6"
+        CURRENT_PROJECT_VERSION: "10"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QT3N6256FG
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: TVTopShelf/AutohopTVTopShelf.entitlements
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+    info:
+      path: TVTopShelf/Info.plist
+      properties:
+        CFBundleDisplayName: Autohop Top Shelf
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.tv-top-shelf
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).TopShelfContentProvider"
+    dependencies:
+      - sdk: TVServices.framework
 
   # tvOS-only regression tests. Kept separate from AutohopTests so these tests
   # can import TVAppModel's canonical resolver without linking any TV source

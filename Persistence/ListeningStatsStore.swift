@@ -4,8 +4,9 @@ import Foundation
 // Data layer for the Stats page. Buckets all listening activity per LOCAL
 // calendar day in DayStats records (wall-clock seconds, 24-hour histogram,
 // per-show seconds and per-show time saved keyed by subscription UUID with a
-// title map that survives unsubscribes, four time-saved categories, episodes
-// started/completed, manual skip count, and bytes/episodes downloaded
+// title map that survives unsubscribes, per-show episode start/completion counts,
+// four time-saved categories, global episodes started/completed, manual skip
+// count, and bytes/episodes downloaded
 // (forward-only from June 2026)). Persisted to listening-stats.json; saves throttled to
 // 30 s during playback and force-flushed on pause / sleep-timer or sleep-schedule
 // pause / background by PlaybackCheckpointWorkflow. Day-bucket writes into the sync
@@ -24,8 +25,9 @@ import Foundation
 // writes remain immediately visible. This keeps diagnostic I/O out of playback.
 // stats_sync_state. These low-frequency breadcrumbs help correlate DayStats
 // CloudKit conflicts and playback tick pressure without logging every 0.5 s tick.
-// Legacy lifetime totals from playback-stats.json are imported once as
-// `legacyBaseline` so pre-daily-bucketing history isn't lost.
+// Legacy totals from playback-stats.json are imported once as `legacyBaseline`
+// with a cutover timestamp. They are included in any selected period that fully
+// contains the known legacy interval, without fabricating daily attribution.
 // PERIODS: summary(for: StatsPeriod) aggregates a window; StatsPeriod includes
 // the current calendar week/month/year, .lifetime, AND the previous concluded
 // week/month/year (.previousWeek/.previousMonth/.previousYear) — the latter
@@ -90,6 +92,10 @@ public struct DayStats: Codable, Equatable {
     /// `Subscription.id.uuidString`. Added 2026-06; days recorded before then
     /// have an empty map, so per-period sums can undercount the category totals.
     public var perShowTimeSaved: [String: TimeInterval]
+    /// Episode starts/completions attributed to the same stable subscription key
+    /// as perShowSeconds. Added 2026-08; older buckets decode as empty maps.
+    public var perShowEpisodesStarted: [String: Int]
+    public var perShowEpisodesCompleted: [String: Int]
     public var timeSavedVariableSpeed: TimeInterval
     public var timeSavedTrimSilence: TimeInterval
     public var timeSavedManualSkip: TimeInterval
@@ -117,6 +123,8 @@ public struct DayStats: Codable, Equatable {
         hourSeconds: [TimeInterval] = Array(repeating: 0, count: 24),
         perShowSeconds: [String: TimeInterval] = [:],
         perShowTimeSaved: [String: TimeInterval] = [:],
+        perShowEpisodesStarted: [String: Int] = [:],
+        perShowEpisodesCompleted: [String: Int] = [:],
         timeSavedVariableSpeed: TimeInterval = 0,
         timeSavedTrimSilence: TimeInterval = 0,
         timeSavedManualSkip: TimeInterval = 0,
@@ -133,6 +141,8 @@ public struct DayStats: Codable, Equatable {
         self.hourSeconds = hourSeconds
         self.perShowSeconds = perShowSeconds
         self.perShowTimeSaved = perShowTimeSaved
+        self.perShowEpisodesStarted = perShowEpisodesStarted
+        self.perShowEpisodesCompleted = perShowEpisodesCompleted
         self.timeSavedVariableSpeed = timeSavedVariableSpeed
         self.timeSavedTrimSilence = timeSavedTrimSilence
         self.timeSavedManualSkip = timeSavedManualSkip
@@ -158,6 +168,8 @@ public struct DayStats: Codable, Equatable {
         for h in 0..<24 { r.hourSeconds[h] += other.hourSeconds[h] }
         for (k, v) in other.perShowSeconds { r.perShowSeconds[k, default: 0] += v }
         for (k, v) in other.perShowTimeSaved { r.perShowTimeSaved[k, default: 0] += v }
+        for (k, v) in other.perShowEpisodesStarted { r.perShowEpisodesStarted[k, default: 0] += v }
+        for (k, v) in other.perShowEpisodesCompleted { r.perShowEpisodesCompleted[k, default: 0] += v }
         r.timeSavedVariableSpeed += other.timeSavedVariableSpeed
         r.timeSavedTrimSilence += other.timeSavedTrimSilence
         r.timeSavedManualSkip += other.timeSavedManualSkip
@@ -176,6 +188,7 @@ public struct DayStats: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case dayKey, wallClockSeconds, hourSeconds, perShowSeconds, perShowTimeSaved
+        case perShowEpisodesStarted, perShowEpisodesCompleted
         case timeSavedVariableSpeed, timeSavedTrimSilence, timeSavedManualSkip, timeSavedAutoSkip
         case episodesStarted, episodesCompleted, manualSkipForwardCount
         case bytesDownloaded, episodesDownloaded, showTitles
@@ -203,6 +216,8 @@ public struct DayStats: Codable, Equatable {
         perShowSeconds = try c.decode([String: TimeInterval].self, forKey: .perShowSeconds)
         // Absent in JSON written before per-show time-saved tracking (2026-06).
         perShowTimeSaved = try c.decodeIfPresent([String: TimeInterval].self, forKey: .perShowTimeSaved) ?? [:]
+        perShowEpisodesStarted = try c.decodeIfPresent([String: Int].self, forKey: .perShowEpisodesStarted) ?? [:]
+        perShowEpisodesCompleted = try c.decodeIfPresent([String: Int].self, forKey: .perShowEpisodesCompleted) ?? [:]
         timeSavedVariableSpeed = try c.decode(TimeInterval.self, forKey: .timeSavedVariableSpeed)
         timeSavedTrimSilence = try c.decode(TimeInterval.self, forKey: .timeSavedTrimSilence)
         timeSavedManualSkip = try c.decode(TimeInterval.self, forKey: .timeSavedManualSkip)
@@ -240,10 +255,18 @@ public struct ListeningStatsSummary {
     /// Time saved per subscription UUID string, summed over the period. Empty
     /// contributions from days recorded before per-show tracking (2026-06).
     public var perShowTimeSaved: [String: TimeInterval] = [:]
+    /// Durable per-show outcome counts. Empty contributions identify buckets
+    /// written before attribution was introduced and are recovered in StatsView
+    /// from retained episode/history evidence where possible.
+    public var perShowEpisodesStarted: [String: Int] = [:]
+    public var perShowEpisodesCompleted: [String: Int] = [:]
     /// Wall-clock seconds per hour of day (24 buckets), summed over the period.
     public var hourSeconds: [TimeInterval] = Array(repeating: 0, count: 24)
     /// One entry per day in the period (zero-filled), oldest first — feeds heatmaps.
     public var days: [DayStats] = []
+    /// Lifetime listening imported from the pre-day-bucket store. Included in
+    /// `wallClockSeconds`, but unavailable to date/hour/show visual breakdowns.
+    public var legacyUnbucketedListeningSeconds: TimeInterval = 0
 
     public var totalTimeSaved: TimeInterval {
         timeSavedVariableSpeed + timeSavedTrimSilence + timeSavedManualSkip + timeSavedAutoSkip
@@ -286,6 +309,9 @@ private struct ListeningStatsData: Codable {
     var showTitles: [String: String] = [:]
     /// Totals imported from the legacy `playback-stats.json` (pre-daily-bucket era).
     var legacyBaseline: PlaybackStats?
+    /// End of the unbucketed legacy interval. Optional for files written before
+    /// this marker existed; those infer cutover from the earliest local bucket.
+    var legacyBaselineEndedAt: Date?
     var startedAt: Date = Date()
 }
 
@@ -482,8 +508,11 @@ public final class ListeningStatsStore: ObservableObject {
         let showKey = subscriptionID.uuidString
         day.perShowSeconds[showKey, default: 0] += seconds
         if speed > 1.0 {
-            // Time that would have elapsed at 1× minus time actually elapsed.
-            let saved = seconds * (speed - 1.0) / speed
+            // `seconds` is elapsed wall time. At S× speed that interval consumes
+            // seconds*S of media, so the time avoided versus 1× is seconds*(S-1).
+            // Do not divide by speed here; that formula applies only when the
+            // input is media time rather than this API's wall-clock contract.
+            let saved = seconds * (speed - 1.0)
             day.timeSavedVariableSpeed += saved
             day.perShowTimeSaved[showKey, default: 0] += saved
         }
@@ -528,12 +557,20 @@ public final class ListeningStatsStore: ObservableObject {
     }
 
     public func recordEpisodeStarted(subscriptionID: UUID, showTitle: String) {
-        data.showTitles[subscriptionID.uuidString] = showTitle
-        mutateToday { $0.episodesStarted += 1 }
+        let key = subscriptionID.uuidString
+        data.showTitles[key] = showTitle
+        mutateToday {
+            $0.episodesStarted += 1
+            $0.perShowEpisodesStarted[key, default: 0] += 1
+        }
     }
 
     public func recordEpisodeCompleted(subscriptionID: UUID) {
-        mutateToday { $0.episodesCompleted += 1 }
+        let key = subscriptionID.uuidString
+        mutateToday {
+            $0.episodesCompleted += 1
+            $0.perShowEpisodesCompleted[key, default: 0] += 1
+        }
     }
 
     /// Records one completed episode download of `bytes` against today's bucket.
@@ -652,11 +689,67 @@ public final class ListeningStatsStore: ObservableObject {
             for (show, seconds) in day.perShowTimeSaved {
                 result.perShowTimeSaved[show, default: 0] += seconds
             }
+            for (show, count) in day.perShowEpisodesStarted {
+                result.perShowEpisodesStarted[show, default: 0] += count
+            }
+            for (show, count) in day.perShowEpisodesCompleted {
+                result.perShowEpisodesCompleted[show, default: 0] += count
+            }
             for hour in 0..<24 {
                 result.hourSeconds[hour] += day.hourSeconds[hour]
             }
         }
+        // Legacy totals have an interval but no daily attribution. Include the
+        // block whenever the selected range wholly contains that interval. This
+        // makes Year equal Lifetime when all listening occurred in that year,
+        // while refusing to guess how a baseline spanning a boundary splits.
+        if let baseline = legacyBaselineIncluded(in: period) {
+            result.legacyUnbucketedListeningSeconds = baseline.totalListeningSeconds
+            result.wallClockSeconds += baseline.totalListeningSeconds
+            result.timeSavedVariableSpeed += baseline.timeSavedVariableSpeed
+            result.timeSavedTrimSilence += baseline.timeSavedTrimSilence
+            result.timeSavedManualSkip += baseline.timeSavedManualSkip
+            result.timeSavedAutoSkip += baseline.timeSavedAutoSkip
+        }
         return result
+    }
+
+    private func legacyBaselineIncluded(in period: StatsPeriod) -> PlaybackStats? {
+        guard let baseline = data.legacyBaseline else { return nil }
+        if period == .lifetime { return baseline }
+
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? Date.distantFuture
+        let bounds: (start: Date, end: Date)
+        switch period {
+        case .last(let count):
+            bounds = (
+                calendar.date(byAdding: .day, value: -(max(count, 1) - 1), to: today) ?? today,
+                tomorrow
+            )
+        case .currentWeek:
+            bounds = (startOfCurrentWeek(), tomorrow)
+        case .currentMonth:
+            bounds = (startOfCurrentMonth(), tomorrow)
+        case .currentYear:
+            bounds = (startOfCurrentYear(), tomorrow)
+        case .previousWeek:
+            let end = startOfCurrentWeek()
+            bounds = (calendar.date(byAdding: .day, value: -7, to: end) ?? end, end)
+        case .previousMonth:
+            let end = startOfCurrentMonth()
+            bounds = (calendar.date(byAdding: .month, value: -1, to: end) ?? end, end)
+        case .previousYear:
+            let end = startOfCurrentYear()
+            bounds = (calendar.date(byAdding: .year, value: -1, to: end) ?? end, end)
+        case .lifetime:
+            return baseline
+        }
+
+        let inferredCutover = data.days.keys.compactMap(dayDate(from:)).min() ?? Date()
+        let endedAt = data.legacyBaselineEndedAt ?? inferredCutover
+        guard baseline.startedAt >= bounds.start, endedAt <= bounds.end else { return nil }
+        return baseline
     }
 
     /// Per-show seconds for the window of the same length immediately before
@@ -921,6 +1014,7 @@ public final class ListeningStatsStore: ObservableObject {
               let legacy = try? JSONDecoder().decode(PlaybackStats.self, from: encoded)
         else { return }
         data.legacyBaseline = legacy
+        data.legacyBaselineEndedAt = Date()
         data.startedAt = legacy.startedAt
         save()
         AppLogger.shared.info("stats.legacyImport", "Imported legacy playback stats as lifetime baseline", metadata: [

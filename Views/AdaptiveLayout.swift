@@ -78,6 +78,38 @@ struct AdaptiveEditorialMetrics: Equatable {
         AdaptiveLayoutMetrics.horizontalGutter(for: availableWidth)
     }
 
+    /// Scales non-text artwork, symbols and spacing in lockstep with the
+    /// editorial typography. Standard preserves the established iPhone design.
+    var contentScale: CGFloat {
+        switch band {
+        case .narrow:    return 0.92
+        case .standard:  return 1
+        case .wide:      return 1.15
+        case .expansive: return 1.3
+        }
+    }
+
+    func scaled(_ value: CGFloat) -> CGFloat { value * contentScale }
+
+    var pageSectionSpacing: CGFloat { scaled(60) }
+    var introSectionSpacing: CGFloat { scaled(16) }
+    var pageTopPadding: CGFloat { scaled(8) }
+
+    var bannerTitleFont: Font { band == .expansive ? .title3.bold() : (band == .wide ? .headline.bold() : .subheadline.bold()) }
+    var bannerDetailFont: Font { band == .expansive ? .body.weight(.medium) : (band == .wide ? .subheadline.weight(.medium) : .caption.weight(.medium)) }
+    var searchFont: Font { band == .expansive ? .title3 : (band == .wide ? .body : .subheadline) }
+    var sectionTitleFont: Font { band == .expansive ? .title.bold() : (band == .wide ? .title2.bold() : .title3.bold()) }
+    var seeAllFont: Font { band == .expansive ? .title3.weight(.semibold) : (band == .wide ? .body.weight(.semibold) : .subheadline.weight(.semibold)) }
+    var seeAllSymbolFont: Font { band == .expansive ? .body.bold() : (band == .wide ? .subheadline.bold() : .caption2.bold()) }
+
+    var chipFont: Font { band == .expansive ? .title3.weight(.semibold) : (band == .wide ? .body.weight(.semibold) : .subheadline.weight(.semibold)) }
+    var chipSymbolFont: Font { band == .expansive ? .body.weight(.semibold) : (band == .wide ? .subheadline.weight(.semibold) : .caption.weight(.semibold)) }
+    var railHeadingFont: Font { sectionTitleFont }
+    var railHeadingSymbolFont: Font { band == .expansive ? .title.bold() : (band == .wide ? .title2.weight(.semibold) : .title3.weight(.semibold)) }
+    var shelfTitleFont: Font { band == .expansive ? .body.weight(.semibold) : (band == .wide ? .subheadline.weight(.semibold) : .caption.weight(.semibold)) }
+    var shelfMetadataFont: Font { band == .expansive ? .subheadline : (band == .wide ? .caption : .caption2) }
+    var shelfRankFont: Font { band == .expansive ? .subheadline.bold() : (band == .wide ? .caption.bold() : .caption2.bold()) }
+
     var shelfArtworkSize: CGFloat {
         switch band {
         case .narrow:    return 112
@@ -100,8 +132,8 @@ struct AdaptiveEditorialMetrics: Equatable {
         switch band {
         case .narrow:    return 132
         case .standard:  return 148
-        case .wide:      return 164
-        case .expansive: return 180
+        case .wide:      return min(max(heroCardHeight - 40, 196), 236)
+        case .expansive: return min(max(heroCardHeight - 44, 260), 316)
         }
     }
 
@@ -109,10 +141,37 @@ struct AdaptiveEditorialMetrics: Equatable {
         switch band {
         case .narrow:    return 120
         case .standard:  return 140
-        case .wide:      return 156
-        case .expansive: return 176
+        case .wide:      return min(max(featureCardHeight - 40, 190), 220)
+        case .expansive: return min(max(featureCardHeight - 44, 250), 296)
         }
     }
+
+    var heroContentSpacing: CGFloat { band == .expansive ? 22 : (band == .wide ? 18 : 14) }
+    var heroTextSpacing: CGFloat { band == .expansive ? 8 : (band == .wide ? 6 : 4) }
+    var heroContentPadding: CGFloat { band == .expansive ? 22 : (band == .wide ? 20 : 18) }
+    var heroRankFont: Font { band == .expansive ? .title3.bold() : (band == .wide ? .headline.bold() : .caption.bold()) }
+    var heroTitleFont: Font { band == .expansive ? .title.bold() : (band == .wide ? .title2.bold() : .headline.bold()) }
+    var heroMetadataFont: Font { band == .expansive ? .title3 : (band == .wide ? .body : .caption) }
+    var heroDetailFont: Font { band == .expansive ? .body.weight(.semibold) : (band == .wide ? .subheadline.weight(.semibold) : .caption2.weight(.semibold)) }
+    var heroTitleLineLimit: Int { band == .expansive ? 4 : 3 }
+
+    var heroPlaceholderIconSize: CGFloat { scaled(36) }
+    var heroArtworkCornerRadius: CGFloat { scaled(18) }
+    var heroCardCornerRadius: CGFloat { scaled(22) }
+    var heroGhostRankSize: CGFloat { scaled(230) }
+    var heroGhostRankOffset: CGSize { CGSize(width: scaled(18), height: -scaled(34)) }
+    var heroRankHorizontalPadding: CGFloat { scaled(9) }
+    var heroRankVerticalPadding: CGFloat { scaled(4) }
+    var carouselDotClearance: CGFloat { scaled(36) }
+
+    var featureContentSpacing: CGFloat { band == .expansive ? 22 : (band == .wide ? 18 : 16) }
+    var featureTextSpacing: CGFloat { band == .expansive ? 8 : (band == .wide ? 7 : 6) }
+    var featureContentPadding: CGFloat { band == .expansive ? 24 : (band == .wide ? 22 : 20) }
+    var featureRankFont: Font { band == .expansive ? .title3.bold() : (band == .wide ? .headline.bold() : .caption.bold()) }
+    var featureTitleFont: Font { band == .expansive || band == .wide ? .title.bold() : .title3.bold() }
+    var featureMetadataFont: Font { band == .expansive ? .title3 : (band == .wide ? .headline : .subheadline) }
+    var featureDetailFont: Font { band == .expansive ? .body.weight(.semibold) : (band == .wide ? .subheadline.weight(.semibold) : .caption.weight(.semibold)) }
+    var featureTitleLineLimit: Int { band == .expansive ? 3 : 2 }
 
     var compactArtworkSize: CGFloat {
         switch band {
@@ -123,6 +182,14 @@ struct AdaptiveEditorialMetrics: Equatable {
         }
     }
 
+    var shelfCornerRadius: CGFloat { scaled(14) }
+    var shelfPlaceholderIconSize: CGFloat { scaled(26) }
+    var shelfTextSpacing: CGFloat { scaled(6) }
+    var shelfRankHorizontalPadding: CGFloat { scaled(7) }
+    var shelfRankVerticalPadding: CGFloat { scaled(3) }
+    var shelfRankInset: CGFloat { scaled(6) }
+    var seeAllTileSymbolSize: CGFloat { scaled(30) }
+
     /// Height for the card itself. The aspect ratio governs normal phone sizes;
     /// the clamp prevents a single hero from consuming an entire wide viewport.
     var heroCardHeight: CGFloat {
@@ -131,7 +198,7 @@ struct AdaptiveEditorialMetrics: Equatable {
     }
 
     /// Includes clearance for the page-control dots beneath a hero card.
-    var heroCarouselHeight: CGFloat { heroCardHeight + 36 }
+    var heroCarouselHeight: CGFloat { heroCardHeight + carouselDotClearance }
 
     var featureCardHeight: CGFloat {
         let cardWidth = max(availableWidth - (horizontalGutter * 2), 0)
@@ -217,6 +284,61 @@ private struct AdaptivePageContentModifier: ViewModifier {
     }
 }
 
+// AI CONTEXT — Navigation-heavy modal surfaces need different presentation
+// ownership from compact controls. iPhone keeps the familiar sheet gesture;
+// regular-width iPad and Mac windows receive a full navigation canvas so pages
+// pushed from Menu or Up Next do not inherit an undersized form-sheet frame.
+// Do not use this for small confirmation, picker or share sheets.
+private struct AdaptiveNavigationPresentationModifier<Presented: View>: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    @Binding var isPresented: Bool
+    let onDismiss: (() -> Void)?
+    let presentedContent: () -> Presented
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if horizontalSizeClass == .regular {
+            content.fullScreenCover(
+                isPresented: $isPresented,
+                onDismiss: onDismiss,
+                content: presentedContent
+            )
+        } else {
+            content.sheet(
+                isPresented: $isPresented,
+                onDismiss: onDismiss,
+                content: presentedContent
+            )
+        }
+    }
+}
+
+private struct AdaptiveItemNavigationPresentationModifier<Item: Identifiable, Presented: View>: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    @Binding var item: Item?
+    let onDismiss: (() -> Void)?
+    let presentedContent: (Item) -> Presented
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if horizontalSizeClass == .regular {
+            content.fullScreenCover(
+                item: $item,
+                onDismiss: onDismiss,
+                content: presentedContent
+            )
+        } else {
+            content.sheet(
+                item: $item,
+                onDismiss: onDismiss,
+                content: presentedContent
+            )
+        }
+    }
+}
+
 extension View {
     /// Caps the inner reading measure while leaving its parent background,
     /// safe-area treatment and scroll container free to fill the viewport.
@@ -230,5 +352,33 @@ extension View {
     /// backgrounds, separators and scrolling chrome.
     func adaptivePageContent(_ style: AdaptiveContentStyle) -> some View {
         modifier(AdaptivePageContentModifier(style: style))
+    }
+
+    /// Presents page-like navigation at an appropriate scale: a sheet on
+    /// compact iPhone layouts and a full canvas on regular-width iPad/Mac.
+    func adaptiveNavigationPresentation<Presented: View>(
+        isPresented: Binding<Bool>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> Presented
+    ) -> some View {
+        modifier(AdaptiveNavigationPresentationModifier(
+            isPresented: isPresented,
+            onDismiss: onDismiss,
+            presentedContent: content
+        ))
+    }
+
+    /// Identifiable-item counterpart used by page routes whose destination is
+    /// not known until the user selects an episode or podcast.
+    func adaptiveNavigationPresentation<Item: Identifiable, Presented: View>(
+        item: Binding<Item?>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping (Item) -> Presented
+    ) -> some View {
+        modifier(AdaptiveItemNavigationPresentationModifier(
+            item: item,
+            onDismiss: onDismiss,
+            presentedContent: content
+        ))
     }
 }

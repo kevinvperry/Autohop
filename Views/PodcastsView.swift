@@ -219,7 +219,9 @@ struct PodcastsView: View {
         } message: {
             Text(persistenceErrorMessage ?? "Autohop will retry the save.")
         }
-        .sheet(isPresented: $showMenu) { MenuSheetView() }
+        .adaptiveNavigationPresentation(isPresented: $showMenu) {
+            MenuSheetView()
+        }
         .navigationDestination(isPresented: $showDiscover) { DiscoverView() }
         .fileImporter(
             isPresented: $showOPMLImporter,

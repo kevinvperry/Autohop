@@ -70,7 +70,9 @@ import Combine
 // (piggyback vs. the flush reason) so the log shows why a push went out. Local-DB writes that were once `try?`-swallowed now go
 // through runDB() and log failures. ERROR-level sync events use
 // alwaysPersist:true so they survive even when the Diagnostics toggle is off —
-// since this is a since-launch backup feature, a user reporting "my data didn't
+// Pull diagnostics are privacy-safe batch summaries by record type; individual
+// record identifiers are verbose-only and never forced into routine exports.
+// Since this is a since-launch backup feature, a user reporting "my data didn't
 // sync" must leave a trace. Verbosity is "balanced": batch summaries, not one
 // line per record. Stats sync conflicts are enriched with device/day identity
 // and tracked per recordName; repeated conflicts produce sync.conflictStorm so
@@ -149,6 +151,23 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     private var cancellables = Set<AnyCancellable>()
     private var quarantinedRecordKeys = Set<QuarantinedRecordKey>()
     private var conflictTrackers: [String: ConflictTracker] = [:]
+    // AI CONTEXT — Privacy-safe fetch attribution. CKSyncEngine owns the opaque
+    // change token; we fingerprint its serialized state rather than logging it.
+    // A keyed stack plus page/material-change totals distinguishes legitimate
+    // paging from replay loops without exposing record identifiers. CKSyncEngine
+    // can nest fetch callbacks; one global "active" ID caused the inner cycle
+    // to overwrite its predecessor and then be completed twice.
+    private struct FetchCycleDiagnostics {
+        let id: Int
+        let stateBefore: String
+        var page = 0
+        var records = 0
+        var materialChanges = 0
+    }
+    private var fetchCycleSequence = 0
+    private var activeFetchCycles: [FetchCycleDiagnostics] = []
+    private var lastStateFingerprint = "none"
+    private var lastStatePersisted = false
 
     /// Slow-lane (history/stats) push debounce. Batches a playback session's
     /// continuous stats/history churn into roughly one CloudKit push per minute;
@@ -279,6 +298,10 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
 
     private func activateEngine() {
         let restoredState = loadState()
+        if let restoredState, let data = try? JSONEncoder().encode(restoredState) {
+            lastStateFingerprint = Self.stableFingerprint(data)
+            lastStatePersisted = true
+        }
         let configuration = CKSyncEngine.Configuration(
             database: container.privateCloudDatabase,
             stateSerialization: restoredState,
@@ -861,16 +884,62 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         switch event {
         case .stateUpdate(let event):
-            saveState(event.stateSerialization)
+            let result = saveState(event.stateSerialization)
+            lastStateFingerprint = result.fingerprint
+            lastStatePersisted = result.persisted
         case .accountChange(let event):
             await handleAccountChange(event)
         case .fetchedRecordZoneChanges(let event):
             await handleFetchedChanges(event)
         case .sentRecordZoneChanges(let event):
             await handleSentChanges(event)
+        case .willFetchChanges:
+            fetchCycleSequence += 1
+            let cycle = FetchCycleDiagnostics(
+                id: fetchCycleSequence,
+                stateBefore: lastStateFingerprint
+            )
+            activeFetchCycles.append(cycle)
+            logger.info("sync.fetchCycleStarted", "CKSyncEngine fetch cycle started", metadata: [
+                "cycle": "\(cycle.id)",
+                "stateBefore": cycle.stateBefore,
+                "overlapDepth": "\(activeFetchCycles.count)"
+            ])
+        case .willFetchRecordZoneChanges:
+            if !activeFetchCycles.isEmpty {
+                activeFetchCycles[activeFetchCycles.count - 1].page += 1
+            }
+        case .didFetchRecordZoneChanges:
+            let cycle = activeFetchCycles.last
+            logger.info("sync.fetchPageCompleted", "CKSyncEngine record-zone page completed", metadata: [
+                "cycle": "\(cycle?.id ?? 0)",
+                "page": "\(cycle?.page ?? 0)",
+                "recordsInCycle": "\(cycle?.records ?? 0)",
+                "materialChangesInCycle": "\(cycle?.materialChanges ?? 0)",
+                "state": lastStateFingerprint,
+                "statePersisted": "\(lastStatePersisted)"
+            ])
+        case .didFetchChanges:
+            guard let cycle = activeFetchCycles.popLast() else {
+                logger.warning(
+                    "sync.fetchCycleUnbalanced",
+                    "CKSyncEngine completed a fetch without a matching start",
+                    metadata: ["stateAfter": lastStateFingerprint],
+                    alwaysPersist: true
+                )
+                break
+            }
+            logger.info("sync.fetchCycleCompleted", "CKSyncEngine fetch cycle completed", metadata: [
+                "cycle": "\(cycle.id)",
+                "pages": "\(cycle.page)",
+                "records": "\(cycle.records)",
+                "materialChanges": "\(cycle.materialChanges)",
+                "unchanged": "\(max(cycle.records - cycle.materialChanges, 0))",
+                "stateAfter": lastStateFingerprint,
+                "statePersisted": "\(lastStatePersisted)",
+                "remainingOverlapDepth": "\(activeFetchCycles.count)"
+            ], alwaysPersist: true)
         case .fetchedDatabaseChanges, .sentDatabaseChanges,
-             .willFetchChanges, .didFetchChanges,
-             .willFetchRecordZoneChanges, .didFetchRecordZoneChanges,
              .willSendChanges, .didSendChanges:
             break
         @unknown default:
@@ -1065,8 +1134,12 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         // refresh treadmill running the whole time the stream drained.
         suppressPerRecordHistoryNotify = true
         historyChangedDuringSuppressedBatch = false
+        var appliedByType: [String: Int] = [:]
+        var effects: [RemoteApplyEffect: Int] = [:]
         for modification in event.modifications {
-            await applyRemote(record: modification.record)
+            appliedByType[modification.record.recordType, default: 0] += 1
+            let effect = await applyRemote(record: modification.record)
+            effects[effect, default: 0] += 1
         }
         suppressPerRecordHistoryNotify = false
         if historyChangedDuringSuppressedBatch {
@@ -1075,38 +1148,63 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         }
         await MainActor.run { subscriptionStore.endChangeNotificationCoalescing() }
         guard !event.modifications.isEmpty || !event.deletions.isEmpty else { return }
+        let materiallyChanged = effects[.changed, default: 0]
+        if !activeFetchCycles.isEmpty {
+            activeFetchCycles[activeFetchCycles.count - 1].records += event.modifications.count + event.deletions.count
+            activeFetchCycles[activeFetchCycles.count - 1].materialChanges += materiallyChanged
+        }
+        let cycle = activeFetchCycles.last
         logger.info("sync.fetched", "Applied remote changes", metadata: [
             "applied": "\(event.modifications.count)",
-            "deletions": "\(event.deletions.count)"
+            "deletions": "\(event.deletions.count)",
+            "episodeStates": "\(appliedByType[CloudKitSync.episodeRecordType, default: 0])",
+            "history": "\(appliedByType[CloudKitSync.historyRecordType, default: 0])",
+            "subscriptions": "\(appliedByType[CloudKitSync.subscriptionRecordType, default: 0])",
+            "queueSnapshots": "\(appliedByType[CloudKitSync.queueSnapshotRecordType, default: 0])",
+            "cycle": "\(cycle?.id ?? 0)",
+            "page": "\(cycle?.page ?? 0)",
+            "materialChanged": "\(materiallyChanged)",
+            "unchanged": "\(effects[.unchanged, default: 0])",
+            "rejected": "\(effects[.rejected, default: 0])",
+            "state": lastStateFingerprint,
+            "statePersisted": "\(lastStatePersisted)"
         ])
+    }
+
+    private enum RemoteApplyEffect: Hashable {
+        case changed
+        case unchanged
+        case rejected
     }
 
     /// Applies a server record to the local store and caches its system fields.
     /// Shared by the fetch path and the serverRecordChanged conflict path.
-    private func applyRemote(record: CKRecord) async {
+    @discardableResult
+    private func applyRemote(record: CKRecord) async -> RemoteApplyEffect {
         let name = record.recordID.recordName
         switch record.recordType {
         case CloudKitSync.episodeRecordType:
             guard let remote = CloudKitSync.episodeSyncState(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
-            await MainActor.run { _ = subscriptionStore.applyRemoteEpisodeState(remote) }
+            let changed = await MainActor.run { subscriptionStore.applyRemoteEpisodeState(remote) }
             runDB("storeEpisodeSystemFields", metadata: ["syncKey": remote.syncKey]) {
                 try self.database?.storeEpisodeSystemFields(Self.systemFields(of: record), syncKey: remote.syncKey)
             }
-            logger.info("sync.episodeStateReceived", "Applied episode state received from iCloud", metadata: [
+            logger.verbose("sync.episodeStateReceived", "Applied episode state received from iCloud", metadata: [
                 "syncKey": remote.syncKey,
                 "subscriptionID": remote.subscriptionID.uuidString,
                 "guid": remote.guid,
                 "playedState": String(describing: remote.playedState),
                 "wasCompleted": "\(remote.wasCompleted)"
-            ], alwaysPersist: true)
+            ])
+            return changed ? .changed : .unchanged
 
         case CloudKitSync.subscriptionRecordType:
             guard let remote = CloudKitSync.subscriptionSyncState(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
             let outcome = await MainActor.run { subscriptionStore.applyRemoteSubscriptionState(remote) }
             runDB("storeSubscriptionSystemFields", metadata: ["id": remote.subscriptionID.uuidString]) {
@@ -1118,12 +1216,15 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     "feedHost": state.feedURL.host ?? "unknown"
                 ])
                 await onSubscriptionNeedsMaterialization?(state)
+                return .changed
             }
+            if case .unchanged = outcome { return .unchanged }
+            return .changed
 
         case CloudKitSync.subscriptionOrderRecordType:
             guard let remote = CloudKitSync.subscriptionOrder(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
             var adopted = false
             runDB("saveSyncedSubscriptionOrder", metadata: [
@@ -1139,12 +1240,14 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     subscriptionStore.applyRemoteSubscriptionOrder(remote)
                 }
             }
+            return adopted ? .changed : .unchanged
 
         case CloudKitSync.historyRecordType:
             guard let remote = CloudKitSync.historyEntry(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
+            let previousHistory = try? database?.historyEntry(id: remote.id)
             if let onRemoteHistoryEntry {
                 // iOS: the app layer (ListeningHistoryStore) merges with
                 // record-level LWW and persists the clean row itself.
@@ -1166,24 +1269,25 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             runDB("storeHistorySystemFields", metadata: ["id": remote.id]) {
                 try self.database?.storeHistorySystemFields(Self.systemFields(of: record), id: remote.id)
             }
-            logger.info("sync.historyReceived", "Applied listening history received from iCloud", metadata: [
+            logger.verbose("sync.historyReceived", "Applied listening history received from iCloud", metadata: [
                 "id": remote.id,
                 "episodeID": remote.episodeID.uuidString,
                 "position": String(format: "%.1f", remote.lastPositionSeconds),
                 "playbackSpeed": remote.playbackSpeed.map { String(format: "%.2f", $0) } ?? "unset",
                 "status": String(describing: remote.status),
                 "lastListenedAt": ISO8601DateFormatter().string(from: remote.lastListenedAt)
-            ], alwaysPersist: true)
+            ])
             if suppressPerRecordHistoryNotify {
-                historyChangedDuringSuppressedBatch = true
+                if previousHistory != remote { historyChangedDuringSuppressedBatch = true }
             } else {
-                await onRemoteHistoryChanged?()
+                if previousHistory != remote { await onRemoteHistoryChanged?() }
             }
+            return previousHistory != remote ? .changed : .unchanged
 
         case CloudKitSync.queueSnapshotRecordType:
             guard let remote = CloudKitSync.queueSnapshot(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
             // Persisted by the ENGINE directly (per the 2026-07-04 lesson from
             // the history-record bug: never make a record type's persistence
@@ -1200,15 +1304,16 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             if adopted {
                 await onRemoteQueueSnapshotChanged?()
             }
+            return adopted ? .changed : .unchanged
 
         case CloudKitSync.queueCommandRecordType:
             guard let request = CloudKitSync.queuePlayNextRequest(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
-            guard let onRemotePlayNextRequest else { return }
+            guard let onRemotePlayNextRequest else { return .unchanged }
             let consumed = await onRemotePlayNextRequest(request)
-            guard consumed else { return }
+            guard consumed else { return .unchanged }
             do {
                 _ = try await container.privateCloudDatabase.deleteRecord(withID: record.recordID)
                 logger.info("sync.queueCommandConsumed", "Applied and removed companion queue command", metadata: [
@@ -1225,11 +1330,12 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     "error": String(describing: error)
                 ], alwaysPersist: true)
             }
+            return .changed
 
         case CloudKitSync.statsRecordType:
             guard let (deviceID, day) = CloudKitSync.statsPartition(from: record) else {
                 logDecodeFailure(record)
-                return
+                return .rejected
             }
             if deviceID == DeviceIdentity.current {
                 // This is our own per-device partition, often delivered as the
@@ -1242,18 +1348,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 ]) {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: day.dayKey)
                 }
-                return
+                return .unchanged
             }
             runDB("applyRemoteStatsPartition", metadata: ["device": deviceID]) {
                 try self.database?.applyRemoteStatsPartition(deviceID: deviceID, day: day)
             }
             await onRemoteStatsChanged?()
+            return .changed
 
         default:
             logger.warning("sync.unknownRecordType", "Ignored remote record of unknown type", metadata: [
                 "type": record.recordType,
                 "name": name
             ])
+            return .rejected
         }
     }
 
@@ -1631,23 +1739,52 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         }
     }
 
-    private func saveState(_ serialization: CKSyncEngine.State.Serialization) {
-        guard let stateURL else { return }
+    private func saveState(_ serialization: CKSyncEngine.State.Serialization) -> (fingerprint: String, persisted: Bool) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(serialization)
+        } catch {
+            logger.warning("sync.stateEncodeFailed", "Could not encode sync state token", metadata: [
+                "error": "\(error)"
+            ], alwaysPersist: true)
+            return ("encodeFailed", false)
+        }
+        let fingerprint = Self.stableFingerprint(data)
+        guard let stateURL else { return (fingerprint, false) }
         do {
             try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(serialization)
             try data.write(to: stateURL, options: [.atomic])
+            return (fingerprint, true)
         } catch {
             // Losing the token only forces a fuller fetch next launch.
             logger.warning("sync.stateSaveFailed", "Could not persist sync state token", metadata: [
                 "error": "\(error)"
             ])
+            return (fingerprint, false)
         }
     }
 
+    /// Stable, non-reversible fingerprint for an opaque serialized CKSyncEngine
+    /// state. It exposes token advancement without exporting CloudKit tokens.
+    private static func stableFingerprint(_ data: Data) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", hash)
+    }
+
     private static func defaultStateURL() -> URL? {
-        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        #if os(tvOS)
+        // The token is regenerable and belongs beside the TV's other purgeable
+        // local projections. Caches is reliably writable/exported on hardware.
+        return try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("Autohop/cloudkit-sync-state.json")
+        #else
+        return try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("Autohop/cloudkit-sync-state.json")
+        #endif
     }
 
     // MARK: - CKRecord system-field helpers

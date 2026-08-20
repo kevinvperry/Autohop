@@ -25,4 +25,9 @@ final class TVBootstrapCoordinator {
         case .empty: "No library yet"
         }
     }
+
+    var isLoading: Bool {
+        if case .loading = state { return true }
+        return false
+    }
 }

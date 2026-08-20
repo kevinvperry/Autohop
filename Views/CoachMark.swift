@@ -8,8 +8,12 @@ import SwiftUI
 // retains requestTip/dismissActiveTip compatibility façades. Views call
 // `onboardingCoordinator.requestTip(_:)` on first arrival at
 // their surface; `CoachMarkOverlay` (mounted once in RootView, behind sheets)
-// renders the active tip as a bottom card. Everything a tip teaches also lives
-// permanently in Menu → Support, so dismissing loses nothing.
+// renders the active tip as a bottom card. The overlay scrolls only when short
+// viewports or large Dynamic Type make the whole card taller than the space
+// offered by RootView; this keeps both the copy and dismissal action reachable
+// without introducing fragile control-specific anchor coordinates. Everything
+// a tip teaches also lives permanently in Menu → Support, so dismissing loses
+// nothing.
 
 enum OnboardingTip: String, CaseIterable {
     case priorityStack
@@ -66,14 +70,23 @@ struct CoachMarkOverlay: View {
 
     var body: some View {
         if let tip = onboardingCoordinator.activeTip {
-            VStack {
-                Spacer()
-                card(tip)
-                    .adaptiveContentWidth(.prose)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 28)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            ScrollView(.vertical) {
+                VStack {
+                    Spacer(minLength: 16)
+                    card(tip)
+                        .adaptiveContentWidth(.prose)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 28)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                // A viewport-relative minimum keeps an ordinary coach mark at
+                // the bottom. When accessibility text makes the card taller,
+                // the content grows naturally and the ScrollView makes the
+                // complete card—including “Got it”—reachable.
+                .containerRelativeFrame(.vertical, alignment: .bottom)
             }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
             .animation(.spring(response: 0.4, dampingFraction: 0.82), value: onboardingCoordinator.activeTip)
         }
     }

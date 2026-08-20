@@ -19,9 +19,17 @@ import UIKit
 // publishes them). Event handlers (skip buttons) may read the AppState proxy.
 // STAGE 13 OBSERVATION: episode/playing state, queue projection, and
 // subscription metadata are observed from PlaybackCoordinator,
+// The Details panel ends with the iOS-family Review in Apple Podcasts action,
+// immediately below its metadata-card grid. It resolves the current episode's
+// subscription by exact RSS identity through ApplePodcastsReviewButton.
 // QueueCoordinator, and SubscriptionStore. AppState remains only for
 // cross-domain player commands and compatibility state not yet assigned to a
 // dedicated observable owner.
+// FULLSCREEN VIDEO STATE (2026-08-13): capture the AVPlayer's live effective
+// rate and play/pause state before presenting the full-screen cover, then
+// restore both after AVKit attaches. AVKit may call plain play() while appearing,
+// so defaultRate must be aligned too. This transition is layout-independent and
+// must remain valid on iPhone, iPad, Mac-compatible and future folding widths.
 // RESTORED-SCRUBBER FIX (2026-07-12): sliderValue is drag-local @State and
 // therefore starts at zero even when AppState restores PlaybackClock before this
 // permanently-mounted view appears. onAppear and current-episode changes call
@@ -115,6 +123,8 @@ struct PlayerView: View {
     @State private var showArchiveConfirmation = false
     @State private var showShareSheet = false
     @State private var showFullScreenVideo = false
+    @State private var fullScreenVideoRate: Float = 1
+    @State private var fullScreenVideoWasPlaying = false
     @State private var pictureInPictureStartToken = 0
     @State private var isPlayerVisible = false
     @State private var audioRouteName = PlayerView.currentAudioRouteName()
@@ -233,8 +243,10 @@ struct PlayerView: View {
                 selectedPanel = PlayerPanel.nowPlaying.rawValue
             }
         }
-        .sheet(isPresented: $showMenu) { MenuSheetView() }
-        .sheet(isPresented: $showQueue, onDismiss: {
+        .adaptiveNavigationPresentation(isPresented: $showMenu) {
+            MenuSheetView()
+        }
+        .adaptiveNavigationPresentation(isPresented: $showQueue, onDismiss: {
             // "Replace Up Next": open the target page only after the Up Next sheet
             // has fully dismissed — presenting during dismissal is dropped by UIKit.
             if let id = queueRequestedSettingsID {
@@ -256,13 +268,13 @@ struct PlayerView: View {
                 }
             )
         }
-        .sheet(item: $podcastSettingsRoute) { route in
+        .adaptiveNavigationPresentation(item: $podcastSettingsRoute) { route in
             NavigationStack {
                 SubscriptionSettingsView(subscriptionID: route.id)
             }
             .environmentObject(appState)
         }
-        .sheet(item: $podcastDetailRoute) { route in
+        .adaptiveNavigationPresentation(item: $podcastDetailRoute) { route in
             NavigationStack {
                 PodcastDetailView(subscriptionID: route.id)
             }
@@ -300,8 +312,7 @@ struct PlayerView: View {
                 }
                 .background(Color.black.ignoresSafeArea())
                 .onAppear {
-                    VideoOrientationController.allowVideoOrientations()
-                    videoPlayer.play()
+                    restoreFullScreenPlaybackState(on: videoPlayer)
                 }
                 .onDisappear {
                     VideoOrientationController.restorePortrait()
@@ -311,6 +322,7 @@ struct PlayerView: View {
         .sheet(isPresented: $showAudioControlMenu) {
             AudioControlsSheetView()
                 .environmentObject(appState)
+                .environmentObject(settingsViewModel)
         }
         .sheet(isPresented: $showSleepTimer) {
             SleepTimerSheetView(sleepTimer: sleepTimerService)
@@ -777,6 +789,17 @@ struct PlayerView: View {
             .accessibilityLabel("Mini Player")
 
             Button {
+                // Unlock supported orientations before SwiftUI begins the cover
+                // presentation. Forcing a geometry change from the presented
+                // view's onAppear can race UIKit and crash immediately.
+                VideoOrientationController.allowVideoOrientations()
+                if let player = playbackCoordinator.videoPlayer {
+                    fullScreenVideoWasPlaying = player.rate > 0
+                    fullScreenVideoRate = validVideoRate(
+                        player.rate > 0 ? player.rate : player.defaultRate
+                    )
+                    player.defaultRate = fullScreenVideoRate
+                }
                 showFullScreenVideo = true
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -787,6 +810,28 @@ struct PlayerView: View {
             }
             .accessibilityLabel("Full Screen Video")
         }
+    }
+
+    private func restoreFullScreenPlaybackState(on player: AVPlayer) {
+        let rate = validVideoRate(fullScreenVideoRate)
+        player.defaultRate = rate
+        guard fullScreenVideoWasPlaying else {
+            player.pause()
+            return
+        }
+
+        // AVPlayerViewController may issue its own plain play() while becoming
+        // visible. Reapply after the presentation transaction so its final
+        // state retains the podcast's effective speed (including overrides).
+        Task { @MainActor in
+            await Task.yield()
+            player.defaultRate = rate
+            player.playImmediately(atRate: rate)
+        }
+    }
+
+    private func validVideoRate(_ rate: Float) -> Float {
+        rate.isFinite && rate > 0 ? rate : 1
     }
 
     // MARK: - Chapter strip
@@ -1021,7 +1066,10 @@ struct PlayerView: View {
                     showAudioControlMenu = true
                 } label: {
                     // Mirrors the sleep timer button: white while Shared Listening is on.
-                    playerActionIcon("slider.horizontal.3", highlighted: appState.sharedListeningActive)
+                    playerActionIcon(
+                        "slider.horizontal.3",
+                        highlighted: settingsViewModel.appSettings.sharedListeningActive
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(episode == nil)
@@ -1266,7 +1314,16 @@ struct PlayerView: View {
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 30)
+                    .padding(.bottom, 12)
+
+                    if let sub {
+                        ApplePodcastsReviewButton(
+                            showTitle: sub.title,
+                            feedURL: sub.feedURL
+                        )
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 30)
+                    }
                 }
             } else {
                 ContentUnavailableView("No Episode Playing", systemImage: "waveform")
@@ -2176,10 +2233,14 @@ private struct ArchiveConfirmationSheet: View {
 // temporary override (1x–1.3x, Trim Silence forced off, per-sub settings
 // untouched); while on, the Speed and Trim rows below are greyed out and the
 // player's sound-controls button renders white.
+// Shared Listening values MUST be read from SettingsViewModel, the observable
+// global-settings owner. AppState remains the command facade for live playback
+// side effects but intentionally does not forward settings objectWillChange.
 struct AudioControlsSheetView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
 
     private var episode: Episode? { playbackCoordinator.currentEpisode }
@@ -2226,7 +2287,9 @@ struct AudioControlsSheetView: View {
         .presentationCornerRadius(20)
     }
 
-    private var sharedListeningActive: Bool { appState.sharedListeningActive }
+    private var sharedListeningActive: Bool {
+        settingsViewModel.appSettings.sharedListeningActive
+    }
 
     // MARK: - Shared Listening Row
 
@@ -2260,7 +2323,9 @@ struct AudioControlsSheetView: View {
             if isOn {
                 Picker("", selection: Binding(
                     get: {
-                        speeds.first { abs($0 - appState.sharedListeningSpeed) < 0.01 } ?? 1.0
+                        speeds.first {
+                            abs($0 - settingsViewModel.appSettings.sharedListeningSpeed) < 0.01
+                        } ?? 1.0
                     },
                     set: { appState.updateSharedListeningSpeed($0) }
                 )) {

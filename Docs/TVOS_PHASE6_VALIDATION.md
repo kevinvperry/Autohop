@@ -20,5 +20,22 @@ Date: _not tested_
 - [ ] Cache purge and CloudKit rebuild tested
 - [ ] Product owner physical-device sign-off
 
+## Dynamic Top Shelf release gates
+
+- [ ] Signed archive embeds `AutohopTVTopShelf.appex`; app and extension have
+      the identical production App Group entitlement
+- [ ] Static fallback and dynamic rows reviewed at 1080p and 4K with Autohop in
+      the Apple TV top row
+- [ ] Continue Listening precedes Up Next; ordering, progress and final-minute
+      exclusion match the in-app Home projection
+- [ ] Select opens exact episode details from terminated and running states
+- [ ] Play/Pause starts or resumes the exact episode from terminated and running
+      states; unavailable identities show a clear non-destructive message
+- [ ] Offline, corrupt/stale snapshot and missing-artwork cases fall back safely
+- [ ] Apple TV user/account switching never exposes the prior scope's titles or
+      artwork
+- [ ] Focus, VoiceOver, Reduce Motion and rapid repeated actions are reviewed on
+      physical hardware
+
 The tvOS App Store submission feature gate must remain disabled until every box
 is complete and `Scripts/validate-tvos-release.sh --archive …` passes.

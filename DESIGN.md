@@ -13,7 +13,17 @@ subscriptions receive drag grips, Inactive rows remain fixed below them, and
 browse previews are absent from the visual/index space. Done commits once.
 The project contains distinct iPhone and Apple TV design systems. There is no
 Autohop Pro purchase or external-relay settings surface.
+tvOS follows the platform focus engine rather than pointer/drag metaphors.
+Scrollable settings provide stable nearby focus stops and avoid recomputing
+filesystem, memory, sync or artwork state during focus movement. Top Shelf
+extensions read a prebuilt local projection and never perform networking or
+image processing.
 -->
+
+> Version 1.6 build 9 tvOS interaction rule: expensive diagnostic export and
+> sync projection work must not occupy the main actor. Long operations expose
+> an immediate progress state, disable duplicate activation, and preserve focus
+> and scrolling responsiveness.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
@@ -1741,6 +1751,18 @@ Button { showSearch = true } label: {
 
 The Main Player is the root view of the app — a full-screen `ZStack` on black (`Color.black.ignoresSafeArea()`). It has no navigation bar. Three panels are swiped horizontally via `TabView(.page)` with the default index dots hidden: **Now Playing**, **Details**, and **Chapters** (only when the current episode has chapters).
 
+For video episodes, the expand control presents the existing AVPlayer through a
+SwiftUI full-screen cover. Capture its live effective rate and play/pause state
+before presentation, set `AVPlayer.defaultRate` to that rate, and restore both
+after AVKit attaches its controller. This ordering is required because AVKit may
+issue plain `play()` while appearing, which otherwise resumes at 1x. Unlock
+landscape support before starting the cover transition, but do not force a scene
+geometry update during presentation. SwiftUI exclusively owns
+`AVPlayerViewController` containment. These rules apply across responsive iPhone,
+iPad, Mac-compatible and future variable-width layouts because they do not depend
+on a fixed screen size. tvOS uses its native player surface but shares the same
+persistent-default-rate playback policy.
+
 ---
 
 ## Main Player — Top Bar
@@ -1872,6 +1894,23 @@ VStack(alignment: .center, spacing: 3) {
     .buttonStyle(.plain)
 }
 ```
+
+---
+
+## Play Instant — Interruption Boundary
+
+**AI CONTEXT — final-minute protection (2026-08-14):** Play Instant is an iOS
+automatic-download workflow and must not interrupt a current episode whose known
+remaining runtime is exactly 60 seconds or less. Compute the boundary from the
+canonical `PlaybackClock.time` and the current episode duration both before the
+warning and after its two-second delay. Keep the arrival armed within its normal
+30-minute lifetime so natural queue advancement can make it eligible against a
+later episode. An unknown or invalid duration preserves established eligibility;
+do not treat missing metadata as zero remaining. This rule is playback policy,
+not a screen-size or presentation decision, so every responsive iOS presentation
+inherits it without duplicated UI logic. tvOS does not currently expose the
+automatic-download Play Instant workflow; retain this boundary if that feature is
+later unified onto TV.
 
 ---
 
@@ -2167,6 +2206,11 @@ A `ScrollView` showing full episode metadata. Sections top to bottom:
 5. **Episode author** — `size 12, Color(white: 0.33)` (from RSS `<itunes:author>`)
 6. **`HTMLDescriptionText`** — full HTML description. `fontSize: 14`, `color: Color(white: 0.78)`, `linkColor: .purple`. `showsFirstImage: false` (image already shown above). Wrapped in a `Glass-Card` (`.glassCard(cornerRadius: 16)`, `padding 14`) with an explicit `white.opacity(0.12)` `lineWidth 0.5` border overlay, inset `padding(.horizontal, 20)`.
 7. **Meta cards grid** (`MetaCard-Details`) — two-column `LazyVGrid` of glass cards in a `GlassEffectContainer(spacing: 8)`
+8. **Review in Apple Podcasts** — iOS-family-only full-width glass card directly
+   beneath the metadata grid. Uses `star.bubble`, an external-link affordance and
+   honest guidance to scroll to Ratings & Reviews. While resolving the current
+   subscription it displays progress in place; a failed exact-feed match becomes
+   an inline orange explanation rather than opening a speculative destination.
 
 ---
 
@@ -2281,7 +2325,9 @@ A bottom sheet (`presentationDetents`) for per-subscription audio settings. Shee
 
 Sheet background: `Sheet-MaterialBackground` (`.presentationBackground(.regularMaterial)`). Drag indicator hidden; `presentationCornerRadius(20)`.
 
-**Three rows, each separated by a `Divider` indented `60 pt` from the leading edge:**
+The leading Shared Listening row contains a purple-tinted `Toggle` and reveals a 1.0×–1.3× segmented picker with `.easeInOut(duration: 0.22)`. Its displayed state—and the Player sound-controls button's active white highlight—must come from the injected observable `SettingsViewModel`; AppState is command-only and intentionally does not forward global-settings invalidations. Enabling immediately animates the switch, reveals the picker, and dims/disables the podcast Speed and Trim Silence rows. Picker taps must update their selected segment in place.
+
+**Three per-podcast rows, each separated by a `Divider` indented `60 pt` from the leading edge:**
 
 ### Speed Row
 Stepper (`−` · value · `+`) on the right. Steps through `PlaybackPreference.speedOptions` array (e.g. `0.5× … 3.0×`). Value display: `size 15, weight .bold, design .rounded`, `.monospacedDigit()`. Stepper background: `.glassCard(cornerRadius: 10)` (iOS 26 glass, `.ultraThinMaterial` fallback), buttons `44×38 pt`.
@@ -2585,7 +2631,11 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 p
 
 **Label: `Card-ShowStatsExpanded`**
 
-Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `Glass-Card` — kept as a faint solid inset rather than nested glass. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
+Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `Glass-Card` — kept as a faint solid inset rather than nested glass. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when any contributing day is apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Finished counts must come from period-filtered `DayStats.perShowEpisodesCompleted`; for pre-attribution buckets, merge the strongest retained history and sticky completed-episode evidence by enclosure identity and use the greater count to avoid double-counting migration overlap. Do not derive long-range finished counts solely from the mutable history projection. Legacy time-saved fallback must be applied per day so a mixed legacy/current range cannot discard older contributions. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
+
+## Stats Page — Accounting Integrity
+
+All time-based visuals share one source-of-truth contract: `DayStats.wallClockSeconds` is elapsed listening time, never media position. Playback adapters convert natural media progress using `mediaDelta / effectiveSpeed` before recording it. The hero, Top Shows, heatmap, monthly trend, listening clock and streak threshold must all consume the resulting daily buckets so their totals remain mutually reconcilable. Imported legacy totals remain valid for Lifetime and for a calendar range that wholly contains the baseline's known start-to-cutover interval, but must not be partially guessed across a boundary or fabricated into month, hour, or show buckets; an affected trend discloses this unattributed amount beneath the chart.
 
 ## Main Player — Sleep Schedule Prompt Overlay
 
@@ -2902,10 +2952,75 @@ Read-only browse UI, lean-back and artwork-forward (Docs/TVOS_APP_IMPLEMENTATION
 | `TVCard-Episode` | `TVEpisodeCard` | 280×280 artwork + title (2 lines) + podcast name, `.buttonStyle(.card)` |
 | `TVCard-Hero` | `TVHomeView.continueListeningSection` | Wide artwork + title/podcast/"Resume" label, the `Continue Listening` shelf's single large card |
 | `TVCard-Podcast` | `TVSubscriptionCard` | Square artwork + title, used in the Library grid (`LazyVGrid(.adaptive(minimum: 260))`) |
-| `TVCard-QueueRow` | `TVQueueRow` | Full-width row: artwork + title/podcast/duration — the tvOS analog of "List Row — Up Next Episode Row" |
+| `TVCard-QueueRow` | `TVQueueRow` | Full-width row: artwork + title/podcast + remaining time for partial playback (total runtime when untouched) — the tvOS analog of "List Row — Up Next Episode Row" |
 | `TVRow-Episode` | `TVEpisodeRow` | Title + relative date + a plain text status pill (Played/Archived/In Progress) — no swipe actions (tvOS has none); a focus-driven context menu is a later-phase option if needed |
 
 **Navigation shell:** `TabView` + `.tabViewStyle(.sidebarAdaptable)`, tvOS 18 `Tab(_:systemImage:value:)` builder (`TVMainTabView`) — this is why `AutohopTV`'s deployment target is 18.0, not the Phase 1 scaffold's 17.0 (see project.yml's inline note). Library pushes by subscription UUID (`TVRouter.libraryPath`), not the `Subscription` value, so a pushed detail page always resolves the live model instead of a stale snapshot.
 
-**Known simplification:** `Continue Listening` identifies an in-progress episode via the synced `Episode.playedState == .playing` field, not a real resume-position bar. Decomposition Stage 2 moved `ListeningHistoryStore` into shared-core Persistence, where it remains module-internal; the TV UI has not been wired to a public history reader, so physical target membership alone does not change this screen's current behavior.
+**Playback-position projection:** tvOS bulk-reads resumable synced history while
+rebuilding immutable queue rows. Views and focus updates never query the store.
+This drives remaining-time labels on Home and progress on Top Shelf.
 | Podcast hero cards | `TabView(.page)` carousel, same card style as before |
+# Apple TV First-Launch and Demo Design Rules (Version 1.6)
+
+<!-- AI CONTEXT — Stable completed states must never visually impersonate
+loading. Demo labelling is a privacy and review-integrity requirement. -->
+
+1. Branded loading is permitted only before the ten-second presentation
+   deadline or during an explicitly initiated bounded retry.
+2. Setup/empty/failure states use factual completed language and no perpetual
+   activity indicator.
+3. Explore Demo Library receives initial focus because it is immediately usable
+   without credentials; genuine iPhone/iCloud setup remains equally explicit.
+4. Demo surfaces retain Autohop's purple, spacious ten-foot grammar but display
+   a persistent Demo Library/Demo badge.
+5. Demo Exit and Reset are ordinary visible settings, never hidden gestures.
+6. Mode changes dismiss private demo playback before returning to real state.
+
+# Dynamic Apple TV Top Shelf Design Rules (Version 1.6)
+
+<!-- AI CONTEXT — tvOS owns this ten-foot system surface; the app supplies a
+small presentation model and must not reproduce an in-app player there. -->
+
+1. Use native `TVTopShelfSectionedContent` with consistently sized poster
+   artwork: live Currently Playing/Watching first, idle Continue Listening as
+   its fallback, then Up Next in exact Home order.
+2. Keep text brief and factual. The visible title combines episode and podcast;
+   descriptions, statistics, feed bodies and private diagnostics stay out.
+3. Both normal Select and Play/Pause start or resume that exact identity. Never
+   guess or silently substitute another episode; descriptions remain in-app.
+4. The current playing episode always owns the first slot regardless of queue
+   rank and is not duplicated in Up Next. While idle, Continue Listening is
+   omitted inside the final minute and deduplicated from Up Next.
+5. Use system focus, spacing, progress and accessibility behavior. The static
+   fallback is a quiet purple brand field with a compact mark and no fake UI.
+6. Dynamic content is useful enhancement, never a launch dependency: stale,
+   corrupt, empty or scope-mismatched data returns the static fallback safely.
+
+# Apple TV Diagnostic Presentation Rules (Version 1.6)
+
+<!-- AI CONTEXT — Diagnostics explain remedies without exposing personal
+listening content or becoming a performance workload. -->
+
+1. Present subsystem boundaries in execution order to identify the first
+   failed boundary rather than requiring interpretation of raw logs.
+2. Prefer outcome, count, duration, generation and age over titles or URLs.
+3. Diagnostic actions are explicit and non-destructive.
+4. Detailed evidence remains bounded and local; health inspection is on demand
+   and must not introduce a recurring SwiftUI polling loop.
+5. Every screenful of a long tvOS settings page needs a predictable focus stop.
+   Read-only health rows are focusable even though they perform no action.
+6. Clean-install setup and returning-library recovery are different states.
+   Durable local evidence keeps a returning user on branded refresh during the
+   normal sync window; it must not flash first-time onboarding.
+7. Regenerable cross-process presentation files live below the App Group's
+   Library/Caches directory. Root and cache writes are probed independently;
+   a non-nil container URL alone is not treated as proof of write permission.
+8. Permanent background-presentation failures use bounded retries. Manual user
+   diagnostics always remain able to re-probe immediately.
+9. Foreground performance metrics must be scene-aware; suspension is reported
+   separately and never ranked as a UI hang.
+10. Dynamic sectioned Top Shelf content cannot layer over the static fallback.
+    Autohop therefore carries its purple brand backdrop inside every 404×608
+    poster card, with square podcast artwork centered on top. Poster geometry
+    provides four visible choices while retaining Apple-owned focus and labels.

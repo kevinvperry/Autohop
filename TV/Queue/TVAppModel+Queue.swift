@@ -50,6 +50,20 @@ extension TVAppModel {
         set { queueModel.uniqueEpisodesByNormalizedTitle = newValue }
     }
 
+    /// Builds the canonical immutable Up Next projection with one bounded
+    /// history lookup. All queue mutation paths use this helper so remaining
+    /// time cannot become stale depending on which action rebuilt the rows.
+    func projectQueueRows(from items: [QueueModel.ResolvedQueueItem]) -> [TVQueueRowModel] {
+        let positions = subscriptionStore.savedListeningPositions(
+            forEpisodeKeys: items.map(\.episodeKey)
+        )
+        return TVQueueProjector.rows(
+            from: items,
+            subscriptionsByID: subscriptionsByID,
+            playbackPositionsByEpisodeKey: positions
+        )
+    }
+
     /// Reconciles queue/history records authored before a subscription was
     /// removed and re-added. Their subscription-scoped keys legitimately no
     /// longer match, while the same RSS GUID/title exists under the replacement
@@ -206,14 +220,14 @@ extension TVAppModel {
     }
 
     var unresolvedQueueDiagnostics: [String] {
-        queueRows.filter { !$0.isPlayable }.map { row in
+        queueRows.filter { !$0.isPlayable }.enumerated().map { offset, row in
             guard let item = upNextItems.first(where: { $0.episodeKey == row.id }) else {
-                return "\(row.title): projection missing"
+                return "Queue item \(offset + 1): projection missing"
             }
             let source = subscriptionsByID[item.subscriptionID] != nil ? "source yes" : "source no"
             let title = uniqueEpisodesByNormalizedTitle[normalizedEpisodeTitle(item.title)] != nil ? "title yes" : "title no"
             let keyKind = item.episodeKey.contains("|guid:") ? "GUID" : "legacy key"
-            return "\(row.title): \(keyKind), \(source), \(title)"
+            return "Queue item \(offset + 1): \(keyKind), \(source), \(title)"
         }
     }
 
@@ -221,7 +235,8 @@ extension TVAppModel {
         let realIDs = Set(librarySubscriptions.map(\.id))
         return (survivalKitStore.load()?.entries ?? [])
             .filter { !realIDs.contains($0.subscriptionID) }
-            .map { "\($0.title): awaiting RSS details from \($0.feedURL.host ?? "unknown")" }
+            .enumerated()
+            .map { offset, _ in "Subscription \(offset + 1): awaiting RSS details" }
     }
 
     func retryLegacyRowsWhoseSourcesArrived() {

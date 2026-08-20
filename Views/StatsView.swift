@@ -33,7 +33,14 @@ import Charts
 // listening clock (Canvas rose chart), data-downloaded card (total bytes +
 // episode count / average size, forward-only from June 2026), time-saved
 // breakdown, privacy footer.
+// Lifetime adds imported pre-bucket totals to the hero/breakdown and explicitly
+// labels that those older seconds cannot be assigned to month/hour/show charts.
 // Tapping a Top Shows or
+// drifting row expands period detail. Durable per-show completion counts come
+// from ListeningStatsStore; for buckets written before that attribution existed,
+// ShowPeriodDetail recovers the strongest available evidence from retained
+// history plus the subscription's sticky completed episodes and takes the
+// greater count without double-counting the same enclosure URL.
 // drifting-shows row expands a ShowStatsExpandedCard (per-show detail).
 // All on-device data only. Show rows use 44 pt CachedArtworkImage thumbnails so
 // stats-heavy lists share the same artwork cache variant as queues and settings.
@@ -194,6 +201,12 @@ private struct StatsContentView: View {
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
+    /// AI CONTEXT: Preserve the intentional hierarchy of the statistics hero
+    /// numbers while allowing Accessibility and Dynamic Type settings to scale
+    /// them. Fixed sizes remain appropriate for nearby decorative glyphs and
+    /// compact artwork placeholders.
+    @ScaledMetric(relativeTo: .largeTitle) private var heroValueFontSize: CGFloat = 40
+    @ScaledMetric(relativeTo: .title) private var summaryValueFontSize: CGFloat = 36
     private let forcedLastRange: StatsRange?
     // Stats opens in 7 Days by default (showingLast = false ⇒ the current week,
     // not Last Week). Changing this default is the only thing that sets the initial
@@ -360,7 +373,7 @@ private struct StatsContentView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(formattedLongDuration(summary.wallClockSeconds))
-                    .font(.system(size: 40, weight: .bold))
+                    .font(.system(size: heroValueFontSize, weight: .bold))
                     .foregroundStyle(.purple)
                     .contentTransition(.numericText())
             }
@@ -496,6 +509,11 @@ private struct StatsContentView: View {
                     }
                     .frame(height: 170)
                 }
+                if summary.legacyUnbucketedListeningSeconds > 0 {
+                    Text("The selected total also includes \(formattedLongDuration(summary.legacyUnbucketedListeningSeconds)) from before daily chart tracking began.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity)
@@ -607,6 +625,9 @@ private struct StatsContentView: View {
                                 detail: ShowPeriodDetail(
                                     subscriptionID: show.id,
                                     entries: historyStore.entries,
+                                    episodes: UUID(uuidString: show.id).flatMap {
+                                        subscriptionStore.subscription(id: $0)?.episodes
+                                    } ?? [],
                                     summary: summary,
                                     since: range.sinceDate(last: isLast),
                                     until: range.untilDate(last: isLast)
@@ -682,6 +703,9 @@ private struct StatsContentView: View {
                                     detail: ShowPeriodDetail(
                                         subscriptionID: show.subscriptionID.uuidString,
                                         entries: historyStore.entries,
+                                        episodes: subscriptionStore.subscription(
+                                            id: show.subscriptionID
+                                        )?.episodes ?? [],
                                         summary: summary,
                                         since: since,
                                         until: nil
@@ -836,7 +860,7 @@ private struct StatsContentView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(formattedBytes(summary.bytesDownloaded))
-                            .font(.system(size: 36, weight: .bold))
+                            .font(.system(size: summaryValueFontSize, weight: .bold))
                             .foregroundStyle(.cyan)
                             .contentTransition(.numericText())
                         Text("total downloaded")
@@ -1162,9 +1186,8 @@ private struct TopShowRow: View {
 
 /// Per-show numbers for the expandable detail card, derived from listening
 /// history entries (episode outcomes, cadence) plus the period summary (time
-/// listened, per-show time saved). Time saved uses the tracked per-show value
-/// when the period has any; days recorded before per-show tracking existed
-/// fall back to apportioning the period total by listening share ("est.").
+/// listened, per-show time saved). Time saved is resolved day by day so mixed
+/// legacy/current ranges retain apportioned legacy contributions ("est.").
 private struct ShowPeriodDetail {
     var seconds: TimeInterval = 0
     var episodesCompleted = 0
@@ -1182,12 +1205,14 @@ private struct ShowPeriodDetail {
     init(
         subscriptionID: String,
         entries: [ListeningHistoryEntry],
+        episodes: [Episode],
         summary: ListeningStatsSummary,
         since: Date?,
         until: Date? = nil
     ) {
         var percents: [Double] = []
         var releaseDelays: [TimeInterval] = []
+        var completedEvidence = Set<String>()
         for entry in entries where entry.subscriptionID.uuidString == subscriptionID {
             if let since, entry.lastListenedAt < since { continue }
             if let until, entry.lastListenedAt >= until { continue }
@@ -1202,11 +1227,28 @@ private struct ShowPeriodDetail {
                 if delay >= 0 { releaseDelays.append(delay) }
             }
             switch ShowEngagementAnalyzer.classify(entry) {
-            case .completed: episodesCompleted += 1
+            case .completed:
+                completedEvidence.insert(Self.identity(for: entry))
             case .abandoned: episodesAbandoned += 1
             case .archivedUnplayed, nil: break
             }
         }
+        for episode in episodes where episode.subscriptionID.uuidString == subscriptionID
+            && episode.wasCompleted {
+            guard let completedAt = episode.lastPlayedAt else { continue }
+            if let since, completedAt < since { continue }
+            if let until, completedAt >= until { continue }
+            completedEvidence.insert(Self.identity(for: episode))
+            lastListenedAt = max(lastListenedAt ?? .distantPast, completedAt)
+        }
+        // New daily buckets are authoritative and survive history retention.
+        // Existing installations have no per-show attribution on older buckets,
+        // so retain the larger independently evidenced count. Both sources refer
+        // to the same outcomes; summing would double-count the migration overlap.
+        episodesCompleted = max(
+            summary.perShowEpisodesCompleted[subscriptionID] ?? 0,
+            completedEvidence.count
+        )
         if !percents.isEmpty {
             averageCompletionPercent = percents.reduce(0, +) / Double(percents.count)
         }
@@ -1218,15 +1260,29 @@ private struct ShowPeriodDetail {
         if summary.wallClockSeconds > 0 {
             shareOfListening = seconds / summary.wallClockSeconds
         }
-        // Tracked per-show savings exist for this period — use the real number.
-        // A period made up entirely of pre-tracking days has an empty map; fall
-        // back to apportioning the period total by listening share.
-        if !summary.perShowTimeSaved.isEmpty {
-            timeSaved = summary.perShowTimeSaved[subscriptionID] ?? 0
-        } else {
-            timeSaved = summary.totalTimeSaved * shareOfListening
-            timeSavedIsEstimate = true
+        // Resolve each bucket independently. Testing only the aggregate map
+        // drops older buckets whenever a range also contains one modern bucket.
+        for day in summary.days {
+            let showSeconds = day.perShowSeconds[subscriptionID] ?? 0
+            if day.perShowTimeSaved.isEmpty {
+                guard day.wallClockSeconds > 0, showSeconds > 0 else { continue }
+                timeSaved += day.totalTimeSaved * showSeconds / day.wallClockSeconds
+                timeSavedIsEstimate = true
+            } else {
+                timeSaved += day.perShowTimeSaved[subscriptionID] ?? 0
+            }
         }
+    }
+
+    private static func identity(for entry: ListeningHistoryEntry) -> String {
+        if let streamURL = entry.streamURL {
+            return "url:\(streamURL.absoluteString)"
+        }
+        return "episode:\(entry.episodeID.uuidString)"
+    }
+
+    private static func identity(for episode: Episode) -> String {
+        "url:\(episode.audioURL.absoluteString)"
     }
 }
 
@@ -1385,6 +1441,7 @@ private struct CompletionBar: View {
 // MARK: - Top shows full list (Top 50)
 
 private struct TopShowsListView: View {
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @ObservedObject var store: ListeningStatsStore
     @ObservedObject var historyStore: ListeningHistoryStore
     @State var range: StatsRange
@@ -1436,6 +1493,9 @@ private struct TopShowsListView: View {
                                     detail: ShowPeriodDetail(
                                         subscriptionID: show.id,
                                         entries: historyStore.entries,
+                                        episodes: UUID(uuidString: show.id).flatMap {
+                                            subscriptionStore.subscription(id: $0)?.episodes
+                                        } ?? [],
                                         summary: summary,
                                         since: range.sinceDate(last: isLast),
                                         until: range.untilDate(last: isLast)
