@@ -1163,6 +1163,8 @@ final class PlaybackEngine: PlaybackControlling {
     /// read queue. Averaging L+R prevents clipping and copies the centred signal
     /// back to both channels, so headphones and stereo speakers both hear the
     /// same content. Native mono files and unsupported/interleaved formats no-op.
+    /// Copy with Swift's typed buffer operation; do not restore deprecated
+    /// `cblas_scopy`, which opts this target into Accelerate's legacy LP64 API.
     private static func foldStereoBufferToMono(_ buffer: AVAudioPCMBuffer) {
         guard buffer.format.channelCount >= 2,
               let channels = buffer.floatChannelData,
@@ -1171,7 +1173,7 @@ final class PlaybackEngine: PlaybackControlling {
         vDSP_vadd(channels[0], 1, channels[1], 1, channels[0], 1, count)
         var half: Float = 0.5
         vDSP_vsmul(channels[0], 1, &half, channels[0], 1, count)
-        cblas_scopy(Int32(buffer.frameLength), channels[0], 1, channels[1], 1)
+        channels[1].update(from: channels[0], count: Int(buffer.frameLength))
     }
 
     /// Convert net trimmed frames (as reported by SilenceDetector) to seconds and add

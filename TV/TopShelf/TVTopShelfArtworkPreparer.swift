@@ -134,7 +134,7 @@ enum TVTopShelfArtworkPreparer {
         // silently doubled 404×608 into 808×1216 and made Top Shelf cards too
         // wide. A scale of 1 produces the exact TVServices poster contracts;
         // the caller explicitly requests the separate 2x variant.
-        let format = UIGraphicsImageRendererFormat.default()
+        let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
         return UIGraphicsImageRenderer(

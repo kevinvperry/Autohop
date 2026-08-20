@@ -16,6 +16,17 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-20 warning and Home projection repairs
+
+- Made parsed RSS projection values genuinely `Sendable` for Swift 6
+  concurrency compatibility.
+- Removed deprecated CBLAS copying and renderer-format construction while
+  preserving mono fold-down and exact-pixel Top Shelf output.
+- Home now excludes its Continue Listening hero from the rendered Up Next rail
+  by stable episode identity without modifying the phone-authored queue.
+- Removed only unassigned asset-catalog child copies; assigned icon images and
+  the hardware-proven layered icon structure remain intact.
+
 ## Release status
 
 - **Development status:** active development following the Version 1.5 App

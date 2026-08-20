@@ -5,6 +5,8 @@ import AutohopCore
 // stable, compact values instead of traversing Subscription graphs or reading
 // persistence during Siri Remote focus updates. Episode is retained only as an
 // action payload; playbackPositionSeconds is projected once from synced history.
+// TVHomeQueueProjector is the single presentation-only exclusion boundary for
+// hero episodes: it never mutates the phone-authored queue snapshot.
 
 struct TVQueueRowModel: Identifiable, Equatable {
     let id: String
@@ -31,6 +33,36 @@ struct TVQueueRowModel: Identifiable, Equatable {
               duration.isFinite, duration > position
         else { return nil }
         return duration - position
+    }
+}
+
+enum TVHomeQueueProjector {
+    static func rows(
+        queueRows: [TVQueueRowModel],
+        currentEpisode: Episode?,
+        continueListening: TVContinueListening?
+    ) -> [TVQueueRowModel] {
+        let featuredKeys: Set<String>
+        if let currentEpisode {
+            featuredKeys = [PlaybackPositionStore.key(for: currentEpisode)]
+        } else if let continuation = continueListening {
+            var keys = Set([continuation.entry.id])
+            if let episode = continuation.episode {
+                keys.insert(PlaybackPositionStore.key(for: episode))
+            }
+            featuredKeys = keys
+        } else {
+            featuredKeys = []
+        }
+
+        return queueRows.filter { row in
+            guard !featuredKeys.contains(row.id) else { return false }
+            if let currentEpisode, let episode = row.episode,
+               episode.id == currentEpisode.id {
+                return false
+            }
+            return true
+        }
     }
 }
 

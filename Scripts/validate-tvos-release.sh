@@ -76,6 +76,14 @@ for icon_file in \
   "App Icon - App Store.imagestack/Front.imagestacklayer/Content.imageset/AutohopTV-AppStore-1280x768.png"; do
   [[ -f "$icon_root/$icon_file" ]] || fail "hardware-proven tvOS icon stack is incomplete: $icon_file"
 done
+# AI CONTEXT — Back intentionally has empty asset slots. Loose files in that
+# Content.imageset are ignored by actool and produce the misleading repeated
+# "unassigned children" warning across every consumer of AutohopCore.
+for ignored_icon_file in \
+  "App Icon.imagestack/Back.imagestacklayer/Content.imageset/HomeScreen-400x240@1x.png" \
+  "App Icon.imagestack/Back.imagestacklayer/Content.imageset/HomeScreen-800x480@2x.png"; do
+  [[ ! -e "$icon_root/$ignored_icon_file" ]] || fail "unassigned tvOS icon child must not be restored: $ignored_icon_file"
+done
 
 if [[ "${1:---configuration-only}" == "--configuration-only" ]]; then
   echo "tvOS configuration checks passed; signed hardware checklist remains required for submission."

@@ -59,7 +59,9 @@ therefore documented here and in the tvOS section of `project.yml`:
 - `Media.xcassets`: App Store icon stack and Top Shelf artwork metadata/assets;
   it contains no runtime logic. The current repeated-layer icon stack is the
   last hardware-proven configuration that produces tvOS's required flattened
-  primary icon. Do not delete, empty or consolidate its Front/Middle/Back files
+  primary icon. Preserve every image referenced by a layer or nested
+  `Content.imageset`; Back's empty `Content.imageset` must remain free of loose,
+  unassigned PNGs. Do not consolidate the assigned Front/Middle/Back structure
   based only on visual theory or simulator compilation; replacement requires a
   signed-device Home Screen check plus compiled `Assets.car` inspection.
 - Dynamic Top Shelf is implemented by `TV/TopShelf`, `TVTopShelf` and the typed
@@ -115,3 +117,7 @@ therefore documented here and in the tvOS section of `project.yml`:
 13. Treat the tvOS icon stack as an indivisible release artifact. A successful
     asset-catalog build is insufficient: the Home Screen must show Autohop, not
     the white grid placeholder, before any layer cleanup can ship.
+14. Home's hero and Up Next rail are mutually exclusive presentation surfaces.
+    Exclude the idle Continue Listening episode (or active playback episode)
+    from Home's rendered queue by authoritative episode key without mutating
+    the phone-authored queue snapshot.

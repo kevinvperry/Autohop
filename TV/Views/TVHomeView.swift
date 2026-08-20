@@ -6,7 +6,7 @@ import AutohopCore
 // One mutually-exclusive hero (active Now Playing/Watching OR historical
 // Continue Listening), followed by the Up Next shelf. Home deliberately has
 // no second in-content title: TVMainTabView owns the persistent system Home
-// chrome. While playback is loaded, its episode is removed only from Home's
+// chrome. The episode occupying either hero is removed only from Home's
 // rendered Up Next projection; the phone-authored queue remains unchanged.
 // The Latest
 // shelf was REMOVED 2026-07-11 (Kevin: irrelevant on TV — Up Next is the
@@ -62,22 +62,16 @@ struct TVHomeView: View {
     }
 
     /// Home is a presentation projection, not a second queue authority. Keep
-    /// the active item in the authoritative phone-authored snapshot, but avoid
-    /// showing the same episode immediately below its Now Playing hero here.
+    /// the featured item in the authoritative phone-authored snapshot, but avoid
+    /// showing the same episode immediately below either Home hero here.
     /// Use every stable identity available because legacy queue rows may have
     /// been reconstructed from a different object instance than playback.
     private var homeQueueRows: [TVQueueRowModel] {
-        guard let current = model.playbackModel.currentEpisode else {
-            return model.queueModel.rows
-        }
-        let currentKey = PlaybackPositionStore.key(for: current)
-        return model.queueModel.rows.filter { row in
-            if let episode = row.episode,
-               model.playbackModel.isCurrentEpisode(episode) {
-                return false
-            }
-            return row.id != currentKey
-        }
+        TVHomeQueueProjector.rows(
+            queueRows: model.queueModel.rows,
+            currentEpisode: model.playbackModel.currentEpisode,
+            continueListening: model.continueListeningModel.item
+        )
     }
 
     // MARK: - Current playback

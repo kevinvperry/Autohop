@@ -4,11 +4,13 @@ import Foundation
 // Intermediate value types produced by RSSParser — feed-shaped data BEFORE it
 // becomes a Subscription/Episode (no UUIDs, no local state). SubscriptionStore
 // and FeedService convert these into model types; PodcastDetailView renders them
-// directly for not-yet-subscribed (browse-preview) podcasts.
+// directly for not-yet-subscribed (browse-preview) podcasts. These projection
+// values are Sendable because actors (including tvOS Discover) return them
+// across isolation boundaries; keep every newly added field Sendable.
 // Also hosts the shared HTTPResponseValidation gate (see bottom of file) — placed
 // here because this file is compiled by BOTH the SwiftPM AutohopCore target and
 // the Xcode app target, so it needs no XcodeGen regeneration.
-public struct ParsedFeed: Equatable {
+public struct ParsedFeed: Equatable, Sendable {
     public var title: String
     public var description: String?
     public var author: String?
@@ -30,7 +32,7 @@ public struct ParsedFeed: Equatable {
     }
 }
 
-public struct ParsedEpisode: Equatable {
+public struct ParsedEpisode: Equatable, Sendable {
     public var guid: String
     public var title: String
     public var description: String?
@@ -116,7 +118,7 @@ public extension ParsedEpisode {
     }
 }
 
-public struct ParsedChapter: Equatable {
+public struct ParsedChapter: Equatable, Sendable {
     public var position: Int
     public var title: String
     public var startSeconds: TimeInterval
