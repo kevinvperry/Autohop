@@ -14,7 +14,10 @@ import AutohopCore
 //   AVPlayerViewController (transport bar, scrubbing); Menu/onExitCommand in
 //   fullscreen returns to this windowed page rather than closing the cover.
 // - Menu on the windowed page exits the cover; audio keeps playing
-//   (UIBackgroundModes: audio). onPlayPauseCommand toggles from anywhere.
+//   (UIBackgroundModes: audio). Autohop owns `.onPlayPauseCommand` for the
+//   custom audio UI only. AVPlayerViewController exclusively owns video
+//   transport; registering both handlers makes one remote press resume and
+//   immediately pause the same AVPlayer.
 // FAILURE UX unchanged: `TVPlaybackModel.errorMessage` renders a focusable
 // retry card instead of the player (§8 item 5).
 // CHAPTERS (round 9, 2026-07-11): the WINDOWED page now has full chapter
@@ -47,9 +50,10 @@ struct TVPlayerView: View {
 
             content
         }
-        .onPlayPauseCommand {
-            playbackModel.togglePlayPause()
-        }
+        .modifier(TVPlayerPlayPauseCommandModifier(
+            owner: TVPlayerTransportPolicy.owner(for: playbackModel.currentEpisode?.mediaKind),
+            action: playbackModel.togglePlayPause
+        ))
         .preferredColorScheme(.dark)
         .tvEpisodeDescriptionSheet(
             item: $descriptionItem,
@@ -124,6 +128,33 @@ struct TVPlayerView: View {
             let resolved = await resolveEpisodeDescription(episode)
             isResolvingDescription = false
             descriptionItem = TVEpisodeDescriptionItem(episode: resolved, podcastTitle: podcastTitle)
+        }
+    }
+}
+
+enum TVPlayerTransportOwner: Equatable {
+    case autohop
+    case avKit
+}
+
+enum TVPlayerTransportPolicy {
+    /// Native AVKit already handles Siri Remote transport for video. Custom
+    /// audio presentation has no AVPlayerViewController and remains app-owned.
+    static func owner(for mediaKind: EpisodeMediaKind?) -> TVPlayerTransportOwner {
+        mediaKind == .video ? .avKit : .autohop
+    }
+}
+
+private struct TVPlayerPlayPauseCommandModifier: ViewModifier {
+    let owner: TVPlayerTransportOwner
+    let action: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if owner == .autohop {
+            content.onPlayPauseCommand(perform: action)
+        } else {
+            content
         }
     }
 }

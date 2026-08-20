@@ -121,3 +121,7 @@ therefore documented here and in the tvOS section of `project.yml`:
     Exclude the idle Continue Listening episode (or active playback episode)
     from Home's rendered queue by authoritative episode key without mutating
     the phone-authored queue snapshot.
+15. A Siri Remote play/pause event has exactly one UI owner. Autohop handles
+    custom audio presentation; `AVPlayerViewController` exclusively handles
+    video. Never install SwiftUI `.onPlayPauseCommand` around native video or a
+    single press can resume and immediately pause the AVPlayer.

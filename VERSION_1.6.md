@@ -16,6 +16,14 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-20 tvOS native-video resume repair
+
+- Gave Siri Remote play/pause a single owner: Autohop continues to handle its
+  custom audio player, while `AVPlayerViewController` exclusively handles
+  video. This prevents one Play press from resuming and immediately pausing the
+  same AVPlayer; device diagnostics captured the two transitions 8–250 ms
+  apart. Added transport-ownership regression tests and AI-context guidance.
+
 ## 2026-08-20 warning and Home projection repairs
 
 - Made parsed RSS projection values genuinely `Sendable` for Swift 6
