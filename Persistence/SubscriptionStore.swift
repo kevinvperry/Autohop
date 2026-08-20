@@ -77,6 +77,13 @@ import Foundation
 @MainActor
 public final class SubscriptionStore: ObservableObject {
     public private(set) var subscriptions: [Subscription] = []
+    /// AI CONTEXT — O(1) mutation token for projection clients. Comparing two
+    /// `[Subscription]` values walks every embedded episode (4,000+ on a real
+    /// tvOS library) and can block the main actor for over a second merely to
+    /// prove nothing changed. Increment only with an authored in-memory store
+    /// change; consumers cache this token and rebuild graph projections when it
+    /// advances. This is process-local and deliberately not persisted.
+    public private(set) var projectionRevision: UInt64 = 0
     /// Stage 4 narrow invalidation stream. QueueCoordinator observes this
     /// instead of broad objectWillChange, so metadata/settings-only saves cannot
     /// trigger queue recomputation or QueueSnapshot publication.
@@ -2249,6 +2256,7 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     private func publishChange() {
+        projectionRevision &+= 1
         if changeNotificationCoalescingDepth > 0 {
             coalescedChangeNotificationPending = true
         } else {

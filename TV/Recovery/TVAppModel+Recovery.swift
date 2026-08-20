@@ -75,6 +75,7 @@ extension TVAppModel {
         }
         kit.entries.sort { $0.priorityRank < $1.priorityRank }
         survivalKitStore.save(kit)
+        libraryProjectionExplicitlyInvalidated = true
         scheduleLibraryRefresh()
     }
 
@@ -85,6 +86,7 @@ extension TVAppModel {
         materializationAttempts[id] = nil
         materializationRetryTasks[id]?.cancel()
         materializationRetryTasks[id] = nil
+        libraryProjectionExplicitlyInvalidated = true
         scheduleLibraryRefresh()
     }
 

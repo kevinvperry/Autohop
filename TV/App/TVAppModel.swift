@@ -166,6 +166,11 @@ final class TVAppModel {
     var deferredInactiveLibraryRefreshRequestCount = 0
     var lastLibraryRefreshAt = Date.distantPast
     var lastLibraryRefreshDuration: TimeInterval = 0
+    // AI CONTEXT — Periodic CloudKit freshness polls usually change only
+    // queue/history state. This token/flag prevents their Library pass from
+    // comparing the complete 4,000+-episode Subscription graph on main.
+    var lastLibraryProjectionRevision: UInt64?
+    var libraryProjectionExplicitlyInvalidated = true
     @ObservationIgnored
     lazy var episodeDetailRepository = TVEpisodeDetailRepository(
         store: subscriptionStore,

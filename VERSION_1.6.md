@@ -16,6 +16,16 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-20 tvOS periodic Library projection repair
+
+- Replaced full recursive `[Subscription]` equality during every freshness poll
+  with an O(1), process-local store revision check plus explicit survival-kit
+  invalidation. The captured device database contained 116 subscriptions and
+  4,378 embedded episodes; unchanged refreshes were spending 1.1–1.25 seconds
+  on the main actor proving that graph equal. Full projection now runs only
+  after a genuine store/materialisation change, with regression coverage and
+  an AI-context invariant preventing restoration of graph equality.
+
 ## 2026-08-20 tvOS native-video resume repair
 
 - Gave Siri Remote play/pause a single owner: Autohop continues to handle its

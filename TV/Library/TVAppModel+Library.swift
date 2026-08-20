@@ -144,29 +144,40 @@ extension TVAppModel {
         // the whole Home/Queue tree even when nothing changed, disturbing the
         // tvOS focus engine mid-navigation. A no-change refresh is now a
         // genuine no-op: nothing is written, so nothing re-renders.
-        let realIDs = Set(subscriptionStore.subscriptions.lazy
-            .filter { $0.browseDate == nil }
-            .map(\.id))
-        let pendingEntries = (survivalKitStore.load()?.entries ?? [])
-            .filter { !realIDs.contains($0.subscriptionID) }
-        let projection = TVLibraryProjector.project(
-            subscriptions: subscriptionStore.subscriptions,
-            pendingEntries: pendingEntries
+        let storeRevision = subscriptionStore.projectionRevision
+        let shouldRebuildLibrary = TVLibraryProjectionRefreshPolicy.shouldRebuild(
+            lastRevision: lastLibraryProjectionRevision,
+            currentRevision: storeRevision,
+            explicitlyInvalidated: libraryProjectionExplicitlyInvalidated
         )
-        let newLibrary = projection.subscriptions
-        let libraryChanged = newLibrary != librarySubscriptions
-        if libraryChanged {
-            librarySubscriptions = newLibrary
+        var libraryChanged = false
+        if shouldRebuildLibrary {
+            let realIDs = Set(subscriptionStore.subscriptions.lazy
+                .filter { $0.browseDate == nil }
+                .map(\.id))
+            let pendingEntries = (survivalKitStore.load()?.entries ?? [])
+                .filter { !realIDs.contains($0.subscriptionID) }
+            let projection = TVLibraryProjector.project(
+                subscriptions: subscriptionStore.subscriptions,
+                pendingEntries: pendingEntries
+            )
+            // A revision change is already proof that the store graph changed.
+            // Assign directly: `newLibrary != librarySubscriptions` recursively
+            // compared all 4,378 captured episode values and caused the periodic
+            // 1.1–1.25 s main-thread stalls this guard was meant to avoid.
+            librarySubscriptions = projection.subscriptions
+            libraryChanged = true
             rebuildOrphanRecoveryIndexes()
-            let compact = newLibrary.map {
+            let compact = projection.subscriptions.map {
                 TVLibraryProjectionEntry(id: $0.id, title: $0.title, author: $0.author, artworkURL: $0.artworkURL, feedURL: $0.feedURL, priorityRank: $0.priorityRank)
             }
             Task.detached(priority: .utility) { [projectionStore] in
                 try? projectionStore?.saveLibrary(compact)
             }
+            if projection.tiles != libraryTiles { libraryTiles = projection.tiles }
+            lastLibraryProjectionRevision = storeRevision
+            libraryProjectionExplicitlyInvalidated = false
         }
-        let newTiles = projection.tiles
-        if newTiles != libraryTiles { libraryTiles = newTiles }
 
         // PERF FIX (2026-07-10, found investigating a reported memory/CPU bug):
         // subscriptionsByID + upNextItems/upNextEpisodes/
@@ -211,7 +222,7 @@ extension TVAppModel {
         // alone are not a usable Home screen: queue, history and Continue
         // Listening must all be projected before TVRootView leaves the branded
         // launch experience. This prevents a one-frame false empty state.
-        let newRootState: RootState = newTiles.isEmpty ? .empty : .ready
+        let newRootState: RootState = libraryTiles.isEmpty ? .empty : .ready
         if newRootState != rootState { rootState = newRootState }
         scheduleTopShelfPublication(reason: "libraryRefresh")
     }

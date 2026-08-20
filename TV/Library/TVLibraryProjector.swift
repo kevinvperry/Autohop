@@ -2,7 +2,9 @@ import Foundation
 import AutohopCore
 
 // AI CONTEXT — Pure Library projection. It performs no persistence/network
-// work and is safe to test independently of TVAppModel.
+// work and is safe to test independently of TVAppModel. Its refresh policy is
+// revision-based: never use synthesized Subscription equality as a no-change
+// check because that recursively compares every embedded episode.
 struct TVLibraryProjector {
     struct Projection {
         let subscriptions: [AutohopCore.Subscription]
@@ -41,5 +43,15 @@ struct TVLibraryProjector {
             subscriptions: library,
             tiles: tiles
         )
+    }
+}
+
+enum TVLibraryProjectionRefreshPolicy {
+    static func shouldRebuild(
+        lastRevision: UInt64?,
+        currentRevision: UInt64,
+        explicitlyInvalidated: Bool
+    ) -> Bool {
+        explicitlyInvalidated || lastRevision != currentRevision
     }
 }

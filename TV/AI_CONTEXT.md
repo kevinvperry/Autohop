@@ -125,3 +125,7 @@ therefore documented here and in the tvOS section of `project.yml`:
     custom audio presentation; `AVPlayerViewController` exclusively handles
     video. Never install SwiftUI `.onPlayPauseCommand` around native video or a
     single press can resume and immediately pause the AVPlayer.
+16. Periodic freshness polls must not compare complete `Subscription` values.
+    Each subscription embeds its episode graph; use `SubscriptionStore`'s O(1)
+    process-local `projectionRevision` plus explicit survival-kit invalidation
+    to decide when the Library projection needs rebuilding.
