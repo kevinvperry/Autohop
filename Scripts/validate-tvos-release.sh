@@ -85,13 +85,27 @@ for ignored_icon_file in \
   [[ ! -e "$icon_root/$ignored_icon_file" ]] || fail "unassigned tvOS icon child must not be restored: $ignored_icon_file"
 done
 
-if [[ "${1:---configuration-only}" == "--configuration-only" ]]; then
+mode="${1:---configuration-only}"
+if [[ "$mode" == "--configuration-only" ]]; then
   echo "tvOS configuration checks passed; signed hardware checklist remains required for submission."
   exit 0
 fi
-[[ "$1" == "--archive" && -d "${2:-}" ]] || fail "use --archive <AutohopTV.xcarchive>"
-app="${2}/Products/Applications/AutohopTV.app"
-[[ -d "$app" ]] || fail "AutohopTV.app missing from archive"
+case "$mode" in
+  --archive)
+    [[ -d "${2:-}" ]] || fail "use --archive <AutohopTV.xcarchive>"
+    app="${2}/Products/Applications/AutohopTV.app"
+    product_label="archive"
+    ;;
+  --exported-app)
+    [[ -d "${2:-}" ]] || fail "use --exported-app <AutohopTV.app>"
+    app="$2"
+    product_label="exported App Store app"
+    ;;
+  *)
+    fail "use --configuration-only, --archive <AutohopTV.xcarchive>, or --exported-app <AutohopTV.app>"
+    ;;
+esac
+[[ -d "$app" ]] || fail "AutohopTV.app missing from $product_label"
 info_plist="$app/Info.plist"
 [[ -f "$info_plist" ]] || fail "AutohopTV Info.plist missing from archive"
 primary_icon="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon' "$info_plist" 2>/dev/null || true)"
@@ -145,9 +159,17 @@ raise SystemExit(0 if valid else 1)
 PY
 rm -f "$asset_json"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+codesign --verify --deep --strict "$app" 2>/dev/null || fail "app or embedded extension signature is invalid"
+if [[ "$mode" == "--exported-app" ]]; then
+  signing_details="$(codesign -dvv "$app" 2>&1)"
+  grep -q '^Authority=Apple Distribution:' <<<"$signing_details" \
+    || fail "exported app is not signed by Apple Distribution"
+fi
 codesign -d --entitlements :- "$app" >"$tmp" 2>/dev/null || fail "cannot read signed entitlements"
 env="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$tmp" 2>/dev/null || true)"
 [[ "$env" == production ]] || fail "signed APNs environment is '${env:-missing}', expected production"
+get_task_allow="$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$tmp" 2>/dev/null || true)"
+[[ "$get_task_allow" == false ]] || fail "signed app permits debugging; expected get-task-allow=false"
 app_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$tmp" 2>/dev/null || true)"
 [[ "$app_group" == group.com.kevinperry.autohop ]] || fail "signed tvOS app App Group is missing"
 app_user_management="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.user-management:0' "$tmp" 2>/dev/null || true)"
@@ -161,5 +183,9 @@ rm -f "$appex_entitlements"
 [[ "$appex_group" == group.com.kevinperry.autohop ]] || fail "signed extension App Group is missing or mismatched"
 [[ "$appex_user_management" == runs-as-current-user-with-user-independent-keychain ]] \
   || fail "signed extension current-user isolation is missing"
-grep -Eq '^- \[x\] Product owner physical-device sign-off' "$checklist" || fail "physical-device sign-off is incomplete"
-echo "tvOS archive checks passed."
+if [[ "$mode" == "--archive" ]]; then
+  grep -Eq '^- \[x\] Product owner physical-device sign-off' "$checklist" || fail "physical-device sign-off is incomplete"
+  echo "tvOS archive and physical sign-off checks passed."
+else
+  echo "tvOS exported App Store product checks passed; physical-device sign-off remains a separate release gate."
+fi

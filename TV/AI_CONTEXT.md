@@ -52,7 +52,10 @@ therefore documented here and in the tvOS section of `project.yml`:
 - Repository-root `PrivacyInfo.xcprivacy`: an explicit resource of both the
   tvOS app and Top Shelf targets. Required-reason declarations are scoped to
   each executable bundle; a package dependency's manifest cannot cover either
-  Autohop executable. Archive validation must find and lint both copies.
+  Autohop executable. Release validation must find and lint both copies. With
+  automatic signing, the intermediate archive may retain development signing;
+  production APNs and distribution identity are authoritative only in the
+  App Store export, which must pass the validator's `--exported-app` mode.
 - `AutohopTV.entitlements`: Debug/private CloudKit container and development
   APNs entitlement. `AutohopTV.Release.entitlements`: the matching distribution
   container plus production APNs. `project.yml` selects them by configuration;

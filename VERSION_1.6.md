@@ -26,6 +26,12 @@ of the implementation definition of done.
 - Advanced the tvOS app and embedded Top Shelf extension together to build 11
   so the repaired submission candidate cannot collide with a previously
   processed build number.
+- Added an exported-product validation mode for Xcode's automatic-signing
+  workflow. The intermediate archive can legitimately retain development
+  signing before App Store export; the gate now verifies production APNs,
+  distribution entitlements, privacy manifests, nested signatures and compiled
+  artwork against the actual exported application while keeping physical Apple
+  TV sign-off separate.
 
 ## 2026-08-20 tvOS periodic Library projection repair
 
