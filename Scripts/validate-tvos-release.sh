@@ -108,6 +108,8 @@ esac
 [[ -d "$app" ]] || fail "AutohopTV.app missing from $product_label"
 info_plist="$app/Info.plist"
 [[ -f "$info_plist" ]] || fail "AutohopTV Info.plist missing from archive"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :UIRequiredDeviceCapabilities:0' "$info_plist" 2>/dev/null || true)" == "arm64" ]] \
+  || fail "tvOS app must declare arm64 in UIRequiredDeviceCapabilities"
 primary_icon="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon' "$info_plist" 2>/dev/null || true)"
 [[ -n "$primary_icon" ]] || fail "App Store icon is missing from the compiled tvOS asset catalogue"
 top_shelf="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfPrimaryImage' "$info_plist" 2>/dev/null || true)"
@@ -129,6 +131,8 @@ for privacy_manifest in "$app_privacy_manifest" "$appex_privacy_manifest"; do
     || fail "required-reason API declarations missing: $privacy_manifest"
 done
 appex_info="$appex/Info.plist"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :UIRequiredDeviceCapabilities:0' "$appex_info" 2>/dev/null || true)" == "arm64" ]] \
+  || fail "Top Shelf extension must declare arm64 in UIRequiredDeviceCapabilities"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex_info" 2>/dev/null || true)" == "com.apple.tv-top-shelf" ]] \
   || fail "embedded extension has the wrong extension point"
 [[ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPrincipalClass' "$appex_info" 2>/dev/null || true)" ]] \

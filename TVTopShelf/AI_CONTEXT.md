@@ -36,4 +36,7 @@ scope. Demo Library content is never published by the containing app.
 `PrivacyInfo.xcprivacy` must remain an explicit extension resource because
 required-reason declarations do not inherit from the containing app or linked
 packages. The archive gate verifies the extension's compiled copy.
+The generated extension Info.plist must explicitly list `arm64` in
+`UIRequiredDeviceCapabilities`; App Store Connect rejects the arm64 binary when
+that declaration is absent (validation error 90502).
 -->

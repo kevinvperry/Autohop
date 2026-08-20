@@ -32,6 +32,10 @@ of the implementation definition of done.
   distribution entitlements, privacy manifests, nested signatures and compiled
   artwork against the actual exported application while keeping physical Apple
   TV sign-off separate.
+- Repaired App Store Connect validation error 90502 by explicitly declaring
+  the arm64 device capability in both the tvOS app and Top Shelf extension.
+  The exported-product gate now verifies both compiled plists so project
+  regeneration cannot silently restore the invalid extension bundle.
 
 ## 2026-08-20 tvOS periodic Library projection repair
 

@@ -48,7 +48,9 @@ break compilation, signing or App Store processing. Their AI-readable intent is
 therefore documented here and in the tvOS section of `project.yml`:
 
 - `Info.plist`: generated target metadata, CloudKit background notification and
-  audio playback declarations.
+  audio playback declarations. Both the containing app and Top Shelf extension
+  must declare `arm64` in `UIRequiredDeviceCapabilities`; App Store Connect
+  rejects an arm64 extension without that explicit capability (error 90502).
 - Repository-root `PrivacyInfo.xcprivacy`: an explicit resource of both the
   tvOS app and Top Shelf targets. Required-reason declarations are scoped to
   each executable bundle; a package dependency's manifest cannot cover either

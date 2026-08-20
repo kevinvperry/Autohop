@@ -418,6 +418,8 @@ targets:
           - remote-notification
         # Lean-back media surface — dark only.
         UIUserInterfaceStyle: Dark
+        UIRequiredDeviceCapabilities:
+          - arm64
         # Same unbounded-podcast-hosts ATS rationale as the iOS target above.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -489,6 +491,8 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.tv-top-shelf
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).TopShelfContentProvider"
+        UIRequiredDeviceCapabilities:
+          - arm64
     dependencies:
       - sdk: TVServices.framework
 
