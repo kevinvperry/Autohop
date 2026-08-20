@@ -57,7 +57,11 @@ therefore documented here and in the tvOS section of `project.yml`:
   user with a user-independent keychain, so app and App Group presentation data
   are profile-scoped without deprecated user-identifier APIs.
 - `Media.xcassets`: App Store icon stack and Top Shelf artwork metadata/assets;
-  it contains no runtime logic.
+  it contains no runtime logic. The current repeated-layer icon stack is the
+  last hardware-proven configuration that produces tvOS's required flattened
+  primary icon. Do not delete, empty or consolidate its Front/Middle/Back files
+  based only on visual theory or simulator compilation; replacement requires a
+  signed-device Home Screen check plus compiled `Assets.car` inspection.
 - Dynamic Top Shelf is implemented by `TV/TopShelf`, `TVTopShelf` and the typed
   routes in `TV/Navigation`. The extension is a bounded renderer of an atomic
   App Group presentation snapshot and may write only its 4 KB content-free
@@ -108,3 +112,6 @@ therefore documented here and in the tvOS section of `project.yml`:
 12. Natural playback completion and explicit stop always leave a fully idle
     presentation snapshot. Demo playback also completes on AVPlayer end events,
     and completed demo episodes are never offered as Continue Listening.
+13. Treat the tvOS icon stack as an indivisible release artifact. A successful
+    asset-catalog build is insufficient: the Home Screen must show Autohop, not
+    the white grid placeholder, before any layer cleanup can ship.

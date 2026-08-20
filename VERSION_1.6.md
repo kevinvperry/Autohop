@@ -443,8 +443,10 @@ of the implementation definition of done.
 - Reconciled local archive suppression against newer phone snapshots, completed
   demo episodes on natural media end and excluded completed demo progress from
   Continue Listening.
-- Removed audited dead seams, excluded engineering Markdown from products and
-  consolidated both tvOS icons to one opaque Back layer for flat presentation.
+- Removed audited dead seams and excluded engineering Markdown from products.
 - Added current-user execution entitlements to the app and extension, retained
   hashed CloudKit account scoping, and expanded the AI context contracts so
   future changes preserve every repaired boundary.
+- Restored the hardware-proven complete tvOS icon stack after a Back-only
+  cleanup produced the system's white grid placeholder on the Home Screen.
+  AI context now forbids icon-layer deletion without signed-device evidence.

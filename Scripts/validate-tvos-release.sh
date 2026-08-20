@@ -67,6 +67,15 @@ done
 grep -q 'Refresh Top Shelf Now' "$repo_root/TV/Views/TVDiagnosticsView.swift" \
   || fail "on-device Top Shelf diagnostic refresh missing"
 [[ -f "$checklist" ]] || fail "physical-device validation checklist missing"
+icon_root="$repo_root/TV/Media.xcassets/Brand Assets.brandassets"
+for icon_file in \
+  "App Icon.imagestack/Front.imagestacklayer/Content.imageset/HomeScreen-400x240@1x.png" \
+  "App Icon.imagestack/Front.imagestacklayer/Content.imageset/HomeScreen-800x480@2x.png" \
+  "App Icon.imagestack/Middle.imagestacklayer/Content.imageset/HomeScreen-400x240@1x.png" \
+  "App Icon.imagestack/Middle.imagestacklayer/Content.imageset/HomeScreen-800x480@2x.png" \
+  "App Icon - App Store.imagestack/Front.imagestacklayer/Content.imageset/AutohopTV-AppStore-1280x768.png"; do
+  [[ -f "$icon_root/$icon_file" ]] || fail "hardware-proven tvOS icon stack is incomplete: $icon_file"
+done
 
 if [[ "${1:---configuration-only}" == "--configuration-only" ]]; then
   echo "tvOS configuration checks passed; signed hardware checklist remains required for submission."
