@@ -16,6 +16,17 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-20 tvOS privacy-manifest packaging repair
+
+- Made the repository privacy manifest an explicit resource of both tvOS
+  executables. The app and Top Shelf extension now each carry their own
+  required-reason API declarations instead of incorrectly relying on GRDB's
+  package manifest. The signed-archive gate rejects a missing, invalid,
+  tracking-enabled or declaration-free copy in either executable bundle.
+- Advanced the tvOS app and embedded Top Shelf extension together to build 11
+  so the repaired submission candidate cannot collide with a previously
+  processed build number.
+
 ## 2026-08-20 tvOS periodic Library projection repair
 
 - Replaced full recursive `[Subscription]` equality during every freshness poll

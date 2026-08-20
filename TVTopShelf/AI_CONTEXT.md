@@ -33,4 +33,7 @@ never delete the newly committed generation on failure.
 
 PRIVACY: Never log titles, episode keys, subscription IDs, URLs or account
 scope. Demo Library content is never published by the containing app.
+`PrivacyInfo.xcprivacy` must remain an explicit extension resource because
+required-reason declarations do not inherit from the containing app or linked
+packages. The archive gate verifies the extension's compiled copy.
 -->

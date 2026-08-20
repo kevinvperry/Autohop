@@ -49,6 +49,10 @@ therefore documented here and in the tvOS section of `project.yml`:
 
 - `Info.plist`: generated target metadata, CloudKit background notification and
   audio playback declarations.
+- Repository-root `PrivacyInfo.xcprivacy`: an explicit resource of both the
+  tvOS app and Top Shelf targets. Required-reason declarations are scoped to
+  each executable bundle; a package dependency's manifest cannot cover either
+  Autohop executable. Archive validation must find and lint both copies.
 - `AutohopTV.entitlements`: Debug/private CloudKit container and development
   APNs entitlement. `AutohopTV.Release.entitlements`: the matching distribution
   container plus production APNs. `project.yml` selects them by configuration;

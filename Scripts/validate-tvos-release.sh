@@ -103,6 +103,17 @@ top_shelf_wide="$(/usr/libexec/PlistBuddy -c 'Print :TVTopShelfImage:TVTopShelfP
 [[ -f "$app/Assets.car" ]] || fail "compiled tvOS asset catalogue is missing from archive"
 appex="$app/PlugIns/AutohopTVTopShelf.appex"
 [[ -d "$appex" ]] || fail "embedded AutohopTVTopShelf.appex missing"
+app_privacy_manifest="$app/PrivacyInfo.xcprivacy"
+appex_privacy_manifest="$appex/PrivacyInfo.xcprivacy"
+for privacy_manifest in "$app_privacy_manifest" "$appex_privacy_manifest"; do
+  [[ -f "$privacy_manifest" ]] || fail "privacy manifest missing from executable bundle: $privacy_manifest"
+  /usr/bin/plutil -lint "$privacy_manifest" >/dev/null \
+    || fail "invalid privacy manifest: $privacy_manifest"
+  /usr/libexec/PlistBuddy -c 'Print :NSPrivacyTracking' "$privacy_manifest" 2>/dev/null | grep -qx 'false' \
+    || fail "privacy manifest must explicitly disable tracking: $privacy_manifest"
+  /usr/libexec/PlistBuddy -c 'Print :NSPrivacyAccessedAPITypes' "$privacy_manifest" >/dev/null 2>&1 \
+    || fail "required-reason API declarations missing: $privacy_manifest"
+done
 appex_info="$appex/Info.plist"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex_info" 2>/dev/null || true)" == "com.apple.tv-top-shelf" ]] \
   || fail "embedded extension has the wrong extension point"

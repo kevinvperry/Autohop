@@ -370,6 +370,10 @@ targets:
         excludes:
           - "**/*.md"
           - "*.entitlements"
+      # AI CONTEXT — Required-reason API declarations are per executable
+      # bundle. Keep the shared manifest as an explicit app resource; the TV
+      # source glob cannot discover this repository-root file.
+      - path: PrivacyInfo.xcprivacy
     postBuildScripts:
       - name: Embed Git Commit Identity
         script: Scripts/embed-git-commit.sh
@@ -379,7 +383,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "3"          # Apple TV
         MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         # Set 2026-07-04 once Kevin created the tvOS App Icon & Top Shelf
@@ -455,13 +459,17 @@ targets:
           - AutohopTVTopShelf.entitlements
           - "**/*.md"
       - path: TV/TopShelf/Shared
+      # AI CONTEXT — Extensions cannot inherit the containing app's required-
+      # reason declarations. Top Shelf uses UserDefaults and file metadata, so
+      # it must carry its own copy of the shared privacy manifest.
+      - path: PrivacyInfo.xcprivacy
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.TopShelf
         PRODUCT_NAME: AutohopTVTopShelf
         TARGETED_DEVICE_FAMILY: "3"
         MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         APPLICATION_EXTENSION_API_ONLY: YES
