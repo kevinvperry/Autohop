@@ -52,6 +52,7 @@ final class TVQueueModel {
     internal var uniqueEpisodesByGUID: [String: Episode] = [:]
     internal var uniqueEpisodesByNormalizedTitle: [String: Episode] = [:]
     internal var locallyArchivedEpisodeKeys: Set<String> = []
+    internal var localArchiveAuthoredAtByEpisodeKey: [String: Date] = [:]
 }
 
 @MainActor

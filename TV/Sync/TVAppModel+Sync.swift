@@ -5,7 +5,9 @@ import AutohopCore
 
 // AI CONTEXT — Private-iCloud lifecycle and foreground freshness workflow. Extracted from TVAppModel without changing
 // product policy; this extension is tvOS-only and coordinated through focused
-// observable state owners defined in TVAppFeatureModels.swift.
+// observable state owners defined in TVAppFeatureModels.swift. Populated launch
+// avoids a full membership sweep; freshness polls always end in a terminal
+// status, and Discover queue commands prefer phone-authored row keys.
 
 extension TVAppModel {
     // MARK: - Sync
@@ -142,6 +144,15 @@ extension TVAppModel {
             .first(where: {
                 $0.guid == episode.guid || $0.audioURL == episode.audioURL
             }) {
+            if let authoritativeRow = queueRows.first(where: { row in
+                guard row.subscriptionID == librarySubscription.id,
+                      let queuedEpisode = row.episode else { return false }
+                return queuedEpisode.guid == libraryEpisode.guid
+                    || queuedEpisode.audioURL == libraryEpisode.audioURL
+            }) {
+                await requestPlayNext(authoritativeRow)
+                return
+            }
             let key = PlaybackPositionStore.key(for: libraryEpisode)
             let row = TVQueueRowModel(
                 id: key,
@@ -303,13 +314,12 @@ extension TVAppModel {
             let needsDurableMaterializationMigration = !UserDefaults.standard.bool(
                 forKey: durableMaterializationMigrationKey
             )
-            let shouldFetchSubscriptions = reason == "bootstrap"
-                || reason == "tv.manualRetry"
+            let shouldFetchSubscriptions = reason == "tv.manualRetry"
                 || librarySubscriptions.isEmpty
                 || needsDurableMaterializationMigration
             let migrationKey = durableMaterializationMigrationKey
             let historyTask = shouldFetchHistory
-                ? sharedRecentHistoryPrime(engine: engine, reason: reason)
+                ? (syncCoordinator.sharedRecentHistoryPrime(reason: reason) ?? Task { 0 })
                 : nil
             let subscriptionTask = shouldFetchSubscriptions ? Task { [weak self] in
                 _ = await engine.fetchAllSubscriptionsNow(reason: reason)
@@ -319,8 +329,9 @@ extension TVAppModel {
                 self?.scheduleLibraryRefresh()
             } : nil
             // A foreground queue/history recovery must not re-download and
-            // reapply the complete subscription zone. Bootstrap owns the full
-            // library prime; later activations use compact projections only.
+            // reapply the complete subscription zone. Empty-library recovery,
+            // the one-time durable migration and explicit manual retry own
+            // full sweeps; populated launches use compact projections only.
             if let subscriptionTask { await subscriptionTask.value }
             if let historyTask { _ = await historyTask.value }
             refreshLibrary()
@@ -437,22 +448,9 @@ extension TVAppModel {
         scheduleLibraryRefresh()
         if let snapshot = subscriptionStore.syncedQueueSnapshot() {
             syncStatus = .upToDate(snapshot.updatedAt, generation: snapshot.generation)
+        } else {
+            syncStatus = .unavailable
         }
-    }
-
-    /// One owner for launch/foreground history recovery. Scene activation can
-    /// race bootstrap while the first CloudKit query is still in flight; the
-    /// old code started a second ~3,000-record sweep because
-    /// `lastHistoryPrimeAt` changed only after completion.
-    func sharedRecentHistoryPrime(
-        engine: CloudSyncEngine,
-        reason: String
-    ) -> Task<Int, Never> {
-        // `engine` remains in the signature while callers migrate; the single
-        // engine owner is now TVSyncCoordinator.
-        _ = engine
-        return syncCoordinator.sharedRecentHistoryPrime(reason: reason)
-            ?? Task { 0 }
     }
 
 }

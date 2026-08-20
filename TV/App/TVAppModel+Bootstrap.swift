@@ -81,11 +81,9 @@ extension TVAppModel {
 
     /// Shown IN ORDER (not shuffled) so the informative ones about what's
     /// actually happening come first, then Autohop feature highlights, with
-    /// family-friendly dad jokes sprinkled throughout for relief. 42 messages
-    /// at 7 s each ≈ 5 minutes before any repeat — longer than the ~4-minute
-    /// first sync observed on real hardware, so a user should never see the
-    /// same line twice. Tripled + feature-highlighted per Kevin's request
-    /// (2026-07-04) after the previous 14 still felt thin on a real wait.
+    /// family-friendly dad jokes sprinkled throughout for relief. Normal
+    /// bootstrap exits after only a couple of messages; the longer rotation is
+    /// retained for an exceptional survival-kit rebuild without looking frozen.
     static var firstSyncWaitMessages: [String] { [
         // — What's actually happening (process, in rough order) —
         "Connecting to your iCloud library…",

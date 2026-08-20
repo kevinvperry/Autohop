@@ -1,12 +1,10 @@
 {
   "images" : [
     {
-      "filename" : "HomeScreen-400x240@1x.png",
       "idiom" : "tv",
       "scale" : "1x"
     },
     {
-      "filename" : "HomeScreen-800x480@2x.png",
       "idiom" : "tv",
       "scale" : "2x"
     }

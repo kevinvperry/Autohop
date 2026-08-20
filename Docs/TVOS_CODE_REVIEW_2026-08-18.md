@@ -14,6 +14,13 @@ of them has been confirmed on physical Apple TV hardware. Update or delete a
 finding when it is fixed, and record the fix in VERSION_1.6.md.
 -->
 
+> Resolution update — 20 August 2026: the confirmed and qualified findings in
+> this review were repaired in commits `87e4ba8` and its follow-up. Dedicated
+> AI context headers now preserve the account, commit, refresh, repository,
+> lifecycle, playback and demo invariants. Physical-device checklist items in
+> `TVOS_PHASE6_VALIDATION.md` remain deliberately unchecked until observed on
+> signed Apple TV hardware.
+
 ## Scope and verdict
 
 10,608 lines across 80 Swift files. The architecture is sound and the

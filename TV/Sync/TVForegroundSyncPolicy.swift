@@ -37,9 +37,4 @@ final class TVForegroundSyncCoordinator {
             }
         }
     }
-
-    func stop() {
-        pollingTask?.cancel()
-        pollingTask = nil
-    }
 }

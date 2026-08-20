@@ -25,6 +25,8 @@ import AutohopCore
 // `currentEpisode` STAYS set, so the presenting cover stays open showing a
 // retry card (TVPlayerView) instead of silently dismissing to a dead list —
 // streaming means network errors are a normal, expected case here.
+// TERMINAL/NOW PLAYING: finish and stop fully reset presentation even if the
+// subscription invariant fails. System metadata includes artwork and seek.
 @MainActor
 @Observable
 final class TVPlaybackModel {
@@ -190,6 +192,7 @@ final class TVPlaybackModel {
         currentHistoryEntryID = historyEntryID
         currentSubscriptionTitle = displayPodcastTitle ?? subscription.title
         currentTime = 0
+        isBuffering = false
         sessionListenedSeconds = 0
         lastHistoryWriteAt = Date()
         lastProgressPushRequestedAt = Date.distantPast
@@ -232,6 +235,7 @@ final class TVPlaybackModel {
             ], alwaysPersist: true)
             currentTime = start.reportedStartTime
             updateNowPlayingInfo()
+            loadNowPlayingArtwork(for: episode, subscription: subscription, requestGeneration: requestGeneration)
         } catch {
             guard requestOwnership.owns(requestGeneration) else { return }
             if let failure = error as? StreamingPlaybackFailure, failure == .cancelled {
@@ -369,8 +373,15 @@ final class TVPlaybackModel {
         playbackOrigin = .library
         currentHistoryEntryID = nil
         isPlaying = false
+        isBuffering = false
         playbackState = .idle
         errorMessage = nil
+        currentTime = 0
+        currentSubscriptionTitle = ""
+        currentSpeed = 1.0
+        sessionListenedSeconds = 0
+        lastHistoryWriteAt = nil
+        lastProgressPushRequestedAt = .distantPast
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
@@ -384,11 +395,11 @@ final class TVPlaybackModel {
             // forward jumps; `sessionListenedSeconds` still credited the resume
             // seek (and any scrub) as time actually heard. That made a two-hour
             // resume instantly add two hours to synced listening history.
-            if TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta) {
+            let isNaturalDelta = TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta)
+            if isNaturalDelta {
                 sessionListenedSeconds += delta
             }
-            if TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta),
-               let subscriptionID = currentSubscriptionID {
+            if isNaturalDelta, let subscriptionID = currentSubscriptionID {
                 statsStore.addListeningTime(
                     // StreamingPlaybackEngine reports media-position deltas.
                     // ListeningStatsStore's cross-platform contract is elapsed
@@ -465,7 +476,15 @@ final class TVPlaybackModel {
 
     private func handleFinished(_ episode: Episode) {
         guard let subscription = currentSubscription
-        else { return }
+        else {
+            AppLogger.shared.warning(
+                "tv.playback.finishMissingSubscription",
+                "Finished playback without an owning subscription; clearing presentation",
+                alwaysPersist: true
+            )
+            stopAndClear()
+            return
+        }
         subscriptionStore.markListeningHistoryFinished(
             episode: episode,
             podcastTitle: currentSubscriptionTitle,
@@ -514,7 +533,29 @@ final class TVPlaybackModel {
         if let duration = episode.durationSeconds {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
+        if let artworkURL = ArtworkURL.upscaled(
+            episode.artworkURL ?? currentSubscription?.artworkURL,
+            toMinimumPixels: 600
+        ), let image = TVArtworkLoader.shared.cachedImage(url: artworkURL, targetPixels: 600) {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func loadNowPlayingArtwork(
+        for episode: Episode,
+        subscription: Subscription,
+        requestGeneration: UInt64
+    ) {
+        guard let artworkURL = ArtworkURL.upscaled(
+            episode.artworkURL ?? subscription.artworkURL,
+            toMinimumPixels: 600
+        ) else { return }
+        Task { [weak self] in
+            _ = await TVArtworkLoader.shared.image(url: artworkURL, targetPixels: 600)
+            guard let self, self.requestOwnership.owns(requestGeneration) else { return }
+            self.updateNowPlayingInfo()
+        }
     }
 
     /// Registers Siri Remote / Control Center transport commands once. Native
@@ -530,6 +571,21 @@ final class TVPlaybackModel {
         center.pauseCommand.addTarget { [weak self] _ in
             guard let self, self.isPlaying else { return .commandFailed }
             self.togglePlayPause()
+            return .success
+        }
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self, self.currentEpisode != nil else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self,
+                  let event = event as? MPChangePlaybackPositionCommandEvent,
+                  self.currentEpisode != nil
+            else { return .commandFailed }
+            self.engine.seek(to: event.positionTime)
+            self.currentTime = event.positionTime
+            self.updateNowPlayingInfo()
             return .success
         }
         center.skipForwardCommand.preferredIntervals = [30]

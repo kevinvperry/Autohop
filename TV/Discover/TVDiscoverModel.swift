@@ -26,8 +26,6 @@ final class TVDiscoverModel {
     }
 
     let storefronts = ApplePodcastChartsProvider.storefronts
-    let mutationPolicy = TVDiscoverMutationPolicy()
-
     private let repository: TVDiscoverRepository
     private var loadTask: Task<Void, Never>?
     private var generation = 0
@@ -99,4 +97,3 @@ final class TVDiscoverModel {
         }
     }
 }
-

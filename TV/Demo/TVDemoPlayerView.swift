@@ -2,7 +2,8 @@ import AVKit
 import SwiftUI
 
 // AI CONTEXT — Offline demo-only playback surface. Uses a private AVPlayer over
-// bundled first-party media and reports progress solely to TVDemoSession. It
+// bundled first-party media and reports progress solely to TVDemoSession.
+// Natural AVPlayer end uses the same completion path as explicit Finish. It
 // must never call TVPlaybackModel, production history/stats stores, CloudKit,
 // Now Playing services, or production archive/queue workflows.
 
@@ -15,8 +16,10 @@ struct TVDemoPlayerView: View {
 
     @State private var player: AVPlayer?
     @State private var observer: Any?
+    @State private var completionObserver: NSObjectProtocol?
     @State private var isPlaying = false
     @State private var speed = 1.0
+    @State private var didComplete = false
 
     var body: some View {
         ZStack {
@@ -91,6 +94,16 @@ struct TVDemoPlayerView: View {
         ) { time in
             onProgress(time.seconds)
         }
+        completionObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
+            object: created.currentItem,
+            queue: .main
+        ) { _ in
+            guard !didComplete else { return }
+            didComplete = true
+            checkpoint()
+            onComplete()
+        }
         created.playImmediately(atRate: Float(speed))
         isPlaying = true
     }
@@ -116,8 +129,9 @@ struct TVDemoPlayerView: View {
         checkpoint()
         if let observer, let player { player.removeTimeObserver(observer) }
         observer = nil
+        if let completionObserver { NotificationCenter.default.removeObserver(completionObserver) }
+        completionObserver = nil
         player?.pause()
         player = nil
     }
 }
-

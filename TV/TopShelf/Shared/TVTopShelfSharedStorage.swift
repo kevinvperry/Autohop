@@ -3,7 +3,9 @@ import Foundation
 // AI CONTEXT — Sole filesystem boundary shared by the tvOS app and Top Shelf
 // extension. The app writes complete generations; the extension only reads.
 // Manifest replacement is atomic, artwork names are basenames, and resolved
-// URLs remain inside Library/Caches/TVTopShelf. Regenerable Top Shelf material
+// URLs remain inside Library/Caches/TVTopShelf. Manifest replacement is the
+// commit point; pruning afterward is best-effort and cannot roll it back.
+// Regenerable Top Shelf material
 // belongs in Caches; a dual-location probe distinguishes a bad path from an
 // ineffective signed App Group entitlement on physical Apple TV hardware.
 
@@ -18,7 +20,7 @@ enum TVTopShelfSharedConfiguration {
 // App Group boundary. Diagnostics deliberately retain only Foundation's domain,
 // numeric code and the failed operation; paths and content never enter logs.
 struct TVTopShelfStorageError: Error {
-    enum Operation: String { case createCaches, createRoot, replaceGeneration, createGeneration, writeArtwork, encodeManifest, writeManifest, pruneGenerations }
+    enum Operation: String { case createCaches, createRoot, replaceGeneration, createGeneration, writeArtwork, encodeManifest, writeManifest }
     let operation: Operation
     let domain: String
     let code: Int

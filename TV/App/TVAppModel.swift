@@ -88,6 +88,10 @@ final class TVAppModel {
         get { queueModel.locallyArchivedEpisodeKeys }
         set { queueModel.locallyArchivedEpisodeKeys = newValue }
     }
+    var localArchiveAuthoredAtByEpisodeKey: [String: Date] {
+        get { queueModel.localArchiveAuthoredAtByEpisodeKey }
+        set { queueModel.localArchiveAuthoredAtByEpisodeKey = newValue }
+    }
 
     let subscriptionStore: SubscriptionStore
     /// Phase 3 (§8): the tvOS playback composition. Its upNextProvider/
@@ -178,6 +182,7 @@ final class TVAppModel {
         )
         coordinator.onArchiveSuppression = { [weak self] key in
             self?.locallyArchivedEpisodeKeys.insert(key)
+            self?.localArchiveAuthoredAtByEpisodeKey[key] = Date()
         }
         coordinator.onHistoryInvalidated = { [weak self] in
             self?.continueListeningModel.invalidate()
@@ -259,7 +264,11 @@ final class TVAppModel {
             // are ready. Keep the branded launch view visible until bootstrap
             // rebuilds every Home dependency; otherwise users briefly see an
             // incorrect "Nothing to play yet" screen on every cold launch.
-            syncStatus = .cached(Date(), generation: 0)
+            if let cachedAt = (try? projectionStore?.libraryUpdatedAt()) ?? nil {
+                syncStatus = .cached(cachedAt, generation: 0)
+            } else {
+                syncStatus = .unavailable
+            }
         }
 
         Self.shared = self

@@ -433,3 +433,18 @@ of the implementation definition of done.
   background transition; transient inactive phases no longer purge the cache.
 - Added regression coverage for account-scope clearing and Discover probe
   backoff.
+- Completed the remaining audit repairs: single-pass Library projection,
+  hoisted survival-kit reads, truthful cached/freshness status, authoritative
+  queue-key preference, bounded Top Shelf thumbnails and accurate paused
+  diagnostics.
+- Made artwork disk corruption self-healing and write only validated image
+  bytes. Now Playing gains artwork, toggle and position commands; terminal
+  playback fully clears presentation and handles a missing subscription.
+- Reconciled local archive suppression against newer phone snapshots, completed
+  demo episodes on natural media end and excluded completed demo progress from
+  Continue Listening.
+- Removed audited dead seams, excluded engineering Markdown from products and
+  consolidated both tvOS icons to one opaque Back layer for flat presentation.
+- Added current-user execution entitlements to the app and extension, retained
+  hashed CloudKit account scoping, and expanded the AI context contracts so
+  future changes preserve every repaired boundary.

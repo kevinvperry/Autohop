@@ -19,11 +19,4 @@ final class TVMaterializationCoordinator {
         self.survivalKitStore = survivalKitStore
         self.feedLoader = feedLoader
     }
-
-    func cancelRetry(subscriptionID: UUID) {
-        retryTasks[subscriptionID]?.cancel()
-        retryTasks[subscriptionID] = nil
-        attempts[subscriptionID] = nil
-    }
 }
-

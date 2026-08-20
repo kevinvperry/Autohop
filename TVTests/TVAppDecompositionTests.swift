@@ -44,7 +44,6 @@ final class TVAppDecompositionTests: XCTestCase {
         XCTAssertEqual(projection.subscriptions.map(\.id), [second.id, first.id])
         XCTAssertEqual(projection.tiles.map(\.id), [second.id, first.id, pendingID])
         XCTAssertTrue(projection.tiles.last?.isMaterializing == true)
-        XCTAssertEqual(projection.subscriptionsByID[first.id]?.title, "First")
     }
 
     func testQueueProjectorPreservesPhoneAuthoredOrderAndPlaceholder() {
@@ -79,6 +78,23 @@ final class TVAppDecompositionTests: XCTestCase {
         XCTAssertFalse(rows[0].isPlayable)
         XCTAssertTrue(rows[1].isPlayable)
         XCTAssertEqual(rows[0].podcastTitle, "Projected Show")
+    }
+
+    func testNewerAuthoritativeQueueCanReleaseLocalArchiveSuppression() {
+        let authoredAt = Date(timeIntervalSince1970: 100)
+        XCTAssertEqual(
+            TVQueueProjector.archiveSuppressionsToRelease(
+                authoredAtByEpisodeKey: ["restored": authoredAt, "missing": authoredAt],
+                authoritativeEpisodeKeys: ["restored"],
+                snapshotUpdatedAt: Date(timeIntervalSince1970: 101)
+            ),
+            ["restored"]
+        )
+        XCTAssertTrue(TVQueueProjector.archiveSuppressionsToRelease(
+            authoredAtByEpisodeKey: ["restored": authoredAt],
+            authoritativeEpisodeKeys: ["restored"],
+            snapshotUpdatedAt: authoredAt
+        ).isEmpty)
     }
 
     func testQueueProjectionMirrorsIOSRemainingTimeRules() throws {

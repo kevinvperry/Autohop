@@ -25,6 +25,17 @@ public final class TVProjectionStore: @unchecked Sendable {
         try load([TVLibraryProjectionEntry].self, key: "library") ?? []
     }
 
+    public func libraryUpdatedAt() throws -> Date? {
+        try db.read { database in
+            guard let seconds = try Double.fetchOne(
+                database,
+                sql: "SELECT updatedAt FROM tv_projection WHERE key = ?",
+                arguments: ["library"]
+            ) else { return nil }
+            return Date(timeIntervalSince1970: seconds)
+        }
+    }
+
     public func saveLibrary(_ entries: [TVLibraryProjectionEntry]) throws {
         try save(entries, key: "library")
     }

@@ -53,6 +53,9 @@ therefore documented here and in the tvOS section of `project.yml`:
   APNs entitlement. `AutohopTV.Release.entitlements`: the matching distribution
   container plus production APNs. `project.yml` selects them by configuration;
   the signed archive remains the final authority and must be inspected.
+  Both app configurations and the Top Shelf extension run as the current tvOS
+  user with a user-independent keychain, so app and App Group presentation data
+  are profile-scoped without deprecated user-identifier APIs.
 - `Media.xcassets`: App Store icon stack and Top Shelf artwork metadata/assets;
   it contains no runtime logic.
 - Dynamic Top Shelf is implemented by `TV/TopShelf`, `TVTopShelf` and the typed
@@ -63,6 +66,11 @@ therefore documented here and in the tvOS section of `project.yml`:
   Continue Listening item, owns the first slot and is deduplicated from Up Next.
   Both system actions use exact-identity playback. Queue rows carry bulk-read
   synced position metadata so rendering and focus remain persistence-free.
+  The containing app resolves a SHA-256 account scope from CloudKit before
+  publishing. An unavailable or changed account clears the manifest first;
+  never replace this with an installation UUID or relabel an old candidate.
+  Generation pruning happens only after manifest commit and is best-effort —
+  cleanup failure must not roll back artwork referenced by the live manifest.
   Its canonical design and remaining physical release gates are in
   `Docs/TVOS_DYNAMIC_TOP_SHELF_IMPLEMENTATION_PROPOSAL.md`.
 - `Diagnostics/` and Settings expose compact local health for launch, memory,
@@ -80,7 +88,7 @@ therefore documented here and in the tvOS section of `project.yml`:
    cannot mutate current presentation state.
 4. Record important sync/playback/recovery stages through `AppLogger` with
    stable event keys and bounded metadata.
-5. Update this map, the affected file header, tests and Version 1.5 notes when
+5. Update this map, the affected file header, tests and current version notes when
    ownership or a cross-device contract changes.
 6. Queue snapshot schema v3 carries optional Play Next/Play Last pin state.
    Keep decoding compatible with older snapshots and treat the latest durable
@@ -90,3 +98,13 @@ therefore documented here and in the tvOS section of `project.yml`:
    work; a late genuine library may still become ready normally.
 8. Demo media and mutations remain bundle/in-memory only. Never merge demo and
    personal projections or allow demo actions to reach CloudKit/stats.
+9. Survival-kit membership changes enter `scheduleLibraryRefresh`; per-record
+   CloudKit materialisation must never call the synchronous projector directly.
+10. Discover owns one stable repository for landing, cards and destinations.
+    Media-kind failures use bounded retry backoff; view reconstruction must not
+    discard successful classification caches or create probe storms.
+11. Treat `.inactive` as a transient presentation state. Only `.background`
+    performs lifecycle checkpointing and decoded-artwork eviction.
+12. Natural playback completion and explicit stop always leave a fully idle
+    presentation snapshot. Demo playback also completes on AVPlayer end events,
+    and completed demo episodes are never offered as Continue Listening.

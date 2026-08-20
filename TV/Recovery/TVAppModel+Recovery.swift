@@ -5,7 +5,8 @@ import AutohopCore
 
 // AI CONTEXT — Purge recovery and targeted subscription materialisation. Extracted from TVAppModel without changing
 // product policy; this extension is tvOS-only and coordinated through focused
-// observable state owners defined in TVAppFeatureModels.swift.
+// observable state owners defined in TVAppFeatureModels.swift. Survival-kit
+// mutations must schedule, never directly execute, Library projection refresh.
 
 extension TVAppModel {
     // MARK: - Purge recovery (T2)

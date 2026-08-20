@@ -7,7 +7,8 @@ import AutohopCore
 // ImageIO work happen outside the extension. Output uses Apple's narrower
 // poster geometry so four cards fit the 1920-wide Top Shelf. Every card owns a
 // purple Autohop backdrop because dynamic TVServices content replaces (rather
-// than layers over) the app's static Top Shelf fallback image.
+// than layers over) the app's static Top Shelf fallback image. Publisher art
+// can have hostile aspect ratios, so source thumbnails are capped at 4096 px.
 
 struct TVTopShelfPreparedArtwork: Sendable {
     enum Source: String, Sendable { case tvDiskCache, network, placeholder }
@@ -99,7 +100,10 @@ enum TVTopShelfArtworkPreparer {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: Int(CGFloat(max(width, height)) * maxDimension / min(sourceWidth, sourceHeight))
+            kCGImageSourceThumbnailMaxPixelSize: min(
+                4_096,
+                Int(CGFloat(max(width, height)) * maxDimension / min(sourceWidth, sourceHeight))
+            )
         ] as CFDictionary
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions) else { return nil }
         let image = UIImage(cgImage: cgImage)

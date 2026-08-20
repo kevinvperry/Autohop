@@ -366,7 +366,10 @@ targets:
     # proposal's own chosen APIs — not worth it for a brand-new 2026 TV app.
     deploymentTarget: "18.0"
     sources:
-      - TV
+      - path: TV
+        excludes:
+          - "**/*.md"
+          - "*.entitlements"
     postBuildScripts:
       - name: Embed Git Commit Identity
         script: Scripts/embed-git-commit.sh
@@ -450,6 +453,7 @@ targets:
       - path: TVTopShelf
         excludes:
           - AutohopTVTopShelf.entitlements
+          - "**/*.md"
       - path: TV/TopShelf/Shared
     settings:
       base:

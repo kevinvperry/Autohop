@@ -35,4 +35,13 @@ final class TVDemoSessionTests: XCTestCase {
         XCTAssertTrue(session.archivedEpisodeIDs.isEmpty)
         XCTAssertNil(session.progressByEpisodeID[episode.id])
     }
+
+    func testCompletedEpisodeIsNotOfferedAsContinueListening() throws {
+        let session = TVDemoSession()
+        let episode = try XCTUnwrap(session.continueEpisode)
+
+        session.markCompleted(episode)
+
+        XCTAssertNotEqual(session.continueEpisode?.id, episode.id)
+    }
 }

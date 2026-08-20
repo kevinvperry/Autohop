@@ -22,6 +22,15 @@ account-scope mismatch, missing artwork or malformed action returns nil or
 omits the affected item so tvOS uses Autohop's static fallback. Completion must
 be called exactly once and promptly.
 
+ACCOUNT CONTRACT: `accountScope` is a one-way hash of the containing app's
+current CloudKit user record, never a random installation token. The app clears
+the manifest when identity is unavailable or changes. The extension only
+compares the shared current scope and must remain CloudKit-free.
+
+COMMIT CONTRACT: A manifest becomes authoritative at atomic replacement.
+Pruning older artwork generations is post-commit best-effort cleanup and must
+never delete the newly committed generation on failure.
+
 PRIVACY: Never log titles, episode keys, subscription IDs, URLs or account
 scope. Demo Library content is never published by the containing app.
 -->

@@ -25,6 +25,8 @@ import AutohopCore
 //    gets is already display-sized: crisp AND smooth. targetPixels therefore
 //    returned to sane display-density values (default 600) — the crispness
 //    problem was never fetch size, it was unfiltered scaling.
+// DISK INTEGRITY: write only successfully decoded bytes. Delete a corrupt
+// mapped entry and retry that URL from the network once.
 struct TVArtworkImage: View {
     let url: URL?
     var cornerRadius: CGFloat = 12
@@ -151,17 +153,20 @@ final class TVArtworkLoader {
             // these lines during navigation means cache misses are churning
             // (view identity or key problem), which is its own smoking gun.
             let startedAt = CFAbsoluteTimeGetCurrent()
-            let data: Data
             if let cachedData = try? Data(contentsOf: diskURL, options: .mappedIfSafe) {
-                data = cachedData
-            } else {
-                guard let (received, response) = try? await session.data(from: url),
-                      (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
-                else { return nil }
-                data = received
-                try? received.write(to: diskURL, options: .atomic)
+                if let image = Self.downsampledImage(data: cachedData, maxPixels: targetPixels) {
+                    return image
+                }
+                // A truncated cache file must not poison this URL forever.
+                // Remove it and make one normal network attempt below.
+                try? FileManager.default.removeItem(at: diskURL)
             }
-            let image = Self.downsampledImage(data: data, maxPixels: targetPixels)
+            guard let (received, response) = try? await session.data(from: url),
+                  (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+                  let image = Self.downsampledImage(data: received, maxPixels: targetPixels)
+            else { return nil }
+            // Only validated image bytes enter the persistent cache.
+            try? received.write(to: diskURL, options: .atomic)
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             if elapsedMs >= 400 {
                 AppLogger.shared.info("tv.perf", "Artwork fetch+decode was slow (off-main)", metadata: [

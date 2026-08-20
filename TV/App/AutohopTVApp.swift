@@ -5,6 +5,8 @@ import Observation
 import AutohopCore
 
 // AI CONTEXT — TV/App/AutohopTVApp.swift
+// `.inactive` is transient. Lifecycle checkpointing, Top Shelf background
+// publication and decoded-artwork eviction run only for `.background`.
 // tvOS Phase 1 (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md §6): app entry point,
 // TVAppModel composition root, and the purge-resilient bootstrap (T2). This
 // target consumes AutohopCore as a LIBRARY (import AutohopCore) — it must

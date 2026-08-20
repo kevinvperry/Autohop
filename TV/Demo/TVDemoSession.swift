@@ -6,6 +6,7 @@ import Observation
 // CloudKit, ListeningStatsStore, SurvivalKitStore, or production queue/history
 // writers. All mutations live in this resettable in-memory session and are
 // discarded when Demo is exited. Bundled first-party media is resolved by name.
+// Continue Listening includes only partial progress below the completion band.
 
 enum TVDemoMediaKind: String, Equatable {
     case audio
@@ -59,7 +60,10 @@ final class TVDemoSession {
     init() { reset() }
 
     var continueEpisode: TVDemoEpisode? {
-        shows.flatMap(\.episodes).first { (progressByEpisodeID[$0.id] ?? 0) > 0 }
+        shows.flatMap(\.episodes).first {
+            let progress = progressByEpisodeID[$0.id] ?? 0
+            return progress > 0 && progress < $0.duration * 0.95
+        }
     }
 
     func recordProgress(_ seconds: TimeInterval, for episode: TVDemoEpisode) {

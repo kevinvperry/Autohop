@@ -3,8 +3,19 @@ import AutohopCore
 
 // AI CONTEXT — Pure conversion from resolved queue items into immutable tvOS
 // rows. Phone-authored ordering is preserved exactly. Synced resume positions
-// are injected as one bulk-read map so views remain persistence-free.
+// are injected as one bulk-read map so views remain persistence-free. Local
+// archive suppression releases only when a newer phone snapshot contains it.
 struct TVQueueProjector {
+    static func archiveSuppressionsToRelease(
+        authoredAtByEpisodeKey: [String: Date],
+        authoritativeEpisodeKeys: Set<String>,
+        snapshotUpdatedAt: Date
+    ) -> Set<String> {
+        Set(authoredAtByEpisodeKey.compactMap { key, authoredAt in
+            snapshotUpdatedAt > authoredAt && authoritativeEpisodeKeys.contains(key) ? key : nil
+        })
+    }
+
     static func pinToFront(
         _ items: [QueueModel.ResolvedQueueItem],
         episodeKey: String?

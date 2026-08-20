@@ -256,34 +256,6 @@ struct TVHomeView: View {
         return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
-    // MARK: - Shelves and lists
-
-    private func shelf(title: String, episodes: [Episode]) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 32) {
-                    ForEach(episodes.prefix(25)) { episode in
-                        TVEpisodeCard(
-                            episode: episode,
-                            podcastTitle: model.subscription(for: episode)?.title,
-                            onPlay: { onPlay(episode) },
-                            onShowDescription: {
-                                showDescription(
-                                    episode,
-                                    podcastTitle: model.subscription(for: episode)?.title
-                                )
-                            },
-                            onArchive: { model.archiveEpisode(episode) }
-                        )
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .focusSection()
-        }
-    }
-
     /// Queue rows, rather than only resolved Episode values, keep legacy phone
     /// snapshots visible on Home while targeted detail recovery runs. This
     /// prevents video/unresolved entries disappearing from Home even though
@@ -324,47 +296,6 @@ struct TVHomeView: View {
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.title2.weight(.semibold))
-    }
-}
-
-/// TVCard-Episode pattern (DESIGN.md): artwork-forward card for horizontal
-/// shelves — chromeless button (no custom scale hack; standard tvOS focus
-/// effect via `.buttonStyle(.card)`, matching PC's ChromelessButtonStyle intent).
-struct TVEpisodeCard: View {
-    let episode: Episode
-    let podcastTitle: String?
-    let onPlay: () -> Void
-    let onShowDescription: () -> Void
-    let onArchive: () -> Void
-
-    var body: some View {
-        Button(action: onPlay) {
-            VStack(alignment: .leading, spacing: 8) {
-                    TVArtworkImage(url: episode.artworkURL, targetPixels: 520)
-                    .frame(width: 280, height: 280)
-                Text(episode.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .frame(width: 280, alignment: .leading)
-                if let podcastTitle {
-                    Text(podcastTitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(width: 280, alignment: .leading)
-                }
-            }
-        }
-        .buttonStyle(.card)
-        .tvFocusHighlight(cornerRadius: 18)
-        .contextMenu {
-            Button(action: onShowDescription) {
-                Label("Episode Description", systemImage: "text.page")
-            }
-            Button(role: .destructive, action: onArchive) {
-                Label("Archive Episode", systemImage: "archivebox")
-            }
-        }
     }
 }
 

@@ -144,11 +144,9 @@ extension TVAppModel {
         // the whole Home/Queue tree even when nothing changed, disturbing the
         // tvOS focus engine mid-navigation. A no-change refresh is now a
         // genuine no-op: nothing is written, so nothing re-renders.
-        let baseProjection = TVLibraryProjector.project(
-            subscriptions: subscriptionStore.subscriptions,
-            pendingEntries: []
-        )
-        let realIDs = Set(baseProjection.subscriptions.map(\.id))
+        let realIDs = Set(subscriptionStore.subscriptions.lazy
+            .filter { $0.browseDate == nil }
+            .map(\.id))
         let pendingEntries = (survivalKitStore.load()?.entries ?? [])
             .filter { !realIDs.contains($0.subscriptionID) }
         let projection = TVLibraryProjector.project(
@@ -253,7 +251,7 @@ extension TVAppModel {
             // AI CONTEXT — History checkpoints must never rebuild Up Next.
             // Log 25 showed 199 queue projections for only five meaningful
             // queue generations because history invalidation shared this path.
-            let authoritativeUpNextItems = computeUpNextItems().map { item in
+            let projectedAuthoritativeItems = computeUpNextItems().map { item in
                 let recovered = legacyQueueEpisodes[item.episodeKey] ?? recoveredLocalEpisode(for: item)
                 guard item.episode == nil, let recovered else { return item }
                 return QueueModel.ResolvedQueueItem(
@@ -265,7 +263,23 @@ extension TVAppModel {
                     pinState: item.pinState,
                     publishedAt: item.publishedAt
                 )
-            }.filter { item in
+            }
+            if let snapshot = lastRenderedQueueSnapshot {
+                let restoredKeys = TVQueueProjector.archiveSuppressionsToRelease(
+                    authoredAtByEpisodeKey: localArchiveAuthoredAtByEpisodeKey,
+                    authoritativeEpisodeKeys: Set(projectedAuthoritativeItems.map(\.episodeKey)),
+                    snapshotUpdatedAt: snapshot.updatedAt
+                )
+                if !restoredKeys.isEmpty {
+                    locallyArchivedEpisodeKeys.subtract(restoredKeys)
+                    restoredKeys.forEach { localArchiveAuthoredAtByEpisodeKey[$0] = nil }
+                    AppLogger.shared.info("tv.archiveSuppressionReleased", "A newer phone queue restored locally archived episodes", metadata: [
+                        "count": "\(restoredKeys.count)",
+                        "generation": "\(snapshot.generation)"
+                    ], alwaysPersist: true)
+                }
+            }
+            let authoritativeUpNextItems = projectedAuthoritativeItems.filter { item in
                 guard let episode = item.episode else {
                     return !locallyArchivedEpisodeKeys.contains(item.episodeKey)
                 }
@@ -334,10 +348,6 @@ extension TVAppModel {
         // here so tvOS mirrors the iOS Up Next label immediately.
         let refreshedQueueRows = projectQueueRows(from: upNextItems)
         if refreshedQueueRows != queueRows { queueRows = refreshedQueueRows }
-    }
-
-    func episodeRows(subscriptionID: UUID) -> [TVEpisodeRowModel] {
-        episodeRowsBySubscription[subscriptionID] ?? []
     }
 
     /// Phase 4 bounded detail loading. The view first receives at most 25

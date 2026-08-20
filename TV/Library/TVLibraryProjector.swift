@@ -7,7 +7,6 @@ struct TVLibraryProjector {
     struct Projection {
         let subscriptions: [AutohopCore.Subscription]
         let tiles: [TVPodcastTileModel]
-        let subscriptionsByID: [UUID: AutohopCore.Subscription]
     }
 
     static func project(
@@ -40,9 +39,7 @@ struct TVLibraryProjector {
         }).sorted { $0.priorityRank < $1.priorityRank }
         return Projection(
             subscriptions: library,
-            tiles: tiles,
-            subscriptionsByID: Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
+            tiles: tiles
         )
     }
 }
-

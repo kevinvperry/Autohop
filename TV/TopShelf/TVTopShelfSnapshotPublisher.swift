@@ -8,6 +8,8 @@ import AutohopCore
 // generation-owns async artwork preparation, coalesces bursts, atomically
 // replaces the App Group materialized view, and only then asks tvOS to reload.
 // It receives immutable Home projections and never changes queue/history state.
+// Publication fails closed on CloudKit identity: scope is a SHA-256 user-record
+// hash, and identity failure/change clears prior shared content.
 
 struct TVTopShelfPublisherDiagnostics: Equatable {
     var phase = "Not requested"
@@ -282,8 +284,9 @@ final class TVTopShelfSnapshotPublisher {
                 retryNotBefore = Date().addingTimeInterval(15 * 60)
                 diagnostics.retryAfterSeconds = 15 * 60
                 diagnostics.phase = "Paused after storage failure"
+            } else {
+                diagnostics.phase = "Publish failed"
             }
-            diagnostics.phase = "Publish failed"
             diagnostics.lastErrorCode = errorCode(error)
             diagnostics.lastPublishMilliseconds = elapsedMilliseconds(since: startedAt)
             AppLogger.shared.warning("tv.topShelf.publishFailed", "Could not publish Top Shelf presentation", metadata: [

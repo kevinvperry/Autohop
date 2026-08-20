@@ -46,6 +46,13 @@ grep -q 'com.kevinperry.autohop.tv-navigation' "$project" || fail "tvOS Top Shel
 grep -q 'group.com.kevinperry.autohop' "$repo_root/TV/AutohopTV.entitlements" || fail "Debug tvOS App Group missing"
 grep -q 'group.com.kevinperry.autohop' "$repo_root/TV/AutohopTV.Release.entitlements" || fail "Release tvOS App Group missing"
 grep -q 'group.com.kevinperry.autohop' "$repo_root/TVTopShelf/AutohopTVTopShelf.entitlements" || fail "extension App Group missing"
+for entitlements in "$repo_root/TV/AutohopTV.entitlements" "$repo_root/TV/AutohopTV.Release.entitlements" "$repo_root/TVTopShelf/AutohopTVTopShelf.entitlements"; do
+  grep -q 'runs-as-current-user-with-user-independent-keychain' "$entitlements" \
+    || fail "current-user tvOS isolation missing from $(basename "$entitlements")"
+done
+if rg -n 'AI_CONTEXT\.md in Resources|README\.md in Resources' "$repo_root/Autohop.xcodeproj/project.pbxproj" >/dev/null; then
+  fail "engineering Markdown is included in a shipping tvOS product"
+fi
 if rg -n 'import (AutohopCore|GRDB|CloudKit|AVKit)|URLSession|TVAppModel|SubscriptionStore' "$repo_root/TVTopShelf" --glob '*.swift' >/dev/null; then
   fail "Top Shelf extension crossed its domain/network dependency boundary"
 fi
@@ -115,10 +122,16 @@ env="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$tmp" 2>/dev/null ||
 [[ "$env" == production ]] || fail "signed APNs environment is '${env:-missing}', expected production"
 app_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$tmp" 2>/dev/null || true)"
 [[ "$app_group" == group.com.kevinperry.autohop ]] || fail "signed tvOS app App Group is missing"
+app_user_management="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.user-management:0' "$tmp" 2>/dev/null || true)"
+[[ "$app_user_management" == runs-as-current-user-with-user-independent-keychain ]] \
+  || fail "signed tvOS app current-user isolation is missing"
 appex_entitlements="$(mktemp)"
 codesign -d --entitlements :- "$appex" >"$appex_entitlements" 2>/dev/null || fail "cannot read extension entitlements"
 appex_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$appex_entitlements" 2>/dev/null || true)"
+appex_user_management="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.user-management:0' "$appex_entitlements" 2>/dev/null || true)"
 rm -f "$appex_entitlements"
 [[ "$appex_group" == group.com.kevinperry.autohop ]] || fail "signed extension App Group is missing or mismatched"
+[[ "$appex_user_management" == runs-as-current-user-with-user-independent-keychain ]] \
+  || fail "signed extension current-user isolation is missing"
 grep -Eq '^- \[x\] Product owner physical-device sign-off' "$checklist" || fail "physical-device sign-off is incomplete"
 echo "tvOS archive checks passed."

@@ -57,6 +57,9 @@ prepared artwork after a failed publication attempt.
   use a quiet opaque fill to avoid stacked blur/compositing cost.
 - Queue artwork decodes to 360 px, library/shelf artwork to approximately
   520 px, detail artwork to 440 px, and the audio-player hero to 1200 px.
+- Discover uses separate bounded tiers: 240 px compact results, 440/560/640 px
+  shelf cards and 720 px detail artwork. These are decoded pixel targets, not
+  source-image layout points; all remain owned by `TVArtworkLoader`.
 - The shared decoded artwork cache is capped at 48 MB / 80 images and is purged
   when the app backgrounds or receives memory pressure.
 

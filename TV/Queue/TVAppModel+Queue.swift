@@ -120,10 +120,13 @@ extension TVAppModel {
     }
 
     func pumpQueueEnrichment() {
+        let kitEntriesByID = Dictionary(uniqueKeysWithValues:
+            (survivalKitStore.load()?.entries ?? []).map { ($0.subscriptionID, $0) }
+        )
         while queueEnrichmentTasks.count < 2, !pendingQueueEnrichmentIDs.isEmpty {
             let subscriptionID = pendingQueueEnrichmentIDs.removeFirst()
             let existing = subscriptionsByID[subscriptionID]
-            let kitEntry = survivalKitStore.load()?.entries.first { $0.subscriptionID == subscriptionID }
+            let kitEntry = kitEntriesByID[subscriptionID]
             let recoveryItem = upNextItems.first {
                 $0.subscriptionID == subscriptionID && $0.episode == nil
             }
@@ -241,10 +244,11 @@ extension TVAppModel {
 
     func retryLegacyRowsWhoseSourcesArrived() {
         let availableIDs = Set(subscriptionsByID.keys)
+        let survivalKitIDs = Set((survivalKitStore.load()?.entries ?? []).map(\.subscriptionID))
         failedQueueEnrichmentIDs.subtract(availableIDs)
         for item in upNextItems where item.episode == nil {
             let canResolve = availableIDs.contains(item.subscriptionID)
-                || survivalKitStore.load()?.entries.contains(where: { $0.subscriptionID == item.subscriptionID }) == true
+                || survivalKitIDs.contains(item.subscriptionID)
             guard canResolve else { continue }
             failedQueueEnrichmentIDs.remove(item.subscriptionID)
             queueEnrichmentAttempts[item.subscriptionID] = 0

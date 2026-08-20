@@ -4,7 +4,9 @@ import AutohopCore
 // AI CONTEXT — TV/Discover/TVDiscoverRepository.swift
 // Actor-backed orchestration for the initial TV landing page. Apple networking
 // and disk chart caching remain in AutohopCore; this layer owns only TV request
-// batching, cancellation and the deliberately small eager-shelf budget.
+// batching, cancellation and the deliberately small eager-shelf budget. One
+// stable instance is shared by landing/cards/destinations; successful media
+// classification is cached and transient failures receive bounded backoff.
 
 actor TVDiscoverRepository {
     private let charts: any PodcastChartsProviding
