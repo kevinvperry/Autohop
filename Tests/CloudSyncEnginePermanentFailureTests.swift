@@ -1,7 +1,7 @@
 // AI CONTEXT — Tests/CloudSyncEnginePermanentFailureTests.swift. Pure tests for
 // CloudSyncEngine's permanent CloudKit push-failure and retired-pending-change
-// classifiers plus the targeted queue empty-state classifier. CKSyncEngine
-// itself is not run in unit tests; these cases protect
+// classifiers plus targeted queue/subscription compatibility and account
+// fingerprint classifiers. CKSyncEngine itself is not run in unit tests; these cases protect
 // the Phase-1 quarantine guard and the Phase-2 namespace repair guard that
 // discards restored pre-namespace saves before they can collide again. Keep the
 // classifiers narrow: unrelated CK errors must stay retryable, and legacy
@@ -15,6 +15,71 @@ import CloudKit
 #endif
 
 final class CloudSyncEnginePermanentFailureTests: XCTestCase {
+
+    func testReadOnlyCompanionConsumesLegacySubscriptionWhenNoCurrentRecordExists() {
+        let id = UUID()
+        let legacy = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CKRecord.ID(recordName: id.uuidString, zoneID: CloudKitSync.zoneID)
+        )
+
+        let selection = CloudSyncEngine.preferredSubscriptionRecords(
+            from: [legacy],
+            allowLegacyFallback: true
+        )
+
+        XCTAssertEqual(selection.records.map(\.recordID), [legacy.recordID])
+        XCTAssertEqual(selection.current, 0)
+        XCTAssertEqual(selection.legacyFallback, 1)
+        XCTAssertEqual(selection.legacyShadowed, 0)
+    }
+
+    func testNamespacedSubscriptionAlwaysWinsOverLegacyRecord() {
+        let id = UUID()
+        let legacy = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CKRecord.ID(recordName: id.uuidString, zoneID: CloudKitSync.zoneID)
+        )
+        let current = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CloudKitSync.subscriptionRecordID(id: id)
+        )
+
+        let selection = CloudSyncEngine.preferredSubscriptionRecords(
+            from: [legacy, current],
+            allowLegacyFallback: true
+        )
+
+        XCTAssertEqual(selection.records.map(\.recordID), [current.recordID])
+        XCTAssertEqual(selection.current, 1)
+        XCTAssertEqual(selection.legacyFallback, 0)
+        XCTAssertEqual(selection.legacyShadowed, 1)
+    }
+
+    func testPhoneAuthorityLeavesLegacyRecordToNamespaceRecovery() {
+        let id = UUID()
+        let legacy = CKRecord(
+            recordType: CloudKitSync.subscriptionRecordType,
+            recordID: CKRecord.ID(recordName: id.uuidString, zoneID: CloudKitSync.zoneID)
+        )
+
+        let selection = CloudSyncEngine.preferredSubscriptionRecords(
+            from: [legacy],
+            allowLegacyFallback: false
+        )
+
+        XCTAssertTrue(selection.records.isEmpty)
+        XCTAssertEqual(selection.legacyFallback, 0)
+        XCTAssertEqual(selection.legacyShadowed, 1)
+    }
+
+    func testAccountFingerprintIsStableAndSeparatesAccounts() {
+        let first = CloudSyncEngine.accountFingerprint(forRecordName: "account-a")
+        XCTAssertEqual(first, CloudSyncEngine.accountFingerprint(forRecordName: "account-a"))
+        XCTAssertNotEqual(first, CloudSyncEngine.accountFingerprint(forRecordName: "account-b"))
+        XCTAssertEqual(first.count, 16)
+        XCTAssertFalse(first.contains("account-a"))
+    }
 
     func testMissingQueueRecordIsHealthyNotAuthoredState() {
         XCTAssertEqual(

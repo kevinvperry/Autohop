@@ -383,7 +383,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "3"          # Apple TV
         MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "12"
+        CURRENT_PROJECT_VERSION: "13"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         # Set 2026-07-04 once Kevin created the tvOS App Icon & Top Shelf
@@ -471,7 +471,7 @@ targets:
         PRODUCT_NAME: AutohopTVTopShelf
         TARGETED_DEVICE_FAMILY: "3"
         MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "12"
+        CURRENT_PROJECT_VERSION: "13"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         APPLICATION_EXTENSION_API_ONLY: YES

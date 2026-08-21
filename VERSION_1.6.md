@@ -16,6 +16,20 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-22 tvOS legacy iCloud library recovery
+
+- Repaired the build-10 read-only companion regression: Apple TV remains
+  structurally unable to upload subscription settings, but may consume a legacy
+  UUID-named `SubscriptionState` locally when no namespaced successor exists.
+  Namespaced records always win, preventing stale legacy settings from
+  overwriting migrated state.
+- Subscription-prime diagnostics now report matched/current/legacy fallback/
+  shadowed/rejected/result-failure counts instead of the ambiguous `count=0`.
+- iPhone and Apple TV sync startup now persist the same privacy-safe CloudKit
+  account fingerprint, allowing cross-device account provenance to be compared
+  without logging Apple's user record identifier.
+- Advanced the tvOS app and embedded Top Shelf extension together to build 13.
+
 ## 2026-08-20 tvOS privacy-manifest packaging repair
 
 - Made the repository privacy manifest an explicit resource of both tvOS

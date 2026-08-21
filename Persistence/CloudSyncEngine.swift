@@ -17,6 +17,13 @@ import Combine
 // are healthy clean-account outcomes, distinct from transport/auth failures.
 // Preserve QueueSnapshotFetchResult so tvOS cannot regress to presenting record
 // absence as “iCloud unavailable.”
+// TARGETED SUBSCRIPTION READ: tvOS is forbidden to AUTHOR subscription state,
+// but it must still CONSUME legacy UUID-named SubscriptionState records on an
+// account that has not completed the iPhone namespace migration. The prime
+// groups records by subscription ID, prefers `subscription:<UUID>`, and uses a
+// legacy record only when no current record exists. Never restore the old
+// blanket legacy skip: it made clean TestFlight installs appear to have an
+// empty iCloud library while history continued to sync normally.
 //
 // Push: observes SubscriptionStore changes (debounced 1 s), scans the database
 // for pending sync-state rows (dirty fields/partitions), and queues saves in two
@@ -278,14 +285,26 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         Task { [weak self] in
             guard let self else { return }
             let status: CKAccountStatus?
+            var accountFingerprint = "unavailable"
             do {
                 status = try await self.container.accountStatus()
+                if status == .available {
+                    do {
+                        let recordID = try await self.container.userRecordID()
+                        accountFingerprint = Self.accountFingerprint(forRecordName: recordID.recordName)
+                    } catch {
+                        self.logger.warning("sync.accountFingerprintFailed", "Could not fingerprint iCloud account identity", metadata: [
+                            "error": "\(error)"
+                        ])
+                    }
+                }
             } catch {
                 status = nil
                 self.logger.error("sync.accountStatusFailed", "Could not read iCloud account status", metadata: [
                     "error": "\(error)"
                 ], alwaysPersist: true)
             }
+            let resolvedAccountFingerprint = accountFingerprint
             await MainActor.run {
                 self.isStarting = false
                 guard status == .available, self.engine == nil else {
@@ -295,6 +314,9 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     ])
                     return
                 }
+                self.logger.info("sync.accountResolved", "Resolved privacy-safe iCloud account identity", metadata: [
+                    "accountFingerprint": resolvedAccountFingerprint
+                ], alwaysPersist: true)
                 self.activateEngine()
             }
         }
@@ -492,7 +514,10 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     /// routes through `applyRemote` → `applyRemoteSubscriptionState`, which
     /// kicks off local materialisation (feed fetch) right away, so the Library
     /// populates in seconds. Legacy unprefixed records are skipped (the normal
-    /// namespace-repair path owns those). Returns the number applied; 0 is a
+    /// namespace-repair path owns those on iPhone). A read-only companion cannot
+    /// perform that upload repair, so it consumes a legacy UUID-named record as
+    /// a local fallback only when no current namespaced record exists for that
+    /// subscription. Returns the number successfully decoded/applied; 0 is a
     /// normal result on a brand-new account with nothing synced yet.
     @discardableResult
     public func fetchAllSubscriptionsNow(reason: String) async -> Int {
@@ -500,9 +525,14 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         let query = CKQuery(recordType: CloudKitSync.subscriptionRecordType, predicate: NSPredicate(value: true))
         let database = container.privateCloudDatabase
         var applied = 0
+        var rejected = 0
+        var resultFailures = 0
+        var pages = 0
+        var fetchedRecords: [CKRecord] = []
         var cursor: CKQueryOperation.Cursor?
         do {
             repeat {
+                pages += 1
                 let page: (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?)
                 if let cursor {
                     page = try await database.records(continuingMatchFrom: cursor, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
@@ -510,14 +540,21 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                     page = try await database.records(matching: query, inZoneWith: CloudKitSync.zoneID, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults)
                 }
                 for (_, result) in page.matchResults {
-                    guard case .success(let record) = result else { continue }
-                    // Skip legacy unprefixed records — namespace repair owns them.
-                    if CloudKitSync.isLegacySubscriptionRecordName(record.recordID.recordName) { continue }
-                    await applyRemote(record: record)
-                    applied += 1
+                    switch result {
+                    case .success(let record): fetchedRecords.append(record)
+                    case .failure: resultFailures += 1
+                    }
                 }
                 cursor = page.queryCursor
             } while cursor != nil
+            let selection = Self.preferredSubscriptionRecords(
+                from: fetchedRecords,
+                allowLegacyFallback: !pushesSubscriptionState
+            )
+            for record in selection.records {
+                let effect = await applyRemote(record: record)
+                if effect == .rejected { rejected += 1 } else { applied += 1 }
+            }
             // Prime the authoritative whole-list order immediately after the
             // membership records. Materialization can continue asynchronously;
             // SubscriptionStore reuses this stored order as each feed arrives.
@@ -525,8 +562,17 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 await applyRemote(record: orderRecord)
             }
             logger.info("sync.subscriptionsPrimed", "Targeted subscription prime applied", metadata: [
-                "reason": reason, "count": "\(applied)"
-            ])
+                "reason": reason,
+                "applied": "\(applied)",
+                "current": "\(selection.current)",
+                "legacyFallback": "\(selection.legacyFallback)",
+                "legacyShadowed": "\(selection.legacyShadowed)",
+                "matched": "\(fetchedRecords.count)",
+                "pages": "\(pages)",
+                "rejected": "\(rejected)",
+                "resultFailures": "\(resultFailures)",
+                "unidentified": "\(selection.unidentified)"
+            ], alwaysPersist: true)
             return applied
         } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
             // Nothing synced yet / zone not created — normal on a fresh account.
@@ -537,6 +583,51 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             ])
             return applied
         }
+    }
+
+    struct SubscriptionPrimeSelection {
+        let records: [CKRecord]
+        let current: Int
+        let legacyFallback: Int
+        let legacyShadowed: Int
+        let unidentified: Int
+    }
+
+    /// Pure selection boundary used by the production query and unit tests.
+    /// Record order from CloudKit is not authoritative; group by decoded UUID
+    /// so a stale legacy record can never overwrite its namespaced successor.
+    static func preferredSubscriptionRecords(
+        from records: [CKRecord],
+        allowLegacyFallback: Bool
+    ) -> SubscriptionPrimeSelection {
+        var currentByID: [UUID: CKRecord] = [:]
+        var legacyByID: [UUID: CKRecord] = [:]
+        var unidentified = 0
+
+        for record in records {
+            guard let id = CloudKitSync.subscriptionID(fromRecordName: record.recordID.recordName) else {
+                unidentified += 1
+                continue
+            }
+            if CloudKitSync.isLegacySubscriptionRecordName(record.recordID.recordName) {
+                legacyByID[id] = record
+            } else {
+                currentByID[id] = record
+            }
+        }
+
+        let legacyFallbackIDs = allowLegacyFallback
+            ? Set(legacyByID.keys).subtracting(currentByID.keys)
+            : []
+        let selected = Array(currentByID.values)
+            + legacyFallbackIDs.compactMap { legacyByID[$0] }
+        return SubscriptionPrimeSelection(
+            records: selected,
+            current: currentByID.count,
+            legacyFallback: legacyFallbackIDs.count,
+            legacyShadowed: legacyByID.count - legacyFallbackIDs.count,
+            unidentified: unidentified
+        )
     }
 
     /// Targeted fetch of EVERY listening-history record in the zone, applied
@@ -1803,6 +1894,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             hash &*= 1_099_511_628_211
         }
         return String(format: "%016llx", hash)
+    }
+
+    /// Stable, non-reversible account correlation token. Diagnostics from an
+    /// iPhone and Apple TV may compare this value without exporting Apple's
+    /// private CKRecord user identifier or an Apple Account email address.
+    static func accountFingerprint(forRecordName recordName: String) -> String {
+        stableFingerprint(Data(recordName.utf8))
     }
 
     private static func defaultStateURL() -> URL? {
