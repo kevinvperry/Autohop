@@ -11,8 +11,9 @@ and lazy image-loading system: source-byte disk cache, downsampled memory
 variants, validation/failure cooldowns, disk pruning, prefetch priorities, and
 the call sites that deliberately use CachedArtworkImage/ArtworkImageCache.
 Verified against the current code during the 2026-07-24 whole-project audit.
-VERSION_1.4.md is the closed ledger for the build submitted to Apple on 25 July
-2026; VERSION_1.5.md records changes implemented after that submission.
+VERSION_1.4.md and VERSION_1.5.md are closed historical ledgers. VERSION_1.6.md
+records the tvOS Version 1.6 (build 13) submission on 22 August 2026 and
+separates post-submission source work from the submitted binary.
 Section 15.1 documents Release Radar's learned scheduling, including hourly,
 rolling-bulletin, burst, daily, weekly, multi-slot, learning, unreliable-date,
 and random profiles; foreground/background caps; protected background slots for
@@ -58,14 +59,16 @@ Used to keep website pages, App Store copy, and in-app help text in sync and acc
 > user's private iCloud account. There is no Autohop account, subscription tier,
 > developer-operated sync service, or Cloudflare relay.
 
-> **Version 1.5 development note:** the separate, still-unsubmitted Apple TV
+> **tvOS submission note:** the separate Apple TV
 > target now uses an iPhone-authored self-contained queue, native audio/video
 > streaming, compact purgeable projections, bounded podcast detail loading and
 > read-only subscription/order behaviour. It also presents complete feed-supplied
 > episode descriptions in a native scrollable sheet: use the Description control
 > in the audio player, the Episode menu during native video playback, or long-press
 > an episode on Home, Up Next, Library or History. Physical-device Phase 6
-> validation is still required before this can become a public feature claim.
+> target was submitted as Version 1.6 (build 13) on 22 August 2026. The
+> in-repository physical-device evidence checklist remains incomplete, so this
+> submission record is not itself an approval or public-release claim.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 

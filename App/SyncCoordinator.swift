@@ -8,6 +8,12 @@
 //  history/Stats routing, active-player identity protection, and deferred
 //  private-iCloud pushes.
 //
+//  PRODUCTION BOOTSTRAP: primeSubscriptionsNow is called on iPhone foreground
+//  re-entry. CloudSyncEngine also primes once after activation. Keep both: the
+//  activation query establishes the normal fast path, while foreground retries
+//  a transient zone/network failure. The engine's capability guard guarantees
+//  this authority operation cannot run from tvOS.
+//
 //  This extraction does not change CloudKit containers, record types, keys,
 //  identity, merge policy, pending-row durability, or platform authorship.
 //  Download/media state never enters CloudKit. AppState retains only thin
@@ -78,6 +84,10 @@ final class SyncCoordinator {
     func fetchAllNow(reason: String) async {
         await engine.fetchAllSubscriptionsNow(reason: reason)
         await engine.fetchAllHistoryNow(reason: reason)
+    }
+
+    func primeSubscriptionsNow(reason: String) async {
+        await engine.fetchAllSubscriptionsNow(reason: reason)
     }
 
     private func installCallbacksIfNeeded() {

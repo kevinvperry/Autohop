@@ -26,6 +26,9 @@ import UIKit
 //   FeedRefreshCycleWorkflow's four-minute/resource-pressure policy.
 // - Auto Archive gets its own poll opportunity and is not coupled to a feed
 //   cycle selecting or completing work.
+// - A genuine inactive/background -> active transition retries the iPhone's
+//   targeted subscription prime. This is required for Development-to-Production
+//   CloudKit bootstrap; do not replace it with a tvOS-authoritative upload.
 // - Paused engine resources are released only when both application and engine
 //   playback state agree that audio is inactive.
 // - Settings reactions are operational; they never forward objectWillChange.
@@ -199,6 +202,13 @@ final class AppRuntimeWorkflow {
             context: metadata,
             force: isBackground || !isActive
         )
+
+        if isActive && !previousSceneActive,
+           settingsStore.appSettings.iCloudSyncEnabled {
+            Task { [syncCoordinator] in
+                await syncCoordinator.primeSubscriptionsNow(reason: "foreground")
+            }
+        }
 
         guard isBackground else { return }
         lifecycle.runMaintenance {

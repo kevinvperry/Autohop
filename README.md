@@ -13,13 +13,14 @@ atomic cross-device order generation; Inactive and hidden browse rows never shar
 its move-index space.
 The checked-in production configuration includes the full iPhone and Apple TV
 codebases. Cross-device synchronization uses only the user's private iCloud.
-VERSION_1.4.md is the closed ledger for the build submitted to Apple on 25 July
-2026; VERSION_1.5.md tracks improvements implemented after that submission.
+VERSION_1.4.md and VERSION_1.5.md are closed historical submission ledgers.
+VERSION_1.6.md records the tvOS Version 1.6 (build 13) submission sent to Apple
+on 22 August 2026 and clearly separates later source changes.
 The abandoned Autohop Pro and Cloudflare relay prototypes have been removed.
 The post-1.4 tvOS rebuild is implemented through automated Phase 6 hardening:
 compact cached projections, targeted detail loading, truthful streaming states,
-native video and read-only sync authority. It remains unsubmitted until the
-physical Apple TV soak checklist passes.
+native video and read-only sync authority. Version 1.6 (build 13) was submitted
+to Apple App Review on 22 August 2026; approval and release remain pending.
 AppState decomposition Stages 0–14 are implementation-complete. Domain
 coordinators and named workflows exclusively own playback, queue, downloads,
 feed refresh/Release Radar, Auto Archive, history/Stats, onboarding, import,

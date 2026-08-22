@@ -12,7 +12,9 @@ configuration gates: atomic schema/storage, artwork preparation, publisher,
 embedded sectioned TVServices extension, exact display/play routes, redesigned
 fallback assets, tests, validator and canonical documentation. Physical Apple
 TV 1080p/4K focus, VoiceOver, offline, multiuser and signed-distribution archive
-inspection remain OPEN and must pass before App Store submission.
+inspection remain unrecorded in the repository. Version 1.6 build 13 was
+submitted on 22 August 2026; submission does not retrospectively prove those
+manual gates or constitute approval.
 
 PRIMARY DECISION: Use TVTopShelfSectionedContent with consistently square
 podcast artwork. Continue Listening comes first when valid; Up Next follows in

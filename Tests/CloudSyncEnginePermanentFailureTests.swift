@@ -1,7 +1,8 @@
 // AI CONTEXT — Tests/CloudSyncEnginePermanentFailureTests.swift. Pure tests for
 // CloudSyncEngine's permanent CloudKit push-failure and retired-pending-change
 // classifiers plus targeted queue/subscription compatibility and account
-// fingerprint classifiers. CKSyncEngine itself is not run in unit tests; these cases protect
+// fingerprint and empty-environment bootstrap classifiers. CKSyncEngine itself
+// is not run in unit tests; these cases protect
 // the Phase-1 quarantine guard and the Phase-2 namespace repair guard that
 // discards restored pre-namespace saves before they can collide again. Keep the
 // classifiers narrow: unrelated CK errors must stay retryable, and legacy
@@ -15,6 +16,39 @@ import CloudKit
 #endif
 
 final class CloudSyncEnginePermanentFailureTests: XCTestCase {
+
+    func testPhoneBootstrapsLocalLibraryWhenRemoteEnvironmentIsEmpty() {
+        XCTAssertTrue(CloudSyncEngine.shouldBootstrapEmptySubscriptionEnvironment(
+            pushesSubscriptionState: true,
+            remoteRecordCount: 0,
+            localSubscriptionCount: 134,
+            alreadyAttempted: false
+        ))
+    }
+
+    func testTVCanNeverBootstrapSubscriptionState() {
+        XCTAssertFalse(CloudSyncEngine.shouldBootstrapEmptySubscriptionEnvironment(
+            pushesSubscriptionState: false,
+            remoteRecordCount: 0,
+            localSubscriptionCount: 134,
+            alreadyAttempted: false
+        ))
+    }
+
+    func testNonemptyRemoteEnvironmentAndRepeatedAttemptDoNotBootstrap() {
+        XCTAssertFalse(CloudSyncEngine.shouldBootstrapEmptySubscriptionEnvironment(
+            pushesSubscriptionState: true,
+            remoteRecordCount: 1,
+            localSubscriptionCount: 134,
+            alreadyAttempted: false
+        ))
+        XCTAssertFalse(CloudSyncEngine.shouldBootstrapEmptySubscriptionEnvironment(
+            pushesSubscriptionState: true,
+            remoteRecordCount: 0,
+            localSubscriptionCount: 134,
+            alreadyAttempted: true
+        ))
+    }
 
     func testReadOnlyCompanionConsumesLegacySubscriptionWhenNoCurrentRecordExists() {
         let id = UUID()

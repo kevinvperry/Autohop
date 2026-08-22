@@ -19,8 +19,9 @@ Cloudflare relay prototypes have been removed.
 The tvOS rebuild now renders compact purgeable Library/queue projections,
 streams self-contained phone-authored queue entries, loads podcast details in
 bounded targeted requests, and exposes diagnostics. Automated Phase 6 gates are
-present; physical-device soak approval remains incomplete, so submission stays
-disabled.
+present. Version 1.6 (build 13) was submitted to Apple App Review on 22 August
+2026. The physical-device evidence checklist remains incomplete in-repository,
+so approval and public release are not yet recorded.
 AppState decomposition Stages 0–14 are implementation-complete as of
 2026-07-19. Domain coordinators and named workflows exclusively own
 history/Stats, queue, onboarding, typed routing, downloads, feed refresh/Release

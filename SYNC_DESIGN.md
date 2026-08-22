@@ -588,6 +588,29 @@ intentionally avoided because it has more cross-device risk than benefit.
 - `CKSyncEngine` uses zone fetches, not queries — no custom indexes needed (a
   `recordName` queryable index is only for browsing in the CloudKit Console).
 
+### Development-to-Production bootstrap invariant
+
+CloudKit Development and Production are isolated even though the app bundle,
+local GRDB database and record identities are the same. A subscription that was
+acknowledged in Development can therefore be locally clean while Production has
+no corresponding record. On the iPhone authority, a successful targeted query
+that returns zero `SubscriptionState` records while a real local library exists
+triggers one guarded bootstrap per engine lifetime: subscription snapshots are
+rebuilt fully dirty, environment-specific CKRecord system fields are cleared,
+existing episode/history/stats/queue projections are requeued, ordering receives
+a new generation, and the send is requested immediately. Query failures never
+trigger this path. The tvOS companion capability makes the bootstrap structurally
+impossible because Apple TV must never author subscription membership/settings.
+The iPhone performs this targeted membership query immediately after sync-engine
+activation and retries it on a genuine foreground re-entry; the recovery is not
+merely a dormant API waiting for a settings-screen action.
+
+Do not remove this as a redundant first-run upload. It is the release transition
+that seeds Production when development builds have already marked local state
+clean. Diagnostics use `sync.emptyEnvironmentBootstrap`,
+`sync.emptyEnvironmentBootstrapCompleted`, and
+`sync.emptyEnvironmentBootstrapFailed`.
+
 ## Tests
 Sync coverage lives in `Tests/SyncStateTests.swift`,
 `CloudKitSyncMappingTests.swift`, `EpisodeDiffPersistTests.swift`,

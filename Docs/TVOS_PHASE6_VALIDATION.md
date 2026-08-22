@@ -4,9 +4,9 @@
 cannot truthfully mark these physical Apple TV checks complete. Check boxes only
 after testing the exact signed release candidate; attach diagnostic log details. -->
 
-Release candidate: _not assigned_  
-Apple TV model / tvOS version: _not recorded_  
-Date: _not tested_
+Release candidate: Version 1.6 (build 13), submitted 22 August 2026
+Apple TV model / tvOS version: _not recorded_
+Date: _evidence not recorded in this document_
 
 - [ ] Fresh install and warm-cache launch tested
 - [ ] Wi-Fi, interruption and recovery tested
@@ -37,5 +37,8 @@ Date: _not tested_
 - [ ] Focus, VoiceOver, Reduce Motion and rapid repeated actions are reviewed on
       physical hardware
 
-The tvOS App Store submission feature gate must remain disabled until every box
-is complete and `Scripts/validate-tvos-release.sh --archive …` passes.
+Version 1.6 (build 13) was submitted on 22 August 2026. These boxes remain
+unchecked because the repository does not contain enough signed human/device
+evidence to mark them complete retrospectively. Before replacing the submitted
+binary or shipping a later build, complete this record against that exact
+candidate and run `Scripts/validate-tvos-release.sh` against its exported app.

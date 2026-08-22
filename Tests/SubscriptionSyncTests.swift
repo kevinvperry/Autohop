@@ -7,7 +7,9 @@
 // prefixed; keep the legacy unprefixed decode path for existing iCloud data.
 // Also covers the namespace data-loss repair: absent remote fields must not wipe
 // local settings, fresh records write full snapshots, and legacy records can
-// restore settings then queue a full namespaced upload.
+// restore settings then queue a full namespaced upload. The production-
+// environment bootstrap tests ensure Development acknowledgements/system fields
+// cannot prevent the iPhone authority from seeding an empty Production zone.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -45,6 +47,40 @@ final class SubscriptionSyncTests: XCTestCase {
             insertAtBottom: true
         )
         return id
+    }
+
+    @MainActor
+    func testEmptyEnvironmentReauthorMakesFullFreshSubscriptionAndOrderPending() async throws {
+        let store = SubscriptionStore.inMemory()
+        let firstID = try addSubscription(to: store, title: "First", feedIndex: 1)
+        let secondID = try addSubscription(to: store, title: "Second", feedIndex: 2)
+        await store.flushPendingSaves()
+        let db = try XCTUnwrap(store.database)
+        try db.markSynced(episodeSyncKeys: [], subscriptionIDs: [firstID, secondID])
+        try db.storeSubscriptionSystemFields(Data([1, 2, 3]), id: firstID)
+        let preBootstrapOrder = try XCTUnwrap(db.pendingSubscriptionOrder())
+        _ = try db.acknowledgeSubscriptionOrder(generationID: preBootstrapOrder.generationID)
+        try db.storeSubscriptionOrderSystemFields(Data([4, 5, 6]))
+
+        let bootstrapDate = Date(timeIntervalSince1970: 1_787_356_800)
+        let counts = try db.reauthorAllSyncStateForEmptyCloudEnvironment(
+            store.subscriptions,
+            dirtyAt: bootstrapDate
+        )
+
+        XCTAssertEqual(counts.subscriptions, 2)
+        XCTAssertEqual(counts.subscriptionOrder, 1)
+
+        let pending = try db.pendingSubscriptionSyncStates()
+        XCTAssertEqual(Set(pending.map(\.subscriptionID)), Set([firstID, secondID]))
+        XCTAssertTrue(pending.allSatisfy(\.hasPendingChanges))
+        XCTAssertNil(try db.subscriptionSystemFields(id: firstID))
+        XCTAssertNil(try db.subscriptionSystemFields(id: secondID))
+
+        let order = try XCTUnwrap(db.pendingSubscriptionOrder())
+        XCTAssertEqual(Set(order.orderedSubscriptionIDs), Set([firstID, secondID]))
+        XCTAssertEqual(order.updatedAt, bootstrapDate)
+        XCTAssertNil(try db.subscriptionOrderSystemFields())
     }
 
     // MARK: - Merge

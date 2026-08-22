@@ -82,11 +82,17 @@ of the implementation definition of done.
 
 ## Release status
 
-- **Development status:** active development following the Version 1.5 App
-  Store submission.
-- **Submission status:** not submitted.
+- **tvOS submission status:** Version 1.6 build 13 was submitted to Apple App
+  Review on 22 August 2026. Review is pending; submission is not approval or
+  public release.
+- **Submitted-source boundary:** the submitted tvOS binary is build 13. Changes
+  explicitly labelled `post-build 13` below were committed after submission and
+  are not claimed to exist in Apple's review binary. They require a new build
+  number and replacement submission if they are to be reviewed.
+- **Development status:** active post-submission development continues. iOS and
+  tvOS release status must be recorded independently when they diverge.
 
-## Planned / proposed
+## Historical proposal and implementation record
 
 - **tvOS App Review clean-install access:** Apple rejected Version 1.5 (build
   6) after a clean Apple TV installation appeared to load indefinitely and the
@@ -97,8 +103,9 @@ of the implementation definition of done.
   and a deterministic local demonstration library that cannot write synthetic
   content to production persistence, CloudKit or listening statistics. The
   original proposal is now implemented in runtime code as described under
-  Completed; physical Apple TV clean-install and Release-archive entitlement
-  gates remain outstanding before resubmission.
+  Completed. Version 1.6 build 13 was subsequently submitted on 22 August 2026;
+  the repository still does not contain signed evidence for every manual
+  physical-device checklist item.
   An independent audit of a Claude Opus review subsequently strengthened the
   proposal with stage-level bootstrap deadlines, late-result ownership rules,
   bundled offline media, Release-build demo verification and inspection of the
@@ -169,9 +176,9 @@ of the implementation definition of done.
   module and cannot reach subscriptions, CloudKit, history, queue or Stats
   writers. Added launch-policy and deterministic/resettable fixture tests; the
   complete 37-test tvOS suite and Release simulator build pass. Added matching
-  in-app/website support guidance and an App Store Connect review-notes draft.
-  Physical-device and signed Release archive verification remain required
-  before App Store resubmission.
+  in-app/website support guidance and App Store Connect review notes. Version
+  1.6 build 13 was submitted on 22 August 2026; unchecked human/device evidence
+  remains explicitly unverified rather than being inferred from submission.
 
 - **Review in Apple Podcasts (iOS family):** Added a clearly labelled review
   action beneath the metadata cards in the Player's Details panel and to its
@@ -514,3 +521,19 @@ of the implementation definition of done.
 - Restored the hardware-proven complete tvOS icon stack after a Back-only
   cleanup produced the system's white grid placeholder on the Home Screen.
   AI context now forbids icon-layer deletion without signed-device evidence.
+
+### CloudKit Production bootstrap repair — post-build 13
+
+- Diagnosed the Xcode-versus-TestFlight split from physical-device logs: the
+  development build found 241 subscription records, while the production-signed
+  candidate was authenticated and could upload history but consistently found
+  zero subscription records.
+- Added a guarded iPhone-authority bootstrap for an empty CloudKit environment.
+  It republishes the current real library and ordering, clears environment-bound
+  CKRecord system fields, and requeues existing episode state, history, stats and
+  queue projections so Production receives a complete material replica.
+- Preserved the hard tvOS read-only subscription boundary. A companion build can
+  never invoke the bootstrap, and network/query failures cannot masquerade as an
+  empty environment.
+- Added pure policy and database regression coverage, including proof that fresh
+  projections are pending and old system fields are removed.

@@ -14,7 +14,7 @@ No Autohop Pro page or external relay settings exist. iCloud is the sole
 cross-device synchronization method for iPhone and Apple TV.
 Version 1.4 includes one adaptive Now Playing & Up Next system widget. It is an
 external WidgetKit surface, not a page in the app navigation stack.
-The unsubmitted Version 1.5 tvOS development target has Home, Up Next, Library,
+The tvOS app, submitted as Version 1.6 (build 13) on 22 August 2026, has Home, Up Next, Library,
 Search, Player and Settings/Diagnostics tabs. Search is browse/play-only and TV
 cannot change iPhone subscription settings or Priority order.
 Page names and routes were rechecked against current SwiftUI code on 2026-07-24.

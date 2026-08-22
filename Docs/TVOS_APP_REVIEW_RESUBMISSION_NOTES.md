@@ -3,13 +3,13 @@
 <!--
 AI CONTEXT — Docs/TVOS_APP_REVIEW_RESUBMISSION_NOTES.md
 
-PURPOSE: Reviewer-facing draft for the tvOS resubmission that follows the
-Version 1.5 (build 6) Guideline 2.1(a) rejection. Keep the navigation path and
-privacy claims synchronized with TV/Views/TVRootView.swift and TV/Demo.
+PURPOSE: Record of the reviewer-facing notes for the tvOS resubmission that
+follows the Version 1.5 (build 6) Guideline 2.1(a) rejection. Keep the
+navigation path and privacy claims synchronized with TV/Views/TVRootView.swift
+and TV/Demo.
 
-STATUS: DRAFT. Automated tests pass, but replace the bracketed version/build
-values and complete the physical Apple TV clean-install and signed archive
-entitlement gates before pasting this text into App Store Connect.
+STATUS: SUBMITTED. Version 1.6 build 13 was submitted to Apple App Review on 22
+August 2026. This record does not imply approval or public release.
 
 DESIGN DECISION: Autohop has no developer-operated login or shared test account.
 The production app therefore exposes a deterministic offline Demo Library that
@@ -17,7 +17,7 @@ is available to reviewers and customers and cannot write to production storage,
 CloudKit, listening history, or statistics.
 -->
 
-## App Review Information draft
+## App Review Information — submitted Version 1.6 (build 13)
 
 ### Review notes
 
@@ -61,10 +61,17 @@ Customers who already use Autohop on iPhone can instead enable Settings → Sync
 → iCloud Sync on iPhone, use the same Apple Account on Apple TV, and select
 **Check iCloud Again**.
 
-### Verification record before submission
+### Submission record
 
-- [ ] Replace `[VERSION] ([BUILD])` in App Store Connect with the submitted
-  version and build.
+- [x] App Store Connect submission identified as Version 1.6 (build 13).
+- [x] Submitted to Apple App Review on 22 August 2026.
+
+### Physical and archive evidence record
+
+The repository does not contain enough signed evidence to retrospectively mark
+the following human/device checks complete. Preserve them as an auditable
+record rather than inferring completion from the App Store submission:
+
 - [ ] Delete the app from a physical Apple TV, reinstall the Release candidate,
   and verify the setup screen appears with an empty private iCloud library.
 - [ ] Verify every setup-screen action with the Siri Remote.
@@ -76,4 +83,3 @@ Customers who already use Autohop on iPhone can instead enable Settings → Sync
 - [ ] Inspect the signed distribution archive and confirm production APNs plus
   the intended CloudKit container and services.
 - [ ] Attach concise reproduction notes to the internal release record.
-

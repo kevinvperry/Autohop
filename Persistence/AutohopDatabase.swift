@@ -435,6 +435,102 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    struct CloudEnvironmentBootstrapCounts: Equatable {
+        var subscriptions = 0
+        var episodes = 0
+        var history = 0
+        var stats = 0
+        var queue = 0
+        var subscriptionOrder = 0
+    }
+
+    /// Re-authors the phone's complete material sync state when a different
+    /// CloudKit environment has no SubscriptionState records. Cached CKRecord
+    /// system fields and clean stamps belong to the environment that
+    /// acknowledged them (commonly Development); carrying either into
+    /// Production makes an existing local library look fully synced while the
+    /// production zone remains empty. tvOS never calls this authority-only API.
+    ///
+    /// Subscription projections are rebuilt from the current library. Existing
+    /// episode/history/stats/queue projections are marked pending and stripped
+    /// of environment-specific system fields; the whole-list order receives a
+    /// new generation. Domain identities and values are preserved, so this is a
+    /// transport bootstrap rather than a library migration.
+    func reauthorAllSyncStateForEmptyCloudEnvironment(
+        _ subscriptions: [Subscription],
+        dirtyAt: Date = Date()
+    ) throws -> CloudEnvironmentBootstrapCounts {
+        var counts = CloudEnvironmentBootstrapCounts()
+        try writeAndHarden { db in
+            let realSubscriptions = subscriptions.filter { $0.browseDate == nil }
+            for subscription in realSubscriptions {
+                let state = SubscriptionSyncState(
+                    subscription: subscription,
+                    subscribed: true,
+                    dirtyAt: dirtyAt
+                )
+                let row = SubscriptionSyncRow(
+                    subscriptionID: subscription.id.uuidString,
+                    payload: try encoder.encode(state),
+                    hasPendingChanges: true,
+                    systemFields: nil
+                )
+                try row.save(db)
+                counts.subscriptions += 1
+            }
+
+            for var row in try EpisodeSyncRow.fetchAll(db) {
+                guard var state = try? decoder.decode(EpisodeSyncState.self, from: row.payload) else { continue }
+                state.markAllDirty(at: dirtyAt)
+                row.payload = try encoder.encode(state)
+                row.hasPendingChanges = true
+                row.systemFields = nil
+                try row.save(db)
+                counts.episodes += 1
+            }
+
+            for var row in try HistorySyncRow.fetchAll(db) {
+                row.hasPendingChanges = true
+                row.systemFields = nil
+                try row.save(db)
+                counts.history += 1
+            }
+
+            for var row in try StatsSyncRow.fetchAll(db) {
+                row.hasPendingChanges = true
+                row.systemFields = nil
+                try row.save(db)
+                counts.stats += 1
+            }
+
+            if var row = try QueueSnapshotRow.fetchOne(db, key: QueueSnapshotRow.singletonID) {
+                row.hasPendingChanges = true
+                row.systemFields = nil
+                try row.save(db)
+                counts.queue = 1
+            }
+
+            let order = SubscriptionOrderState(
+                orderedSubscriptionIDs: realSubscriptions
+                    .sorted { $0.priorityRank < $1.priorityRank }
+                    .map(\.id),
+                updatedAt: dirtyAt,
+                sourceDeviceID: DeviceIdentity.current
+            )
+            let orderRow = SubscriptionOrderRow(
+                id: SubscriptionOrderRow.singletonID,
+                payload: try encoder.encode(order),
+                updatedAt: order.updatedAt.timeIntervalSince1970,
+                generationID: order.generationID.uuidString,
+                hasPendingChanges: true,
+                systemFields: nil
+            )
+            try orderRow.save(db)
+            counts.subscriptionOrder = 1
+        }
+        return counts
+    }
+
     // MARK: - Private write helpers
 
     /// Writes a subscription incrementally, diffing against `previous` (the

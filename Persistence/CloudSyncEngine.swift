@@ -24,6 +24,19 @@ import Combine
 // legacy record only when no current record exists. Never restore the old
 // blanket legacy skip: it made clean TestFlight installs appear to have an
 // empty iCloud library while history continued to sync normally.
+// CLOUDKIT ENVIRONMENT BOOTSTRAP: Development and Production are isolated, but
+// the app's local GRDB projections historically shared clean acknowledgements
+// and CKRecord system fields across both. On the iPhone authority only, a
+// successful targeted query returning zero SubscriptionState records while a
+// real local library exists re-authors full fresh subscription snapshots plus
+// all existing episode/history/stats/queue projections and ordering, then sends
+// them immediately. This makes the first production build seed Production after
+// Development previously acknowledged the same material state.
+// The iPhone executes the targeted prime on engine activation and foreground
+// re-entry; defining a recovery method without those call sites leaves an empty
+// Production environment permanently empty. The guard requires a successful
+// empty query (not an error), runs once per engine lifetime, and is structurally
+// impossible under tvCompanion capability.
 //
 // Push: observes SubscriptionStore changes (debounced 1 s), scans the database
 // for pending sync-state rows (dirty fields/partitions), and queues saves in two
@@ -179,6 +192,10 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     private var activeFetchCycles: [FetchCycleDiagnostics] = []
     private var lastStateFingerprint = "none"
     private var lastStatePersisted = false
+    /// Prevent repeated bootstrap attempts while CloudKit is still making the
+    /// just-sent records query-visible. A later process may retry safely if the
+    /// first send failed; once records exist the empty-query guard is false.
+    private var attemptedEmptyEnvironmentBootstrap = false
 
     /// Slow-lane (history/stats) push debounce. Batches a playback session's
     /// continuous stats/history churn into roughly one CloudKit push per minute;
@@ -351,6 +368,13 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             "device": DeviceIdentity.current
         ])
         Task {
+            // iPHONE AUTHORITY BOOTSTRAP. A production-signed first launch must
+            // actually query membership so the empty-environment recovery below
+            // can detect Development-clean/Production-empty state. tvOS performs
+            // its own read-only launch prime and must never enter this path.
+            if pushesSubscriptionState {
+                _ = await fetchAllSubscriptionsNow(reason: "engineActivated")
+            }
             await recoverLegacySubscriptionSettingsIfNeeded()
             await queuePendingLocalChanges(slowLane: .flush(reason: "engineActivated"))
         }
@@ -573,6 +597,16 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 "resultFailures": "\(resultFailures)",
                 "unidentified": "\(selection.unidentified)"
             ], alwaysPersist: true)
+            if Self.shouldBootstrapEmptySubscriptionEnvironment(
+                pushesSubscriptionState: pushesSubscriptionState,
+                remoteRecordCount: fetchedRecords.count,
+                localSubscriptionCount: await MainActor.run {
+                    subscriptionStore.subscriptions.filter { $0.browseDate == nil }.count
+                },
+                alreadyAttempted: attemptedEmptyEnvironmentBootstrap
+            ) {
+                await bootstrapEmptySubscriptionEnvironment(reason: reason)
+            }
             return applied
         } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
             // Nothing synced yet / zone not created — normal on a fresh account.
@@ -582,6 +616,64 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 "reason": reason, "error": "\(error)"
             ])
             return applied
+        }
+    }
+
+    /// Pure guard retained as a regression-test seam. Never broaden this to TV:
+    /// only the phone is permitted to author subscription membership/settings.
+    static func shouldBootstrapEmptySubscriptionEnvironment(
+        pushesSubscriptionState: Bool,
+        remoteRecordCount: Int,
+        localSubscriptionCount: Int,
+        alreadyAttempted: Bool
+    ) -> Bool {
+        pushesSubscriptionState
+            && remoteRecordCount == 0
+            && localSubscriptionCount > 0
+            && !alreadyAttempted
+    }
+
+    private func bootstrapEmptySubscriptionEnvironment(reason: String) async {
+        guard pushesSubscriptionState, !attemptedEmptyEnvironmentBootstrap,
+              let database, let engine
+        else { return }
+        attemptedEmptyEnvironmentBootstrap = true
+        let localSubscriptions = await MainActor.run {
+            subscriptionStore.subscriptions.filter { $0.browseDate == nil }
+        }
+        guard !localSubscriptions.isEmpty else { return }
+
+        do {
+            let counts = try database.reauthorAllSyncStateForEmptyCloudEnvironment(localSubscriptions)
+            logger.warning(
+                "sync.emptyEnvironmentBootstrap",
+                "Republishing the phone library into an empty CloudKit environment",
+                metadata: [
+                    "reason": reason,
+                    "subscriptions": "\(counts.subscriptions)",
+                    "episodes": "\(counts.episodes)",
+                    "history": "\(counts.history)",
+                    "stats": "\(counts.stats)",
+                    "queue": "\(counts.queue)",
+                    "subscriptionOrder": "\(counts.subscriptionOrder)"
+                ],
+                alwaysPersist: true
+            )
+            await queuePendingLocalChanges(slowLane: .flush(reason: "emptyEnvironmentBootstrap"))
+            try await engine.sendChanges()
+            logger.info(
+                "sync.emptyEnvironmentBootstrapCompleted",
+                "Empty CloudKit environment bootstrap send completed",
+                metadata: ["subscriptions": "\(localSubscriptions.count)"],
+                alwaysPersist: true
+            )
+        } catch {
+            logger.error(
+                "sync.emptyEnvironmentBootstrapFailed",
+                "Could not bootstrap subscriptions into the empty CloudKit environment",
+                metadata: ["error": String(describing: error)],
+                alwaysPersist: true
+            )
         }
     }
 

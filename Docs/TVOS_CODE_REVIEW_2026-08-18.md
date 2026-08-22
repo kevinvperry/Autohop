@@ -22,6 +22,10 @@ finding when it is fixed, and record the fix in VERSION_1.6.md.
 > lifecycle, playback and demo invariants. Physical-device checklist items in
 > `TVOS_PHASE6_VALIDATION.md` remain deliberately unchecked until observed on
 > signed Apple TV hardware.
+>
+> Submission update — 22 August 2026: Version 1.6 build 13 was submitted to
+> Apple App Review. Historical findings below retain their original wording;
+> the submission does not mark unchecked device evidence complete.
 
 ## Scope and verdict
 

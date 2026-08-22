@@ -15,8 +15,10 @@ gates: bounded presentation fallback, setup/retry/Discover access, isolated
 offline demo, bundled first-party audio/video, ephemeral demo interactions,
 Reset/Exit, AI headers and canonical documentation. Physical Apple TV clean-
 install/focus/playback validation and inspection of a signed distribution
-archive's effective APNs/CloudKit entitlements remain OPEN; do not claim the
-App Review rejection is resolved or resubmit until those gates pass.
+archive's effective APNs/CloudKit entitlements remain unrecorded in the
+repository. Version 1.6 build 13 was submitted on 22 August 2026; do not treat
+submission as proof that the rejection is resolved, approved or publicly
+released.
 
 INDEPENDENT REVIEW UPDATE: Claude Opus findings were audited against the source
 on 15 August 2026. Accepted: launch and review access are distinct requirements;
