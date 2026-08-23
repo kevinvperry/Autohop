@@ -40,6 +40,7 @@ struct QueueSheetView: View {
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @State private var isRefreshing = false
     @State private var appearTime: Date?
     // Per-row transient transforms driving the action animations.
@@ -64,6 +65,7 @@ struct QueueSheetView: View {
     var onOpenPodcastDetail: ((UUID) -> Void)? = nil
 
     private let logger = AppLogger.shared
+    private var rowMetrics: AdaptiveListRowMetrics { .init(containerWidth: viewportWidth) }
 
     var body: some View {
         NavigationStack {
@@ -85,17 +87,17 @@ struct QueueSheetView: View {
 
                             let isExpanded = expandedEpisodeID == episode.id
                             VStack(alignment: .leading, spacing: 0) {
-                                HStack(spacing: 12) {
+                                HStack(spacing: rowMetrics.rowSpacing) {
                                     if isCurrent {
                                         Image(systemName: "play.fill")
-                                            .font(.system(size: 10, weight: .bold))
+                                            .font(.system(size: rowMetrics.compactControlFontSize, weight: .bold))
                                             .foregroundStyle(.purple)
-                                            .frame(width: 20)
+                                            .frame(width: rowMetrics.leadingMarkerWidth)
                                     } else {
                                         Text("\(index + 1)")
-                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                            .font(.system(size: rowMetrics.secondaryFontSize, weight: .bold, design: .monospaced))
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 20, alignment: .center)
+                                            .frame(width: rowMetrics.leadingMarkerWidth, alignment: .center)
                                     }
 
                                     VStack(alignment: .center, spacing: 4) {
@@ -104,10 +106,10 @@ struct QueueSheetView: View {
 
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(sub?.title ?? "Unknown Podcast")
-                                            .font(.caption)
+                                            .font(.system(size: rowMetrics.secondaryFontSize))
                                             .foregroundStyle(.secondary)
                                         Text(episode.title)
-                                            .font(.subheadline.bold())
+                                            .font(.system(size: rowMetrics.primaryFontSize, weight: .bold))
                                             .foregroundStyle(.primary)
                                             .lineLimit(isExpanded ? nil : 2)
                                             .onTapGesture {
@@ -126,7 +128,7 @@ struct QueueSheetView: View {
                                                     .lineLimit(1)
                                             }
                                         }
-                                        .font(.caption)
+                                        .font(.system(size: rowMetrics.secondaryFontSize))
                                         .foregroundStyle(.secondary)
                                     }
 
@@ -141,12 +143,12 @@ struct QueueSheetView: View {
                                         }
                                         if pinnedNext || pinnedLast {
                                             Image(systemName: "pin.fill")
-                                                .font(.system(size: 10, weight: .bold))
+                                                .font(.system(size: rowMetrics.compactControlFontSize, weight: .bold))
                                                 .foregroundStyle(pinnedNext ? Color.blue : Color.orange)
                                         }
                                         if let dur = episode.durationSeconds {
                                             Text(formatDuration(dur))
-                                                .font(.caption)
+                                                .font(.system(size: rowMetrics.secondaryFontSize))
                                                 .foregroundStyle(.secondary)
                                                 .monospacedDigit()
                                         }
@@ -158,13 +160,12 @@ struct QueueSheetView: View {
                                         let plain = HTMLDescriptionText.plainText(from: raw)
                                         if !plain.isEmpty {
                                             Text(sentenceParagraphs(plain))
-                                                .font(.caption)
-                                                .fontWeight(.regular)
+                                                .font(.system(size: rowMetrics.secondaryFontSize))
                                                 .foregroundStyle(.primary)
                                                 .lineLimit(15)
                                                 .padding(.top, 8)
                                                 // indent to artwork left edge: index (20) + HStack spacing (12)
-                                                .padding(.leading, 32)
+                                                .padding(.leading, rowMetrics.leadingMarkerWidth + rowMetrics.rowSpacing)
                                                 .transition(.opacity.combined(with: .move(edge: .top)))
                                         }
                                     }
@@ -178,9 +179,9 @@ struct QueueSheetView: View {
                                                 onOpenPodcastDetail?(episode.subscriptionID)
                                             } label: {
                                                 let icon = Image(systemName: "list.bullet")
-                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .font(.system(size: rowMetrics.compactControlFontSize, weight: .semibold))
                                                     .foregroundStyle(.purple)
-                                                    .frame(width: 30, height: 30)
+                                                    .frame(width: rowMetrics.compactControlSize, height: rowMetrics.compactControlSize)
                                                 if #available(iOS 26, *) {
                                                     icon.glassEffect(in: Circle())
                                                 } else {
@@ -193,9 +194,9 @@ struct QueueSheetView: View {
                                                 onOpenPodcastSettings?(episode.subscriptionID)
                                             } label: {
                                                 let gearIcon = Image(systemName: "gearshape")
-                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .font(.system(size: rowMetrics.compactControlFontSize, weight: .semibold))
                                                     .foregroundStyle(.purple)
-                                                    .frame(width: 30, height: 30)
+                                                    .frame(width: rowMetrics.compactControlSize, height: rowMetrics.compactControlSize)
                                                 if #available(iOS 26, *) {
                                                     gearIcon.glassEffect(in: Circle())
                                                 } else {
@@ -210,6 +211,7 @@ struct QueueSheetView: View {
                                     }
                                 }
                             }
+                            .padding(.vertical, rowMetrics.verticalPadding)
                             .scaleEffect(rowScales[episode.id] ?? 1)
                             .offset(rowOffsets[episode.id] ?? .zero)
                             .opacity(rowOpacities[episode.id] ?? 1)
@@ -270,6 +272,8 @@ struct QueueSheetView: View {
                             }
                         }
                     }
+                    .responsiveListSizing()
+                    .episodeListPageWidth()
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     // Animate structural changes (row moves to top/bottom, archive
@@ -281,7 +285,7 @@ struct QueueSheetView: View {
                 }
             }
             .navigationTitle("Up Next")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Up Next")
             .refreshable {
                 await refreshQueue()
             }
@@ -443,11 +447,12 @@ struct QueueSheetView: View {
     }
 
     private func artwork(url: URL?, pinnedNext: Bool, pinnedLast: Bool) -> some View {
-        CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {
+        let size = rowMetrics.artworkSize
+        return CachedArtworkImage(url: url, targetSize: CGSize(width: size, height: size)) {
             placeholderArtwork
         }
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.2))
     }
 
     private var placeholderArtwork: some View {

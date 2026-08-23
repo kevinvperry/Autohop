@@ -37,10 +37,11 @@ struct SupportView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .responsiveListSizing()
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .navigationTitle("Support")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Support")
         .miniPlayerBar()
         .preferredColorScheme(.dark)
     }
@@ -49,27 +50,30 @@ struct SupportView: View {
 // MARK: - List row
 
 private struct SupportSectionRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let section: SupportSection
 
     var body: some View {
-        HStack(spacing: 14) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let iconSize = max(38, metrics.artworkSize * 0.86)
+        HStack(spacing: metrics.rowSpacing) {
             Image(systemName: section.icon)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: metrics.primaryFontSize + 2, weight: .semibold))
                 .foregroundStyle(.purple)
-                .frame(width: 38, height: 38)
+                .frame(width: iconSize, height: iconSize)
                 .background(Color.purple.opacity(0.15), in: RoundedRectangle(cornerRadius: 9))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(section.summary)
-                    .font(.system(size: 13))
+                    .font(.system(size: metrics.secondaryFontSize))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, metrics.verticalPadding)
     }
 }
 
@@ -109,7 +113,7 @@ private struct SupportSectionView: View {
         }
         .background(pageBackground.ignoresSafeArea())
         .navigationTitle(section.title)
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle(section.title)
         .miniPlayerBar()
         .preferredColorScheme(.dark)
     }

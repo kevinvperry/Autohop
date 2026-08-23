@@ -118,19 +118,20 @@ struct FeedRefreshScheduleView: View {
                         }
                     }
                 }
+                .responsiveListSizing()
                 .listSectionSpacing(28)
             }
         }
         .navigationTitle("Feed Refresh Schedule")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Feed Refresh Schedule")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if let exportURL {
-                    ShareLink(item: exportURL) { Image(systemName: "square.and.arrow.up") }
+                    ShareLink(item: exportURL) { Image(systemName: "square.and.arrow.up").responsiveToolbarSymbol() }
                         .accessibilityLabel("Export diagnostic report")
                 }
             }

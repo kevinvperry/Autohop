@@ -16,6 +16,89 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-23 whole-app large-screen asset upgrade — post-submission
+
+- Completed a page-by-page audit of all shared iOS-family SwiftUI assets and
+  documented the implementation and deliberate fixed-size exceptions in
+  `Docs/IOS_FAMILY_ASSET_RESPONSIVENESS_AUDIT_2026-08-23.md`.
+- Extended Discover's container-width navigation strategy across library,
+  queue, settings, stats, charts, search, support, diagnostics, scheduling,
+  onboarding and subscription-management pages. Inline headings and toolbar
+  actions now grow consistently on iPad and resizable Mac windows while
+  retaining established iPhone proportions.
+- Made the persistent mini-player's artwork, control, padding and corner radius
+  responsive. Export canvases, progress geometry, badges, native list/form rows
+  and minimum interaction targets remain deliberately stable.
+- This source change postdates the submitted tvOS Version 1.6 build 13 and does
+  not alter the tvOS UI or Apple's review binary.
+- Repaired Podcast Detail's responsive header regression. Content columns below
+  600 points now keep artwork top-leading with title, description, badges and
+  metadata beside it, preserving episode-list height on iPhone and narrow split
+  views. Wider iPad/Mac columns use the centred editorial header.
+- Completed the follow-up all-list density pass. Every native `List` and `Form`
+  now receives the shared container-responsive row baseline, while image-led
+  subscription, episode, queue, search, download, history and notification rows
+  scale artwork from 44 to 52/60 points together with primary/secondary text,
+  spacing, padding and progress indentation. Custom support, activity,
+  diagnostics and Player Up Next rows follow the same policy.
+- Closed the remaining mixed-scale gap on Podcast Detail: show title,
+  description, publisher, categories, Subscribe control and notification button
+  now grow in the same width bands as its artwork and episode list. Shared
+  Video, Explicit and episode-status pills, Settings row labels and trim
+  controls also use those bands wherever they appear.
+- Corrected the shared viewport-width ownership defect exposed by the iPad
+  comparison: Subscriptions and Up Next had applied width to descendants while
+  their parent-owned rows still read the 390-point fallback. Root navigation
+  now supplies the real resizable container width, and both pages scale row
+  copy, metadata, artwork, markers, expanded-row shortcuts, action controls,
+  padding and status/media pills in concert with Podcast Detail.
+- Standardised vertical episode-list measure against Podcast Detail: Podcast
+  Detail, Subscriptions, Up Next, Listening History, Downloads, Search episode
+  results and Auto Archive Activity now use 20-point compact gutters and an
+  860-point maximum list surface inside the shared 900-point outer measure.
+  Editorial episode rails/charts and Player's single embedded Up Next card remain
+  intentionally governed by their host compositions.
+- Aligned Subscriptions' Priority/refresh action row with the same centred
+  episode-list column, removing its wider iPad edge positions. Completed the
+  screenshot-led navigation follow-up by applying the shared large-screen
+  control metrics to Podcast Detail's Back/Share/Settings toolbar and Player's
+  custom Subscriptions, panel, sleep and Up Next controls (including empty state).
+- Added fixed shortcut navigation rails to System Settings and Individual
+  Subscription Settings on expansive iPad/Mac windows. Icon-and-label shortcuts
+  animate the existing right-hand Form to major sections, retain sidebar focus
+  for repeated keyboard navigation, reflect the currently appearing section,
+  and conditionally include Diagnostics/Chapters only when available. iPhone and
+  narrow iPad multitasking keep the established single-column Form unchanged.
+- Repaired the shortcut implementation after repeated iPad validation. SwiftUI
+  `Form` virtualizes distant rows, so neither header nor row view IDs reliably
+  exist for long-distance `ScrollViewReader` commands. The expansive pages now
+  bridge shortcut requests to the Form's native collection/table view and scroll
+  by explicit section index, which remains addressable before its rows are
+  realized. Headers still drive manual-scroll highlighting and shortcut labels
+  exactly match their visible Form section headings.
+- Centred the combined 240-point rail and Form workspace in landscape. Following
+  device review, removed the contrasting grey workspace treatment: the rail,
+  Form pane and surrounding canvas now share one consistent black background.
+- Reassessed the native bridge after another device failure: its first Form
+  lookup depended on an invisible SwiftUI background marker having a meaningful
+  UIKit frame, which is not guaranteed. Form discovery now inspects the visible
+  hierarchy, selects the full-sized enabled native list by content extent,
+  synchronizes layout and performs one bounded retry for presentation races.
+- Increased vertical separation between every System Settings and Individual
+  Subscription Settings section from 36 to 48 points across iPhone, iPad and
+  iOS-family Mac layouts. Internal card-row spacing remains unchanged.
+- Changed shortcut destination alignment from top-pinned to vertically centred.
+  The selected section's first control now lands near the middle of the Form,
+  keeping its supplementary heading and nearby context visible below the title
+  bar instead of cropping the heading above the viewport.
+- Audited native navigation symbols after iPad screenshots exposed a cropped
+  Podcast Detail Share glyph. The previous shared modifier incorrectly gave
+  every utility icon the larger circular-Back font (up to 28 points). Navigation
+  now has separate responsive contracts: bounded utility symbols use the
+  15/18/21-point band inside a 36/44/44-point host, while circular Back symbols
+  retain their dedicated 20/25/28-point artwork band. Applied the Back contract
+  consistently across all audited iOS page toolbars.
+
 ## 2026-08-23 iOS-family Mac player modal repair — post-submission
 
 - Repaired the immediate crash when an iOS-family build running on Mac opened
@@ -47,6 +130,20 @@ of the implementation definition of done.
 - Short touch-device windows remain safely scrollable when the system clamps
   the measured detent; Mac retains native modal sizing. The exported share card
   remains fixed-size and pixel-stable.
+
+## 2026-08-23 Discover large-screen navigation scaling — post-submission
+
+- Connected the Discover inline heading, Back control and storefront picker to
+  the existing container-width editorial bands. The established phone sizes are
+  unchanged while iPad, Mac and future wide windows progressively enlarge title
+  type, control labels, symbols and interaction targets.
+- Added regression coverage for monotonic navigation scaling across standard,
+  wide and expansive layouts. No device-model or fixed-screen branching was
+  introduced.
+- Capped the wide/expansive Back interaction frame to the inline toolbar's
+  44-point vertical slot and adjusted the largest glyph to 28 points, preventing
+  its circular artwork from being cropped. Confirmed that the Search shortcut
+  already scales from 40 to 46 to 52 points high across the same bands.
 
 ## 2026-08-22 tvOS legacy iCloud library recovery
 

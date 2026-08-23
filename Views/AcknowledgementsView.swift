@@ -51,16 +51,17 @@ struct AcknowledgementsView: View {
             }
             .listRowBackground(cardBackground)
         }
+        .responsiveListSizing()
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Acknowledgements")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Acknowledgements")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
         }
         .miniPlayerBar()
@@ -70,6 +71,7 @@ struct AcknowledgementsView: View {
 // MARK: - Row
 
 private struct AcknowledgementRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let name: String
     let author: String
     let licence: String
@@ -80,11 +82,12 @@ private struct AcknowledgementRow: View {
     @State private var showingDetail = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        VStack(alignment: .leading, spacing: max(10, metrics.rowSpacing - 2)) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name)
-                        .font(.body.weight(.semibold))
+                        .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     Text(author)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -114,7 +117,7 @@ private struct AcknowledgementRow: View {
             }
             .tint(.purple)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, metrics.verticalPadding)
     }
 }
 

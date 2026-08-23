@@ -92,11 +92,12 @@ struct StarterPacksView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(pageBackground.ignoresSafeArea())
             .navigationTitle("Starter Packs")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Starter Packs")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(addedPackIDs.isEmpty ? "Cancel" : "Done") { dismiss() }
                         .foregroundStyle(.purple)
+                        .responsiveToolbarLabel()
                 }
             }
             .preferredColorScheme(.dark)

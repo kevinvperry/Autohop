@@ -60,6 +60,11 @@ import SwiftUI
 // the standard iPhone composition remains the baseline while wider windows gain
 // useful scale without stretching a single card. Do not reintroduce UIScreen
 // checks, device-family branches or local fixed card sizes here.
+// RESPONSIVE NAVIGATION (2026-08-23): the inline Discover title, Back control
+// and storefront picker consume the same container-width editorial metrics as
+// page content. Phone sizes remain unchanged; wide/expansive windows increase
+// type, symbols and hit targets. Do not revert them to unqualified toolbar
+// defaults or use UIScreen/device-family checks.
 struct DiscoverView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
@@ -214,18 +219,22 @@ struct DiscoverView: View {
             }
         }
         .navigationTitle("Discover")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Discover")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: {
                     Image(systemName: "chevron.left.circle.fill")
+                        .responsiveToolbarBackSymbol()
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Back")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
+                ChartCountryPicker(
+                    selectionCode: $storedCountryCode,
+                    fallback: country
+                )
             }
         }
         .navigationDestination(item: $pendingRoute) { route in
@@ -869,8 +878,14 @@ struct DiscoverView: View {
 // navigating back. `fallback` preserves the device-region default before the
 // first explicit selection.
 struct ChartCountryPicker: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @Binding var selectionCode: String
     let fallback: ChartCountry
+    var metrics: AdaptiveEditorialMetrics? = nil
+
+    private var effectiveMetrics: AdaptiveEditorialMetrics {
+        metrics ?? AdaptiveEditorialMetrics(containerWidth: viewportWidth)
+    }
 
     private var selectedCountry: ChartCountry {
         selectionCode.isEmpty ? fallback : .named(selectionCode)
@@ -888,12 +903,20 @@ struct ChartCountryPicker: View {
         } label: {
             HStack(spacing: 4) {
                 Text("\(selectedCountry.flag) \(selectedCountry.name)")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(
+                        size: effectiveMetrics.navigationControlFontSize,
+                        weight: .semibold
+                    ))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(.system(
+                        size: effectiveMetrics.navigationChevronSize,
+                        weight: .bold
+                    ))
             }
             .foregroundStyle(.primary)
+            .frame(minHeight: effectiveMetrics.navigationControlSize)
+            .contentShape(Rectangle())
         }
         .accessibilityLabel("Charts country: \(selectedCountry.name)")
     }

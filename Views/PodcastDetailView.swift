@@ -7,9 +7,12 @@ import SwiftUI
 //   • a browse-only preview subscription (init(browseSubscription:))
 //   • a real subscription (init(subscriptionID:)), including Inactive podcasts
 //     whose auto feed refresh is paused
-// Layout: responsive Header-SubscriptionPage. `ViewThatFits` preserves the
-// established side-by-side artwork/title composition while it has useful
-// width, then selects a centred stacked alternative in narrow containers.
+// Layout: responsive Header-SubscriptionPage. Containers below 600 points use
+// the space-efficient iPhone composition: artwork at top-leading with title,
+// badges, description and metadata beside it. Wide iPad/Mac containers use a
+// centred stacked hero because they can afford that height without starving
+// the episode list. The explicit width policy avoids `ViewThatFits` choosing a
+// tall layout merely because a long podcast title has a large ideal width.
 // The HTML-stripped description uses a deterministic expandable control rather
 // than nested geometry probes, so resizing does not create measurement churn.
 // Header content remains capped by the page's shared readable-width policy.
@@ -84,6 +87,7 @@ struct PodcastDetailView: View {
     /// Header/feed-URL fallback captured from the subscription so the page stays
     /// populated (and re-subscribable) after the user taps Unsubscribe.
     @State private var snapshot: PodcastSearchResult?
+    @State private var contentWidth: CGFloat = 390
 
     private let rowArtworkSize = CGSize(width: 44, height: 44)
     private let artworkPrefetchForwardCount = 12
@@ -240,6 +244,7 @@ struct PodcastDetailView: View {
                 }
             } label: {
                 Image(systemName: "chevron.left.circle.fill")
+                    .responsiveToolbarBackSymbol()
             }
             .accessibilityLabel("Back")
         }
@@ -250,9 +255,10 @@ struct PodcastDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showPodcastShare = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .responsiveToolbarSymbol()
+            }
                 .disabled(subscription == nil)
                 .accessibilityLabel("Share Podcast")
             }
@@ -263,16 +269,19 @@ struct PodcastDetailView: View {
                         SubscriptionSettingsView(subscriptionID: id)
                     }
                 } label: {
-                    Label("Show Settings", systemImage: "gearshape")
+                    Image(systemName: "gearshape")
+                        .responsiveToolbarSymbol()
                 }
+                .accessibilityLabel("Show Settings")
             }
         } else {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showPodcastShare = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .responsiveToolbarSymbol()
+            }
                 .disabled(subscription == nil)
                 .accessibilityLabel("Share Podcast")
             }
@@ -282,35 +291,40 @@ struct PodcastDetailView: View {
     // MARK: - Main content
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+        GeometryReader { proxy in
+            VStack(alignment: .leading, spacing: 12) {
+                header(containerWidth: max(0, proxy.size.width - 40))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
 
-            HStack(spacing: 6) {
-                Text("Episodes")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.primary)
-                Image(systemName: "waveform")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("Episodes")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.primary)
+                    Image(systemName: "waveform")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
 
-                Spacer()
+                    Spacer()
 
                 // Feed refresh — small purple circular glass button above the
                 // episode list, matching the Subscriptions page. Real
                 // subscriptions only, including Inactive; browse previews aren't
                 // refreshed here.
-                if isRealSubscription {
-                    refreshButton
+                    if isRealSubscription {
+                        refreshButton
+                    }
                 }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-
-            episodeListCard
                 .padding(.horizontal, 20)
-                .padding(.bottom, 18)
+                .padding(.top, 10)
+
+                episodeListCard
+                    .episodeListPageWidth()
+                    .padding(.bottom, 18)
+            }
+            .environment(\.adaptiveViewportWidth, proxy.size.width)
+            .onAppear { contentWidth = proxy.size.width }
+            .onChange(of: proxy.size.width) { _, width in contentWidth = width }
         }
         .adaptiveContentWidth(.list)
     }
@@ -355,6 +369,7 @@ struct PodcastDetailView: View {
         List {
             episodeContent
         }
+        .responsiveListSizing()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .glassCard(cornerRadius: 16)
@@ -362,7 +377,7 @@ struct PodcastDetailView: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    private func header(containerWidth: CGFloat) -> some View {
         let sub = subscription
         let fallback = searchResult ?? snapshot
         let artworkURL: URL? = sub?.artworkURL ?? fallback?.artworkURL
@@ -375,60 +390,53 @@ struct PodcastDetailView: View {
 
         let cleanedDescription = description.map(stripHTML)
 
-        return VStack(alignment: .leading, spacing: 16) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 16) {
-                    headerArtwork(url: artworkURL, size: 128)
-                    headerIdentity(
-                        title: title,
-                        showVideo: showVideo,
-                        showExplicit: showExplicit,
-                        centered: false
-                    )
-                }
-                // Below this useful content width the title and badges become
-                // visibly squeezed, so ViewThatFits selects the stacked form.
-                .frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
+        let wideMetrics = AdaptiveEditorialMetrics(containerWidth: containerWidth)
+        let usesWideHero = wideMetrics.usesCenteredPodcastHeader
+        let compactArtworkSize: CGFloat = containerWidth < 320 ? 108 : 128
+        let wideArtworkSize = min(wideMetrics.scaled(144), 188)
 
-                VStack(spacing: 12) {
-                    headerArtwork(url: artworkURL, size: 144)
+        return VStack(alignment: .leading, spacing: 16) {
+            if usesWideHero {
+                VStack(spacing: wideMetrics.scaled(12)) {
+                    headerArtwork(url: artworkURL, size: wideArtworkSize)
                     headerIdentity(
                         title: title,
                         showVideo: showVideo,
                         showExplicit: showExplicit,
                         centered: true
                     )
+                    if let desc = cleanedDescription, !desc.isEmpty {
+                        headerDescription(desc, centered: true)
+                    }
+                    headerMetadata(author: author, categories: categories, centered: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
-            }
+            } else {
+                HStack(alignment: .top, spacing: containerWidth < 320 ? 12 : 16) {
+                    headerArtwork(url: artworkURL, size: compactArtworkSize)
 
-            if let desc = cleanedDescription, !desc.isEmpty {
-                headerDescription(desc)
-            }
-
-            VStack(spacing: 2) {
-                if let author {
-                    Text(author)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        headerIdentity(
+                            title: title,
+                            showVideo: showVideo,
+                            showExplicit: showExplicit,
+                            centered: false
+                        )
+                        if let desc = cleanedDescription, !desc.isEmpty {
+                            headerDescription(desc, centered: false)
+                        }
+                        headerMetadata(author: author, categories: categories, centered: false)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !categories.isEmpty {
-                    Text(categories.joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, alignment: .center)
 
             subscribeRow
         }
         .frame(maxWidth: .infinity)
-        // One presentation owner must sit outside `ViewThatFits`. Attaching a
-        // sheet to both candidate artwork views can leave two hidden modifiers
-        // observing the same binding while SwiftUI measures alternatives.
+        // One presentation owner remains outside both responsive compositions,
+        // preventing two conditional artwork branches from owning one sheet.
         .sheet(isPresented: $showExpandedArtwork) {
             ExpandedArtworkSheet(url: artworkURL)
         }
@@ -461,9 +469,10 @@ struct PodcastDetailView: View {
         showExplicit: Bool,
         centered: Bool
     ) -> some View {
-        VStack(alignment: centered ? .center : .leading, spacing: 8) {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: contentWidth)
+        VStack(alignment: centered ? .center : .leading, spacing: metrics.scaled(8)) {
             Text(title)
-                .font(.title2.weight(.bold))
+                .font(.system(size: metrics.detailTitleFontSize, weight: .bold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(centered ? .center : .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -479,15 +488,16 @@ struct PodcastDetailView: View {
         .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
     }
 
-    private func headerDescription(_ description: String) -> some View {
+    private func headerDescription(_ description: String, centered: Bool) -> some View {
         let canExpand = description.count > 180
+        let metrics = AdaptiveEditorialMetrics(containerWidth: contentWidth)
 
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: centered ? .center : .leading, spacing: metrics.scaled(6)) {
             Text(description)
-                .font(.footnote)
+                .font(.system(size: metrics.detailDescriptionFontSize))
                 .foregroundStyle(.secondary)
                 .lineLimit(descriptionExpanded ? nil : 3)
-                .multilineTextAlignment(.leading)
+                .multilineTextAlignment(centered ? .center : .leading)
                 .fixedSize(horizontal: false, vertical: true)
 
             if canExpand {
@@ -496,16 +506,37 @@ struct PodcastDetailView: View {
                         descriptionExpanded.toggle()
                     }
                 }
-                .font(.footnote.weight(.semibold))
+                .font(.system(size: metrics.detailDescriptionFontSize, weight: .semibold))
                 .foregroundStyle(Color.purple)
                 .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+    }
+
+    private func headerMetadata(author: String?, categories: [String], centered: Bool) -> some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: contentWidth)
+        return VStack(alignment: centered ? .center : .leading, spacing: metrics.scaled(2)) {
+            if let author {
+                Text(author)
+                    .font(.system(size: metrics.detailPublisherFontSize, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            if !categories.isEmpty {
+                Text(categories.joined(separator: ", "))
+                    .font(.system(size: metrics.detailDescriptionFontSize))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .multilineTextAlignment(centered ? .center : .leading)
+        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
     }
 
     @ViewBuilder
     private var subscribeButton: some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: contentWidth)
         Button {
             if isRealSubscription {
                 showUnsubscribeConfirm = true
@@ -518,15 +549,15 @@ struct PodcastDetailView: View {
                     ProgressView().tint(.white)
                 } else if isRealSubscription {
                     Label("Subscribed", systemImage: "checkmark.circle.fill")
-                        .font(.headline)
+                        .font(.system(size: metrics.primaryButtonFontSize, weight: .semibold))
                 } else {
                     Label("Subscribe", systemImage: "plus.circle.fill")
-                        .font(.headline)
+                        .font(.system(size: metrics.primaryButtonFontSize, weight: .semibold))
                 }
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 46)
+            .frame(height: metrics.primaryButtonHeight)
 
             // Purple-tinted iOS glass to match the glass bell/toolbar capsule.
             if #available(iOS 26, *) {
@@ -547,13 +578,14 @@ struct PodcastDetailView: View {
     private var bellButton: some View {
         if let sub = subscription, isRealSubscription {
             let enabled = sub.notificationsEnabled
+            let metrics = AdaptiveEditorialMetrics(containerWidth: contentWidth)
             Button {
                 subscriptionStore.updateNotificationsEnabled(subscriptionID: sub.id, enabled: !enabled)
             } label: {
                 let icon = Image(systemName: enabled ? "bell.fill" : "bell.slash")
-                    .font(.subheadline)
+                    .font(.system(size: metrics.primaryButtonFontSize))
                     .foregroundStyle(enabled ? Color.purple : .secondary)
-                    .frame(width: 46, height: 46)
+                    .frame(width: metrics.primaryButtonHeight, height: metrics.primaryButtonHeight)
 
                 // Match the toolbar capsule / Video-Explicit pills: real iOS glass.
                 if #available(iOS 26, *) {
@@ -569,7 +601,7 @@ struct PodcastDetailView: View {
 
     /// Subscribe button plus the notification bell, laid out side by side.
     private var subscribeRow: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: AdaptiveEditorialMetrics(containerWidth: contentWidth).scaled(12)) {
             subscribeButton
             bellButton
         }
@@ -659,9 +691,11 @@ struct PodcastDetailView: View {
 
     private func episodeRow(_ episode: Episode, sub: Subscription) -> some View {
         let isExpanded = expandedEpisodeID == episode.id
+        let metrics = AdaptiveListRowMetrics(containerWidth: contentWidth)
+        let artworkSize = metrics.artworkSize
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+            HStack(alignment: .top, spacing: metrics.rowSpacing) {
+                CachedArtworkImage(url: episode.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -672,12 +706,12 @@ struct PodcastDetailView: View {
                             .foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .frame(width: artworkSize, height: artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(episode.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(isExpanded ? nil : 2)
                         // Reserve room on the right so the title never runs under
@@ -693,7 +727,7 @@ struct PodcastDetailView: View {
                     // title to expand to the full text.
                     if let desc = episode.description.map(stripHTML), !desc.isEmpty {
                         Text(desc)
-                            .font(.caption)
+                            .font(.system(size: metrics.secondaryFontSize))
                             .foregroundStyle(.secondary)
                             .lineLimit(isExpanded ? nil : 3)
                     }
@@ -713,7 +747,7 @@ struct PodcastDetailView: View {
                         Spacer(minLength: 8)
                         EpisodeStatusPill(kind: statusKind(for: episode, sub: sub))
                     }
-                    .font(.caption)
+                    .font(.system(size: metrics.secondaryFontSize))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 3)
                 }
@@ -725,12 +759,12 @@ struct PodcastDetailView: View {
                 ProgressView(value: progress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: progress)
-                    .padding(.leading, 56)
+                    .padding(.leading, artworkSize + metrics.rowSpacing)
                     .padding(.top, 6)
             }
 
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, metrics.verticalPadding)
         .overlay(alignment: .topTrailing) {
             if episode.mediaKind == .video || episode.isExplicit == true {
                 HStack(spacing: 3) {

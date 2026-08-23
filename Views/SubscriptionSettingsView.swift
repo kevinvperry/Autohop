@@ -59,11 +59,15 @@ import UIKit
 // Episode.wasCompleted as Played. (Visual style on iOS 26: every section's row
 // background uses the same regular glassEffect surface as the Playback controls
 // card via sectionRowBackground, so the whole page reads as one consistent glass
-// treatment over a black.opacity(0.5) base, 36 pt section spacing; solid cards
+// treatment over a black.opacity(0.5) base, 48 pt section spacing; solid cards
 // below iOS 26.)
 // Settings/detail artwork uses explicit
 // CachedArtworkImage targets (120 pt header/detail variants), sharing validated
 // source bytes with episode lists while avoiding full-size cover decodes.
+// EXPANSIVE NAVIGATION: a fixed SettingsShortcutSidebar sits left of the same
+// scrolling Form and jumps to stable major-section IDs. Chapters appears only
+// when the rendered chapter section exists. Compact/narrow layouts remain one
+// column; do not split these settings into mutually exclusive detail pages.
 private func stripHTML(_ html: String) -> String {
     // Strip tags, then decode entities.
     let withoutTags = html.replacingOccurrences(
@@ -138,9 +142,36 @@ struct SubscriptionSettingsView: View {
     @State private var showPodcastShare = false
     @State private var copiedFeedURL: URL?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
+    @State private var activeShortcut: SubscriptionShortcut = .general
+    @State private var requestedFormSection: Int?
+    @State private var formScrollRequestID = UUID()
+
+    private enum SubscriptionShortcut: String, Hashable {
+        case general, downloadFilters, playback, automation, autoArchive
+        case chapters, feed, unsubscribe
+    }
 
     private var subscription: Subscription? {
         subscriptionStore.subscription(id: subscriptionID)
+    }
+
+    private var shortcutItems: [SettingsShortcutItem<SubscriptionShortcut>] {
+        var items: [SettingsShortcutItem<SubscriptionShortcut>] = [
+            .init(id: .general, title: "Podcast", systemImage: "dot.radiowaves.left.and.right"),
+            .init(id: .downloadFilters, title: "Download Feed Filters", systemImage: "line.3.horizontal.decrease.circle"),
+            .init(id: .playback, title: "Playback", systemImage: "waveform"),
+            .init(id: .automation, title: "Automation", systemImage: "bolt.fill"),
+            .init(id: .autoArchive, title: "Auto Archive", systemImage: "archivebox")
+        ]
+        if let subscription, chapterSettingsEpisode(for: subscription) != nil {
+            items.append(.init(id: .chapters, title: "Chapter filter", systemImage: "list.bullet.rectangle"))
+        }
+        items.append(contentsOf: [
+            .init(id: .feed, title: "Feed", systemImage: "link"),
+            .init(id: .unsubscribe, title: "Subscription", systemImage: "trash")
+        ])
+        return items
     }
 
     // iOS 26: "defined glass" — a faint white tint lifts each native glass section
@@ -169,43 +200,52 @@ struct SubscriptionSettingsView: View {
         return .hidden
     }
 
-    private var formPageBackground: Color {
-        if #available(iOS 26, *) { return Color.black.opacity(0.5) }
-        return .black
-    }
+    private var formPageBackground: Color { .black }
+
+    private var settingsWorkspaceBackground: Color { .black }
 
     var body: some View {
         Group {
-            if let sub = subscription {
-                Form {
-                    podcastSection(sub)
-                    downloadFeedFiltersSection(sub)
-                    playbackSection(sub)
-                    automationSection(sub)
-                    if let episode = chapterSettingsEpisode(for: sub) {
-                        chapterSection(sub, episode: episode)
+            Group {
+                if let sub = subscription {
+                    if AdaptiveEditorialMetrics(containerWidth: viewportWidth).usesSettingsShortcutSidebar {
+                        HStack(spacing: 0) {
+                            SettingsShortcutSidebar(
+                                items: shortcutItems,
+                                selection: $activeShortcut,
+                                navigate: { shortcut in
+                                    requestedFormSection = formSection(for: shortcut, subscription: sub)
+                                    formScrollRequestID = UUID()
+                                }
+                            )
+                            Divider().overlay(Color.white.opacity(0.08))
+                            subscriptionForm(sub)
+                                .frame(maxWidth: .infinity)
+                                .background(formPageBackground)
+                        }
+                        .frame(maxWidth: 960)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        subscriptionForm(sub)
                     }
-                    feedSection(sub)
-                    dangerSection(sub)
+                } else {
+                    ContentUnavailableView(
+                        "Subscription Not Found",
+                        systemImage: "dot.radiowaves.left.and.right"
+                    )
                 }
-            } else {
-                ContentUnavailableView(
-                    "Subscription Not Found",
-                    systemImage: "dot.radiowaves.left.and.right"
-                )
             }
         }
-        .listSectionSpacing(36)
         .scrollContentBackground(formScrollBackground)
-        .background(formPageBackground.ignoresSafeArea())
+        .background(settingsWorkspaceBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle(subscription?.title ?? "Subscription")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle(subscription?.title ?? "Subscription")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -231,6 +271,7 @@ struct SubscriptionSettingsView: View {
                     showPodcastShare = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
+                        .responsiveToolbarSymbol()
                 }
                 .disabled(subscription == nil)
                 .accessibilityLabel("Share Podcast")
@@ -281,11 +322,51 @@ struct SubscriptionSettingsView: View {
         }
     }
 
+    private func subscriptionForm(_ sub: Subscription) -> some View {
+        Form {
+            podcastSection(sub)
+            downloadFeedFiltersSection(sub)
+            playbackSection(sub)
+            automationSection(sub)
+            autoArchiveSection(sub)
+            if let episode = chapterSettingsEpisode(for: sub) {
+                chapterSection(sub, episode: episode)
+            }
+            feedSection(sub)
+            dangerSection(sub)
+        }
+        .responsiveListSizing()
+        .listSectionSpacing(AdaptiveLayoutMetrics.settingsSectionSpacing)
+        .background(
+            FormSectionScrollController(
+                section: requestedFormSection,
+                requestID: formScrollRequestID
+            )
+        )
+    }
+
+    /// Playback owns two native Form sections (controls and episode trim), so
+    /// every later shortcut must account for the extra section. Chapters are
+    /// conditional and likewise shift Feed and Subscription by one.
+    private func formSection(for shortcut: SubscriptionShortcut, subscription: Subscription) -> Int {
+        let hasChapters = chapterSettingsEpisode(for: subscription) != nil
+        switch shortcut {
+        case .general: return 0
+        case .downloadFilters: return 1
+        case .playback: return 2
+        case .automation: return 4
+        case .autoArchive: return 5
+        case .chapters: return 6
+        case .feed: return hasChapters ? 7 : 6
+        case .unsubscribe: return hasChapters ? 8 : 7
+        }
+    }
+
     // MARK: - Sections
 
     @ViewBuilder
     private func podcastSection(_ sub: Subscription) -> some View {
-        Section("Podcast") {
+        Section {
             Button {
                 draftTitle = sub.title
                 showTitleEditor = true
@@ -299,6 +380,7 @@ struct SubscriptionSettingsView: View {
                 }
             }
             .buttonStyle(.plain)
+            .id(SubscriptionShortcut.general)
 
             Button {
                 draftPriorityRank = sub.priorityRank
@@ -328,6 +410,8 @@ struct SubscriptionSettingsView: View {
                     SettingsRowLabel(title: "Author", systemImage: "person")
                 }
             }
+        } header: {
+            shortcutHeader("Podcast", id: .general)
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -339,8 +423,9 @@ struct SubscriptionSettingsView: View {
             soundControlsCard(sub)
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+                .id(SubscriptionShortcut.playback)
         } header: {
-            Text("Playback")
+            shortcutHeader("Playback", id: .playback)
         } footer: {
             Text("Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only).")
         }
@@ -437,12 +522,16 @@ struct SubscriptionSettingsView: View {
             .glassCard(cornerRadius: 12)
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
+            .id(SubscriptionShortcut.automation)
         } header: {
-            Text("Automation")
+            shortcutHeader("Automation", id: .automation)
         } footer: {
             Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. It waits instead if the current episode has 60 seconds or less remaining. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
         }
+    }
 
+    @ViewBuilder
+    private func autoArchiveSection(_ sub: Subscription) -> some View {
         Section {
             Picker(selection: afterPlayedBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterPlayed.allCases, id: \.self) { v in
@@ -451,6 +540,7 @@ struct SubscriptionSettingsView: View {
             } label: {
                 SettingsRowLabel(title: "Played Episodes", systemImage: "checkmark.circle")
             }
+            .id(SubscriptionShortcut.autoArchive)
             Picker(selection: afterInactiveBinding(sub)) {
                 ForEach(AutoArchiveSettings.AfterInactive.allCases, id: \.self) { v in
                     Text(v.title).tag(v)
@@ -466,7 +556,7 @@ struct SubscriptionSettingsView: View {
                 SettingsRowLabel(title: "Episode Limit", systemImage: "archivebox")
             }
         } header: {
-            Text("Auto Archive")
+            shortcutHeader("Auto Archive", id: .autoArchive)
         } footer: {
             Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 30 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit rotates automatic downloads to keep the newest selected number; manually downloaded and manually positioned Up Next episodes are protected. Changing the limit does not download older episodes. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
         }
@@ -504,9 +594,12 @@ struct SubscriptionSettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isPlaying)
+                .id(chapter.id == episode.chapters.sorted { $0.position < $1.position }.first?.id
+                    ? AnyHashable(SubscriptionShortcut.chapters)
+                    : AnyHashable(chapter.id))
             }
         } header: {
-            Text("Chapter filter")
+            shortcutHeader("Chapter filter", id: .chapters)
         } footer: {
             Text("Skips are position-based and apply to future episodes of this podcast. Changes apply to active playback immediately; while this podcast is playing, its current chapter is protected here from accidental deselection.")
         }
@@ -536,6 +629,7 @@ struct SubscriptionSettingsView: View {
             } label: {
                 SettingsRowLabel(title: "URL", systemImage: "link")
             }
+            .id(SubscriptionShortcut.feed)
 
             Button {
                 UIPasteboard.general.string = sub.feedURL.absoluteString
@@ -555,7 +649,7 @@ struct SubscriptionSettingsView: View {
             .accessibilityLabel(copiedFeedURL == sub.feedURL ? "Feed link copied" : "Copy feed link")
             .accessibilityHint("Copies the RSS feed URL to the clipboard")
         } header: {
-            Text("Feed")
+            shortcutHeader("Feed", id: .feed)
         } footer: {
             Text("This is the publisher's RSS address used to discover episodes. Copy Link places the complete address on the clipboard.")
         }
@@ -570,8 +664,9 @@ struct SubscriptionSettingsView: View {
             } label: {
                 SettingsRowLabel(title: "Filter Rules", systemImage: "line.3.horizontal.decrease.circle")
             }
+            .id(SubscriptionShortcut.downloadFilters)
         } header: {
-            Text("Download Feed Filters")
+            shortcutHeader("Download Feed Filters", id: .downloadFilters)
         } footer: {
             Text("Control which new episodes Autohop downloads automatically from this podcast's feed. Duration, title, and description rules can skip episodes you do not want; manual actions still work. Skipped episodes do not train Release Radar or count as drifting, and the rules sync when iCloud Sync is enabled.")
         }
@@ -584,8 +679,16 @@ struct SubscriptionSettingsView: View {
             Button("Unsubscribe", role: .destructive) {
                 showDeleteConfirm = true
             }
+            .id(SubscriptionShortcut.unsubscribe)
+        } header: {
+            shortcutHeader("Subscription", id: .unsubscribe)
         }
         .listRowBackground(sectionRowBackground)
+    }
+
+    private func shortcutHeader(_ title: String, id: SubscriptionShortcut) -> some View {
+        Text(title)
+            .onAppear { activeShortcut = id }
     }
 
     // MARK: - Bindings
@@ -671,15 +774,18 @@ private struct EditTitleSheet: View {
                         .textInputAutocapitalization(.words)
                 }
             }
+            .responsiveListSizing()
             .navigationTitle("Edit Title")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Edit Title")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .responsiveToolbarLabel()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave() }
                         .disabled(!canSave)
+                        .responsiveToolbarLabel()
                 }
             }
         }
@@ -705,14 +811,17 @@ private struct EditPrioritySheet: View {
                     Text("Changing this rank immediately reorders the podcast list.")
                 }
             }
+            .responsiveListSizing()
             .navigationTitle("Edit Priority")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Edit Priority")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .responsiveToolbarLabel()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave() }
+                        .responsiveToolbarLabel()
                 }
             }
         }
@@ -746,17 +855,18 @@ struct DownloadFiltersView: View {
                 ContentUnavailableView("Subscription Not Found", systemImage: "dot.radiowaves.left.and.right")
             }
         }
+        .responsiveListSizing()
         .listSectionSpacing(36)
         .scrollContentBackground(.hidden)
         .background(Color.black.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Download Feed Filters")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Download Feed Filters")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }
                     .accessibilityLabel("Back")
             }
         }
@@ -1090,7 +1200,11 @@ struct EpisodeDetailView: View {
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left.circle.fill")
+                        .responsiveToolbarBackSymbol()
+                }
+                .accessibilityLabel("Back")
             }
 
             ToolbarItem(placement: .topBarTrailing) {

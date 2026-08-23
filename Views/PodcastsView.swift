@@ -33,6 +33,7 @@ import UniformTypeIdentifiers
 // GettingStartedChecklist at the top; onMove records the "reorder" onboarding step
 // (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
 struct PodcastsView: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
@@ -106,10 +107,10 @@ struct PodcastsView: View {
                                 editMode == .active ? "Done" : "Priority",
                                 systemImage: editMode == .active ? "checkmark" : "arrow.up.arrow.down"
                             )
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: AdaptiveListRowMetrics(containerWidth: viewportWidth).compactControlFontSize, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
+                            .padding(.vertical, AdaptiveListRowMetrics(containerWidth: viewportWidth).verticalPadding)
 
                             // iOS glass; purple-tinted while in the active "Done" state.
                             if #available(iOS 26, *) {
@@ -130,7 +131,7 @@ struct PodcastsView: View {
 
                         if editMode == .active {
                             Text("drag active shows to set priority")
-                                .font(.caption)
+                                .font(.system(size: AdaptiveListRowMetrics(containerWidth: viewportWidth).secondaryFontSize))
                                 .foregroundStyle(.tertiary)
                                 .padding(.leading, 4)
                         }
@@ -146,11 +147,14 @@ struct PodcastsView: View {
                                         ProgressView()
                                     } else {
                                         Image(systemName: "arrow.clockwise")
-                                            .font(.system(size: 13, weight: .semibold))
+                                            .font(.system(size: AdaptiveListRowMetrics(containerWidth: viewportWidth).compactControlFontSize, weight: .semibold))
                                             .foregroundStyle(.purple)
                                     }
                                 }
-                                .frame(width: 30, height: 30)
+                                .frame(
+                                    width: AdaptiveListRowMetrics(containerWidth: viewportWidth).compactControlSize,
+                                    height: AdaptiveListRowMetrics(containerWidth: viewportWidth).compactControlSize
+                                )
 
                                 // Circular iOS glass button.
                                 if #available(iOS 26, *) {
@@ -164,17 +168,17 @@ struct PodcastsView: View {
                             .accessibilityLabel("Refresh all feeds")
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .episodeListPageWidth()
                     .padding(.top, 18)
 
                     priorityListCard
-                        .padding(.horizontal, 20)
+                        .episodeListPageWidth()
                         .padding(.bottom, 18)
                 }
             }
         }
         .navigationTitle("Subscriptions")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Subscriptions")
         .navigationBarBackButtonHidden(true)
         .preferredColorScheme(.dark)
         .toolbar {
@@ -183,6 +187,7 @@ struct PodcastsView: View {
                     showMenu = true
                 } label: {
                     Image(systemName: "line.3.horizontal")
+                        .responsiveToolbarSymbol()
                 }
                 .accessibilityLabel("Menu")
             }
@@ -191,6 +196,7 @@ struct PodcastsView: View {
                     showDiscover = true
                 } label: {
                     Label("Add Podcast", systemImage: "plus")
+                        .responsiveToolbarLabel()
                 }
             }
         }
@@ -378,6 +384,7 @@ struct PodcastsView: View {
                 .moveDisabled(true)
             }
         }
+        .responsiveListSizing()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .environment(\.editMode, $editMode)
@@ -393,9 +400,10 @@ struct PodcastsView: View {
     }
 
     private func subscriptionRow(_ sub: Subscription, displayedRank: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        return VStack(alignment: .leading, spacing: 3) {
             // Top band: artwork + titles
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: metrics.rowSpacing) {
                 VStack(alignment: .center, spacing: 4) {
                     artwork(url: sub.artworkURL)
                 }
@@ -405,7 +413,7 @@ struct PodcastsView: View {
                     // episode rows on PodcastDetailView (subheadline-semibold title,
                     // caption-secondary description).
                     Text(sub.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         // Reserve room on the right so the title never runs under
@@ -414,7 +422,7 @@ struct PodcastsView: View {
 
                     if let description = sub.description.map(stripHTML), !description.isEmpty {
                         Text(description)
-                            .font(.caption)
+                            .font(.system(size: metrics.secondaryFontSize))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -427,12 +435,12 @@ struct PodcastsView: View {
             // Derive from `newestEpisode` (the episode list) not the denormalised
             // `latestEpisode`, which can lag and show a stale "Updated:" date/status.
             if let episode = sub.newestEpisode {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: metrics.rowSpacing) {
                     // Rank pill — centred under the artwork; min width 44pt so it
                     // stays aligned with the artwork above for single-digit numbers,
                     // but expands naturally for two- or three-digit numbers.
                     rankPill(displayedRank)
-                        .frame(minWidth: 44, alignment: .center)
+                        .frame(minWidth: metrics.artworkSize, alignment: .center)
 
                     // Metadata: "Updated: <relative date>" · Spacer · status pill
                     HStack(spacing: 4) {
@@ -460,7 +468,7 @@ struct PodcastsView: View {
                                 Button("Download") {
                                     Task { await appState.downloadLatestEpisode(for: sub) }
                                 }
-                                .font(.caption.bold())
+                                .font(.system(size: metrics.secondaryFontSize, weight: .bold))
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             } else {
@@ -468,7 +476,7 @@ struct PodcastsView: View {
                             }
                         }
                     }
-                    .font(.caption)
+                    .font(.system(size: metrics.secondaryFontSize))
                     .foregroundStyle(.tertiary)
                 }
                 // A little extra separation between the status-pill row and the
@@ -480,12 +488,12 @@ struct PodcastsView: View {
                     ProgressView(value: progress, total: 1.0)
                         .tint(.purple)
                         .animation(.linear(duration: 0.3), value: progress)
-                        .padding(.leading, 56)
+                        .padding(.leading, metrics.artworkSize + metrics.rowSpacing)
                         .padding(.top, 2)
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, metrics.verticalPadding)
         .overlay(alignment: .topTrailing) {
             if let episode = sub.newestEpisode,
                episode.mediaKind == .video || episode.isExplicit == true {
@@ -542,11 +550,12 @@ struct PodcastsView: View {
     /// day (not elapsed seconds) so "Yesterday"/"N days ago" match the wall clock.
 
     private func artwork(url: URL?) -> some View {
-        CachedArtworkImage(url: url, targetSize: CGSize(width: 44, height: 44)) {
+        let size = AdaptiveListRowMetrics(containerWidth: viewportWidth).artworkSize
+        return CachedArtworkImage(url: url, targetSize: CGSize(width: size, height: size)) {
             placeholderArtwork
         }
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.2))
     }
 
     private var placeholderArtwork: some View {

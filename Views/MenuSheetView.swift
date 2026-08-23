@@ -83,10 +83,11 @@ struct MenuSheetView: View {
                 }
                 .listRowBackground(Color.white.opacity(0.07))
             }
+            .responsiveListSizing()
             .scrollContentBackground(.hidden)
             .tint(.primary)
             .navigationTitle("Menu")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Menu")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     SheetCloseButton { dismiss() }

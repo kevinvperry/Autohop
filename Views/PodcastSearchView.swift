@@ -30,6 +30,7 @@ import SwiftUI
 // MARK: - Dedicated Search page
 
 struct PodcastSearchView: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     private enum Scope: String, CaseIterable, Identifiable {
         case all = "All"
         case library = "My Library"
@@ -88,7 +89,7 @@ struct PodcastSearchView: View {
             }
         }
         .navigationTitle("Search")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Search")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // AI CONTEXT — A visible search action provides one pointer and
@@ -98,6 +99,7 @@ struct PodcastSearchView: View {
                     isSearchFieldFocused = true
                 } label: {
                     Image(systemName: "magnifyingglass")
+                        .responsiveToolbarSymbol()
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .accessibilityLabel("Focus search field")
@@ -210,16 +212,17 @@ struct PodcastSearchView: View {
     }
 
     private func recentlyViewedRow(_ sub: Subscription) -> some View {
-        HStack(spacing: 12) {
-            CachedArtworkImage(url: sub.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        return HStack(spacing: metrics.rowSpacing) {
+            CachedArtworkImage(url: sub.artworkURL, targetSize: CGSize(width: metrics.artworkSize, height: metrics.artworkSize)) {
                 artworkPlaceholder(size: 15)
             }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .frame(width: metrics.artworkSize, height: metrics.artworkSize)
+            .clipShape(RoundedRectangle(cornerRadius: metrics.artworkSize * 0.2))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(sub.title)
-                    .font(.headline.weight(.semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let author = sub.author {
@@ -322,7 +325,7 @@ struct PodcastSearchView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .glassCard(cornerRadius: 16)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 20)
                 }
             } else {
                 switch viewModel.episodesPhase {
@@ -347,7 +350,7 @@ struct PodcastSearchView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassCard(cornerRadius: 16)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 20)
                 }
             }
         }
@@ -447,16 +450,17 @@ struct PodcastSearchView: View {
     }
 
     private func showResultRow(_ result: PodcastSearchResult) -> some View {
-        HStack(spacing: 12) {
-            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        return HStack(spacing: metrics.rowSpacing) {
+            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: metrics.artworkSize, height: metrics.artworkSize)) {
                 artworkPlaceholder(size: 15)
             }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .frame(width: metrics.artworkSize, height: metrics.artworkSize)
+            .clipShape(RoundedRectangle(cornerRadius: metrics.artworkSize * 0.2))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(result.title)
-                    .font(.headline.weight(.semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -481,16 +485,18 @@ struct PodcastSearchView: View {
     }
 
     private func episodeResultRow(_ result: PodcastEpisodeSearchResult) -> some View {
-        HStack(spacing: 12) {
-            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: 48, height: 48)) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = max(48, metrics.artworkSize)
+        return HStack(spacing: metrics.rowSpacing) {
+            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                 artworkPlaceholder(size: 15)
             }
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .frame(width: artworkSize, height: artworkSize)
+            .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.title)
-                    .font(.headline.weight(.semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 Text(result.podcastTitle)
@@ -521,16 +527,18 @@ struct PodcastSearchView: View {
     }
 
     private func libraryEpisodeResultRow(_ result: PodcastLibraryEpisodeSearchResult) -> some View {
-        HStack(spacing: 12) {
-            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: 48, height: 48)) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = max(48, metrics.artworkSize)
+        return HStack(spacing: metrics.rowSpacing) {
+            CachedArtworkImage(url: result.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                 artworkPlaceholder(size: 15)
             }
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .frame(width: artworkSize, height: artworkSize)
+            .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.title)
-                    .font(.headline.weight(.semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 Text(result.podcastTitle)
@@ -637,7 +645,7 @@ private struct PodcastCreatorResultsView: View {
             .padding(16)
         }
         .navigationTitle(group.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle(group.name)
         .preferredColorScheme(.dark)
     }
 }

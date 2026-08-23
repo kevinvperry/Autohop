@@ -298,15 +298,18 @@ struct PlaybackControlsCard: View {
 // (SettingsView and its linked sub-screens). Mirrors the Speed / Trim Silence /
 // Vocal Boost rows above so every control row gets a consistent purple glyph.
 struct SettingsRowLabel: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let title: String
     let systemImage: String
 
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         Label {
             Text(title)
+                .font(.system(size: metrics.primaryFontSize))
         } icon: {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: metrics.primaryFontSize + 1, weight: .semibold))
                 .foregroundStyle(.purple)
         }
     }
@@ -318,6 +321,7 @@ struct SettingsRowLabel: View {
 /// `onCommit` crosses into AppState/persistence. A disappearing row flushes the
 /// pending value so Form virtualization or navigation cannot discard the last tap.
 struct EpisodeTrimControlRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let title: String
     let systemImage: String
     let persistedSeconds: TimeInterval
@@ -424,9 +428,10 @@ struct EpisodeTrimControlRow: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
+            let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 44, height: 44)
+                .font(.system(size: metrics.primaryFontSize + 1, weight: .semibold))
+                .frame(width: metrics.minimumRowHeight, height: metrics.minimumRowHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)

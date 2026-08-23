@@ -55,13 +55,14 @@ struct NotificationSettingsView: View {
             recapsSection
             podcastsSection
         }
+        .responsiveListSizing()
         .listSectionSpacing(28)
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Notification Settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Notification Settings")
         .miniPlayerBar()
         .task { await refreshPermissionStatus() }
         .onChange(of: scenePhase) { _, phase in
@@ -208,27 +209,30 @@ struct NotificationSettingsView: View {
 }
 
 private struct NotificationPodcastRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let subscription: Subscription
     @Binding var isOn: Bool
 
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         Toggle(isOn: $isOn) {
-            HStack(spacing: 12) {
-                CachedArtworkImage(url: subscription.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+            HStack(spacing: metrics.rowSpacing) {
+                CachedArtworkImage(url: subscription.artworkURL, targetSize: CGSize(width: metrics.artworkSize, height: metrics.artworkSize)) {
                     Image(systemName: "waveform")
                         .font(.body)
                         .foregroundStyle(.purple)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color(.tertiarySystemGroupedBackground))
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(width: metrics.artworkSize, height: metrics.artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: metrics.artworkSize * 0.2))
 
                 Text(subscription.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .lineLimit(2)
             }
         }
+        .padding(.vertical, metrics.verticalPadding * 0.5)
     }
 }
 
@@ -282,13 +286,14 @@ struct RecapSettingsView: View {
                 }
                 .listRowBackground(cardBackground)
             }
+            .responsiveListSizing()
             .listSectionSpacing(28)
             .scrollContentBackground(formScrollBackground)
             .background(formPageBackground.ignoresSafeArea())
             .tint(.purple)
             .preferredColorScheme(.dark)
             .navigationTitle("Listening Recaps")
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle("Listening Recaps")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     SheetCloseButton { dismiss() }

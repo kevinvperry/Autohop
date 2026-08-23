@@ -106,6 +106,7 @@ struct SheetCloseButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill")
+                .responsiveToolbarSymbol()
         }
         // AI CONTEXT — Escape closes informational sheets when an iPad hardware
         // keyboard is attached. The visible button remains the sole focus target.
@@ -126,12 +127,15 @@ struct MiniPlayerBar: View {
     /// this dedicated clock so AppState no longer publishes on every 0.5 s update.
     @EnvironmentObject private var playbackClock: PlaybackClock
     @Environment(\.returnToPlayerAction) private var returnToPlayerAction
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
 
     var body: some View {
         if let episode = playbackCoordinator.currentEpisode {
             let subscription = subscriptionStore.subscription(id: episode.subscriptionID)
             let duration = episode.durationSeconds ?? 0
             let progress = duration > 0 ? min(1, max(0, playbackClock.time / duration)) : 0
+            let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
+            let artworkSize = metrics.miniPlayerArtworkSize
 
             // Edge-to-edge: opaque full-width bar so page content never shows
             // through or scrolls visibly beneath it.
@@ -148,7 +152,7 @@ struct MiniPlayerBar: View {
                 .frame(height: 2)
 
                 HStack(spacing: 12) {
-                    CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 40, height: 40)) {
+                    CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                         Rectangle()
                             .fill(Color(white: 0.15))
                             .overlay(
@@ -157,8 +161,8 @@ struct MiniPlayerBar: View {
                                     .foregroundStyle(.purple.opacity(0.7))
                             )
                     }
-                    .frame(width: 40, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(width: artworkSize, height: artworkSize)
+                    .clipShape(RoundedRectangle(cornerRadius: metrics.scaled(8)))
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(episode.title)
@@ -211,7 +215,7 @@ struct MiniPlayerBar: View {
                                     )
                             }
                         }
-                            .frame(width: 44, height: 44)
+                            .frame(width: metrics.miniPlayerControlSize, height: metrics.miniPlayerControlSize)
                             .contentShape(Circle())
                             .modifier(MiniPlayerGlassControlStyle())
                             .animation(
@@ -229,8 +233,8 @@ struct MiniPlayerBar: View {
                 }
                 .frame(maxWidth: AdaptiveContentStyle.list.maximumWidth)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, metrics.horizontalGutter)
+                .padding(.vertical, metrics.scaled(8))
             }
             .background(
                 Color(red: 0.10, green: 0.10, blue: 0.13)
@@ -367,6 +371,17 @@ struct RootView: View {
     @State private var handledExplicitLaunchRoute = false
 
     var body: some View {
+        GeometryReader { proxy in
+            rootContent
+                // AI CONTEXT — Width ownership belongs above NavigationStack.
+                // A page cannot consume an Environment value that it applies to
+                // its own body, so measuring only in a navigation-title modifier
+                // left parent-owned rows on the 390-point default on iPad/Mac.
+                .environment(\.adaptiveViewportWidth, proxy.size.width)
+        }
+    }
+
+    private var rootContent: some View {
         ZStack {
             // PlayerView stays alive for the entire app lifetime so AVFoundation is never torn down.
             NavigationStack(path: $navigationPath) {

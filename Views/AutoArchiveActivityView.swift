@@ -31,16 +31,17 @@ struct AutoArchiveActivityView: View {
                 }
             }
             .padding(.vertical, 18)
-            .adaptivePageContent(.list)
+            .episodeListPageWidth()
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Auto Archive Activity")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Auto Archive Activity")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: {
                     Image(systemName: "chevron.left.circle.fill")
+                        .responsiveToolbarBackSymbol()
                 }
                 .accessibilityLabel("Back")
             }
@@ -51,12 +52,14 @@ struct AutoArchiveActivityView: View {
 }
 
 private struct AutoArchiveActivityRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let entry: AutoArchiveActivity
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        VStack(alignment: .leading, spacing: max(10, metrics.rowSpacing)) {
             Text(entry.episodeTitle)
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -71,7 +74,7 @@ private struct AutoArchiveActivityRow: View {
             activityField("Configured threshold", value: entry.configuredThreshold)
             activityField("Measured age", value: Self.duration(entry.measuredAgeSeconds))
         }
-        .padding(16)
+        .padding(16 + metrics.verticalPadding - 6)
         .glassCard(cornerRadius: 16)
     }
 

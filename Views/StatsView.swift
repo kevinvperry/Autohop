@@ -266,13 +266,14 @@ private struct StatsContentView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Stats")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Stats")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showRecaps = true
                 } label: {
                     Image(systemName: "bell.badge")
+                        .responsiveToolbarSymbol()
                 }
                 .accessibilityLabel("Listening Recaps")
             }
@@ -1526,7 +1527,7 @@ private struct TopShowsListView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Top Shows")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Top Shows")
         .preferredColorScheme(.dark)
     }
 

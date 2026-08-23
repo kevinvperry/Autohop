@@ -43,7 +43,7 @@ import UniformTypeIdentifiers
 // accurately and never implies Relay or Pro availability when those gates are off.
 // Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
 // subtle dark base (black.opacity(0.5)) with a faint white.opacity(0.05) tint on
-// each section card so edges read clearly, 36 pt listSectionSpacing between
+// each section card so edges read clearly, 48 pt listSectionSpacing between
 // sections. iOS 17–25: dark page (scrollContentBackground hidden over black),
 // each section a white.opacity(0.08) card. Both with .tint(.purple) and a purple
 // SettingsRowLabel glyph on every control row — matching the Default Playback
@@ -56,6 +56,10 @@ import UniformTypeIdentifiers
 // Stage 14: all rendered global settings and bindings observe/write through
 // SettingsViewModel. AppState remains only for high-level commands whose effects
 // span playback, sync, notifications, diagnostics, or persistence domains.
+// EXPANSIVE NAVIGATION: full-width iPad/Mac windows retain this one Form as the
+// right pane and add a fixed SettingsShortcutSidebar on the left. Shortcuts
+// scroll to stable major-section IDs; never fork the settings into replacement
+// detail pages. Compact/narrow multitasking remains the original single column.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
@@ -65,6 +69,7 @@ struct SettingsView: View {
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
 
     @State private var showOPMLImporter = false
     @State private var showOPMLExporter = false
@@ -84,40 +89,75 @@ struct SettingsView: View {
     // Release Radar section when iOS won't let Autohop check feeds in the background.
     @Environment(\.scenePhase) private var scenePhase
     @State private var backgroundRefreshOff = false
+    @State private var activeShortcut: SettingsShortcut = .general
+    @State private var requestedFormSection: Int?
+    @State private var formScrollRequestID = UUID()
+
+    private enum SettingsShortcut: String, Hashable {
+        case general, releaseRadar, automation, downloads, playback
+        case podcasts, sync, storage, diagnostics, support, about
+    }
+
+    private var shortcutItems: [SettingsShortcutItem<SettingsShortcut>] {
+        var items: [SettingsShortcutItem<SettingsShortcut>] = [
+            .init(id: .general, title: "Startup", systemImage: "house"),
+            .init(id: .releaseRadar, title: "Release Radar", systemImage: "dot.radiowaves.left.and.right"),
+            .init(id: .automation, title: "Auto Archive", systemImage: "archivebox"),
+            .init(id: .downloads, title: "Downloading", systemImage: "arrow.down.circle"),
+            .init(id: .playback, title: "Controls", systemImage: "waveform"),
+            .init(id: .podcasts, title: "Subscriptions", systemImage: "square.stack"),
+            .init(id: .sync, title: "Sync", systemImage: "icloud"),
+            .init(id: .storage, title: "Storage", systemImage: "internaldrive")
+        ]
+        if developerModeUnlocked {
+            items.append(.init(id: .diagnostics, title: "Diagnostics", systemImage: "waveform.path.ecg"))
+        }
+        items.append(contentsOf: [
+            .init(id: .support, title: "Contact", systemImage: "envelope"),
+            .init(id: .about, title: "About", systemImage: "info.circle")
+        ])
+        return items
+    }
 
     var body: some View {
-        Form {
-            startupSection
-            pollingSection
-            autoArchiveSection
-            downloadingSection
-            controlsSection
-            defaultPlaybackSection
-            subscriptionsSection
-            syncSection
-            storageSection
-            if developerModeUnlocked {
-                diagnosticsSection
+        Group {
+            if AdaptiveEditorialMetrics(containerWidth: viewportWidth).usesSettingsShortcutSidebar {
+                HStack(spacing: 0) {
+                    SettingsShortcutSidebar(
+                        items: shortcutItems,
+                        selection: $activeShortcut,
+                        navigate: { shortcut in
+                            requestedFormSection = formSection(for: shortcut)
+                            formScrollRequestID = UUID()
+                        }
+                    )
+                    Divider().overlay(Color.white.opacity(0.08))
+                    settingsForm
+                        .frame(maxWidth: .infinity)
+                        .background(formPageBackground)
+                }
+                .frame(maxWidth: 960)
+                .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                settingsForm
             }
-            contactSection
-            acknowledgementsSection
         }
-        .listSectionSpacing(36)
         .onAppear { refreshBackgroundRefreshStatus() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { refreshBackgroundRefreshStatus() }
         }
         .scrollContentBackground(formScrollBackground)
-        .background(formPageBackground.ignoresSafeArea())
+        .background(settingsWorkspaceBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Settings")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: {
                     Image(systemName: "chevron.left.circle.fill")
+                        .responsiveToolbarBackSymbol()
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Back")
@@ -160,6 +200,51 @@ struct SettingsView: View {
         }
     }
 
+    private var settingsForm: some View {
+        Form {
+            startupSection
+            pollingSection
+            autoArchiveSection
+            downloadingSection
+            controlsSection
+            defaultPlaybackSection
+            subscriptionsSection
+            syncSection
+            storageSection
+            if developerModeUnlocked {
+                diagnosticsSection
+            }
+            contactSection
+            acknowledgementsSection
+        }
+        .responsiveListSizing()
+        .listSectionSpacing(AdaptiveLayoutMetrics.settingsSectionSpacing)
+        .background(
+            FormSectionScrollController(
+                section: requestedFormSection,
+                requestID: formScrollRequestID
+            )
+        )
+    }
+
+    /// Native Form section indexes include the two Default Playback sections,
+    /// even though they intentionally have no shortcut of their own.
+    private func formSection(for shortcut: SettingsShortcut) -> Int {
+        switch shortcut {
+        case .general: return 0
+        case .releaseRadar: return 1
+        case .automation: return 2
+        case .downloads: return 3
+        case .playback: return 4
+        case .podcasts: return 7
+        case .sync: return 8
+        case .storage: return 9
+        case .diagnostics: return 10
+        case .support: return developerModeUnlocked ? 11 : 10
+        case .about: return developerModeUnlocked ? 12 : 11
+        }
+    }
+
     /// Reads the system Background App Refresh authorisation. `.denied` (user turned
     /// it off) or `.restricted` (Screen Time / MDM) both mean iOS won't grant
     /// off-app feed checks, so the Release Radar warning is shown.
@@ -184,10 +269,9 @@ struct SettingsView: View {
         return .hidden
     }
 
-    private var formPageBackground: Color {
-        if #available(iOS 26, *) { return Color.black.opacity(0.5) }
-        return .black
-    }
+    private var formPageBackground: Color { .black }
+
+    private var settingsWorkspaceBackground: Color { .black }
 
     // Purple leading icon + primary-coloured title for every toggle, link, stepper
     // and value row. Thin wrapper over the shared SettingsRowLabel (defined in
@@ -208,9 +292,10 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Open at launch", systemImage: "house")
             }
+            .id(SettingsShortcut.general)
             .pickerStyle(.menu)
         } header: {
-            Text("Startup")
+            shortcutHeader("Startup", id: .general)
         } footer: {
             Text("Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. New users still see a quick welcome first.")
         }
@@ -242,13 +327,14 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Notification Settings", systemImage: "bell.badge")
             }
+            .id(SettingsShortcut.releaseRadar)
             NavigationLink {
                 FeedRefreshScheduleView()
             } label: {
                 rowLabel("Feed Refresh Schedule", systemImage: "calendar.badge.clock")
             }
         } header: {
-            Text("Release Radar")
+            shortcutHeader("Release Radar", id: .releaseRadar)
         } footer: {
             Text("Autohop automatically adapts each podcast's refresh timing to its learned release schedule, recent empty checks, deferred backlog, network conditions, battery mode and device temperature.\n\nNotification Settings controls which podcasts notify you after Autohop discovers a new episode.")
         }
@@ -275,6 +361,7 @@ struct SettingsView: View {
                     Label("Run Auto Archive Now", systemImage: "archivebox")
                 }
             }
+            .id(SettingsShortcut.automation)
             .disabled(isRunningAutoArchive)
 
             NavigationLink {
@@ -310,7 +397,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
         } header: {
-            Text("Auto Archive")
+            shortcutHeader("Auto Archive", id: .automation)
         } footer: {
             Text("Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains every automatic decision. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit rotates automatic downloads while protecting manually downloaded and manually positioned Up Next episodes.")
         }
@@ -325,6 +412,7 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Downloads", systemImage: "arrow.down.circle")
             }
+            .id(SettingsShortcut.downloads)
             Toggle(isOn: wifiBinding) {
                 rowLabel("Download over WiFi", systemImage: "wifi")
             }
@@ -332,7 +420,7 @@ struct SettingsView: View {
                 rowLabel("Download over cellular", systemImage: "cellularbars")
             }
         } header: {
-            Text("Downloading")
+            shortcutHeader("Downloading", id: .downloads)
         } footer: {
             Text("New episodes download automatically so Up Next plays from files already on your device. Downloads use Wi-Fi and cellular by default — turn either network type off here if you want to restrict automatic downloads. Feed checks and transfer starts in the background remain subject to execution time granted by iOS.")
         }
@@ -345,6 +433,7 @@ struct SettingsView: View {
             Toggle(isOn: keepScreenAwakeBinding) {
                 rowLabel("Keep Screen Awake", systemImage: "sun.max")
             }
+            .id(SettingsShortcut.playback)
             Toggle(isOn: lockScreenScrubbingBinding) {
                 rowLabel("Lock Screen Scrubbing", systemImage: "lock.iphone")
             }
@@ -375,7 +464,7 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         } header: {
-            Text("Controls")
+            shortcutHeader("Controls", id: .playback)
         } footer: {
             Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Up Next Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play.\n\nSkip durations also apply to the Lock Screen and Control Centre buttons.")
         }
@@ -438,8 +527,9 @@ struct SettingsView: View {
             Toggle(isOn: iCloudSyncBinding) {
                 rowLabel("iCloud Sync", systemImage: "icloud")
             }
+            .id(SettingsShortcut.sync)
         } header: {
-            Text("Sync")
+            shortcutHeader("Sync", id: .sync)
         } footer: {
             Text("Private by default — your subscriptions, playback position, per-podcast settings, Up Next order, history and stats stay on this device unless you turn on iCloud Sync.\n\nWhen enabled, those records sync through your private iCloud database across iPhones signed into the same iCloud account. Downloaded media and global app settings remain on each device.")
         }
@@ -452,6 +542,7 @@ struct SettingsView: View {
             Toggle(isOn: diagnosticLoggingBinding) {
                 rowLabel("Enable Diagnostic Log", systemImage: "waveform.path.ecg")
             }
+            .id(SettingsShortcut.diagnostics)
             if settingsViewModel.appSettings.diagnosticLoggingEnabled {
                 Toggle(isOn: verboseDiagnosticLoggingBinding) {
                     rowLabel("Detailed Refresh Trace", systemImage: "list.bullet.rectangle")
@@ -463,7 +554,7 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Text("Diagnostics")
+            shortcutHeader("Diagnostics", id: .diagnostics)
         } footer: {
             Text("Normal diagnostics retain refresh-cycle summaries, background wakes, backlog, downloads, failures and playback recovery with low routine overhead. Detailed Refresh Trace adds per-feed decisions for short Release Radar investigations and creates a larger log. Disable diagnostics when testing is complete.")
         }
@@ -472,7 +563,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var subscriptionsSection: some View {
-        Section("Subscriptions") {
+        Section {
             // Subscriptions is the home page beneath the Menu sheet — close the
             // sheet to reveal it as a full page rather than pushing a duplicate
             // PodcastsView inside the sheet (NavRules: one path per page).
@@ -489,6 +580,7 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .id(SettingsShortcut.podcasts)
             NavigationLink {
                 AddFeedView()
             } label: {
@@ -523,6 +615,8 @@ struct SettingsView: View {
                 Label("Export OPML", systemImage: "square.and.arrow.up")
             }
             .disabled(subscriptionStore.subscriptions.isEmpty)
+        } header: {
+            shortcutHeader("Subscriptions", id: .podcasts)
         }
         .listRowBackground(cardBackground)
     }
@@ -537,8 +631,9 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Get in Touch", systemImage: "envelope")
             }
+            .id(SettingsShortcut.support)
         } header: {
-            Text("Contact")
+            shortcutHeader("Contact", id: .support)
         } footer: {
             Text("Have a question, found a bug, or want to share feedback? I'd love to hear from you.")
         }
@@ -552,6 +647,7 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Open Source Acknowledgements", systemImage: "doc.plaintext")
             }
+            .id(SettingsShortcut.about)
             // Version row — tap 5 times to unlock developer tools for this session.
             HStack {
                 rowLabel("Version", systemImage: "info.circle")
@@ -569,7 +665,7 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Text("About")
+            shortcutHeader("About", id: .about)
         } footer: {
             if developerModeUnlocked {
                 Text("Developer tools unlocked.")
@@ -597,6 +693,7 @@ struct SettingsView: View {
             } label: {
                 rowLabel("Downloaded episodes", systemImage: "tray.full")
             }
+            .id(SettingsShortcut.storage)
             LabeledContent {
                 if let bytes = totalDownloadedBytes {
                     Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
@@ -613,7 +710,7 @@ struct SettingsView: View {
                 rowLabel("Manage Downloads", systemImage: "slider.horizontal.3")
             }
         } header: {
-            Text("Storage")
+            shortcutHeader("Storage", id: .storage)
         } footer: {
             Text("To free up space, archive episodes or tighten a podcast's Episode Limit in its Auto Archive settings.")
         }
@@ -624,6 +721,11 @@ struct SettingsView: View {
                 await MainActor.run { totalDownloadedBytes = bytes }
             }
         }
+    }
+
+    private func shortcutHeader(_ title: String, id: SettingsShortcut) -> some View {
+        Text(title)
+            .onAppear { activeShortcut = id }
     }
 
     // MARK: - Bindings
@@ -810,14 +912,16 @@ private struct SkipDurationEditSheet: View {
             .padding(.horizontal, 24)
             .padding(.top, 20)
             .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .responsiveInlineNavigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .responsiveToolbarLabel()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(saveTitle, action: onSave)
                         .fontWeight(.semibold)
+                        .responsiveToolbarLabel()
                 }
             }
         }
@@ -906,12 +1010,12 @@ struct ListeningHistoryView: View {
                 historyList
             }
         }
-        .padding(.horizontal, 20)
+        .episodeListPageWidth()
         .padding(.top, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Listening History")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Listening History")
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
         .preferredColorScheme(.dark)
         .tint(.purple)
@@ -957,6 +1061,7 @@ struct ListeningHistoryView: View {
                 }
             }
         }
+        .responsiveListSizing()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .glassCard(cornerRadius: 16)
@@ -1103,6 +1208,7 @@ private enum SettingsStorageUsage {
 }
 
 private struct ListeningHistoryRow: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let entry: ListeningHistoryEntry
     /// Nil when the retained history record can no longer resolve to a current
     /// library episode; such rows remain readable but cannot show live progress.
@@ -1111,9 +1217,11 @@ private struct ListeningHistoryRow: View {
     let downloadProgress: Double?
 
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = metrics.artworkSize
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+            HStack(alignment: .top, spacing: metrics.rowSpacing) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -1124,12 +1232,12 @@ private struct ListeningHistoryRow: View {
                             .foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .frame(width: artworkSize, height: artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.episodeTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
 
@@ -1156,11 +1264,11 @@ private struct ListeningHistoryRow: View {
                 ProgressView(value: downloadProgress, total: 1.0)
                     .tint(.purple)
                     .animation(.linear(duration: 0.3), value: downloadProgress)
-                    .padding(.leading, 56)
+                    .padding(.leading, artworkSize + metrics.rowSpacing)
                     .padding(.top, 6)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, metrics.verticalPadding)
     }
 
     /// AI CONTEXT — History pills describe the outcome recorded by this entry,

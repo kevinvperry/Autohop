@@ -41,15 +41,15 @@ struct DownloadsView: View {
                 archivedSection
             }
             .padding(.vertical, 18)
-            .adaptivePageContent(.list)
+            .episodeListPageWidth()
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Downloads")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Downloads")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
         }
         .miniPlayerBar()
@@ -152,19 +152,22 @@ struct DownloadsView: View {
 private struct ArchivedEpisodeRow: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let entry: ListeningHistoryEntry
 
     @State private var isRedownloading = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = metrics.artworkSize
+        HStack(alignment: .top, spacing: metrics.rowSpacing) {
             // Artwork column — 44×44 image + badges centred below
             VStack(alignment: .center, spacing: 4) {
-                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+                CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                     placeholderArtwork
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .frame(width: artworkSize, height: artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
             }
 
@@ -176,7 +179,7 @@ private struct ArchivedEpisodeRow: View {
                     .lineLimit(1)
 
                 Text(entry.episodeTitle)
-                    .font(.subheadline.bold())
+                    .font(.system(size: metrics.primaryFontSize, weight: .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
 
@@ -259,18 +262,21 @@ private struct ArchivedEpisodeRow: View {
 private struct DownloadActivityRow: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let activity: DownloadActivity
 
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = metrics.artworkSize
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: metrics.rowSpacing) {
                 // Artwork column — 44×44 image + badges centred below
                 VStack(alignment: .center, spacing: 4) {
-                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                         placeholderArtwork
                     }
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .frame(width: artworkSize, height: artworkSize)
+                    .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
                 }
 
@@ -292,7 +298,7 @@ private struct DownloadActivityRow: View {
                     }
 
                     Text(activity.episodeTitle)
-                            .font(.subheadline.bold())
+                            .font(.system(size: metrics.primaryFontSize, weight: .bold))
                             .foregroundStyle(.primary)
                             .lineLimit(2)
 
@@ -330,7 +336,7 @@ private struct DownloadActivityRow: View {
                         controls
                     }
                 }
-                .padding(.leading, 56)
+                .padding(.leading, artworkSize + metrics.rowSpacing)
             } else if activity.status == .failed {
                 HStack {
                     Text(activity.errorMessage ?? "Download failed")

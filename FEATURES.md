@@ -47,6 +47,46 @@ search, podcast discovery, feed refresh, settings, sleep controls, stats, OPML,
 notifications, or other non-driving workflows.
 -->
 
+> iOS-family large-screen assets use the Discover page's container-width bands:
+> standard iPhone proportions are preserved, while page titles, toolbar actions
+> and persistent mini-player chrome grow deliberately on iPad and resizable Mac
+> windows. Fixed semantic geometry is not blindly scaled.
+> Podcast Detail specifically uses a side-by-side, height-efficient header below
+> a 600-point content column and a centred editorial hero at wider widths.
+> Every list/form uses shared row bands. Image-led rows retain 44-point artwork
+> on iPhone and grow to 52/60 points on wide/expansive columns with coordinated
+> typography, spacing and row height.
+> Secondary page elements participate in the same system: Podcast Detail's
+> description, publisher, categories and subscription controls, shared episode
+> status/media pills, and Settings labels/buttons all grow by coordinated bands.
+> A large-screen pass is incomplete if only its principal title or row text is
+> enlarged.
+> The root navigation container owns and distributes the live viewport width;
+> page-level modifiers may refine descendant layout but must never be the sole
+> source for metrics read by the page itself.
+> Vertical episode collections share Podcast Detail's horizontal measure:
+> 20-point compact gutters and an 860-point maximum surface inside a centred
+> 900-point outer column. Editorial rails/charts are composition-specific.
+> Controls visually associated with a constrained list—including Priority and
+> refresh—align to that same column. Custom Player navigation uses the same
+> responsive control sizes as system toolbar navigation.
+> On expansive iPad/Mac layouts, System Settings and Individual Subscription
+> Settings add a fixed 240-point shortcut rail beside the existing scrolling
+> Form. Shortcuts scroll—not replace—the right-hand content, retain focus for
+> repeated keyboard use, and disappear in narrow multitasking widths.
+> Shortcut labels exactly match visible Form headings. Headers track manual
+> scrolling, while shortcut taps bridge to the native Form collection/table and
+> navigate by stable section index, including sections whose rows have not yet
+> been realized by SwiftUI virtualization. Destinations are vertically centred
+> so the heading above the first row remains visible rather than being cropped by
+> the navigation bar. The centred two-pane workspace uses
+> one consistent black background across rail, Form and surrounding canvas.
+> Manual scrolling continues to update the highlighted shortcut independently.
+> Native navigation separates circular Back artwork from utility glyphs. Share,
+> Menu, Settings and other tall symbols use a bounded responsive font inside the
+> system's 44-point toolbar host, preventing iPad/Mac capsule clipping; Back keeps
+> its larger compact circular artwork band.
+
 > Version 1.6 build 9: Apple TV diagnostics exports are prepared away from the
 > user-interface thread with visible progress. iCloud diagnostics report
 > privacy-safe fetch cycles, state advancement and material-change counts;
@@ -59,6 +99,10 @@ notifications, or other non-driving workflows.
 > The Player's episode share sheet opens at its measured content height rather
 > than generic medium/full-screen stops. Every available action is initially
 > reachable, with scrolling retained only when the window is genuinely short.
+
+> Discover now scales its top heading, Back control and storefront navigation
+> alongside its editorial cards as the available window grows. Phone sizing is
+> preserved while iPad and Mac receive larger labels, symbols and hit targets.
 
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
@@ -633,7 +677,7 @@ phone/tablet-specific; the underlying playback-speed behaviour stays unified.
 
 **Access:** Priority page → tap podcast row → episode list → gear icon (⚙) in top-right toolbar.
 
-The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 36pt section spacing. On iOS 26 every section uses the same regular `glassEffect` surface as the Playback controls card, so the whole page reads as one consistent glass treatment; below iOS 26 it falls back to `white.opacity(0.08)` cards on black.
+The settings page is titled with the podcast name and groups settings into sections. It uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 48pt section spacing on every device width. On iOS 26 every section uses the same regular `glassEffect` surface as the Playback controls card, so the whole page reads as one consistent glass treatment; below iOS 26 it falls back to `white.opacity(0.08)` cards on black.
 
 ---
 
@@ -907,7 +951,7 @@ A family of notifications that summarise the user's listening when a period conc
 
 **Access:** Hamburger menu (☰) on the Priority page → Settings.
 
-The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 36pt section spacing. On iOS 26 it uses "defined glass" — native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base so card edges read clearly; below iOS 26 it falls back to `white.opacity(0.08)` cards on black. The Default Playback card (§15.5) is matched to the other section cards (via `usesHostBackground`), and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
+The page uses the shared dark settings style (`Form-SettingsDark` in DESIGN.md): a purple `SettingsRowLabel` glyph on every control row, purple tint, and 48pt section spacing on every device width. On iOS 26 it uses "defined glass" — native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a black page base so card edges read clearly; below iOS 26 it falls back to `white.opacity(0.08)` cards on black. The Default Playback card (§15.5) is matched to the other section cards (via `usesHostBackground`), and the linked sub-screens (Notification Settings, Add RSS Feed, Diagnostic Log, Acknowledgements) and Podcast Settings (§10) share the same style. Long section footers are split into multiple paragraphs for readability.
 
 ---
 

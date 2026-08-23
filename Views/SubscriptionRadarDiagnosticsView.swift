@@ -39,7 +39,8 @@ struct SubscriptionRadarDiagnosticsView: View {
             }
         }
         .navigationTitle("Release Radar Data")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Release Radar Data")
+        .responsiveListSizing()
         .scrollContentBackground(.hidden)
         .background(Color.black.ignoresSafeArea())
     }

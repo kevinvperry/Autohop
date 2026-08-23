@@ -52,16 +52,17 @@ struct AddFeedView: View {
                 .listRowBackground(cardBackground)
             }
         }
+        .responsiveListSizing()
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Add RSS Feed")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Add RSS Feed")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
         }
     }

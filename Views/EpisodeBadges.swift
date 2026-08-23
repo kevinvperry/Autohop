@@ -10,7 +10,8 @@ import SwiftUI
 //   • glassCard(cornerRadius:highlighted:) View modifier (glass content-card
 //     surface; `highlighted` applies the same purple tint as glassCapsule for
 //     accent-action surfaces such as Discover's rail-trailing "See All" tile)
-// Pure presentation; shared across episode lists, preview, queue, and detail pages.
+// All variants read the shared container width and scale with their surrounding
+// row/detail surface. Do not reintroduce fixed phone-only pill typography.
 
 // MARK: - Video Pill (small)
 //
@@ -18,11 +19,14 @@ import SwiftUI
 // background, or capsule padding; callers own placement and spacing.
 
 struct VideoPillSmall: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
+
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         Image(systemName: "tv.fill")
-            .font(.caption.bold())
+            .font(.system(size: metrics.secondaryFontSize, weight: .bold))
             .foregroundStyle(.white)
-            .frame(minWidth: 14, minHeight: 14)
+            .frame(minWidth: metrics.secondaryFontSize + 2, minHeight: metrics.secondaryFontSize + 2)
             .accessibilityLabel("Video episode")
     }
 }
@@ -32,15 +36,18 @@ struct VideoPillSmall: View {
 // "Video" text pill — large counterpart to VideoPillSmall, used in detail headers.
 
 struct VideoPillLarge: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
+
     var body: some View {
-        let label = HStack(spacing: 4) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let label = HStack(spacing: metrics.rowSpacing / 3) {
             Image(systemName: "tv.fill")
             Text("Video")
         }
-        .font(.caption.bold())
+        .font(.system(size: metrics.secondaryFontSize, weight: .bold))
         .foregroundStyle(.white)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, metrics.verticalPadding + 2)
+        .padding(.vertical, metrics.verticalPadding * 0.8)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())
@@ -55,22 +62,26 @@ struct VideoPillLarge: View {
 // "Explicit" text pill used in detail headers for explicit shows/episodes.
 
 struct ExplicitPillLarge: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
+
     var body: some View {
-        let label = HStack(spacing: 4) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let badgeSize = metrics.secondaryFontSize - 1
+        let label = HStack(spacing: metrics.rowSpacing / 3) {
             ZStack {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(.white)
-                    .frame(width: 11, height: 11)
+                    .frame(width: badgeSize, height: badgeSize)
                 Text("E")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: badgeSize * 0.72, weight: .bold))
                     .foregroundStyle(.black)
             }
             Text("Explicit")
         }
-        .font(.caption.bold())
+        .font(.system(size: metrics.secondaryFontSize, weight: .bold))
         .foregroundStyle(.white)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, metrics.verticalPadding + 2)
+        .padding(.vertical, metrics.verticalPadding * 0.8)
 
         if #available(iOS 26, *) {
             label.glassEffect(in: Capsule())
@@ -86,16 +97,20 @@ struct ExplicitPillLarge: View {
 // styled like the iTunes explicit badge with no surrounding material or capsule.
 
 struct ExplicitPillSmall: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
+
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let badgeSize = metrics.secondaryFontSize - 1
         ZStack {
             RoundedRectangle(cornerRadius: 2)
                 .fill(.white)
-                .frame(width: 11, height: 11)
+                .frame(width: badgeSize, height: badgeSize)
             Text("E")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: badgeSize * 0.72, weight: .bold))
                 .foregroundStyle(.black)
         }
-        .frame(minWidth: 14, minHeight: 14)
+        .frame(minWidth: badgeSize + 3, minHeight: badgeSize + 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Explicit episode")
     }
@@ -140,13 +155,15 @@ enum EpisodeStatusKind {
 
 struct EpisodeStatusPill: View {
     let kind: EpisodeStatusKind
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
 
     var body: some View {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         let label = Text(kind.label)
-            .font(.caption.bold())
+            .font(.system(size: metrics.secondaryFontSize, weight: .bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, metrics.verticalPadding + 4)
+            .padding(.vertical, metrics.verticalPadding * 0.8)
 
         if #available(iOS 26, *) {
             label

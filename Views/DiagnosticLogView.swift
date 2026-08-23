@@ -7,6 +7,7 @@ import SwiftUI
 // width and outer gutter respond to the offered container; the ScrollView and
 // page background remain full width.
 struct DiagnosticLogView: View {
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @ObservedObject private var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss
     @State private var logLines: [String] = []
@@ -31,7 +32,10 @@ struct DiagnosticLogView: View {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(logLines.enumerated()), id: \.offset) { _, line in
                             Text(line)
-                                .font(.system(.caption2, design: .monospaced))
+                                .font(.system(
+                                    size: AdaptiveListRowMetrics(containerWidth: viewportWidth).secondaryFontSize,
+                                    design: .monospaced
+                                ))
                                 .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
@@ -46,11 +50,11 @@ struct DiagnosticLogView: View {
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Diagnostic Log")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Diagnostic Log")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
 
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -58,11 +62,13 @@ struct DiagnosticLogView: View {
                     refresh()
                 } label: {
                     Image(systemName: "arrow.clockwise")
+                        .responsiveToolbarSymbol()
                 }
 
                 if let exportURL {
                     ShareLink(item: exportURL) {
                         Image(systemName: "square.and.arrow.up")
+                            .responsiveToolbarSymbol()
                     }
                 }
 

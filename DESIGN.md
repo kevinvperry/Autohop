@@ -20,6 +20,16 @@ extensions read a prebuilt local projection and never perform networking or
 image processing.
 -->
 
+> Large-screen asset policy is container-driven: scale hierarchy-bearing titles,
+> toolbar controls, meaningful artwork and spacing through `AdaptiveLayout.swift`;
+> cap reading measures; preserve export, progress, badge, system-list and minimum
+> hit-target geometry. See the 23 August 2026 responsiveness audit.
+> `Header-SubscriptionPage` is side-by-side below 600 content points to protect
+> episode-list height, then centred at 600+ points for iPad/Mac presentation.
+> `ListRow-Responsive` uses 44/52/60-point meaningful artwork and coordinated
+> text, spacing, padding and minimum row height across standard/wide/expansive
+> content columns. Status pills and progress thickness remain semantic constants.
+
 > Version 1.6 build 9 tvOS interaction rule: expensive diagnostic export and
 > sync projection work must not occupy the main actor. Long operations expose
 > an immediate progress state, disable duplicate activation, and preserve focus
@@ -36,6 +46,15 @@ image processing.
 > Player sharing uses an intrinsic-height modal: measure the complete Episode
 > Share content and expose one fitted detent. The enclosing ScrollView is the
 > constrained-height fallback; a second generic large detent is not.
+
+> Discover navigation is part of the responsive editorial system. Its inline
+> heading and leading/trailing controls must use `AdaptiveEditorialMetrics`
+> derived from the offered container width, scaling type, symbols and hit
+> targets together rather than retaining phone toolbar defaults on wide screens.
+> Toolbar-hosted controls must remain within the system's 44-point inline bar
+> slot; enlarge their glyphs and labels without assigning a taller frame that
+> the navigation host will crop. The Search shortcut scales independently with
+> editorial content from 40 to 46 to 52 points high.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
@@ -79,6 +98,63 @@ the visual baseline. Wider viewports gain controlled scale inside the editorial
 readable-width cap, while horizontal shelves and navigation remain unchanged.
 Do not replace this pattern with `UIScreen`, device-name checks or unrelated
 page-local breakpoints.
+
+`ElementScale-Coordinated` is the completion rule for every responsive page.
+Once a page selects an `AdaptiveLayoutBand`, its title, descriptive copy,
+publisher/category metadata, primary and secondary buttons, status/media pills,
+icons, artwork, padding and hit targets must all derive from that same band.
+Do not enlarge the dominant list title while leaving supporting information at
+phone scale. Semantic exceptions—system share canvases, progress geometry or a
+platform-mandated minimum—must be documented rather than silently fixed-size.
+The application root owns `adaptiveViewportWidth` so parent views and presented
+pages can consume the real window width. A modifier attached inside a page can
+only change the environment of descendants; it must not be relied upon by that
+same page's stored/computed row metrics.
+
+`EpisodeList-ReadableWidth` standardises vertical episode collections. Apply
+`episodeListPageWidth()` to the list/card collection: it preserves a 20-point
+phone gutter and caps the visible list surface at 860 points inside the app's
+900-point list column. Page backgrounds, navigation and scrolling hosts remain
+full width. Horizontal Discover rails, Top Episodes editorial charts and the
+Player's single embedded Up Next card follow their host composition instead.
+Associated controls must share the list's outer alignment: Subscriptions'
+Priority/refresh row is the reference. Custom navigation (such as Player's top
+bar) must derive icon, label, pill and hit-target sizes from
+`AdaptiveEditorialMetrics`, matching `responsiveToolbarSymbol()` rather than
+retaining a separate fixed phone-sized control system.
+
+Native toolbar symbols have two distinct responsive contracts. Use
+`responsiveToolbarBackSymbol()` only for `chevron.left.circle.fill`; its compact
+circular bounds safely use the 20/25/28-point artwork band. Use
+`responsiveToolbarSymbol()` for Share, Menu, Settings, Add, diagnostics and all
+other icon-only utilities; it uses the bounded 15/18/21-point control-font band.
+Both retain a 36/44/44-point hit-target host. Never give tall utility glyphs the
+Back font merely to make them look larger—the native grouped capsule clips their
+ascenders/descenders before it expands its toolbar slot.
+
+`Settings-ShortcutRail` applies only in the expansive width band. A fixed
+240-point left rail contains purple-accented SF Symbol + label shortcuts; the
+existing Form remains a separately scrolling, maximum-720-point right pane.
+Selection animates to stable section IDs and the rail stays visible and focused
+for repeated keyboard navigation. The highlighted shortcut follows sections as
+they appear. Never replace the Form with mutually exclusive detail fragments:
+compact iPhone and narrow multitasking layouts retain the original single column.
+Shortcut labels must exactly match visible section headings. Header appearance
+drives manual-scroll highlighting. Do not use header or row IDs for shortcut
+commands: `Form` virtualizes distant rows, so those views may not exist when a
+user taps the rail. `FormSectionScrollController` locates the native Form
+collection/table and scrolls to the explicit section index instead. Its mappings
+must count every rendered section, including non-shortcut and conditional ones.
+Use `.centeredVertically` for collection-backed Forms and `.middle` for the table
+fallback. Never top-pin the first row: the section heading is a supplementary
+view immediately above it and will otherwise be cropped by navigation chrome.
+The controller must discover the Form from visible native scroll-surface bounds
+and content extent; never infer it from the coordinate of its invisible SwiftUI
+representable, whose bridged UIKit frame may be zero. Synchronize layout before
+scrolling and allow only one delayed retry for a newly presented Form.
+Centre the complete rail + pane workspace within a 960-point maximum. Rail, Form
+pane and surrounding canvas all use solid black; distinction comes from spacing,
+the divider, selection fill and Form cards rather than competing page colours.
 
 The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and **Individual Episode** pages are the canonical design references for Autohop. All other pages must match the patterns defined here. Each pattern has a **label** so it can be referenced directly in future instructions (e.g. "apply `EpisodeStatusPill` to the History page").
 
@@ -161,7 +237,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `AudioControls-Sheet` | Audio controls bottom sheet: Speed stepper · Trim Silence toggle + picker · Vocal Boost toggle + picker |
 | `Card-PlaybackControls` | Shared Speed / Trim Silence / Vocal Boost / optional Volume Adjustment / Mono Audio card (`Views/PlaybackControlsCard.swift`). Per-podcast settings enable the −3…+3 dB adjustment between Vocal Boost and Mono; global Default Playback deliberately omits it. iOS 26: `.glassCard(cornerRadius:12)` card + `.glassCard(cornerRadius:10)` stepper. iOS 17–25: flat `fill` background. The `usesHostBackground` flag lets App Settings inherit its Form surface; Podcast Settings retains the self-contained glass card. |
 | `ControlRow-EpisodeTrim` | Shared start/end skip row (`EpisodeTrimControlRow`) used in both App Settings and Podcast Settings: title + compact duration text on the left, fixed capsule minus/plus controls on the right, 5-second steps, 0–300s bounds, minute/second wording ("1 min 30 secs"), debounced persistence, and no playback/store-driven animation. **The duration line sits inside the `Label`'s title slot**, so it aligns flush under the title at every Dynamic Type size — never approximate the icon column with a fixed leading pad. Podcast Settings hosts both rows in one `glassCard`, matching its Automation section. |
-| `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a `black.opacity(0.5)` page base, 36pt section spacing; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, 36pt spacing. |
+| `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a black page base, 48pt section spacing on every device width; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, the same 48pt spacing. |
 | `Diagnostics-Tiered` | Hidden App Settings diagnostics section. `Enable Diagnostic Log` is the normal, outcome-focused tier. While enabled, `Detailed Refresh Trace` appears directly beneath it using `SettingsRowLabel` and the same native Form row/card background. The detailed tier is off by default and is described as a short-term Release Radar investigation tool; it must not be styled as a warning or primary action. `View Diagnostic Log` remains the final NavigationLink in the section. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |

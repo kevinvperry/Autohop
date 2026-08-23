@@ -66,11 +66,11 @@ struct TopEpisodesView: View {
             }
         }
         .navigationTitle("Top Episodes")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Top Episodes")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)

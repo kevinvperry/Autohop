@@ -42,15 +42,16 @@ struct SleepScheduleView: View {
                 }
             }
         }
+        .responsiveListSizing()
         .listSectionSpacing(28)
         .tint(.purple)
         .onAppear { onboardingCoordinator.requestTip(.sleepSchedule) }
         .navigationTitle("Sleep Schedule")
-        .navigationBarTitleDisplayMode(.inline)
+        .responsiveInlineNavigationTitle("Sleep Schedule")
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }.accessibilityLabel("Back")
+                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
             }
         }
         .miniPlayerBar()

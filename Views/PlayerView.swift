@@ -110,6 +110,7 @@ struct PlayerView: View {
     /// AppState no longer publishes on every 0.5 s time update.
     @EnvironmentObject private var playbackClock: PlaybackClock
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @State private var selectedPanel = 0
     @State private var showMenu = false
     @State private var showQueue = false
@@ -395,14 +396,15 @@ struct PlayerView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 0) {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
+        return HStack(spacing: 0) {
             // Quiet icon circle — the player's only navigation exit, the
             // visual twin of the MiniPlayerBar that brings you back.
             NavigationLink(value: AppRoute.podcasts) {
                 let icon = Image(systemName: "list.bullet")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: metrics.navigationControlFontSize, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: metrics.navigationControlSize, height: metrics.navigationControlSize)
 
                 if #available(iOS 26, *) {
                     icon.glassEffect(in: Circle())
@@ -432,11 +434,11 @@ struct PlayerView: View {
                     } label: {
                         let tab = HStack(spacing: 5) {
                             Image(systemName: panel.icon)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: metrics.navigationControlFontSize, weight: .semibold))
                             if isSelected {
                                 ViewThatFits(in: .horizontal) {
                                     Text(panel.title)
-                                        .font(.caption.weight(.semibold))
+                                        .font(.system(size: metrics.navigationControlFontSize, weight: .semibold))
                                         .lineLimit(1)
                                     EmptyView()
                                 }
@@ -444,8 +446,8 @@ struct PlayerView: View {
                             }
                         }
                         .foregroundStyle(isSelected ? .white : Color(white: 0.4))
-                        .padding(.horizontal, isSelected ? 12 : 9)
-                        .frame(height: 30)
+                        .padding(.horizontal, isSelected ? metrics.scaled(12) : metrics.scaled(9))
+                        .frame(height: metrics.navigationControlSize)
 
                         // Selected tab sits on neutral glass; unselected stays bare
                         // so the strip reads quiet.
@@ -475,26 +477,26 @@ struct PlayerView: View {
                 ZStack {
                     HStack(spacing: 5) {
                         Image(systemName: "square.stack")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: metrics.navigationControlFontSize, weight: .bold))
                             .foregroundStyle(Color.purple.opacity(0.85))
                         Text("\(queueCoordinator.episodes.count)")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: metrics.navigationControlFontSize * 0.8, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(Color.purple.opacity(0.85))
                     }
                     .opacity(queueFlashArtworkURL == nil ? 1 : 0)
 
                     if let url = queueFlashArtworkURL {
-                        CachedArtworkImage(url: url, targetSize: CGSize(width: 36, height: 36)) {
+                        CachedArtworkImage(url: url, targetSize: CGSize(width: metrics.navigationControlSize, height: metrics.navigationControlSize)) {
                             Rectangle().fill(Color(white: 0.2))
                         }
-                        .frame(width: 36, height: 36)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(width: metrics.navigationControlSize, height: metrics.navigationControlSize)
+                        .clipShape(RoundedRectangle(cornerRadius: metrics.scaled(8)))
                         .transition(.scale(scale: 0.4).combined(with: .opacity))
                     }
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 32)
+                .padding(.horizontal, metrics.scaled(12))
+                .frame(height: metrics.navigationControlSize)
                 .playerGlassPill()
             }
             .accessibilityLabel("Up Next, \(queueCoordinator.episodes.count) episodes")
@@ -535,22 +537,23 @@ struct PlayerView: View {
     /// edges; the @Published phase keeps the digit live while counting.
     @ViewBuilder
     private var sleepScheduleIndicator: some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
         TimelineView(.periodic(from: .now, by: 30)) { context in
             if sleepScheduleService.isActive(context.date) {
                 let minutes = sleepScheduleService.minutesUntilPrompt
                 NavigationLink(value: AppRoute.sleepSchedule) {
                     HStack(spacing: 5) {
                         Image(systemName: "bed.double.fill")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: metrics.navigationControlFontSize, weight: .bold))
                         if let minutes {
                             Text("\(minutes)")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: metrics.navigationControlFontSize * 0.8, weight: .bold))
                                 .monospacedDigit()
                         }
                     }
                     .foregroundStyle(Color.purple.opacity(0.85))
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
+                    .padding(.horizontal, metrics.scaled(12))
+                    .frame(height: metrics.navigationControlSize)
                     .playerGlassPill()
                 }
                 .padding(.leading, 8)
@@ -582,15 +585,16 @@ struct PlayerView: View {
     /// reassuring "downloading" state. See ONBOARDING_PLAN.md Phase 1a.
     private var emptyPlayerView: some View {
         let hasSubscriptions = onboardingCoordinator.realSubscriptionCount > 0
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
 
         return VStack(spacing: 0) {
             // Keep a quiet exit so the player is never a dead end.
             HStack {
                 NavigationLink(value: AppRoute.podcasts) {
                     let icon = Image(systemName: "list.bullet")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: metrics.navigationControlFontSize, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: metrics.navigationControlSize, height: metrics.navigationControlSize)
                     if #available(iOS 26, *) {
                         icon.glassEffect(in: Circle())
                     } else {
@@ -724,6 +728,7 @@ struct PlayerView: View {
                         .padding(.bottom, 30)
                 }
             }
+            .environment(\.adaptiveViewportWidth, geo.size.width)
         }
     }
 
@@ -1924,6 +1929,7 @@ struct HTMLDescriptionText: View {
 private struct UpNextRow: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let episode: Episode
 
     @State private var offset: CGFloat = 0
@@ -2021,7 +2027,9 @@ private struct UpNextRow: View {
 
     // ListRow-Standard layout
     private func rowContent(sub: Subscription?) -> some View {
-        HStack(spacing: 12) {
+        let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
+        let artworkSize = metrics.artworkSize
+        return HStack(spacing: metrics.rowSpacing) {
             // Position indicator — arrow.forward (user-confirmed)
             Image(systemName: "arrow.forward")
                 .font(.system(size: 10, weight: .bold))
@@ -2030,7 +2038,7 @@ private struct UpNextRow: View {
 
             // Artwork column — 44×44 image + badges centred below
             VStack(alignment: .center, spacing: 4) {
-                CachedArtworkImage(url: sub?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
+                CachedArtworkImage(url: sub?.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                     ZStack {
                         LinearGradient(
                             colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
@@ -2041,8 +2049,8 @@ private struct UpNextRow: View {
                             .foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .frame(width: artworkSize, height: artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
             }
 
@@ -2052,7 +2060,7 @@ private struct UpNextRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(episode.title)
-                        .font(.subheadline.bold())
+                        .font(.system(size: metrics.primaryFontSize, weight: .bold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                 HStack(spacing: 4) {
