@@ -154,6 +154,18 @@ final class AdaptiveLayoutTests: XCTestCase {
         XCTAssertLessThan(splitView.primaryButtonFontSize, fullScreen.primaryButtonFontSize)
         XCTAssertLessThan(phone.primaryButtonHeight, splitView.primaryButtonHeight)
         XCTAssertLessThan(splitView.primaryButtonHeight, fullScreen.primaryButtonHeight)
+        XCTAssertEqual(phone.detailsMediaMaximumWidth, 720)
+        XCTAssertEqual(fullScreen.detailsMediaMaximumWidth, 720)
+        XCTAssertEqual(phone.detailsMetaCardMinimumWidth, 150)
+        XCTAssertEqual(splitView.detailsMetaCardMinimumWidth, 170)
+        XCTAssertEqual(fullScreen.detailsMetaCardMinimumWidth, 190)
+        XCTAssertLessThan(phone.detailsMetaKeyFontSize, splitView.detailsMetaKeyFontSize)
+        XCTAssertLessThan(splitView.detailsMetaKeyFontSize, fullScreen.detailsMetaKeyFontSize)
+        XCTAssertEqual(phone.chapterSelectionControlSize, 24)
+        XCTAssertEqual(splitView.chapterSelectionControlSize, 28)
+        XCTAssertEqual(fullScreen.chapterSelectionControlSize, 32)
+        XCTAssertLessThan(phone.chapterCheckmarkFontSize, splitView.chapterCheckmarkFontSize)
+        XCTAssertLessThan(splitView.chapterCheckmarkFontSize, fullScreen.chapterCheckmarkFontSize)
     }
 }
 #endif

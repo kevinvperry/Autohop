@@ -22,6 +22,11 @@ import UIKit
 // The Details panel ends with the iOS-family Review in Apple Podcasts action,
 // immediately below its metadata-card grid. It resolves the current episode's
 // subscription by exact RSS identity through ApplePodcastsReviewButton.
+// LARGE-SCREEN DETAILS (2026-08-23): prose and metadata use the shared
+// editorial type scale and centred 900-point reading column; episode media is
+// capped at 720 points so imagery cannot overwhelm the text on iPad or Mac.
+// Chapters uses that same 900-point column, gutters and typography hierarchy;
+// keep chapter controls bounded and touch-friendly rather than phone-sized.
 // QueueCoordinator, and SubscriptionStore. AppState remains only for
 // cross-domain player commands and compatibility state not yet assigned to a
 // dedicated observable owner.
@@ -1226,13 +1231,13 @@ struct PlayerView: View {
     // MARK: - Details panel
 
     private var detailsPanel: some View {
-        ScrollView {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
+        return ScrollView {
             if let ep = episode {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(ep.title)
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: metrics.detailTitleFontSize, weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 20)
                         .padding(.top, 16)
                         .padding(.bottom, 10)
 
@@ -1244,9 +1249,8 @@ struct PlayerView: View {
                             Label(formatDurationLong(dur), systemImage: "hourglass")
                         }
                     }
-                    .font(.system(size: 12))
+                    .font(.system(size: metrics.detailDescriptionFontSize))
                     .foregroundStyle(Color(white: 0.55))
-                    .padding(.horizontal, 20)
                     .padding(.bottom, 14)
 
                     let descriptionImageURL = ep.description.flatMap { HTMLDescriptionText.firstImageURL(from: $0) }
@@ -1266,40 +1270,39 @@ struct PlayerView: View {
                                     .overlay(ProgressView().tint(.purple))
                             }
                         }
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: metrics.detailsMediaMaximumWidth)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.bottom, 14)
                     } else if let url = detailsArtworkURL(for: ep) {
                         CachedArtworkImage(url: url, targetSize: CGSize(width: 320, height: 320)) {
                             Color(white: 0.07)
                         }
                         .aspectRatio(1, contentMode: .fit)
+                        .frame(maxWidth: metrics.detailsMediaMaximumWidth)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.bottom, 14)
                     }
 
                     if let subtitle = ep.subtitle {
                         Text(subtitle)
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: metrics.detailPublisherFontSize, weight: .bold))
                             .foregroundStyle(Color(white: 0.55))
-                            .padding(.horizontal, 20)
                             .padding(.bottom, 4)
                     }
 
                     if let author = ep.author {
                         Text(author)
-                            .font(.system(size: 12))
+                            .font(.system(size: metrics.detailDescriptionFontSize))
                             .foregroundStyle(Color(white: 0.33))
-                            .padding(.horizontal, 20)
                             .padding(.bottom, 14)
                     }
 
                     if let desc = ep.description {
                         HTMLDescriptionText(
                             html: desc,
-                            fontSize: 14,
+                            fontSize: metrics.detailDescriptionFontSize,
                             color: Color(white: 0.78),
                             linkColor: .purple,
                             showsFirstImage: false,
@@ -1309,7 +1312,6 @@ struct PlayerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .glassCard(cornerRadius: 16)
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-                        .padding(.horizontal, 20)
                         .padding(.bottom, 16)
                     }
 
@@ -1325,7 +1327,6 @@ struct PlayerView: View {
                             detailsMetaGrid(ep: ep, sub: sub)
                         }
                     }
-                    .padding(.horizontal, 20)
                     .padding(.bottom, 12)
 
                     if let sub {
@@ -1333,10 +1334,12 @@ struct PlayerView: View {
                             showTitle: sub.title,
                             feedURL: sub.feedURL
                         )
-                        .padding(.horizontal, 20)
                         .padding(.bottom, 30)
                     }
                 }
+                .frame(maxWidth: AdaptiveContentStyle.list.maximumWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, metrics.horizontalGutter)
             } else {
                 ContentUnavailableView("No Episode Playing", systemImage: "waveform")
                     .padding(.top, 60)
@@ -1346,7 +1349,11 @@ struct PlayerView: View {
 
     @ViewBuilder
     private func detailsMetaGrid(ep: Episode, sub: Subscription?) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: metrics.detailsMetaCardMinimumWidth), spacing: 10)],
+            spacing: 10
+        ) {
             if let date = ep.publishedAt {
                 metaCard("Distributed", relativePublishedDateLabel(date))
                 metaCard("Released", relativeReleasedLabel(date))
@@ -1371,20 +1378,21 @@ struct PlayerView: View {
 
     @ViewBuilder
     private func metaCard(_ key: String, _ value: String) -> some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
         let content = VStack(alignment: .leading, spacing: 3) {
             Text(key)
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: metrics.detailsMetaKeyFontSize, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(Color(white: 0.33))
             Text(value)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: metrics.detailDescriptionFontSize, weight: .bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, metrics.band == .expansive ? 16 : 12)
+        .padding(.vertical, metrics.band == .expansive ? 14 : 10)
 
         if #available(iOS 26, *) {
             content.glassEffect(in: RoundedRectangle(cornerRadius: 10))
@@ -1419,6 +1427,7 @@ struct PlayerView: View {
     // MARK: - Chapters panel
 
     private var chaptersPanel: some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
         let ep = playbackCoordinator.chapterEpisode
         let sub = ep.flatMap { subscriptionStore.subscription(id: $0.subscriptionID) }
         let chapters = (ep?.chapters ?? []).sorted { $0.position < $1.position }
@@ -1427,11 +1436,11 @@ struct PlayerView: View {
         return VStack(spacing: 0) {
             HStack {
                 Text("\(chapters.count) chapters")
-                    .font(.system(size: 12))
+                    .font(.system(size: metrics.detailDescriptionFontSize))
                     .foregroundStyle(Color(white: 0.33))
                 if skippedCount > 0 {
                     Text("· \(skippedCount) skipped")
-                        .font(.system(size: 12))
+                        .font(.system(size: metrics.detailDescriptionFontSize))
                         .foregroundStyle(Color(white: 0.55))
                 }
                 Spacer()
@@ -1446,12 +1455,11 @@ struct PlayerView: View {
                             appState.applyChapterFilter(ChapterFilter(skippedPositions: skipped), subscriptionID: sub.id)
                         }
                     }
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: metrics.detailPublisherFontSize, weight: .bold))
                     .foregroundStyle(Color.purple.opacity(0.8))
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+            .padding(.vertical, metrics.scaled(10))
 
             if chapters.isEmpty {
                 ContentUnavailableView("No Chapters", systemImage: "list.bullet")
@@ -1460,18 +1468,24 @@ struct PlayerView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(chapters) { chapter in
-                            chapterRow(chapter: chapter, subscription: sub)
+                            chapterRow(chapter: chapter, subscription: sub, metrics: metrics)
                         }
                     }
                     .glassCard(cornerRadius: 16)
-                    .padding(.horizontal, 12)
                     .padding(.bottom, 16)
                 }
             }
         }
+        .frame(maxWidth: AdaptiveContentStyle.list.maximumWidth)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, metrics.horizontalGutter)
     }
 
-    private func chapterRow(chapter: Chapter, subscription: Subscription?) -> some View {
+    private func chapterRow(
+        chapter: Chapter,
+        subscription: Subscription?,
+        metrics: AdaptiveEditorialMetrics
+    ) -> some View {
         let isSkipped = subscription?.chapterFilter.skippedPositions.contains(chapter.position) ?? false
         let isCurrentlyPlaying = playbackCoordinator.currentChapter?.position == chapter.position && playbackCoordinator.currentEpisode != nil
 
@@ -1486,32 +1500,35 @@ struct PlayerView: View {
                     ZStack {
                         Circle()
                             .fill(isSkipped ? .clear : Color.purple)
-                            .frame(width: 24, height: 24)
+                            .frame(width: metrics.chapterSelectionControlSize,
+                                   height: metrics.chapterSelectionControlSize)
                         if !isSkipped {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: metrics.chapterCheckmarkFontSize, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                         Circle()
                             .stroke(isSkipped ? Color(white: 0.33) : Color.purple, lineWidth: 1.5)
-                            .frame(width: 24, height: 24)
+                            .frame(width: metrics.chapterSelectionControlSize,
+                                   height: metrics.chapterSelectionControlSize)
                     }
                 }
                 .buttonStyle(.plain)
+                .frame(minWidth: 44, minHeight: 44)
 
                 Text("\(chapter.position)")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: metrics.detailDescriptionFontSize, weight: .bold))
                     .foregroundStyle(isCurrentlyPlaying ? Color.purple : Color(white: 0.33))
                     .frame(width: 18, alignment: .trailing)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(chapter.title)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: metrics.detailPublisherFontSize, weight: .bold))
                         .foregroundStyle(isSkipped ? Color(white: 0.3) : (isCurrentlyPlaying ? Color.purple.opacity(0.85) : .white))
                         .strikethrough(isSkipped, color: Color(white: 0.3))
                         .lineLimit(1)
                     Text(formatTime(chapter.startSeconds))
-                        .font(.system(size: 11))
+                        .font(.system(size: metrics.detailDescriptionFontSize))
                         .foregroundStyle(Color(white: 0.22))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1519,18 +1536,18 @@ struct PlayerView: View {
                 if isCurrentlyPlaying {
                     Circle()
                         .fill(Color.purple)
-                        .frame(width: 6, height: 6)
+                        .frame(width: metrics.scaled(6), height: metrics.scaled(6))
                 }
 
                 if let dur = chapter.durationSeconds {
                     Text(formatDurationShort(dur))
-                        .font(.system(size: 11))
+                        .font(.system(size: metrics.detailDescriptionFontSize))
                         .foregroundStyle(Color(white: 0.22))
                         .monospacedDigit()
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, metrics.scaled(14))
+            .padding(.vertical, metrics.scaled(12))
             .background(isCurrentlyPlaying ? Color.purple.opacity(0.08) : .clear)
             .contentShape(Rectangle())
         }

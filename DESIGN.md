@@ -223,7 +223,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `TopBar-Player` | Main Player top bar: Priority list icon · panel tabs · Up Next count pill |
 | `Panel-NowPlaying` | Main Player now-playing panel — artwork · chapter strip · episode copy · scrubber · controls · audio row · Up Next row |
 | `Panel-Details` | Main Player details panel — episode title · metadata · description image · `HTMLDescriptionText` · meta cards grid |
-| `Panel-Chapters` | Main Player chapters panel — chapter rows with skip toggle + All/None controls |
+| `Panel-Chapters` | Main Player chapters panel — centred `ContentWidth-List` (900pt maximum) with responsive gutters, summary, All/None controls and chapter rows. Titles use the shared 15/17/19pt publisher scale, timing uses the 13/15/17pt description scale, and 24/28/32pt selection rings remain inside a minimum 44pt target. |
 | `Artwork-Player` | Dynamically sized artwork behind a purple radial glow; cornerRadius adapts for chapters |
 | `EpisodeCopy-Player` | Centred episode title (16pt bold) + tappable subscription name (12pt gray) |
 | `Scrubber-Player` | Purple `Slider` + elapsed (left) / remaining (right) time labels, restored on first render from the canonical playback clock so a resumed episode opens at the correct thumb position |
@@ -2265,7 +2265,14 @@ When `appState.activeChapters` is non-empty, a compact chapter strip appears bet
 
 **Label: `Panel-Chapters`**
 
-The full chapters panel (third tab). A header row (chapter count + skip count, plus All/None bulk-toggle buttons) sits above a scrollable chapter list. The list (the `LazyVStack` of rows) is wrapped in a shared `Glass-Card` (`.glassCard(cornerRadius: 16)`, inset `padding(.horizontal, 12)`) — like the Podcast Detail episode list — so the rows sit on one glass surface; the old full-width header divider is dropped. Chapter rows use `padding(.horizontal, 14)` to sit inside the card.
+The full chapters panel (third tab). Its header and scrollable list occupy the
+same centred 900-point readable column and responsive horizontal gutters as the
+Details pane. A header row (chapter count + skip count, plus All/None bulk-toggle
+buttons) sits above the list. The `LazyVStack` is wrapped in the shared
+`Glass-Card` (`.glassCard(cornerRadius: 16)`) so rows form one surface. Chapter
+titles, timing, padding, selection rings, checkmarks and playing indicator follow
+the active editorial width band; the selection button always retains at least a
+44-point interactive target.
 
 **Chapter row structure:**
 - **Toggle circle** — 24×24, `Color.purple` fill + `checkmark` when included; clear fill + `Color(white: 0.33)` stroke when skipped
@@ -2285,14 +2292,17 @@ The row body seeks to that chapter; its leading circular control toggles the ski
 
 **Label: `Panel-Details`**
 
-A `ScrollView` showing full episode metadata. Sections top to bottom:
+A `ScrollView` showing full episode metadata. The inner content uses the shared
+900-point readable column and responsive horizontal gutters. Feed imagery has a
+separate 720-point maximum and is centred, preventing artwork from inheriting
+the main Playing canvas's viewport-filling role. Sections top to bottom:
 
-1. **Episode title** — `size 20, weight .bold`, white, `padding(.horizontal, 20)`
-2. **Metadata row** — date (`calendar` icon) + duration (`hourglass` icon), `size 12, Color(white: 0.55)`
-3. **Description image** — either the first `<img>` extracted from the description HTML, or the channel/episode artwork as a fallback. `cornerRadius 14`, full width. Shown before the text.
-4. **Episode subtitle** — `size 13, weight .bold, Color(white: 0.55)` (from RSS `<itunes:subtitle>`)
-5. **Episode author** — `size 12, Color(white: 0.33)` (from RSS `<itunes:author>`)
-6. **`HTMLDescriptionText`** — full HTML description. `fontSize: 14`, `color: Color(white: 0.78)`, `linkColor: .purple`. `showsFirstImage: false` (image already shown above). Wrapped in a `Glass-Card` (`.glassCard(cornerRadius: 16)`, `padding 14`) with an explicit `white.opacity(0.12)` `lineWidth 0.5` border overlay, inset `padding(.horizontal, 20)`.
+1. **Episode title** — shared responsive detail-title band (22/26/30), bold white
+2. **Metadata row** — date (`calendar` icon) + duration (`hourglass` icon), shared responsive detail-copy band (13/15/17), `Color(white: 0.55)`
+3. **Description image** — either the first `<img>` extracted from the description HTML, or the channel/episode artwork as a fallback. `cornerRadius 14`, centred, maximum width 720. Shown before the text.
+4. **Episode subtitle** — responsive publisher band (15/17/19), bold, `Color(white: 0.55)` (from RSS `<itunes:subtitle>`)
+5. **Episode author** — responsive detail-copy band, `Color(white: 0.33)` (from RSS `<itunes:author>`)
+6. **`HTMLDescriptionText`** — full HTML description using the responsive detail-copy band, `color: Color(white: 0.78)`, `linkColor: .purple`. `showsFirstImage: false` (image already shown above). Wrapped in a `Glass-Card` (`.glassCard(cornerRadius: 16)`, `padding 14`) with an explicit `white.opacity(0.12)` `lineWidth 0.5` border overlay.
 7. **Meta cards grid** (`MetaCard-Details`) — two-column `LazyVGrid` of glass cards in a `GlassEffectContainer(spacing: 8)`
 8. **Review in Apple Podcasts** — iOS-family-only full-width glass card directly
    beneath the metadata grid. Uses `star.bubble`, an external-link affordance and
@@ -2344,10 +2354,10 @@ HTMLDescriptionText(
 
 A two-column `LazyVGrid` of key/value **glass** cards shown at the bottom of the Details panel — same treatment as the Episode Detail page's `MetaGrid-EpisodePage`. Each card: uppercase tracking label + bold value.
 
-- **Grid** — `[GridItem(.flexible()), GridItem(.flexible())]`, spacing `8`, wrapped in a `GlassEffectContainer(spacing: 8)` (iOS 26) so the tiles read as one cohesive glass surface
+- **Grid** — one adaptive column definition with 150/170/190-point minimum cards and 10-point spacing, wrapped in a `GlassEffectContainer` (iOS 26) so the tiles read as one cohesive glass surface
 - **Card** — iOS 26: `.glassEffect(in: RoundedRectangle(cornerRadius: 10))`; iOS 17–25 fallback: flat `Color(white: 0.09)` + `white.opacity(0.075)` stroke. Padding `12 × 10`
-- **Key** — `size 10, weight .bold`, `.textCase(.uppercase)`, `.tracking(0.5)`, `Color(white: 0.33)`
-- **Value** — `size 13, weight .bold`, white, `lineLimit(2)`
+- **Key** — responsive 10/11/13-point bold uppercase type, `.tracking(0.5)`, `Color(white: 0.33)`
+- **Value** — responsive 13/15/17-point bold type, white, `lineLimit(2)`
 
 Fields shown (when available): Published · Released · Duration · File size · Classification (Explicit / Clean) · File Status (Downloaded / Available / Archived) · Priority rank · Chapter count. The Published and Released cards split a single `publishedAt` into two complementary views: **Published** answers *which day* via `relativePublishedDateLabel` — Today / Yesterday / "N Days Ago" (up to 6 days) / then an abbreviated exact date ("12 Jun", year only when not the current year, e.g. "28 Dec 2024"); **Released** answers *what time* via `relativeReleasedLabel` — relative elapsed time under 24h ("10 minutes ago" / "2 hours ago"), then the actual clock time of release ("6:54 AM") once 24h+ old. (Episode **lists** still use the separate time-tiered `relativePublishedLabel`, so a same-day episode reads "11 hours ago" in a list but "Today" on the Published card.) All are shared helpers in `Views/EpisodeBadges.swift`, only shown when `publishedAt` is non-nil.
 

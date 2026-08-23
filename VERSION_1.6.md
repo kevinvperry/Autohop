@@ -98,6 +98,17 @@ of the implementation definition of done.
   15/18/21-point band inside a 36/44/44-point host, while circular Back symbols
   retain their dedicated 20/25/28-point artwork band. Applied the Back contract
   consistently across all audited iOS page toolbars.
+- Rebalanced the Main Player Details pane for iPad/Mac. Feed imagery now caps at
+  720 points inside a centred 900-point reading column instead of expanding to
+  the viewport; the column uses responsive gutters, and title, metadata,
+  subtitle, author, HTML description, metadata cards and Apple Podcasts review
+  action now scale through the shared width bands. Metadata cards use larger
+  minimum widths, type and internal padding on expansive screens.
+- Matched the Main Player Chapters pane to that responsive Details design. The
+  summary, All/None actions and chapter card occupy the same centred 900-point
+  column with shared responsive gutters and typography. Selection rings,
+  checkmarks, row padding, timestamps and playback indicators scale by width
+  band while retaining a minimum 44-point interactive target.
 
 ## 2026-08-23 iOS-family Mac player modal repair — post-submission
 

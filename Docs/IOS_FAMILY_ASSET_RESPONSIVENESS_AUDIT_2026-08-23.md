@@ -112,9 +112,14 @@ supplementary section heading and neighbouring context visible.
 
 - `RootView` / `MiniPlayerBar`: upgraded. Artwork, play control, padding and
   corner treatment use shared width bands; progress geometry remains fixed.
-- `PlayerView`: already uses container-derived player metrics and adaptive
-  presentations. Playback waveform, scrubber and video surface retain semantic
-  geometry; modal and share-sheet repairs remain unified.
+- `PlayerView`: playback uses container-derived player metrics and adaptive
+  presentations. Its Details pane now follows the same editorial scale as the
+  rest of the app: a centred 900-point reading column, responsive gutters and
+  typography, a 720-point media cap, and proportionally scaled metadata cards
+  and Apple Podcasts review action. Chapters shares that 900-point column,
+  gutter and typography system, with bounded responsive selection controls and
+  row spacing. Playback waveform, scrubber and video
+  surface retain semantic geometry; modal and share-sheet repairs remain unified.
 - `PodcastsView`: upgraded title, Menu control and Add Podcast action. Native
   list rows retain semantic Dynamic Type and readable list behaviour.
 - `QueueSheetView`: upgraded title and shared close control. Episode rows remain

@@ -10,10 +10,13 @@ import UIKit
 // add a validated channel webpage without changing these call sites. The shared
 // ApplePodcastsReviewButton is iOS-family UI: it opens the verified Apple
 // Podcasts show page (Apple has no supported direct review-composer URL) and
-// tells the listener where the Ratings & Reviews control lives.
+// tells the listener where the Ratings & Reviews control lives. Its typography,
+// symbol and insets follow AdaptiveEditorialMetrics so the action remains in
+// proportion when embedded in Player Details on iPad and Mac.
 
 struct ApplePodcastsReviewButton: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.adaptiveViewportWidth) private var viewportWidth
 
     let showTitle: String
     let feedURL: URL
@@ -23,6 +26,7 @@ struct ApplePodcastsReviewButton: View {
     @State private var resolutionFailed = false
 
     var body: some View {
+        let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
         Button {
             openReviewPage()
         } label: {
@@ -31,22 +35,23 @@ struct ApplePodcastsReviewButton: View {
                     ProgressView().tint(.white).scaleEffect(0.8)
                 } else {
                     Image(systemName: "star.bubble")
+                        .font(.system(size: metrics.navigationControlFontSize, weight: .semibold))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(isResolving ? "Finding Podcast…" : "Review in Apple Podcasts")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: metrics.detailPublisherFontSize, weight: .bold))
                     Text(resolutionFailed ? "This show wasn't found in Apple Podcasts" : "Open the show, then scroll to Ratings & Reviews")
-                        .font(.caption)
+                        .font(.system(size: metrics.detailDescriptionFontSize))
                         .foregroundStyle(resolutionFailed ? Color.orange : Color.white.opacity(0.65))
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.bold))
+                    .font(.system(size: metrics.navigationChevronSize, weight: .bold))
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, metrics.band == .expansive ? 18 : 14)
+            .padding(.vertical, metrics.band == .expansive ? 16 : 12)
             .glassCard(cornerRadius: 14)
         }
         .buttonStyle(.plain)

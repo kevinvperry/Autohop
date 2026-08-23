@@ -86,6 +86,14 @@ notifications, or other non-driving workflows.
 > Menu, Settings and other tall symbols use a bounded responsive font inside the
 > system's 44-point toolbar host, preventing iPad/Mac capsule clipping; Back keeps
 > its larger compact circular artwork band.
+> The Player Details pane is prose-led on large screens: its content is centred
+> in the 900-point readable column with responsive gutters, while feed artwork
+> is capped at 720 points. Titles, descriptions, metadata cards and the Apple
+> Podcasts review action scale together instead of leaving small text beneath
+> viewport-wide imagery.
+> The Player Chapters pane follows the same large-screen hierarchy: a centred
+> 900-point column, shared responsive gutters and type, proportional row spacing,
+> and bounded selection indicators with full-size touch targets.
 
 > Version 1.6 build 9: Apple TV diagnostics exports are prepared away from the
 > user-interface thread with visible progress. iCloud diagnostics report

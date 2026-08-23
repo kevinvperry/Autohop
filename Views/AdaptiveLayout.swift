@@ -200,6 +200,46 @@ struct AdaptiveEditorialMetrics: Equatable {
         }
     }
 
+    /// The Player Details pane is prose-led, not an artwork-led player canvas.
+    /// Cap embedded feed imagery separately so it cannot consume an iPad/Mac
+    /// viewport, while keeping copy and metadata in the shared readable column.
+    var detailsMediaMaximumWidth: CGFloat { 720 }
+
+    var detailsMetaCardMinimumWidth: CGFloat {
+        switch band {
+        case .narrow, .standard: return 150
+        case .wide:              return 170
+        case .expansive:         return 190
+        }
+    }
+
+    var detailsMetaKeyFontSize: CGFloat {
+        switch band {
+        case .narrow, .standard: return 10
+        case .wide:              return 11
+        case .expansive:         return 13
+        }
+    }
+
+    /// Chapters is a list-led companion to Details. It shares the editorial
+    /// type hierarchy and gutters, while its selection control grows as a
+    /// bounded touch target rather than scaling without limit.
+    var chapterSelectionControlSize: CGFloat {
+        switch band {
+        case .narrow, .standard: return 24
+        case .wide:              return 28
+        case .expansive:         return 32
+        }
+    }
+
+    var chapterCheckmarkFontSize: CGFloat {
+        switch band {
+        case .narrow, .standard: return 10
+        case .wide:              return 12
+        case .expansive:         return 14
+        }
+    }
+
     var primaryButtonFontSize: CGFloat {
         switch band {
         case .narrow, .standard: return 17
