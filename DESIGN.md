@@ -25,6 +25,18 @@ image processing.
 > an immediate progress state, disable duplicate activation, and preserve focus
 > and scrolling responsiveness.
 
+> Version 1.6 iOS-family modal rule: a Player modal that reads domain models
+> must receive them explicitly at its presentation boundary. Do not depend on
+> environment-object inheritance for Audio Controls; iOS-on-Mac can host the
+> sheet in a distinct modal subtree. Keep one responsive implementation across
+> iPhone, iPad, Mac and future variable-width devices.
+> Mac uses system modal sizing without touch-oriented detents or drag chrome;
+> iPhone and iPad retain the resizable bottom-sheet presentation.
+
+> Player sharing uses an intrinsic-height modal: measure the complete Episode
+> Share content and expose one fitted detent. The enclosing ScrollView is the
+> constrained-height fallback; a second generic large detent is not.
+
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
 ## Adaptive viewport layout

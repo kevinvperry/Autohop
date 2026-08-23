@@ -16,6 +16,38 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-23 iOS-family Mac player modal repair — post-submission
+
+- Repaired the immediate crash when an iOS-family build running on Mac opened
+  Audio Controls from the main Player. The modal no longer relies on inherited
+  environment-object propagation across a platform presentation boundary; its
+  playback, subscription, settings and command owners are explicit observed
+  inputs.
+- Preserved one shared Audio Controls implementation and behavior across
+  iPhone, iPad and Mac rather than creating a Mac-only settings fork. Mac uses
+  native modal sizing while touch platforms retain medium/large sheet detents.
+- This source change postdates the submitted tvOS Version 1.6 build 13 and is
+  not claimed to exist in Apple's review binary.
+
+### Mac development-signing repair
+
+- Registered the development Mac with Apple through Xcode automatic signing
+  and refreshed both the Autohop app and widget provisioning profiles. Each
+  profile now contains the Mac identifier, and a normally signed
+  Mac-compatible build completes with the configured Apple Development
+  certificate. No repository signing override or machine-specific profile
+  identifier was added to project configuration.
+
+## 2026-08-23 responsive Player share-sheet repair — post-submission
+
+- Replaced the episode share sheet's generic medium/large detents with one
+  measured content-height stop. The initial presentation no longer hides Copy,
+  Review or Cancel controls, and an upward swipe can no longer expand the sheet
+  into an unnecessarily full-screen surface.
+- Short touch-device windows remain safely scrollable when the system clamps
+  the measured detent; Mac retains native modal sizing. The exported share card
+  remains fixed-size and pixel-stable.
+
 ## 2026-08-22 tvOS legacy iCloud library recovery
 
 - Repaired the build-10 read-only companion regression: Apple TV remains

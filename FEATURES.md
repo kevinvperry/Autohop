@@ -52,6 +52,14 @@ notifications, or other non-driving workflows.
 > privacy-safe fetch cycles, state advancement and material-change counts;
 > inactive Apple TV scenes defer projection rebuilding until they become active.
 
+> Version 1.6 post-submission: Player Audio Controls use explicit modal model
+> ownership, preventing an iOS-on-Mac presentation crash while retaining the
+> identical controls and saved preferences on iPhone and iPad.
+
+> The Player's episode share sheet opens at its measured content height rather
+> than generic medium/full-screen stops. Every available action is initially
+> reachable, with scrolling retained only when the window is genuinely short.
+
 **Source of truth for all feature descriptions, setting labels, defaults, and behaviour.**
 Used to keep website pages, App Store copy, and in-app help text in sync and accurate.
 

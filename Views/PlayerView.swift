@@ -30,6 +30,10 @@ import UIKit
 // restore both after AVKit attaches. AVKit may call plain play() while appearing,
 // so defaultRate must be aligned too. This transition is layout-independent and
 // must remain valid on iPhone, iPad, Mac-compatible and future folding widths.
+// MAC MODAL SAFETY (2026-08-23): AudioControlsSheetView receives every model
+// through its initializer. Do not restore implicit @EnvironmentObject lookup in
+// that sheet: the iOS-on-Mac presentation host can form a separate modal
+// subtree, and a missing inherited object terminates the process immediately.
 // RESTORED-SCRUBBER FIX (2026-07-12): sliderValue is drag-local @State and
 // therefore starts at zero even when AppState restores PlaybackClock before this
 // permanently-mounted view appears. onAppear and current-episode changes call
@@ -320,9 +324,12 @@ struct PlayerView: View {
             }
         }
         .sheet(isPresented: $showAudioControlMenu) {
-            AudioControlsSheetView()
-                .environmentObject(appState)
-                .environmentObject(settingsViewModel)
+            AudioControlsSheetView(
+                appState: appState,
+                playbackCoordinator: playbackCoordinator,
+                subscriptionStore: subscriptionStore,
+                settingsViewModel: settingsViewModel
+            )
         }
         .sheet(isPresented: $showSleepTimer) {
             SleepTimerSheetView(sleepTimer: sleepTimerService)
@@ -2236,12 +2243,27 @@ private struct ArchiveConfirmationSheet: View {
 // Shared Listening values MUST be read from SettingsViewModel, the observable
 // global-settings owner. AppState remains the command facade for live playback
 // side effects but intentionally does not forward settings objectWillChange.
+// MODAL DEPENDENCY CONTRACT: all four models are explicit @ObservedObject
+// initializer inputs. This keeps the sheet independent of environment-object
+// propagation across UIKit's iPhone/iPad sheet host and the iOS-on-Mac host.
 struct AudioControlsSheetView: View {
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @ObservedObject private var appState: AppState
+    @ObservedObject private var playbackCoordinator: PlaybackCoordinator
+    @ObservedObject private var subscriptionStore: SubscriptionStore
+    @ObservedObject private var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        appState: AppState,
+        playbackCoordinator: PlaybackCoordinator,
+        subscriptionStore: SubscriptionStore,
+        settingsViewModel: SettingsViewModel
+    ) {
+        _appState = ObservedObject(wrappedValue: appState)
+        _playbackCoordinator = ObservedObject(wrappedValue: playbackCoordinator)
+        _subscriptionStore = ObservedObject(wrappedValue: subscriptionStore)
+        _settingsViewModel = ObservedObject(wrappedValue: settingsViewModel)
+    }
 
     private var episode: Episode? { playbackCoordinator.currentEpisode }
     private var subscription: Subscription? {
@@ -2280,11 +2302,7 @@ struct AudioControlsSheetView: View {
         }
         .adaptiveContentWidth(.form)
         }
-        .presentationBackground(.regularMaterial)
-        .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(20)
+        .audioControlsPresentationChrome()
     }
 
     private var sharedListeningActive: Bool {
@@ -2535,6 +2553,29 @@ private enum PlayerPanel: Int, CaseIterable, Identifiable {
         case .nowPlaying: return "waveform"
         case .details: return "info.circle"
         case .chapters: return "list.number"
+        }
+    }
+}
+
+// MARK: - Audio controls presentation
+
+private extension View {
+    /// Keeps the Audio Controls content universal while allowing the host
+    /// platform to own modal mechanics. iOS-on-Mac has no touch-driven sheet
+    /// gesture, so it uses the system's default modal size and omits detent,
+    /// drag-indicator and custom-corner configuration. iPhone and iPad retain
+    /// the established resizable bottom sheet.
+    @ViewBuilder
+    func audioControlsPresentationChrome() -> some View {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            presentationBackground(.regularMaterial)
+                .preferredColorScheme(.dark)
+        } else {
+            presentationBackground(.regularMaterial)
+                .preferredColorScheme(.dark)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.hidden)
+                .presentationCornerRadius(20)
         }
     }
 }

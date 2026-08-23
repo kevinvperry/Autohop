@@ -28,6 +28,14 @@ surface sourced from the same Up Next projection, not a navigable page.
 > Diagnostic Export control while a report is being prepared and displays a
 > progress/result message. Report preparation does not block focus navigation.
 
+> The Player's Audio Controls sheet is one shared iOS-family surface on iPhone,
+> iPad and Mac. Its runtime owners are passed explicitly at presentation so a
+> Mac modal cannot lose inherited state and terminate the app.
+
+> The Episode Share sheet measures its complete preview and action stack and
+> presents one fitted-height stop. It must not use generic medium/large detents,
+> which either conceal controls or create an oversized full-screen sheet.
+
 **Source of truth for every screen in the app.**
 Use these labels in design, development, and documentation discussions to avoid ambiguity.
 Keep this file updated whenever a new page is added or an existing one is renamed.

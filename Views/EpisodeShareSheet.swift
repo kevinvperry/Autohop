@@ -13,6 +13,11 @@ import LinkPresentation
 // reuses validated disk source bytes and avoids full-size cover decodes.
 // When the RSS show can be matched exactly in Apple's directory, the same sheet
 // also offers the iOS-family-only Review in Apple Podcasts action.
+// RESPONSIVE PRESENTATION (2026-08-23): the sheet measures its complete VStack
+// and publishes one exact content-height detent. Do not restore generic
+// [.medium, .large] detents: medium hides lower actions and large expands beyond
+// the content. Mac uses its native modal size; constrained-height touch devices
+// are system-clamped and retain ScrollView access to every action.
 
 // MARK: - Episode share sheet
 
@@ -64,6 +69,7 @@ struct EpisodeShareSheet: View {
     @State private var shareItems: [Any] = []
     @State private var showActivitySheet = false
     @State private var didCopyLink = false
+    @State private var measuredContentHeight: CGFloat = 660
 
     var body: some View {
         ScrollView {
@@ -173,12 +179,20 @@ struct EpisodeShareSheet: View {
 
                 Spacer(minLength: 20)
             }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: EpisodeShareContentHeightPreferenceKey.self,
+                        value: proxy.size.height
+                    )
+                }
+            }
         }
-        .presentationBackground(.regularMaterial)
-        .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(20)
+        .onPreferenceChange(EpisodeShareContentHeightPreferenceKey.self) { height in
+            guard height.isFinite, height > 0 else { return }
+            measuredContentHeight = ceil(height)
+        }
+        .episodeSharePresentationChrome(contentHeight: measuredContentHeight)
         .task { await loadArtwork() }
         .sheet(isPresented: $showActivitySheet) {
             ActivitySheet(items: shareItems)
@@ -234,6 +248,33 @@ struct EpisodeShareSheet: View {
 
         shareItems = items
         showActivitySheet = true
+    }
+}
+
+private struct EpisodeShareContentHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private extension View {
+    /// Uses one intrinsic-height stop on touch platforms. The system clamps an
+    /// over-tall custom detent to the available window, where the enclosing
+    /// ScrollView preserves access without offering an oversized second stop.
+    @ViewBuilder
+    func episodeSharePresentationChrome(contentHeight: CGFloat) -> some View {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            presentationBackground(.regularMaterial)
+                .preferredColorScheme(.dark)
+        } else {
+            presentationBackground(.regularMaterial)
+                .preferredColorScheme(.dark)
+                .presentationDetents([.height(max(1, contentHeight))])
+                .presentationDragIndicator(.hidden)
+                .presentationCornerRadius(20)
+        }
     }
 }
 
