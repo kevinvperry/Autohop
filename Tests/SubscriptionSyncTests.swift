@@ -10,6 +10,8 @@
 // restore settings then queue a full namespaced upload. The production-
 // environment bootstrap tests ensure Development acknowledgements/system fields
 // cannot prevent the iPhone authority from seeding an empty Production zone.
+// Duplicate-identity coverage protects an active feed from obsolete namespaced
+// records created by historical unsubscribe/resubscribe cycles.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -324,6 +326,58 @@ final class SubscriptionSyncTests: XCTestCase {
         XCTAssertEqual(result.startSkipSeconds, 5)
         XCTAssertEqual(result.trimSilence, .low)
         XCTAssertEqual(result.vocalBoostLevel, .strong)
+    }
+
+    @MainActor
+    func testForeignCurrentIdentityForSameFeedCannotResetActiveSettings() async throws {
+        let store = SubscriptionStore.inMemory()
+        let activeID = UUID()
+        let foreignID = UUID()
+        let feedURL = URL(string: "https://f.com/feed")!
+        let episode = Episode(
+            subscriptionID: activeID,
+            guid: "g1",
+            title: "Ep",
+            audioURL: URL(string: "https://e.com/a.mp3")!
+        )
+        _ = try store.addSubscription(
+            id: activeID,
+            feedURL: feedURL,
+            title: "Jase, Lauren & Clint",
+            author: nil,
+            artworkURL: nil,
+            latestEpisode: episode
+        )
+        var preference = PlaybackPreference(
+            speed: 1.6,
+            startSkipSeconds: 12,
+            endSkipSeconds: 8,
+            vocalBoostLevel: .strong,
+            trimSilence: .low
+        )
+        preference.volumeAdjustment = -2
+        store.updatePlaybackPreference(subscriptionID: activeID, preference: preference)
+        await store.flushPendingSaves()
+
+        var obsolete = Subscription(
+            id: foreignID,
+            feedURL: feedURL,
+            title: "Jase, Lauren & Clint",
+            priorityRank: 99
+        )
+        obsolete.playbackPreference = .default
+        let remote = SubscriptionSyncState(
+            subscription: obsolete,
+            dirtyAt: Date().addingTimeInterval(3_600)
+        )
+
+        let outcome = store.applyRemoteSubscriptionState(remote)
+        await store.flushPendingSaves()
+
+        if case .unchanged = outcome {} else { XCTFail("expected foreign identity to be ignored") }
+        XCTAssertEqual(store.subscription(id: activeID)?.playbackPreference, preference)
+        XCTAssertNil(store.subscription(id: foreignID))
+        XCTAssertNil(try store.database?.subscriptionSyncState(id: foreignID))
     }
 
     @MainActor

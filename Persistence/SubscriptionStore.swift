@@ -51,7 +51,11 @@ import Foundation
 // Remote subscription recovery can restore per-podcast settings from legacy
 // unprefixed CloudKit SubscriptionState records left by the namespace migration;
 // it never creates/removes subscriptions and always marks the repaired state for
-// a full namespaced re-upload. Inactive podcasts (`excludeFromAutoFeedRefresh`)
+// a full namespaced re-upload. IDENTITY SAFETY: a current namespaced record with
+// a foreign UUID must never apply settings to an active row merely because its
+// feed URL matches. Old re-subscriptions can leave several current UUID records
+// for one feed in CloudKit; only the row's exact UUID owns its settings.
+// Inactive podcasts (`excludeFromAutoFeedRefresh`)
 // remain real subscriptions: they move to the bottom, keep a hidden return rank,
 // and later restore that rank instead of using the browse-preview activation path.
 // DownloadFilterSettings is persisted on the local Subscription payload and
@@ -1888,11 +1892,31 @@ public final class SubscriptionStore: ObservableObject {
     public func applyRemoteSubscriptionState(_ remote: SubscriptionSyncState) -> RemoteSubscriptionOutcome {
         guard let database else { return .applied }
 
-        let localProjection = try? database.subscriptionSyncState(id: remote.subscriptionID)
         let identityIndex = subscriptions.firstIndex { $0.id == remote.subscriptionID }
         let feedIndex = subscriptions.firstIndex {
             Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(remote.feedURL)
         }
+
+        // A feed can have several namespaced records after unsubscribe/resubscribe
+        // cycles minted different UUIDs. Feed equality is useful only to suppress
+        // duplicate materialisation; it is not authority to transfer settings
+        // between identities. Otherwise query order lets an obsolete record reset
+        // every field on the active subscription at each launch/foreground prime.
+        if identityIndex == nil, let feedIndex {
+            AppLogger.shared.warning(
+                "subscriptions.foreignIdentitySettingsIgnored",
+                "Ignored subscription settings from a different identity for an existing feed",
+                metadata: [
+                    "activeSubscriptionID": subscriptions[feedIndex].id.uuidString,
+                    "remoteSubscriptionID": remote.subscriptionID.uuidString,
+                    "feedHost": remote.feedURL.host ?? "unknown"
+                ],
+                alwaysPersist: true
+            )
+            return .unchanged
+        }
+
+        let localProjection = try? database.subscriptionSyncState(id: remote.subscriptionID)
         let existingIndex = identityIndex ?? feedIndex
 
         let baseline: SubscriptionSyncState
@@ -1915,27 +1939,6 @@ public final class SubscriptionStore: ObservableObject {
 
         let merged = baseline.merged(withRemote: remote)
         try? database.saveSubscriptionSyncState(merged)
-
-        if identityIndex == nil, let feedIndex {
-            // A legacy CloudKit UUID points at a feed already owned by another
-            // local identity. Apply user settings to that row, but never insert
-            // a second feedURL or author an unsubscribe tombstone for either ID.
-            var sub = subscriptions[feedIndex]
-            sub.title = merged.title
-            sub.notificationsEnabled = merged.notificationsEnabled
-            sub.excludeFromAutoFeedRefresh = merged.excludeFromAutoFeedRefresh
-            sub.autoFeedRefreshReturnPriorityRank = merged.autoFeedRefreshReturnPriorityRank
-            sub.playbackPreference = merged.playbackPreference
-            sub.autoArchiveSettings = merged.autoArchiveSettings
-            sub.chapterFilter = merged.chapterFilter
-            sub.downloadFilterSettings = merged.downloadFilterSettings
-            if sub != subscriptions[feedIndex] {
-                subscriptions[feedIndex] = sub
-                save(authorSubscriptionOrder: false)
-                return .applied
-            }
-            return .unchanged
-        }
 
         // Remote unsubscribe wins → remove locally.
         if !merged.subscribed {

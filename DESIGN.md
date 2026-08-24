@@ -43,6 +43,12 @@ image processing.
 > Mac uses system modal sizing without touch-oriented detents or drag chrome;
 > iPhone and iPad retain the resizable bottom-sheet presentation.
 
+> CloudKit subscription settings are owned by the exact active subscription
+> UUID. Canonical feed equality may prevent a second local row from being
+> materialised, but it must never transfer settings from a foreign namespaced
+> record. This protects current preferences from obsolete identities left by
+> unsubscribe/resubscribe cycles.
+
 > Player sharing uses an intrinsic-height modal: measure the complete Episode
 > Share content and expose one fitted detent. The enclosing ScrollView is the
 > constrained-height fallback; a second generic large detent is not.

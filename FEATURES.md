@@ -94,6 +94,10 @@ notifications, or other non-driving workflows.
 > The Player Chapters pane follows the same large-screen hierarchy: a centred
 > 900-point column, shared responsive gutters and type, proportional row spacing,
 > and bounded selection indicators with full-size touch targets.
+> CloudKit subscription identity is UUID-authoritative. Multiple historical
+> records may share a canonical feed URL after resubscription, but a foreign UUID
+> can only suppress duplicate materialisation—it cannot overwrite the active
+> subscription's per-podcast settings.
 
 > Version 1.6 build 9: Apple TV diagnostics exports are prepared away from the
 > user-interface thread with visible progress. iCloud diagnostics report

@@ -24,6 +24,10 @@ import Combine
 // legacy record only when no current record exists. Never restore the old
 // blanket legacy skip: it made clean TestFlight installs appear to have an
 // empty iCloud library while history continued to sync normally.
+// SubscriptionStore separately rejects a namespaced record whose UUID differs
+// from the active row even when its canonical feed matches; feed aliases left by
+// unsubscribe/resubscribe history may suppress materialisation, never own the
+// active subscription's settings.
 // CLOUDKIT ENVIRONMENT BOOTSTRAP: Development and Production are isolated, but
 // the app's local GRDB projections historically shared clean acknowledgements
 // and CKRecord system fields across both. On the iPhone authority only, a

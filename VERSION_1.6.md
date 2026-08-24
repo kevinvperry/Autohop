@@ -110,6 +110,17 @@ of the implementation definition of done.
   checkmarks, row padding, timestamps and playback indicators scale by width
   band while retaining a minimum 44-point interactive target.
 
+## 2026-08-24 CloudKit duplicate-subscription identity repair
+
+- Repaired per-podcast settings repeatedly resetting after launch or foreground
+  sync when historical unsubscribe/resubscribe cycles had left multiple current
+  CloudKit UUID records for the same feed. A namespaced record may now mutate
+  settings only for its exact active subscription UUID; canonical feed equality
+  suppresses duplicate materialisation but no longer transfers settings between
+  identities. Rejected aliases emit privacy-redacted active/remote identifiers
+  and feed-host diagnostics. Regression coverage verifies that a newer foreign
+  default record cannot erase speed, skips, Trim Silence, Vocal Boost or volume.
+
 ## 2026-08-23 iOS-family Mac player modal repair — post-submission
 
 - Repaired the immediate crash when an iOS-family build running on Mac opened
