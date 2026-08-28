@@ -23,8 +23,9 @@ import UIKit
 // Speed/Trim/Vocal card is the
 // shared Views/PlaybackControlsCard, also used by SettingsView's global
 // Default Playback panel), Download Feed Filters (per-feed auto-download
-// eligibility), Automation (per-podcast notifications, exclude from auto feed
-// refresh, and automatic-download-only Play Instant with explicit sparse-use
+// eligibility), Automation (authoritative per-podcast notifications; the App
+// Settings value seeds future subscriptions only and never gates this choice;
+// exclude from auto feed refresh; and automatic-download-only Play Instant with explicit sparse-use
 // guidance), Auto Archive (three rules), Chapter Filter (uses the actively playing
 // episode when it belongs to this podcast, otherwise newest; position-based and
 // live-applied through AppState), Feed (URL with clipboard copy action), Danger
@@ -526,7 +527,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Automation", id: .automation)
         } footer: {
-            Text("Notifications also require the master switch in Settings → Release Radar → Notification Settings. Excluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. It waits instead if the current episode has 60 seconds or less remaining. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
+            Text("New episode notifications are controlled independently for this podcast. The global-looking switch in Settings → Release Radar → Notification Settings is only the default for subscriptions added in the future and never overrides this choice.\n\nExcluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. It waits instead if the current episode has 60 seconds or less remaining. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
         }
     }
 

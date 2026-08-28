@@ -12,6 +12,9 @@ import Foundation
 // Diagnostic logging has two local-only switches: the master enables compact
 // outcome-focused logging/resource monitoring; verboseDiagnosticLoggingEnabled
 // adds short-term per-feed Release Radar traces and defaults off.
+// iCloud Sync is ON only for the factory value used when no settings file exists.
+// Decoding an older payload with no iCloud key deliberately falls back to OFF,
+// and an explicitly saved value is always preserved, so upgrades never opt in.
 
 /// Which screen Autohop opens to on a normal cold launch (set in App Settings →
 /// Startup). The first-run Welcome flow always takes precedence for brand-new
@@ -52,6 +55,8 @@ struct AppSettings: Equatable, Codable {
     var podcastPollMinutes: Int
     var downloadOverWifi: Bool
     var downloadOverCellular: Bool
+    // Default copied into Subscription.notificationsEnabled only when a new
+    // local subscription is created. It does not gate or rewrite existing shows.
     var notifyNewEpisodes: Bool
     var skipBackSeconds: TimeInterval
     var skipForwardSeconds: TimeInterval
@@ -266,8 +271,8 @@ struct AppSettings: Equatable, Codable {
         downloadOverWifi = try container.decodeIfPresent(Bool.self, forKey: .downloadOverWifi) ?? Self.default.downloadOverWifi
         downloadOverCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular) ?? Self.default.downloadOverCellular
         // Missing keys identify an older persisted settings payload, not a new
-        // install. Keep the historical false values so changing Version 1.5's
-        // factory defaults cannot alter an existing user's choices.
+        // install. Keep the historical false value so the new-subscription
+        // default does not silently opt an existing user into future alerts.
         notifyNewEpisodes = try container.decodeIfPresent(Bool.self, forKey: .notifyNewEpisodes) ?? false
         skipBackSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .skipBackSeconds) ?? Self.default.skipBackSeconds
         skipForwardSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .skipForwardSeconds) ?? Self.default.skipForwardSeconds

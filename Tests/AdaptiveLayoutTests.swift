@@ -2,8 +2,9 @@
 // shared responsive sizing policy used by iPhone, iPad, Mac-compatible and
 // future variable-width layouts. It protects width-band boundaries, readable
 // content limits, and the whole iOS-family app's phone-baseline scaling of
-// navigation, persistent-player, artwork and decorative assets. AdaptiveLayout is
-// intentionally not part of the platform-neutral AutohopCore Swift package.
+// navigation, persistent-player, Menu-player, artwork and decorative assets.
+// AdaptiveLayout is intentionally not part of the platform-neutral AutohopCore
+// Swift package.
 #if !AUTOHOP_SPM
 import XCTest
 @testable import Autohop
@@ -95,12 +96,27 @@ final class AdaptiveLayoutTests: XCTestCase {
         let wide = AdaptiveEditorialMetrics(containerWidth: 600)
         let expansive = AdaptiveEditorialMetrics(containerWidth: 1_024)
 
-        XCTAssertEqual(standard.miniPlayerArtworkSize, 40)
-        XCTAssertEqual(wide.miniPlayerArtworkSize, 46)
-        XCTAssertEqual(expansive.miniPlayerArtworkSize, 52)
+        XCTAssertEqual(standard.miniPlayerArtworkSize, 52)
+        XCTAssertEqual(wide.miniPlayerArtworkSize, 58)
+        XCTAssertEqual(expansive.miniPlayerArtworkSize, 64)
         XCTAssertEqual(standard.miniPlayerControlSize, 44)
         XCTAssertEqual(wide.miniPlayerControlSize, 48)
         XCTAssertEqual(expansive.miniPlayerControlSize, 52)
+    }
+
+    func testMenuMiniPlayerUsesRicherResponsiveGeometry() {
+        let standard = AdaptiveEditorialMetrics(containerWidth: 390)
+        let wide = AdaptiveEditorialMetrics(containerWidth: 600)
+        let expansive = AdaptiveEditorialMetrics(containerWidth: 1_024)
+
+        XCTAssertEqual(standard.menuPlayerMaximumWidth, 760)
+        XCTAssertEqual(expansive.menuPlayerMaximumWidth, 760)
+        XCTAssertEqual(standard.menuPlayerArtworkSize, 88)
+        XCTAssertEqual(wide.menuPlayerArtworkSize, 104)
+        XCTAssertEqual(expansive.menuPlayerArtworkSize, 120)
+        XCTAssertEqual(standard.menuPlayerControlSize, 52)
+        XCTAssertEqual(wide.menuPlayerControlSize, 58)
+        XCTAssertEqual(expansive.menuPlayerControlSize, 64)
     }
 
     func testPodcastHeaderOnlyCentersWhenContentColumnIsTrulyWide() {

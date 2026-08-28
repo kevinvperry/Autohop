@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 // settings Form. Startup (Open-at-launch menu picker →
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
 // cold-launch routing, see FEATURES.md §15.0 / §18), Release Radar (fully automatic adaptive scheduling +
-// Notification Settings link — the global notifications toggle now lives on
-// NotificationSettingsView as the master switch — plus a warning row + "Open iOS
+// Notification Settings link — its new-episode toggle is the default for future
+// subscriptions only; existing podcasts keep their own setting — plus a warning row + "Open iOS
 // Settings" deep link shown when UIApplication.backgroundRefreshStatus != .available,
 // since iOS then grants no off-app feed checks; re-checked on scenePhase) and a Feed
 // Refresh Schedule link (FeedRefreshScheduleView — a per-active-subscription table of
@@ -33,6 +33,7 @@ import UniformTypeIdentifiers
 // per page), Storage
 // (downloaded episode count; byte total is calculated by SettingsStorageUsage
 // off-main and returned as one Int64 to keep Swift 6 concurrency checks clean),
+// Contact (website support + iOS-family Join TestFlight Beta external links),
 // About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
 // Diagnostics uses a master normal-tier switch plus a subordinate Detailed
@@ -531,7 +532,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Sync", id: .sync)
         } footer: {
-            Text("Private by default — your subscriptions, playback position, per-podcast settings, Up Next order, history and stats stay on this device unless you turn on iCloud Sync.\n\nWhen enabled, those records sync through your private iCloud database across iPhones signed into the same iCloud account. Downloaded media and global app settings remain on each device.")
+            Text("On for new installs so your subscriptions, playback position, per-podcast settings, Up Next order, history and stats can stay current across your devices. Existing installs keep their previous choice.\n\nSync uses your private iCloud database across iPhones signed into the same iCloud account. You can turn it off at any time; downloaded media and global app settings remain on each device.")
         }
         .listRowBackground(cardBackground)
     }
@@ -632,10 +633,24 @@ struct SettingsView: View {
                 rowLabel("Get in Touch", systemImage: "envelope")
             }
             .id(SettingsShortcut.support)
+
+            Button {
+                if let url = URL(string: "https://testflight.apple.com/join/KnjwQz1C") {
+                    openURL(url)
+                }
+            } label: {
+                HStack {
+                    rowLabel("Join TestFlight Beta", systemImage: "paperplane.fill")
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityHint("Opens the Autohop beta in TestFlight")
         } header: {
             shortcutHeader("Contact", id: .support)
         } footer: {
-            Text("Have a question, found a bug, or want to share feedback? I'd love to hear from you.")
+            Text("Have a question, found a bug, or want to share feedback? Get in touch, or join the TestFlight beta to try prerelease Autohop builds.")
         }
         .listRowBackground(cardBackground)
     }

@@ -177,7 +177,8 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `NavBack-Standard` | Pushed pages: brand back chevron top-left, nothing else in that corner |
 | `SheetClose-Standard` | Informational sheets: ✕ close button top-right, no Done/Cancel |
 | `Sheet-MaterialBackground` | Player sheets use `.presentationBackground(.regularMaterial)` (Liquid Glass on iOS 26) to match the system AirPlay picker — not a solid fill |
-| `MiniPlayer-Bar` | Now-playing bar docked at the bottom of every pushed page; tap to return to Player |
+| `MiniPlayer-Bar` | Compact rounded purple-glass player docked below every pushed page: enlarged left artwork, full-width episode title, podcast/countdown beside a tight transport cluster, bottom full-width progress and safe-area continuation; tap its surface to return to Player |
+| `MiniPlayer-Menu` | Rich fixed transport card in the root Menu: responsive artwork, identity, progress/time and configured skips |
 | `List-Plain` | Lists use `.plain` style; row backgrounds do the visual separating |
 | `Section-Heading` | Bold `title3` section label above each card group |
 | `Section-CardList` | A `List` or `VStack` wrapped in a `white.opacity(0.08)` rounded-rect card |
@@ -208,7 +209,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Badge-RankPill` | Liquid glass capsule pill centred below artwork on Priority page, stacked vertically below VideoPillSmall and ExplicitPillLarge |
 | `Button-DownloadInline` | Bordered small "Download" button inline in the metadata row for undownloaded episodes |
 | `Badge-Pin` | `pin.fill` icon in trailing stack: blue = Play Next, orange = Play Last |
-| `SwipeActions-EpisodeRow` | Swipe actions on episode rows: Play / Play Next (leading), and trailing far-right Download/Archive · Play Last. The trailing far-right button is state-driven: downloaded → Archive; not-downloaded on a subscribed + active feed → Download (teal); on non-subscribed previews or Inactive subs it falls back to Archive/Unarchive. Episode Detail uses the same primary-action rule in its fourth circle button. |
+| `SwipeActions-EpisodeRow` | Swipe actions on episode rows: Play / Play Next (leading), and trailing far-right Download/Archive · Play Last. The trailing far-right button is state-driven: downloaded → Archive; not-downloaded on a subscribed + active feed → Download (teal); on non-subscribed previews or Inactive subs it falls back to Archive/Unarchive. Episode Detail uses the same primary-action rule in its fourth circle button. The Main Player's single embedded Up Next row cannot host native `swipeActions`, so its custom drag must visually mirror them with isolated rounded colour controls and separate labels—never edge-to-edge colour slabs. |
 | `SwipeColor-Semantics` | green=play, blue=promote, teal=download/queue, purple=primary action, orange=demote, red=destructive |
 | `Header-SubscriptionPage` | Centred channel header: 120pt artwork · title · Video+Explicit pills · description · bold author + bold categories |
 | `Toolbar-SubscriptionPage` | Individual Subscription toolbar: Return to Player leading, Refresh Feed + Settings trailing |
@@ -246,6 +247,8 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Form-SettingsDark` | Settings page recipe. **App Settings (`SettingsView`)** — "defined glass" on iOS 26: `scrollContentBackground(.visible)` native Liquid Glass Form sections lifted by a faint `white.opacity(0.05)` row tint over a black page base, 48pt section spacing on every device width; the shared Default Playback card orders Speed, Trim Silence, Vocal Boost, then Mono Audio. Mono Audio uses the same full-width segmented-selector treatment as the two multi-level audio controls, with explicit Stereo/Mono states. The card uses `usesHostBackground: true` to match. **Podcast Settings (`SubscriptionSettingsView`)** — every section's row background uses the same regular `glassEffect` surface as the Playback controls card (`sectionRowBackground`) so the whole page reads as one consistent glass treatment; the Automation toggles (notifications, feed-refresh exclusion, and Play Instant) are rendered inside one divided `glassCard` to avoid per-row glass shade variance. iOS 17–25 (both pages): `scrollContentBackground(.hidden)` over `Color.black`, `white.opacity(0.08)` row cards, the same 48pt spacing. |
 | `Diagnostics-Tiered` | Hidden App Settings diagnostics section. `Enable Diagnostic Log` is the normal, outcome-focused tier. While enabled, `Detailed Refresh Trace` appears directly beneath it using `SettingsRowLabel` and the same native Form row/card background. The detailed tier is off by default and is described as a short-term Release Radar investigation tool; it must not be styled as a warning or primary action. `View Diagnostic Log` remains the final NavigationLink in the section. |
 | `SettingsRowLabel` | Purple SF Symbol (16pt semibold) + primary-colour title row label (`Views/PlaybackControlsCard.swift`), used on every control row across the settings flow — mirrors the Speed / Trim / Vocal rows |
+| `Settings-TestFlightLink` | iOS-family external action in App Settings → Contact. Uses `SettingsRowLabel` with `paperplane.fill`, the standard section surface and spacing, plus a secondary trailing `arrow.up.right` so users can distinguish the TestFlight hand-off from an in-app drill-down. It remains inside Contact and therefore shares that section's expansive-layout shortcut. |
+| `Form-NotificationSettings` | Notification Settings follows the main App Settings hierarchy rather than presenting one undifferentiated control stream: 48pt section spacing, the standard `Form-SettingsDark` surfaces and `SettingsRowLabel` glyphs, and explicit **New Subscriptions**, **Listening Recaps**, and **Podcasts** headers. The future-default switch and recap drill-down must never be visually interleaved with existing podcast toggles. |
 | `HTMLDescriptionText` | Full-fidelity HTML episode description: `NSAttributedString` parsed, fonts normalised to SF, links purple, first image extracted |
 | `Header-EpisodePage` | Centred episode header: 120pt artwork · title · Video+Explicit pills · feed title · categories |
 | `Buttons-EpisodePage` | Four equal-width circle buttons in one row: Play (green) · Play Next (blue) · Play Last (orange) · state-driven Download (teal) / Archive / Unarchive (purple) |
@@ -339,7 +342,36 @@ ToolbarItem(placement: .topBarLeading) {
 
 **Label: `SheetClose-Standard`** — every informational sheet's only close control, top-right (`SheetCloseButton` in `Views/RootView.swift`). Text `Cancel`/`Save` buttons are reserved for editing sheets that commit data.
 
-**Label: `MiniPlayer-Bar`** — `MiniPlayerBar` (`Views/RootView.swift`), docked via `.miniPlayerBar()` on every pushed page. Artwork · episode title · remaining time · play/pause, with a purple progress hairline on top. Tapping it posts `.autohopReturnToPlayer` to pop to the Player. Hidden on Subscriptions while Reorder mode is active.
+**Label: `MiniPlayer-Bar`** — `MiniPlayerBar` (`Views/RootView.swift`), docked
+via `.miniPlayerBar()` on every pushed page. It preserves the established compact
+height while adopting `MiniPlayer-Menu`'s purple-glass hierarchy: enlarged
+responsive artwork at far left; episode title spanning the remaining upper row;
+podcast identity and a live remaining-time countdown beside a right-aligned
+Skip Back, Play/Pause and Skip Forward cluster below; and a timer-free purple
+progress strip as the only edge-to-edge element, positioned above an opaque
+glass continuation through the bottom safe area. Continuous rounded top corners
+separate the player cleanly from page content. Skip
+controls inherit the common surface and Play/Pause is the sole solid-purple
+emphasis. Tapping outside its controls returns to Player. Hidden on Subscriptions
+while Reorder mode is active.
+
+**Label: `MiniPlayer-Menu`** — `MenuMiniPlayer` (`Views/MenuSheetView.swift`),
+fixed beneath the root Menu's independently scrolling links and hidden when no
+episode is loaded. It uses larger responsive artwork, episode and podcast
+identity, a display-only purple progress track, elapsed/remaining labels and the
+user’s configured Skip Back/Play-Pause/Skip Forward controls. The remaining card
+surface returns to the permanent Player. Its 760-point maximum width preserves a
+compact glass-card composition on iPad and Mac; iOS 26 uses purple-tinted Liquid
+Glass and older systems use the matching material fallback. It is deliberately
+root-only: destinations pushed inside the Menu use `MiniPlayer-Bar` instead.
+Skip Back/Forward inherit the card surface without separate dark control fills;
+Play/Pause is the sole solid-purple transport emphasis, and all three controls
+form a close centred cluster with a small responsive clearance between their
+touch targets. Bottom breathing room
+keeps the card visually inside the lower third rather than pinned to the edge.
+The containing Menu uses `systemGroupedBackground` and
+`secondarySystemGroupedBackground`, matching Sleep Schedule's native dark
+page/section hierarchy instead of introducing a separate grey palette.
 
 **Navigation ownership:** `PlayerView` remains the permanent
 `NavigationStack` root. `AppRoutingCoordinator` emits typed launch, menu,
@@ -1311,6 +1343,12 @@ Only shown when `episode.downloadState == .downloading && appState.downloadProgr
 **Label: `SwipeActions-EpisodeRow`**
 
 Four swipe actions used on episode rows. Full-swipe is disabled on both edges. Applied on the **Up Next** sheet, **Podcast Detail** page, and **Listening History** page (the History rows resolve each entry to its `Episode` first and skip the actions when it can't be resolved).
+
+The Main Player's compact one-row Up Next preview uses the same Play-green and
+Archive-purple semantics. Because it is nested inside the Player's ScrollView
+and paged gesture host, it retains a bounded custom drag implementation, but
+reveals the action as a rounded capsule with its label beneath. Do not replace
+that presentation with a full-height solid-colour rectangle.
 
 Listening History deliberately mirrors Podcast Detail's action implementation:
 Play and Play Next lead; the same state-driven Download/Archive/Unarchive primary
@@ -3128,3 +3166,15 @@ listening content or becoming a performance workload. -->
     Autohop therefore carries its purple brand backdrop inside every 404×608
     poster card, with square podcast artwork centered on top. Poster geometry
     provides four visible choices while retaining Apple-owned focus and labels.
+
+# Fresh-Install Sync Preference Rules (Version 1.6)
+
+<!-- AI CONTEXT — A factory default and a decode fallback represent different
+user populations. Never replace the legacy fallback with the factory default. -->
+
+1. A genuinely new iOS-family install starts with private iCloud Sync enabled.
+2. A persisted explicit On or Off choice is authoritative on every relaunch.
+3. A legacy settings payload without the sync key decodes to Off, preserving
+   the existing user's historical state rather than silently opting them in.
+4. Settings copy must state both halves of this contract: On for new installs,
+   unchanged for existing installs, and user-controllable at any time.

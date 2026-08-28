@@ -152,9 +152,9 @@ struct AdaptiveEditorialMetrics: Equatable {
     /// iPad and Mac without turning the utility bar into a second player page.
     var miniPlayerArtworkSize: CGFloat {
         switch band {
-        case .narrow, .standard: return 40
-        case .wide:              return 46
-        case .expansive:         return 52
+        case .narrow, .standard: return 52
+        case .wide:              return 58
+        case .expansive:         return 64
         }
     }
 
@@ -163,6 +163,28 @@ struct AdaptiveEditorialMetrics: Equatable {
         case .narrow, .standard: return 44
         case .wide:              return 48
         case .expansive:         return 52
+        }
+    }
+
+    /// The Menu player is a richer destination card, not the persistent utility
+    /// bar. Its artwork and controls may grow further while the card itself is
+    /// capped to a readable landscape/iPad measure.
+    var menuPlayerMaximumWidth: CGFloat { 760 }
+
+    var menuPlayerArtworkSize: CGFloat {
+        switch band {
+        case .narrow:    return 76
+        case .standard:  return 88
+        case .wide:      return 104
+        case .expansive: return 120
+        }
+    }
+
+    var menuPlayerControlSize: CGFloat {
+        switch band {
+        case .narrow, .standard: return 52
+        case .wide:              return 58
+        case .expansive:         return 64
         }
     }
 

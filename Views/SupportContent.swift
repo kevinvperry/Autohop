@@ -380,7 +380,7 @@ enum SupportGuide {
             .heading("Exclude from auto-refresh"),
             .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed during automatic/feed-all refreshes. The podcast stays subscribed, moves to the bottom with the Inactive pill, keeps its downloaded episodes and queue eligibility, and can still be manually refreshed from its own podcast page. Turning the setting off restores its saved Priority Stack position."),
             .heading("Notifications"),
-            .paragraph("Toggle on to receive a notification when a new episode from this podcast is available. **Off by default** — notifications are opt-in per show, so you only hear about the podcasts you choose. The global notification toggle in Settings must also be on."),
+            .paragraph("Toggle on to receive a notification when a new episode from this podcast is available. This podcast's choice is independent after subscription: changing the global **New episode notifications** default later does not alter or suppress it."),
         ]
     )
 
@@ -443,17 +443,17 @@ enum SupportGuide {
 
     private static let notifications = SupportSection(
         id: "notifications", icon: "bell", title: "Notifications",
-        summary: "Opt-in, per-podcast new-episode alerts",
+        summary: "Per-podcast alerts and defaults for future subscriptions",
         blocks: [
             .paragraph("Autohop can notify you when new episodes from your subscriptions are downloaded and ready to play."),
             .heading("Enabling notifications"),
             .steps([
-                "Go to **Settings → Release Radar → Notification Settings** and turn on the **New episode notifications** master toggle.",
-                "iOS will prompt for notification permission the first time — tap **Allow**. If you previously denied permission, the page shows a banner with an **Open iOS Settings** shortcut.",
-                "Then turn on the toggle for each podcast you want to hear about — right there on the Notification Settings page, or in each podcast's own settings.",
+                "Go to **Settings → Release Radar → Notification Settings**. The **New episode notifications** switch chooses whether podcasts you subscribe to from then on start with alerts enabled.",
+                "Use each podcast's own toggle to change an existing subscription, or use **Enable All** / **Disable All** for the current list.",
+                "iOS will prompt for notification permission when you explicitly enable a notification option — tap **Allow**. If you previously denied permission, the page shows an **Open iOS Settings** shortcut.",
             ]),
             .heading("Per-podcast control"),
-            .paragraph("Notifications are **off by default for every podcast** — you opt in only for the shows you want to hear about. The Notification Settings page lists every subscription with its own toggle, plus **Enable All** / **Disable All** buttons. Both the master toggle and the per-podcast toggle must be on for a notification to fire."),
+            .paragraph("On a fresh install, new subscriptions start with notifications enabled. The page lists every existing subscription with its own authoritative toggle. Changing the new-subscription default never rewrites or gates those existing choices."),
             .callout(.note, "**Note:** Autohop uses local notifications only. No data leaves your device to deliver them — they are generated entirely on-device when the app detects a new episode."),
         ]
     )
@@ -606,7 +606,7 @@ enum SupportGuide {
             .paragraph("Autohop learns each podcast's release schedule and prioritises its feed when a new episode is expected. Refresh timing depends on whether Autohop is active and when iOS grants background execution, so Release Radar improves the chance of prompt discovery without promising an exact delivery time."),
             .table(headers: nil, rows: [
                 ["Automatic refresh timing", "Release Radar controls its own timing from each feed's learned schedule: about 2–3 minutes in a strong active release window, 5 minutes before a predicted release, 5–10 minutes shortly after a missed release, and 15–60 minutes for random or unreliable feeds. Broader safety checks cover unexpected releases."],
-                ["Notification Settings", "Opens the Notification Settings page — the global master toggle (on for new users), Enable All / Disable All, and a per-podcast toggle for every subscription."],
+                ["Notification Settings", "Opens headed sections for the future-subscription notification default (on for fresh installs), Listening Recaps (weekly on for fresh installs), and independent controls for every existing podcast."],
             ]),
             .heading("Auto-Archive"),
             .table(headers: nil, rows: [

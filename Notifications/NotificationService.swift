@@ -5,9 +5,10 @@ import UserNotifications
 // AI CONTEXT — Notifications/NotificationService.swift
 // Singleton UNUserNotificationCenter wrapper AND the app's notification-center
 // delegate (set in AppDelegate.didFinishLaunching). New-episode notifications
-// fire only when BOTH the global toggle (AppSettings.notifyNewEpisodes) and the
-// per-podcast toggle (Subscription.notificationsEnabled, default OFF) are on —
-// that gating lives in AppState.notifyNewEpisodeIfAllowed, not here. Also owns
+// fire when the per-podcast toggle (Subscription.notificationsEnabled) is on —
+// AppSettings.notifyNewEpisodes is only the default snapshotted by future local
+// subscriptions, not a delivery gate. Eligibility lives in
+// NewEpisodeNotificationWorkflow, not here. Also owns
 // the app icon badge (queue count, behind the showQueueBadge setting).
 //
 // Sleep Schedule "still listening?" prompt: postSleepSchedulePrompt() fires a

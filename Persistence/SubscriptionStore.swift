@@ -37,6 +37,10 @@ import Foundation
 // RefreshStats.releaseObservations so the learned scheduler starts with the
 // feed's current RSS publish-date evidence),
 // priorityRank normalization (contiguous 1..n after any insert/move/delete).
+// NEW-SUBSCRIPTION DEFAULTS: genuine local subscriptions snapshot Playback,
+// Auto Archive, and notifications defaults supplied by SettingsViewModel.
+// Changing a provider later never mutates existing subscriptions; remote
+// materialization keeps the synced notification value authoritative.
 // Reorder sessions are ID-based: the SwiftUI draft contains ONLY active real
 // subscriptions, Inactive rows are fixed at the bottom, browse previews never
 // enter the drag index space, and one validated commit authors one atomic
@@ -141,6 +145,11 @@ public final class SubscriptionStore: ObservableObject {
     /// existing subscriptions.
     public var defaultAutoArchiveSettingsProvider: (() -> AutoArchiveSettings)?
 
+    /// Supplies whether a newly created LOCAL subscription starts with episode
+    /// notifications enabled. This value is snapshotted once. Existing and
+    /// remotely materialized subscriptions remain authoritative and unchanged.
+    public var defaultNotificationsEnabledProvider: (() -> Bool)?
+
     /// Requests deletion of an episode's downloaded media file. Installed by
     /// DownloadCoordinator to call DownloadManager.deleteLocalFile(for:) — the store can't reach the
     /// DownloadManager directly. Invoked when a remote played/archived state merges
@@ -162,6 +171,10 @@ public final class SubscriptionStore: ObservableObject {
 
     private var seededDefaultAutoArchiveSettings: AutoArchiveSettings {
         defaultAutoArchiveSettingsProvider?() ?? .default
+    }
+
+    private var seededDefaultNotificationsEnabled: Bool {
+        defaultNotificationsEnabledProvider?() ?? false
     }
 
     /// - Parameter fileURL: legacy JSON location (defaults to the historical
@@ -239,7 +252,11 @@ public final class SubscriptionStore: ObservableObject {
 
     // MARK: - Add
 
-    public func add(parsedFeed: ParsedFeed, feedURL: URL) throws -> Subscription {
+    public func add(
+        parsedFeed: ParsedFeed,
+        feedURL: URL,
+        seedNewSubscriptionNotifications: Bool = true
+    ) throws -> Subscription {
         guard !subscriptions.contains(where: {
             Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(feedURL)
         }) else {
@@ -262,6 +279,9 @@ public final class SubscriptionStore: ObservableObject {
         subscription.subscribedAt = Date()
         subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
+        if seedNewSubscriptionNotifications {
+            subscription.notificationsEnabled = seededDefaultNotificationsEnabled
+        }
 
         let episodes = parsedFeed.episodes.compactMap {
             episode(from: $0, subscriptionID: subscriptionID, feedArtworkURL: parsedFeed.artworkURL)
@@ -470,7 +490,8 @@ public final class SubscriptionStore: ObservableObject {
         isExplicit: Bool? = nil,
         latestEpisode: Episode,
         insertAtBottom: Bool = false,
-        reindexRanks: Bool = true
+        reindexRanks: Bool = true,
+        initialNotificationsEnabled: Bool? = nil
     ) throws -> Subscription {
         guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
             throw SubscriptionStoreError.duplicateFeed
@@ -491,6 +512,8 @@ public final class SubscriptionStore: ObservableObject {
         subscription.subscribedAt = Date()
         subscription.playbackPreference = seededDefaultPlaybackPreference
         subscription.autoArchiveSettings = seededDefaultAutoArchiveSettings
+        subscription.notificationsEnabled = initialNotificationsEnabled
+            ?? seededDefaultNotificationsEnabled
         subscription.latestEpisode = latestEpisode
         subscription.episodes = [latestEpisode]
         seedReleaseObservations(for: &subscription, episodes: [latestEpisode])
@@ -689,7 +712,11 @@ public final class SubscriptionStore: ObservableObject {
         guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
             throw SubscriptionStoreError.duplicateFeed
         }
-        var subscription = try add(parsedFeed: parsedFeed, feedURL: feedURL)
+        var subscription = try add(
+            parsedFeed: parsedFeed,
+            feedURL: feedURL,
+            seedNewSubscriptionNotifications: false
+        )
         // Move to bottom and mark inactive + browsed.
         guard let index = subscriptions.firstIndex(where: { $0.id == subscription.id }) else { return subscription }
         subscriptions[index].excludeFromAutoFeedRefresh = true
@@ -752,6 +779,7 @@ public final class SubscriptionStore: ObservableObject {
         // While it was browse-only its preference was resolved live; from here it
         // owns an independent copy that later default changes won't touch.
         subscription.playbackPreference = seededDefaultPlaybackPreference
+        subscription.notificationsEnabled = seededDefaultNotificationsEnabled
         subscriptions.insert(subscription, at: 0)
         reindexPriority()
         save()

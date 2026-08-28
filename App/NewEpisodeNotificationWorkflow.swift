@@ -4,8 +4,10 @@ import Foundation
 //
 // PURPOSE / OWNERSHIP:
 // Sole application policy for notifying about a newly downloaded episode. It
-// applies the global master switch and per-subscription switch, records an
+// applies the subscription's independently persisted switch, records an
 // explainable skipped/sent diagnostic, and submits the local notification.
+// AppSettings.notifyNewEpisodes is only a creation default for future local
+// subscriptions and must never gate an existing subscription here.
 //
 // CONCURRENCY:
 // Eligibility is read on MainActor. NotificationService delivery is launched
@@ -15,14 +17,9 @@ import Foundation
 
 @MainActor
 final class NewEpisodeNotificationWorkflow {
-    private let settingsStore: any SettingsStoring
     private let logger: AppLogger
 
-    init(
-        settingsStore: any SettingsStoring,
-        logger: AppLogger
-    ) {
-        self.settingsStore = settingsStore
+    init(logger: AppLogger) {
         self.logger = logger
     }
 
@@ -30,16 +27,13 @@ final class NewEpisodeNotificationWorkflow {
         episode: Episode,
         subscription: Subscription
     ) {
-        guard settingsStore.appSettings.notifyNewEpisodes,
-              subscription.notificationsEnabled else {
+        guard subscription.notificationsEnabled else {
             logger.info(
                 "notification.skipped",
                 "New episode notification skipped",
                 metadata: [
                     "podcast": subscription.title,
                     "episode": episode.title,
-                    "globalEnabled":
-                        "\(settingsStore.appSettings.notifyNewEpisodes)",
                     "subscriptionEnabled":
                         "\(subscription.notificationsEnabled)"
                 ]

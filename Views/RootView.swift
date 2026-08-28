@@ -7,13 +7,19 @@ import SwiftUI
 // pushed on top. The .autohopReturnToPlayer notification pops the path to
 // reveal the player from anywhere (posted by MiniPlayerBar on pushed pages).
 // Shared nav chrome lives here: MiniPlayerBar (+ .miniPlayerBar() modifier)
-// and SheetCloseButton. NavRules: pushed page = back chevron top-left,
+// and SheetCloseButton. MiniPlayerBar mirrors the Menu player's purple glass
+// while preserving a compact height: larger artwork at far left, episode title
+// alone across the upper row, podcast/countdown beside a comfortably separated
+// right-aligned transport cluster below, then the sole edge-to-edge element—a timer-free
+// purple progress strip—above a glass background that continues through the
+// device's bottom safe area. The visible glass has continuous top corners.
+// NavRules: pushed page = back chevron top-left,
 // informational sheet = ✕ top-right, editing sheet = Cancel/Save.
 // Also shows the launch splash overlay briefly on cold start. MiniPlayerBar
-// artwork uses a 40 pt CachedArtworkImage target so the always-visible chrome
-// reuses the shared artwork cache without decoding full covers.
-// PERF-1: MiniPlayerBar's progress bar + remaining-time readout observe the
-// @EnvironmentObject PlaybackClock (playbackClock.time), NOT
+// artwork uses its responsive CachedArtworkImage target so the always-visible
+// chrome reuses the shared artwork cache without decoding full covers.
+// PERF-1: MiniPlayerBar's progress bar observes the @EnvironmentObject
+// PlaybackClock (playbackClock.time), NOT
 // appState.currentPlayerTime — AppState no longer publishes the 2 Hz tick, so
 // reading the proxy in body would render stale time.
 // Stage 13 observation is narrow: MiniPlayerBar reads PlaybackCoordinator and
@@ -115,16 +121,16 @@ struct SheetCloseButton: View {
     }
 }
 
-/// Persistent now-playing bar docked at the bottom of every pushed page.
-/// Tapping the bar pops the navigation stack to reveal the always-alive
-/// PlayerView; the trailing button toggles playback in place. Renders
-/// nothing when no episode is loaded.
+/// Persistent now-playing bar docked at the bottom of every pushed page. It
+/// keeps artwork at far left while the remaining column gives episode/show
+/// identity a full row above three functional transports. Tapping outside a
+/// control returns to PlayerView.
 struct MiniPlayerBar: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    /// 2 Hz playback tick (PERF-1): the progress bar / remaining-time readout observe
-    /// this dedicated clock so AppState no longer publishes on every 0.5 s update.
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    /// 2 Hz playback tick (PERF-1): only the progress strip observes it.
     @EnvironmentObject private var playbackClock: PlaybackClock
     @Environment(\.returnToPlayerAction) private var returnToPlayerAction
     @Environment(\.adaptiveViewportWidth) private var viewportWidth
@@ -137,109 +143,102 @@ struct MiniPlayerBar: View {
             let metrics = AdaptiveEditorialMetrics(containerWidth: viewportWidth)
             let artworkSize = metrics.miniPlayerArtworkSize
 
-            // Edge-to-edge: opaque full-width bar so page content never shows
-            // through or scrolls visibly beneath it.
             VStack(spacing: 0) {
-                GeometryReader { geo in
-                    Rectangle()
-                        .fill(Color(white: 0.25))
-                        .overlay(alignment: .leading) {
-                            Rectangle()
-                                .fill(Color.purple)
-                                .frame(width: geo.size.width * progress)
-                        }
-                }
-                .frame(height: 2)
-
-                HStack(spacing: 12) {
-                    CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
+                HStack(spacing: metrics.scaled(11)) {
+                    CachedArtworkImage(
+                        url: episode.artworkURL ?? subscription?.artworkURL,
+                        targetSize: CGSize(width: artworkSize, height: artworkSize)
+                    ) {
                         Rectangle()
-                            .fill(Color(white: 0.15))
-                            .overlay(
+                            .fill(Color.white.opacity(0.07))
+                            .overlay {
                                 Image(systemName: "waveform")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.purple.opacity(0.7))
-                            )
+                                    .foregroundStyle(.purple)
+                            }
                     }
                     .frame(width: artworkSize, height: artworkSize)
                     .clipShape(RoundedRectangle(cornerRadius: metrics.scaled(8)))
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: metrics.scaled(2)) {
                         Text(episode.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 5) {
-                                if let showTitle = subscription?.title {
-                                    Text(showTitle).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
+
+                        HStack(spacing: metrics.scaled(8)) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(subscription?.title ?? "Autohop")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(Color.white.opacity(0.58))
+                                    .lineLimit(1)
+                                Text(remainingTimeLabel(duration: duration))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(Color.white.opacity(0.42))
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            HStack(spacing: metrics.scaled(8)) {
+                                compactTransportButton(
+                                    label: "Skip back \(Int(settingsViewModel.appSettings.skipBackSeconds)) seconds",
+                                    action: skipBack
+                                ) {
+                                    MiniPlayerSkipIntervalIcon(
+                                        direction: .backward,
+                                        seconds: settingsViewModel.appSettings.skipBackSeconds,
+                                        size: metrics.miniPlayerControlSize
+                                    )
                                 }
-                                if duration > 0 {
-                                    if subscription?.title != nil { Text("•") }
-                                    remainingTime(duration)
+
+                                compactTransportButton(
+                                    label: playbackCoordinator.isPlaying ? "Pause" : "Play",
+                                    highlighted: true,
+                                    action: { Task { await appState.togglePlayPause() } }
+                                ) {
+                                    Image(systemName: playbackCoordinator.isPlaying ? "pause.fill" : "play.fill")
+                                        .font(.system(size: metrics.scaled(16), weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .offset(x: playbackCoordinator.isPlaying ? 0 : 1)
+                                        .frame(width: metrics.miniPlayerControlSize, height: metrics.miniPlayerControlSize)
+                                }
+
+                                compactTransportButton(
+                                    label: "Skip forward \(Int(settingsViewModel.appSettings.skipForwardSeconds)) seconds",
+                                    action: skipForward
+                                ) {
+                                    MiniPlayerSkipIntervalIcon(
+                                        direction: .forward,
+                                        seconds: settingsViewModel.appSettings.skipForwardSeconds,
+                                        size: metrics.miniPlayerControlSize
+                                    )
                                 }
                             }
-                            if duration > 0 {
-                                remainingTime(duration)
-                            } else if let showTitle = subscription?.title {
-                                Text(showTitle).lineLimit(1)
-                            }
+                            .fixedSize(horizontal: true, vertical: false)
                         }
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(Color(white: 0.55))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-
-                    Button {
-                        Task { await appState.togglePlayPause() }
-                    } label: {
-                        Group {
-                            if playbackCoordinator.isPlaying {
-                                MiniPlayerWaveformIcon()
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .scale(scale: 0.72)
-                                                .combined(with: .opacity),
-                                            removal: .opacity
-                                        )
-                                    )
-                            } else {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 17, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .offset(x: 1)
-                                    .transition(
-                                        .scale(scale: 0.72)
-                                            .combined(with: .opacity)
-                                    )
-                            }
-                        }
-                            .frame(width: metrics.miniPlayerControlSize, height: metrics.miniPlayerControlSize)
-                            .contentShape(Circle())
-                            .modifier(MiniPlayerGlassControlStyle())
-                            .animation(
-                                .smooth(duration: 0.24),
-                                value: playbackCoordinator.isPlaying
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(playbackCoordinator.isPlaying ? "Pause" : "Play")
-                    .accessibilityHint(
-                        playbackCoordinator.isPlaying
-                            ? "Double-tap to pause playback"
-                            : "Double-tap to resume playback"
-                    )
                 }
                 .frame(maxWidth: AdaptiveContentStyle.list.maximumWidth)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, metrics.horizontalGutter)
-                .padding(.vertical, metrics.scaled(8))
+                .padding(.vertical, metrics.scaled(7))
+
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(Color.purple)
+                                .frame(width: geometry.size.width * progress)
+                        }
+                }
+                .frame(height: metrics.scaled(3))
             }
-            .background(
-                Color(red: 0.10, green: 0.10, blue: 0.13)
-                    .ignoresSafeArea(edges: .bottom)
-            )
+            .modifier(PersistentMiniPlayerSurface())
             .contentShape(Rectangle())
             .onTapGesture {
                 AppLogger.shared.info(
@@ -249,8 +248,6 @@ struct MiniPlayerBar: View {
                 if let returnToPlayerAction {
                     returnToPlayerAction()
                 } else {
-                    // Preview/legacy fallback only. RootView injects the direct
-                    // action in the running app.
                     NotificationCenter.default.post(name: .autohopReturnToPlayer, object: nil)
                 }
             }
@@ -259,92 +256,130 @@ struct MiniPlayerBar: View {
         }
     }
 
-    private func remainingTime(_ duration: TimeInterval) -> some View {
-        Text("-\(formatRemaining(max(0, duration - playbackClock.time)))")
-            .monospacedDigit()
-            .fixedSize(horizontal: true, vertical: false)
+    private func compactTransportButton<Label: View>(
+        label: String,
+        highlighted: Bool = false,
+        action: @escaping () -> Void,
+        @ViewBuilder content: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            if highlighted {
+                content().modifier(PersistentMiniPlayerPrimaryControlSurface())
+            } else {
+                content()
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
-    private func formatRemaining(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let h = s / 3600
-        let m = (s % 3600) / 60
-        let sec = s % 60
-        if h > 0 { return String(format: "%d:%02d:%02d", h, m, sec) }
-        return String(format: "%d:%02d", m, sec)
+    private func skipBack() {
+        let interval = settingsViewModel.appSettings.skipBackSeconds
+        appState.seek(to: max(0, playbackClock.time - interval))
+    }
+
+    private func remainingTimeLabel(duration: TimeInterval) -> String {
+        guard duration > 0 else { return "Time remaining unavailable" }
+        let remaining = max(0, duration - playbackClock.time)
+        let totalSeconds = Int(remaining.rounded(.down))
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d remaining", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d remaining", minutes, seconds)
+    }
+
+    private func skipForward() {
+        guard let episode = playbackCoordinator.currentEpisode else { return }
+        let interval = settingsViewModel.appSettings.skipForwardSeconds
+        if let duration = episode.durationSeconds,
+           playbackClock.time + interval >= duration {
+            Task { await appState.playNextEpisode(excluding: [episode.id]) }
+        } else {
+            appState.skipForward(seconds: interval)
+        }
     }
 }
 
-/// Compact live playback mark for the Mini-Player. A TimelineView avoids owning
-/// a repeating Timer and automatically pauses its updates when Reduce Motion is
-/// enabled. The button remains semantically a Pause action while this is visible.
-private struct MiniPlayerWaveformIcon: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+private struct MiniPlayerSkipIntervalIcon: View {
+    enum Direction { case backward, forward }
 
-    private let restingHeights: [CGFloat] = [8, 13, 18, 13, 8]
+    let direction: Direction
+    let seconds: TimeInterval
+    let size: CGFloat
 
     var body: some View {
-        TimelineView(
-            .animation(
-                minimumInterval: 1.0 / 15.0,
-                paused: reduceMotion
-            )
-        ) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2.5) {
-                ForEach(restingHeights.indices, id: \.self) { index in
-                    let wave = (
-                        sin(time * 5.4 + Double(index) * 1.18) + 1
-                    ) / 2
-                    let scale = reduceMotion
-                        ? 0.72
-                        : 0.48 + CGFloat(wave) * 0.52
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    .white,
-                                    Color.purple.opacity(0.82)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(
-                            width: 3,
-                            height: max(4, restingHeights[index] * scale)
-                        )
-                }
-            }
-            .frame(width: 26, height: 22)
+        let value = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
+        ZStack {
+            Image(systemName: direction == .backward ? "gobackward" : "goforward")
+                .font(.system(size: size * 0.56, weight: .regular))
+            Text("\(value)")
+                .font(.system(size: value >= 100 ? size * 0.16 : size * 0.21, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .offset(y: size * 0.04)
         }
-        .accessibilityHidden(true)
+        .foregroundStyle(.white)
+        .frame(width: size, height: size)
     }
 }
 
-/// One glass shell for both Mini-Player states so Play and the live waveform
-/// morph inside a stable, modern iOS control rather than changing button chrome.
-private struct MiniPlayerGlassControlStyle: ViewModifier {
+private struct PersistentMiniPlayerSurface: ViewModifier {
+    private let topRoundedShape = UnevenRoundedRectangle(
+        cornerRadii: RectangleCornerRadii(
+            topLeading: 20,
+            bottomLeading: 0,
+            bottomTrailing: 0,
+            topTrailing: 20
+        ),
+        style: .continuous
+    )
+
     func body(content: Content) -> some View {
         if #available(iOS 26, *) {
             content
-                .glassEffect(
-                    .regular.tint(Color.purple.opacity(0.22)),
-                    in: Circle()
-                )
-                .shadow(
-                    color: Color.purple.opacity(0.18),
-                    radius: 8,
-                    y: 3
-                )
+                .background {
+                    topRoundedShape
+                        .fill(.regularMaterial)
+                        .overlay(Color.purple.opacity(0.12))
+                }
+                .background(alignment: .bottom) {
+                    Rectangle()
+                        .fill(.regularMaterial)
+                        .overlay(Color.purple.opacity(0.12))
+                        .frame(height: 64)
+                        .offset(y: 64)
+                        .ignoresSafeArea(edges: .bottom)
+                }
+                .glassEffect(.regular.tint(.purple.opacity(0.12)), in: topRoundedShape)
         } else {
             content
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay {
-                    Circle()
-                        .strokeBorder(.white.opacity(0.13), lineWidth: 0.75)
+                .background {
+                    topRoundedShape
+                        .fill(.regularMaterial)
+                        .overlay(Color.purple.opacity(0.12))
                 }
-                .shadow(color: .black.opacity(0.24), radius: 7, y: 3)
+                .background(alignment: .bottom) {
+                    Rectangle()
+                        .fill(.regularMaterial)
+                        .overlay(Color.purple.opacity(0.12))
+                        .frame(height: 64)
+                        .offset(y: 64)
+                        .ignoresSafeArea(edges: .bottom)
+                }
+        }
+    }
+}
+
+private struct PersistentMiniPlayerPrimaryControlSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular.tint(.purple), in: Circle())
+        } else {
+            content
+                .background(Color.purple, in: Circle())
+                .overlay { Circle().strokeBorder(.white.opacity(0.10), lineWidth: 0.75) }
         }
     }
 }

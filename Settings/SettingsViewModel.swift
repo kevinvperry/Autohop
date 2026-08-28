@@ -15,7 +15,8 @@ import Foundation
 // - persistence format and SettingsStore save behavior are unchanged.
 // - this type owns no playback, sync, notification, or lifecycle side effects;
 //   AppState observes the typed settings stream only to invoke those workflows.
-// - new-subscription defaults are exposed to SubscriptionStore through an
+// - new-subscription playback, Auto Archive, and notification defaults are
+//   exposed to SubscriptionStore through an
 //   idempotent adapter installed here, not callback closures authored in
 //   AppState.
 @MainActor
@@ -59,6 +60,9 @@ final class SettingsViewModel: ObservableObject {
         }
         subscriptionStore.defaultAutoArchiveSettingsProvider = { [weak self] in
             self?.settingsStore.appSettings.defaultAutoArchiveSettings ?? .default
+        }
+        subscriptionStore.defaultNotificationsEnabledProvider = { [weak self] in
+            self?.settingsStore.appSettings.notifyNewEpisodes ?? false
         }
     }
 }

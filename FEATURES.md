@@ -51,6 +51,10 @@ notifications, or other non-driving workflows.
 > standard iPhone proportions are preserved, while page titles, toolbar actions
 > and persistent mini-player chrome grow deliberately on iPad and resizable Mac
 > windows. Fixed semantic geometry is not blindly scaled.
+> The persistent player reserves its right column's full upper width for the
+> episode title. Podcast identity and a live remaining-time countdown sit below
+> beside a right-aligned transport cluster with deliberate finger-clearance. Its rounded purple-glass
+> surface continues below the progress strip through the device safe area.
 > Podcast Detail specifically uses a side-by-side, height-efficient header below
 > a 600-point content column and a centred editorial hero at wider widths.
 > Every list/form uses shared row bands. Image-led rows retain 44-point artwork
@@ -98,6 +102,25 @@ notifications, or other non-driving workflows.
 > records may share a canonical feed URL after resubscription, but a foreign UUID
 > can only suppress duplicate materialisation—it cannot overwrite the active
 > subscription's per-podcast settings.
+> The root Main Menu includes a rich fixed Mini Player whenever an episode is
+> loaded. Its responsive artwork, episode/show identity, progress/time display
+> and configured skip/playback controls remain visible while the Menu links
+> scroll. Tapping outside the controls returns to the permanent Player; pushed
+> Menu destinations retain the compact persistent mini-player.
+> The root Menu uses the same native grouped page/section colour hierarchy as
+> Sleep Schedule; its richer player's three transports remain closely grouped
+> around Play/Pause rather than spread across the card, while retaining enough
+> separation for comfortable touch targeting.
+> The compact persistent Mini Player uses the same purple-glass language without
+> adopting the Menu card's height. Artwork stays at far left; episode/show titles
+> and configured Skip Back, Play/Pause and Skip Forward controls share the rest
+> of the row. A timer-free purple progress strip is the only full-width element
+> and runs beneath the artwork and controls.
+> The Main Player's embedded single-item Up Next preview uses custom horizontal
+> dragging only because native list swipe actions conflict with the Player's
+> paged ScrollView. Its Play and Archive reveals still match episode-list visual
+> semantics: isolated rounded green/purple controls with separate labels rather
+> than solid colour blocks spanning the row height.
 
 > Version 1.6 build 9: Apple TV diagnostics exports are prepared away from the
 > user-interface thread with visible progress. iCloud diagnostics report
@@ -282,7 +305,7 @@ A single page (`PodcastDetailView`) serves every state of a podcast — an unsub
 
 **Page structure:**
 1. **Header** — 120×120pt artwork, title, large Video/Explicit pills, show description (truncated to ~3 lines with a "…more" toggle that expands to the full text when long enough), author · categories.
-2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown for real subscriptions, including Inactive ones. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same flag exposed in Podcast Settings and Notification Settings, and still gated by the global notification toggle.
+2. **Subscribe row** — the full-width **Subscribe ⇄ Unsubscribe button** (purple "Subscribe" until subscribed, then grey "Unsubscribe"; see §2.3), with a **per-podcast new-episode notification bell** beside it shown for real subscriptions, including Inactive ones. The bell toggles `Subscription.notificationsEnabled` in place (bell.fill when on, bell.slash when off) — the same authoritative flag exposed in Podcast Settings and Notification Settings. The global setting is only the snapshot default for future subscriptions and never gates an existing show.
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
 
 **Toolbar:**
@@ -727,7 +750,7 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 
 | Setting | Default | Description |
 |---|---|---|
-| New episode notifications | **Off** | Sends a notification when a new episode is published. Off by default — users opt in only for shows they want to be notified about, to avoid unwanted interruptions. Requires the global notification toggle (Settings → Release Radar → Notification Settings) to also be on. |
+| New episode notifications | **Future-subscription default** | Sends a notification when a new episode is published. A newly added show snapshots the current Settings → Release Radar → Notification Settings default (On on a fresh install); changing that default later never alters this podcast. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
 | Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. It does not interrupt when the current episode has exactly 60 seconds or less remaining; the arrival stays armed and may trigger after natural advancement. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing during an active Instant session, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
 
@@ -927,23 +950,23 @@ Sum of all four time-saved categories, displayed in purple.
 
 ## 14. Notifications
 
-**Two levels of control:**
+**Snapshot default plus independent podcast controls:**
 
 
 | Level | Setting | Default | Location |
 |---|---|---|---|
-| Global | New episode notifications | **Off** | Settings → Release Radar → Notification Settings |
-| Per-podcast | New episode notifications | **Off** | Per-podcast Settings → Automation, or Settings → Release Radar → Notification Settings |
+| Future subscriptions | New episode notifications | **On on fresh installs** | Settings → Release Radar → Notification Settings |
+| Existing podcast | New episode notifications | Snapshotted when subscribed | Per-podcast Settings → Automation, Podcast Detail bell, or Settings → Release Radar → Notification Settings |
 
-**Behaviour:** A notification fires only when both the global toggle and the per-podcast toggle are on. Both default off, so the app is silent until the user explicitly opts in — first by enabling the global toggle, then per show.
+**Behaviour:** The global-looking switch is deliberately not a master delivery gate. It is copied once into `Subscription.notificationsEnabled` when a genuine new local subscription is created. Thereafter that podcast's own value is authoritative. Changing the future default does not rewrite, enable, disable, or suppress any existing subscription. Remote/iCloud materialisation preserves the synced podcast value instead of applying the receiving device's local default.
 
-**iOS permission:** `UNUserNotificationCenter` authorisation is **not requested at launch**. `NotificationService.configure()` (called from `AppDelegate`) only installs the delegate + notification categories; the system permission prompt is deferred until the user opts in — enabling a notification toggle, or turning on Sleep Schedule (`NotificationService.requestPermission()`). `NotificationService` is also the app's `UNUserNotificationCenterDelegate`.
+**iOS permission:** `UNUserNotificationCenter` authorisation is **not requested at launch**. `NotificationService.configure()` (called from `AppDelegate`) only installs the delegate + notification categories; the system permission prompt is deferred until the user explicitly changes an in-app notification option, or turns on Sleep Schedule (`NotificationService.requestPermission()`). This system authorization is separate from the saved per-podcast choices. `NotificationService` is also the app's `UNUserNotificationCenterDelegate`.
 
 **Sleep Schedule prompt notification:** Separate from new-episode alerts, `NotificationService` also posts the time-sensitive "Are you still listening?" lock-screen notification with its background "Still Listening" action button (see §8.1). This is generated locally on demand and is not gated by the per-podcast notification toggles.
 
 ### 14.1 Listening Recaps (opt-in periodic summaries)
 
-A family of notifications that summarise the user's listening when a period concludes. Three independent toggles (`AppSettings.recapWeeklyEnabled / recapMonthlyEnabled / recapYearlyEnabled`), with **weekly on for new users** and monthly/yearly off, in a **Listening Recaps** sheet (`RecapSettingsView`) reachable from **two places**: the **bell button in the Stats page toolbar**, and a **Listening Recaps row in Notification Settings**.
+A family of notifications that summarise the user's listening when a period concludes. Three independent toggles (`AppSettings.recapWeeklyEnabled / recapMonthlyEnabled / recapYearlyEnabled`), with **weekly on for fresh installs** and monthly/yearly off, in a **Listening Recaps** sheet (`RecapSettingsView`) reachable from **two places**: the **bell button in the Stats page toolbar**, and a **Listening Recaps** headed section in Notification Settings.
 
 | Recap | Delivered | Covers |
 |---|---|---|
@@ -987,7 +1010,7 @@ Release Radar is Autohop's automatic feed-refresh system. Its job is to prioriti
 
 | Setting | Type | Default | Range | Description |
 |---|---|---|---|---|
-| Notification Settings | Page link | — | — | Opens the Notification Settings page: the global "New episode notifications" master toggle (default **On for new users**), Enable All / Disable All buttons, and a per-podcast toggle row (artwork + title) for every subscription. iOS notification permission remains a separate system choice and is requested contextually rather than at launch. If permission is denied, a banner with an "Open iOS Settings" deep link is shown. A notification fires only when the master toggle, the podcast's own toggle, and system permission are all on. |
+| Notification Settings | Page link | — | — | Opens a settings-style page with distinct **New Subscriptions**, **Listening Recaps**, and **Podcasts** headings. "New episode notifications" is the default snapshotted only by future subscriptions (On for fresh installs), not a master gate. Existing podcasts retain independent artwork + toggle rows and Enable All / Disable All actions. Weekly Listening Recaps are On for fresh installs. iOS notification permission remains separate and a denied-permission banner provides an "Open iOS Settings" link. |
 
 **Core promise:** a feed that usually releases at a known time should be watched aggressively near that time, then left alone when it is unlikely to publish. A feed with no reliable pattern is still checked at a lower surveillance cadence. Learned windows are an optimisation, never an indefinite gate: background-audio checks impose a 90-minute maximum successful-check age, BGAppRefresh/BGProcessing use a two-hour general ceiling, and recognised hourly/news-bulletin feeds use a 75-minute ceiling even when a synthetic latest-item-only feed learns under another schedule kind.
 
@@ -1167,7 +1190,16 @@ data is verified.
 
 ---
 
-### 15.9 About
+### 15.9 Contact and Beta Access
+
+| Item | Description |
+|---|---|
+| Get in Touch | Opens the Autohop contact page for questions, bug reports and feedback. |
+| Join TestFlight Beta | iOS-family external link to Autohop's public TestFlight group, allowing users to opt into prerelease builds. It is intentionally grouped with Contact near the bottom of Settings and uses an external-link indicator. |
+
+---
+
+### 15.10 About
 
 | Item | Description |
 |---|---|
@@ -1388,7 +1420,7 @@ A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`
 | sleepScheduleEndMinutes | 360 (6:00am) |
 | sleepScheduleDurationMinutes | 20 (0 = end of episode) |
 | diagnosticLoggingEnabled | false |
-| iCloudSyncEnabled | false |
+| iCloudSyncEnabled | true for a fresh install; a legacy missing key or an explicitly saved existing-user choice remains false |
 | hasCompletedWelcome | false |
 | hasSubscribedFirstShow | false |
 | hasPlayedFirstEpisode | false |

@@ -2,18 +2,21 @@ import SwiftUI
 import UserNotifications
 
 // AI CONTEXT — Views/NotificationSettingsView.swift ("Notification Settings"
-// page). Reached from the Release Radar section of SettingsView. Top: master
-// "New episode notifications" toggle (AppSettings.notifyNewEpisodes) with
-// Enable All / Disable All buttons. Below: one row per subscription (artwork ·
-// title · toggle) bound to Subscription.notificationsEnabled. If iOS
+// page). Reached from the Release Radar section of SettingsView. The first
+// "New episode notifications" toggle is a FUTURE-SUBSCRIPTION DEFAULT
+// (AppSettings.notifyNewEpisodes): changing it never rewrites or gates existing
+// podcasts. Existing subscriptions remain independently controllable through
+// Enable All / Disable All and one artwork · title · toggle row per podcast,
+// bound to Subscription.notificationsEnabled. If iOS
 // notification permission is denied, a banner with a deep link to the app's
-// system settings page is shown. Notifications fire only when BOTH the master
-// toggle and a podcast's toggle are on (gated in
-// NewEpisodeNotificationWorkflow).
+// system settings page is shown. NewEpisodeNotificationWorkflow consults only
+// the subscription's snapshotted choice; iOS authorization remains a separate
+// system requirement.
 // Subscription rows observe SubscriptionStore directly; AppState remains only
 // for settings and notification commands that cross domain boundaries.
-// A "Listening Recaps" row presents RecapSettingsView (also at the bottom of this
-// file) as a sheet — the opt-in weekly/monthly/yearly stats-summary notifications.
+// "Listening Recaps" has its own headed section and presents RecapSettingsView
+// (also at the bottom of this file) as a sheet — the opt-in weekly/monthly/yearly
+// stats-summary notifications. Weekly recaps default ON for fresh installs.
 // Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
 // downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
@@ -56,7 +59,7 @@ struct NotificationSettingsView: View {
             podcastsSection
         }
         .responsiveListSizing()
-        .listSectionSpacing(28)
+        .listSectionSpacing(48)
         .scrollContentBackground(formScrollBackground)
         .background(formPageBackground.ignoresSafeArea())
         .tint(.purple)
@@ -102,8 +105,10 @@ struct NotificationSettingsView: View {
             Toggle(isOn: masterBinding) {
                 SettingsRowLabel(title: "New episode notifications", systemImage: "bell.badge")
             }
+        } header: {
+            Text("New Subscriptions")
         } footer: {
-            Text("The master switch for new-episode notifications. A podcast only notifies when this and its own toggle below are both on.")
+            Text("Choose whether podcasts you subscribe to from now on start with notifications enabled. Changing this does not alter any existing subscription.")
         }
         .listRowBackground(cardBackground)
     }
@@ -124,8 +129,10 @@ struct NotificationSettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+        } header: {
+            Text("Listening Recaps")
         } footer: {
-            Text("Opt in to weekly, monthly, or yearly summaries of your listening.")
+            Text("Choose weekly, monthly, or yearly summaries of your listening. Weekly recaps are on by default for new installs.")
         }
         .listRowBackground(cardBackground)
     }

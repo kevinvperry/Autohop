@@ -27,6 +27,10 @@ import UIKit
 // capped at 720 points so imagery cannot overwhelm the text on iPad or Mac.
 // Chapters uses that same 900-point column, gutters and typography hierarchy;
 // keep chapter controls bounded and touch-friendly rather than phone-sized.
+// PLAYER UP-NEXT SWIPES (2026-08-29): this row cannot use native swipeActions
+// because it lives inside the Player ScrollView/page gesture hierarchy. Its
+// custom drag must nevertheless reveal isolated rounded Play/Archive controls,
+// never a full-height solid colour slab, so it matches every episode-list swipe.
 // QueueCoordinator, and SubscriptionStore. AppState remains only for
 // cross-domain player commands and compatibility state not yet assigned to a
 // dedicated observable owner.
@@ -1953,8 +1957,8 @@ private struct UpNextRow: View {
     @State private var dragStartOffset: CGFloat = 0
     @State private var isDragging = false
 
-    private let actionWidth: CGFloat = 80
-    private let openThreshold: CGFloat = 40
+    private let actionWidth: CGFloat = 92
+    private let openThreshold: CGFloat = 46
     private let cornerRadius: CGFloat = 14
     private var spring: Animation { .spring(response: 0.3, dampingFraction: 0.75) }
 
@@ -1964,35 +1968,37 @@ private struct UpNextRow: View {
         ZStack(alignment: .center) {
             // Action buttons behind the card
             HStack(spacing: 0) {
-                // Play — leading, green (SwipeColor-Semantics)
-                Color.green
-                    .frame(width: max(0, offset))
-                    .overlay(
-                        swipeLabel(icon: "play.fill", text: "Play")
-                            .opacity(offset > 8 ? 1 : 0)
-                    )
-                    .clipped()
-                    .onTapGesture {
-                        withAnimation(spring) { offset = 0 }
-                        Task { await appState.skipToEpisode(episode) }
-                    }
+                // Play — leading, isolated green capsule. The outer frame clips
+                // progressively during the drag without painting the full row.
+                Button {
+                    withAnimation(spring) { offset = 0 }
+                    Task { await appState.skipToEpisode(episode) }
+                } label: {
+                    swipeActionControl(icon: "play.fill", text: "Play", color: .green)
+                        .frame(width: actionWidth)
+                }
+                .buttonStyle(.plain)
+                .frame(width: max(0, offset), alignment: .leading)
+                .opacity(offset > 8 ? 1 : 0)
+                .clipped()
+                .accessibilityLabel("Play episode")
 
                 Spacer(minLength: 0)
 
-                // Archive — trailing, purple (SwipeColor-Semantics)
-                Color.purple
-                    .frame(width: max(0, -offset))
-                    .overlay(
-                        swipeLabel(icon: "archivebox", text: "Archive")
-                            .opacity(offset < -8 ? 1 : 0)
-                    )
-                    .clipped()
-                    .onTapGesture {
-                        withAnimation(spring) { offset = 0 }
-                        Task { await appState.archiveEpisode(episode) }
-                    }
+                // Archive — trailing, matching isolated purple capsule.
+                Button {
+                    withAnimation(spring) { offset = 0 }
+                    Task { await appState.archiveEpisode(episode) }
+                } label: {
+                    swipeActionControl(icon: "archivebox", text: "Archive", color: .purple)
+                        .frame(width: actionWidth)
+                }
+                .buttonStyle(.plain)
+                .frame(width: max(0, -offset), alignment: .trailing)
+                .opacity(offset < -8 ? 1 : 0)
+                .clipped()
+                .accessibilityLabel("Archive episode")
             }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
 
             // Card — slides over the buttons.
             // Tap on the card itself closes any open swipe action.
@@ -2032,14 +2038,18 @@ private struct UpNextRow: View {
         )
     }
 
-    private func swipeLabel(icon: String, text: String) -> some View {
+    private func swipeActionControl(icon: String, text: String, color: Color) -> some View {
         VStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 62, height: 50)
+                .background(color, in: Capsule())
             Text(text)
                 .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
-        .foregroundStyle(.white)
+        .contentShape(Rectangle())
     }
 
     // ListRow-Standard layout

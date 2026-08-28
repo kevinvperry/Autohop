@@ -90,7 +90,9 @@ import Foundation
 //    protecting Release Radar states in tight background budgets.
 //  - Subscription: priorityRank (1 = top of Priority Stack, drives queue
 //    order), episodes array, playbackPreference, downloadFilterSettings,
-//    notificationsEnabled (default false), excludeFromAutoFeedRefresh,
+//    notificationsEnabled (constructor/legacy fallback false; genuine new local
+//    subscriptions snapshot AppSettings.notifyNewEpisodes in SubscriptionStore),
+//    excludeFromAutoFeedRefresh,
 //    remembered return rank for inactive shows, and browseDate — non-nil marks
 //    an invisible "browse subscription" auto-created when the user previews a
 //    podcast in search (deleted after 30 days if untouched).

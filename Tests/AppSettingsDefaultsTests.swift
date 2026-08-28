@@ -6,6 +6,9 @@
 // Auto Archive values whose persisted raw value and exact duration are part of
 // the per-podcast settings contract. Play Instant tests also protect its opt-in
 // default and backward-compatible decoding for pre-Version-1.4 subscriptions.
+// iCloud coverage distinguishes a genuinely new factory value from legacy or
+// explicitly disabled existing installs; never make the decoder inherit the
+// new-install iCloud default or an upgrade would silently change user consent.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -33,12 +36,61 @@ final class AppSettingsDefaultsTests: XCTestCase {
         XCTAssertTrue(settings.showQueueBadge)
     }
 
+    @MainActor
+    func testNotificationDefaultIsSnapshottedOnlyByNewSubscriptions() throws {
+        let store = SubscriptionStore.inMemory()
+        var defaultEnabled = true
+        store.defaultNotificationsEnabledProvider = { defaultEnabled }
+
+        let first = try store.add(
+            parsedFeed: testFeed(title: "First"),
+            feedURL: URL(string: "https://example.com/first.xml")!
+        )
+        XCTAssertTrue(first.notificationsEnabled)
+
+        defaultEnabled = false
+        let second = try store.add(
+            parsedFeed: testFeed(title: "Second"),
+            feedURL: URL(string: "https://example.com/second.xml")!
+        )
+        XCTAssertFalse(second.notificationsEnabled)
+        XCTAssertTrue(
+            store.subscriptions.first(where: { $0.id == first.id })?.notificationsEnabled == true,
+            "Changing the future default must not rewrite an existing subscription"
+        )
+    }
+
     func testLegacySettingsWithoutNewDefaultFieldsRemainOptedOut() throws {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
 
         XCTAssertFalse(decoded.iCloudSyncEnabled)
         XCTAssertFalse(decoded.notifyNewEpisodes)
         XCTAssertFalse(decoded.recapWeeklyEnabled)
+    }
+
+    func testExistingSavedCloudSyncChoiceRemainsOff() throws {
+        var existingSettings = AppSettings.default
+        existingSettings.iCloudSyncEnabled = false
+
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: JSONEncoder().encode(existingSettings)
+        )
+
+        XCTAssertFalse(decoded.iCloudSyncEnabled)
+    }
+
+    private func testFeed(title: String) -> ParsedFeed {
+        ParsedFeed(
+            title: title,
+            description: nil,
+            author: nil,
+            artworkURL: nil,
+            categories: [],
+            isExplicit: nil,
+            latestEpisode: nil,
+            episodes: []
+        )
     }
 
     func testFreshUserDefaultsNewSubscriptionsToStrongVocalBoost() {

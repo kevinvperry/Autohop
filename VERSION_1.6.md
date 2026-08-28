@@ -16,6 +16,95 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-29 Main Player Up Next Swipe Consistency — post-submission
+
+- Replaced the Main Player's full-height solid green and purple swipe reveals
+  with compact rounded **Play** and **Archive** controls plus separate labels,
+  matching the established episode-list swipe-action design and colour meaning.
+- Retained the Player row's bounded custom drag implementation because native
+  List swipe actions conflict with its nested ScrollView and horizontal panel
+  gestures; action behavior and full-swipe prevention remain unchanged.
+- Added explicit design documentation preventing this embedded row from
+  regressing to edge-to-edge colour slabs.
+
+## 2026-08-28 Fresh-Install iCloud Sync Default — post-submission
+
+- Confirmed and protected **iCloud Sync = On** for a genuinely new install so
+  the iOS-family app can populate the user's private CloudKit library without a
+  hidden setup step and Apple TV can discover that library.
+- Preserved existing-user choice: an explicitly saved Off value remains Off,
+  and an older settings payload with no `iCloudSyncEnabled` key continues to
+  decode as Off rather than inheriting the new-install factory value.
+- Corrected the App Settings explanation and defaults documentation so the UI
+  no longer contradicts the product behavior, and added regression coverage
+  for both the fresh-install and existing-install paths.
+
+## 2026-08-28 Notification Settings Semantics and Layout — post-submission
+
+- Reorganised Notification Settings into distinct **New Subscriptions**,
+  **Listening Recaps**, and **Podcasts** sections using the same 48pt section
+  rhythm, dark Form surfaces, purple row glyphs and heading hierarchy as the
+  main App Settings page.
+- Changed **New episode notifications** from a global delivery gate into a
+  future-subscription default. A genuine new local subscription snapshots the
+  current value once; changing it later never rewrites, enables, disables or
+  suppresses any existing podcast.
+- Removed the global gate from new-episode delivery. Each existing podcast's
+  `Subscription.notificationsEnabled` value is now authoritative, while iOS
+  notification authorization remains a separate system requirement.
+- Fresh installs retain **New episode notifications = On** and **Weekly
+  Listening Recaps = On** (monthly/yearly remain optional and Off). Older saved
+  settings preserve their historical decoded choices rather than being opted in.
+- Added notification-default plumbing to every genuine local subscription path,
+  including normal subscribe, RSS/OPML creation and browse-preview activation.
+  Remote iCloud materialisation explicitly adopts the synced podcast value so a
+  receiving device cannot replace it with its own local default.
+- Added regression coverage proving that changing the future default affects a
+  subsequently added subscription while leaving a previously added one intact.
+
+## 2026-08-26 TestFlight Beta Access — post-submission
+
+- Added a **Join TestFlight Beta** external action near the bottom of App
+  Settings in the Contact section. It opens Autohop's public TestFlight group
+  directly, so interested iPhone, iPad and Apple-silicon Mac users can opt into
+  prerelease builds without manually copying a link.
+- Matched the existing settings design language with a purple paper-plane glyph,
+  an external-link indicator, a descriptive accessibility hint and updated
+  Contact guidance. The action remains grouped under the existing Contact
+  large-screen shortcut rather than adding an unnecessary navigation section.
+
+## 2026-08-25 Main Menu Mini Player — post-submission
+
+- Added a richer fixed Mini Player to the lower region of the root Main Menu.
+  It appears only while an episode is loaded and remains visible while the Menu
+  links scroll; destinations pushed from the Menu continue to use the existing
+  compact persistent mini-player.
+- The card combines responsive episode artwork, episode and podcast titles, a
+  display-only purple progress track, elapsed and remaining time, configured
+  Skip Back/Skip Forward controls, and Play/Pause. Tapping the card outside its
+  controls dismisses the Menu and returns to the permanent Player.
+- Added iPhone/iPad/Mac width-band geometry and iOS 26 purple-tinted Liquid
+  Glass surfaces with material fallbacks. The card is centred and capped at a
+  readable width on large screens rather than stretching edge-to-edge.
+- Refined the first device pass by removing the mismatched independent dark
+  fills behind Skip Back/Forward, leaving Play/Pause as the single solid-purple
+  emphasis, and lifting the card above the sheet edge with additional breathing
+  room.
+- Matched the root Menu's page and grouped-link surfaces to the native dark
+  grouped palette used by Sleep Schedule, and tightened the rich Menu player's
+  three transports into a compact centred cluster.
+- Added modest responsive finger-clearance between Back, Play/Pause and Forward
+  on both persistent and Menu Mini Players without returning to the earlier
+  over-spread layout.
+- Rebuilt the compact persistent Mini Player used across pushed pages around the
+  same purple-glass hierarchy. It retains approximately the existing height with
+  enlarged artwork at far left and the episode title spanning a dedicated row.
+  Podcast identity plus a live remaining-time countdown share the lower row
+  with a compact right-aligned Back/Play/Forward cluster. A timer-free full-width
+  progress strip remains at the bottom. Continuous glass corners finish its top
+  edge, while the background continues through the device safe area so
+  underlying page content cannot show beneath the strip.
+
 ## 2026-08-23 whole-app large-screen asset upgrade — post-submission
 
 - Completed a page-by-page audit of all shared iOS-family SwiftUI assets and

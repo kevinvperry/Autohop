@@ -139,7 +139,6 @@ final class AppState: ObservableObject {
     )
     private lazy var newEpisodeNotificationWorkflow =
         NewEpisodeNotificationWorkflow(
-            settingsStore: settingsStore,
             logger: logger
         )
     private lazy var episodeCompletionWorkflow = EpisodeCompletionWorkflow(

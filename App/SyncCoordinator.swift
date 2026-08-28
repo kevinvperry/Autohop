@@ -175,7 +175,8 @@ final class SyncCoordinator {
                 isExplicit: result.isExplicit,
                 latestEpisode: result.latestEpisode,
                 insertAtBottom: true,
-                reindexRanks: false
+                reindexRanks: false,
+                initialNotificationsEnabled: state.notificationsEnabled
             )
             subscriptionStore.updateEpisodes(
                 subscriptionID: state.subscriptionID,
