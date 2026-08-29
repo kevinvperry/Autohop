@@ -36,6 +36,9 @@ import SwiftUI
 // BELOW sheets + splash): CoachMarkOverlay (onboardingCoordinator.activeTip),
 // the onboarding toast overlay, plus the FirstSubscribeCard .sheet (keyed by
 // FirstSubscribeContext from AppRoutingCoordinator's typed onboarding output).
+// Pages attach tips with onboardingTip(_:when:), which requests on appearance
+// and cancels without marking seen when navigation removes that page. A system
+// sheet that owns a tip mirrors CoachMarkOverlay above its sheet content.
 // RootView retains its local NavigationPath; AppRoutingCoordinator selects typed
 // launch/menu/notification commands and translates legacy notifications.
 // handleWelcome records hasCompletedWelcome and routes per the user's choice.
@@ -459,9 +462,10 @@ struct RootView: View {
                 returnToPlayer()
             }
 
-            // Onboarding coach marks float above pages but below sheets and the
-            // launch splash (so they never clash with Welcome / the first-subscribe
-            // card). Triggered by views via OnboardingCoordinator.requestTip(_:).
+            // Page-scoped onboarding coach marks float above pushed pages but
+            // below system sheets and the launch splash. Views attach them with
+            // onboardingTip(_:when:); leaving the owner page cancels an unread
+            // card. Sheets that teach their own content mirror this overlay.
             CoachMarkOverlay()
                 .allowsHitTesting(onboardingCoordinator.activeTip != nil)
 

@@ -201,12 +201,9 @@ struct PodcastDetailView: View {
                 }
             }
         }
-        .onAppear {
-            // Teach episode swipe actions — but only once the user has a real
-            // subscription, so it never competes with the Subscribe button on a
-            // brand-new user's first preview.
-            if onboardingCoordinator.realSubscriptionCount > 0 { onboardingCoordinator.requestTip(.swipeActions) }
-        }
+        // Teach episode swipe actions only after the first real subscription,
+        // so the tip never competes with the initial Subscribe decision.
+        .onboardingTip(.swipeActions, when: onboardingCoordinator.realSubscriptionCount > 0)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

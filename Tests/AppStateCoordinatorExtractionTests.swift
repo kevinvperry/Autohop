@@ -3,7 +3,8 @@
 // Characterization gates for AppState decomposition Stages 3–14. These tests
 // verify exclusive history/Stats tick ownership and checkpoint ordering, narrow
 // queue invalidation plus side-effect-free reads and legacy pin persistence,
-// onboarding single-vs-bulk milestone behavior, and typed routing commands.
+// onboarding single-vs-bulk milestone behavior, page-scoped tip cancellation,
+// and typed routing commands.
 // BackgroundWakeMonitor characterization verifies the one-summary contract and
 // its cross-domain counters without launching an OS-owned BGTask.
 // Settings ownership coverage includes Shared Listening's live sheet-facing
@@ -332,6 +333,30 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(20))
         XCTAssertTrue(bulkOutputs.isEmpty)
         XCTAssertTrue(bulkSettings.appSettings.hasSubscribedFirstShow)
+    }
+
+    func testOnboardingTipNavigationCancellationDoesNotMarkTipSeen() {
+        let tip = OnboardingTip.discover
+        let seenKey = "tip.\(tip.rawValue).seen"
+        UserDefaults.standard.removeObject(forKey: seenKey)
+        defer { UserDefaults.standard.removeObject(forKey: seenKey) }
+
+        let subject = OnboardingCoordinator(
+            subscriptionStore: .inMemory(),
+            settingsStore: TestSettingsStore()
+        )
+        subject.requestTip(tip)
+        XCTAssertEqual(subject.activeTip, tip)
+
+        subject.cancelActiveTip(tip)
+        XCTAssertNil(subject.activeTip)
+        XCTAssertFalse(tip.isSeen)
+
+        subject.requestTip(tip)
+        XCTAssertEqual(subject.activeTip, tip)
+        subject.dismissActiveTip()
+        XCTAssertNil(subject.activeTip)
+        XCTAssertTrue(tip.isSeen)
     }
 
     func testRoutingCoordinatorProducesTypedLaunchAndPresentationCommands() {

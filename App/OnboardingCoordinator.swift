@@ -20,7 +20,9 @@ import Foundation
 // - Existing users are reconciled false→true only and never see Welcome again.
 // - Exactly one deliberate first subscription emits the milestone; bulk imports
 //   set the flag silently.
-// - One tip at a time, never after seen, maximum three per process session.
+// - One tip at a time, never after explicit dismissal, maximum three per process
+//   session. Leaving the owning page cancels an active tip without marking it
+//   seen, so stale guidance cannot survive navigation and can return later.
 // - No navigation path, playback, queue, download, feed, or sync work belongs
 //   here.
 enum OnboardingOutput: Equatable {
@@ -37,7 +39,7 @@ final class OnboardingCoordinator: ObservableObject {
     private let subscriptionStore: SubscriptionStore
     private let settingsStore: SettingsStoring
     private let logger: AppLogger
-    private var tipsShownThisSession = 0
+    private var tipsPresentedThisSession = Set<OnboardingTip>()
     private let maxTipsPerSession = 3
     private var cancellables = Set<AnyCancellable>()
     private var milestoneTask: Task<Void, Never>?
@@ -116,15 +118,21 @@ final class OnboardingCoordinator: ObservableObject {
     func requestTip(_ tip: OnboardingTip) {
         guard activeTip == nil,
               !tip.isSeen,
-              tipsShownThisSession < maxTipsPerSession
+              tipsPresentedThisSession.contains(tip)
+                || tipsPresentedThisSession.count < maxTipsPerSession
         else { return }
+        tipsPresentedThisSession.insert(tip)
         activeTip = tip
     }
 
     func dismissActiveTip() {
         guard let tip = activeTip else { return }
         tip.markSeen()
-        tipsShownThisSession += 1
+        activeTip = nil
+    }
+
+    func cancelActiveTip(_ tip: OnboardingTip) {
+        guard activeTip == tip else { return }
         activeTip = nil
     }
 }

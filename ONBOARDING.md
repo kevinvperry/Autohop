@@ -144,10 +144,16 @@ Good coach-mark targets (each fires the *first* time the user reaches that surfa
   Next / Play Last / Archive.
 - **Player**: a one-time hint that the player has three swipeable panels (Now Playing /
   Details / Chapters).
+- **Download Feed Filters**: explain that rules govern automatic downloads only,
+  Exclude matches always win, All/Any combines enabled Include rules, and Preview
+  Matches should be checked before relying on a filter.
 
-Rules: one card visible at a time; "Got it" dismisses; each has its own
-`UserDefaults` seen-flag; never more than ~3 in the whole first session; all reachable
-again any time via Menu → Support. See §6 for the system spec.
+Rules: one card visible at a time; the prominent ✕ or full-width confirmation
+dismisses; each has its own `UserDefaults` seen-flag; never more than ~3 in the
+whole first session; all guidance remains available via Menu → Support. A card is
+owned by the page that requests it and must disappear automatically when that
+page leaves the screen. Navigation cancellation does not mark it seen. See §6
+and `Docs/ONBOARDING_AUDIT_2026-08-29.md`.
 
 ---
 
@@ -266,17 +272,21 @@ to opt-in (`§14`). This is a real differentiator in feel; document it as intent
 
 A small reusable system rather than ad-hoc popovers.
 
-- **One at a time.** Never stack. A queue ensures at most one is visible.
+- **One at a time.** Never stack. Later surfaces can request their own tip after
+  the visible card is closed or its owner disappears.
 - **Per-tip seen flag** in `UserDefaults` (e.g. `tip.priorityStack.seen`). Once seen,
   never auto-shown again.
 - **Trigger = first arrival** at the relevant surface (or first relevant event), not a
   timer and not launch.
-- **Dismiss** with an explicit "Got it"; tapping outside also dismisses.
+- **Dismiss** through the prominent top-right ✕ or full-width confirmation.
+- **Navigation safety:** the requesting page owns the card. Leaving it cancels
+  the card immediately without setting the seen flag; returning may offer it again.
 - **Budget:** ≤ 3 in the first session. Power-feature tips spread across later sessions.
 - **Always re-findable:** every concept a tip teaches also lives in Menu → Support
   (`§16`) so nothing is lost by dismissing.
-- **Style:** matches the dark design system (DESIGN.md) — purple-accented card,
-  consistent with `Blocks-Support` / settings cards.
+- **Style:** intentionally contrasts the app — white surface, black text and
+  controls, strong outline/shadow. It must not resemble ordinary glass or purple
+  Autohop content.
 
 ---
 

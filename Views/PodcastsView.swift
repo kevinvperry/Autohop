@@ -206,9 +206,7 @@ struct PodcastsView: View {
                 MiniPlayerBar()
             }
         }
-        .onAppear {
-            if !visibleSubscriptions.isEmpty { onboardingCoordinator.requestTip(.priorityStack) }
-        }
+        .onboardingTip(.priorityStack, when: !visibleSubscriptions.isEmpty)
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active, editMode == .active else { return }
             finishReorderSession(reason: "scene.\(phase)")

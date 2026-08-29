@@ -32,7 +32,9 @@ import UIKit
 // (unsubscribe with confirmation). This file also hosts DownloadFiltersView, a pushed
 // per-subscription page for auto-download eligibility rules
 // (duration/title/description, include/exclude, All/Any, live read-only
-// 50-episode feed preview with greyed skipped rows);
+// 50-episode feed preview with greyed skipped rows). Its page-scoped Feed
+// Filters coach mark explains automatic-only scope and rule precedence on the
+// first arrival, then cancels without being marked seen if this page is popped;
 // The preview and Episode Detail runtime metadata use episodeListTimeLabel(_:)
 // so positive values below one minute appear in seconds on every device size.
 // since July 2026 these filters roam via iCloud Sync with the other per-podcast
@@ -281,6 +283,7 @@ struct SubscriptionSettingsView: View {
             }
         }
         .miniPlayerBar()
+        .onboardingTip(.subscriptionAutomation)
         .sheet(isPresented: $showPodcastShare) {
             if let subscription {
                 PodcastShareSheet(subscription: subscription)
@@ -872,6 +875,7 @@ struct DownloadFiltersView: View {
                 NavigationBackButton()
             }
         }
+        .onboardingTip(.feedFilters, when: subscription != nil)
         .miniPlayerBar()
     }
 

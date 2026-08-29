@@ -248,6 +248,7 @@ struct DiscoverView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
+        .onboardingTip(.discover)
         .task(id: country.code) {
             await viewModel.load(country: country.code)
         }

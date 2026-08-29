@@ -16,6 +16,36 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-29 Contextual Onboarding Redesign — post-submission
+
+- Audited the Welcome flow, first-subscription milestone, Starter Packs,
+  download-first education, getting-started checklist, empty states and every
+  contextual coach mark against the current app.
+- Replaced the dark purple coach card with a deliberately contrasting white card,
+  black typography, a 48-point black close button and a full-width confirmation
+  action so it cannot be mistaken for ordinary page content.
+- Made tips page-scoped: navigating away cancels the originating tip immediately
+  without marking it read; only an explicit close persists its seen state.
+- Expanded contextual coverage from five legacy tips to eleven current surfaces:
+  Discover, Priority Stack, Podcast Detail actions, Player panels/audio controls,
+  Up Next, Stats, Downloads, Sleep Schedule, global Settings and per-podcast
+  automation, plus a dedicated Download Feed Filters card explaining automatic-
+  only scope, rule precedence, All/Any matching and Preview Matches.
+- Preserved the one-at-a-time, once-after-dismissal and three-per-session limits
+  so broader coverage does not become a first-session barrage.
+
+## 2026-08-29 Player Details RSS Metadata — post-submission
+
+- Removed the unlabeled episode-author text previously shown between the artwork
+  and description in the Main Player Details pane.
+- Added a `Publisher` metadata card sourced from the episode RSS author, with
+  the podcast/channel author as a fallback.
+- Added a `Category` metadata card for the first channel RSS category and a
+  separate `Sub-Category` card for every additional category, with blank and
+  duplicate values suppressed.
+- Kept publisher/category attribution within the responsive metadata grid so it
+  scales and wraps consistently across iPhone, iPad and Mac.
+
 ## 2026-08-29 Context-Preserving Back Navigation — post-submission
 
 - Fixed Podcast Detail's Back button skipping its actual parent because it

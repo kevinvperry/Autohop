@@ -6,12 +6,12 @@ import SwiftUI
 // span midnight), and a duration picker — presets 10/15/20/40/60 min plus an
 // End of Episode mode (stored as 0 minutes). All values persist to
 // AppSettings.sleepSchedule*; AppState re-syncs SleepScheduleService whenever
-// settings change. SettingsViewModel is the observable/write-through owner;
-// AppState remains only for the onboarding-tip command. Pure UI — no schedule
+// settings change. SettingsViewModel is the observable/write-through owner.
+// Its page-scoped onboarding tip is attached through onboardingTip(_:when:),
+// which owns presentation and navigation cancellation. Pure UI — no schedule
 // logic lives here.
 struct SleepScheduleView: View {
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
-    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     @Environment(\.dismiss) private var dismiss
 
     private static let durationPresets = [10, 15, 20, 40, 60]
@@ -45,7 +45,7 @@ struct SleepScheduleView: View {
         .responsiveListSizing()
         .listSectionSpacing(28)
         .tint(.purple)
-        .onAppear { onboardingCoordinator.requestTip(.sleepSchedule) }
+        .onboardingTip(.sleepSchedule)
         .navigationTitle("Sleep Schedule")
         .responsiveInlineNavigationTitle("Sleep Schedule")
         .navigationBarBackButtonHidden(true)

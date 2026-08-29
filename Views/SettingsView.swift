@@ -162,6 +162,7 @@ struct SettingsView: View {
             }
         }
         .miniPlayerBar()
+        .onboardingTip(.settings)
         .fileImporter(
             isPresented: $showOPMLImporter,
             allowedContentTypes: [.xml, .plainText, UTType(filenameExtension: "opml") ?? .xml],

@@ -299,6 +299,10 @@ struct QueueSheetView: View {
         }
         .preferredColorScheme(.dark)
         .presentationBackground(.regularMaterial)
+        .onboardingTip(.upNext)
+        // System sheets render above RootView, so mirror the single global tip
+        // surface here while this sheet owns the active Up Next guidance.
+        .overlay { CoachMarkOverlay() }
         .onAppear {
             let t = Date()
             appearTime = t

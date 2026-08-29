@@ -426,6 +426,12 @@ Download Filter previews, Episode Detail and the matching tvOS rows.
 
 Both use the same "replace the queue" pattern: the subscriptionID is staged, the Up Next sheet dismisses, and the new sheet is presented in `onDismiss` so UIKit never sees two simultaneous sheet transitions.
 
+**Player Details RSS metadata:** RSS attribution is presented in the responsive
+metadata-card grid rather than as unlabeled text beside the description.
+`Publisher` uses the episode author with the channel author as fallback. The
+first channel category is labelled `Category`; each additional category is
+labelled `Sub-Category`. Empty and duplicate category values are omitted.
+
 **Action animations:** Each swipe action is animated with a matched haptic (`.sensoryFeedback`) and the list reorders fluidly (a no-bounce `.smooth` spring keyed to the queue's episode order):
 - **Play Next / Play Last** — a light impact haptic; the row pops gently and flashes a directional badge at its leading edge (blue ↑ "to top" / orange ↓ "to bottom"), then the row visibly glides to its new top/bottom slot. The reorder is deferred until the swipe row finishes closing, so a neighbouring episode never appears to jump over the one being moved.
 - **Archive** — a success haptic; the row slides toward the trailing edge while shrinking and fading as a purple archive-box badge fades in, then the archive commits and the gap closes behind it.
@@ -1372,7 +1378,9 @@ one real sub in the coalesced change) flips the flag **silently** — no celebra
 The first time the first-subscribe card runs a download (`hasSeenDownloadFirstNote == false`), it shows a one-time note — "Autohop downloads episodes before playing, so they start instantly and work offline" — then sets the flag so it never repeats.
 
 ### Coach marks (tips)
-A small, deliberately quiet tip system (`Views/CoachMark.swift`, `OnboardingTip`). OnboardingCoordinator enforces the policy: **one visible at a time**, **never re-shown** once dismissed (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session** (the rest surface later). Views call `OnboardingCoordinator.requestTip(_:)` on first arrival; `CoachMarkOverlay` (mounted once in RootView, behind sheets) renders the active tip as a dismissible bottom card with a "Got it" button. Triggers: **priorityStack** (Subscriptions with ≥1 show), **swipeActions** (Podcast Detail, once the user has a real subscription), **playerPanels** + **speed** (Player, when an episode is loaded), **sleepSchedule** (the Sleep Schedule page). Everything a tip teaches also lives in Menu → Support, so dismissing loses nothing.
+A high-contrast contextual tip system (`Views/CoachMark.swift`, `OnboardingTip`). `OnboardingCoordinator` enforces **one visible at a time**, **never re-shown after explicit dismissal** (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session**. Each page requests through `onboardingTip(_:when:)`, which also owns cleanup: leaving the relevant page cancels its card immediately without marking it read, so guidance can never remain stuck over unrelated screens. Explicit close is available through both a prominent 48-point black ✕ and a full-width “Got it — close tip” action.
+
+The deliberately non-Autohop white/black card covers eleven current surfaces: **Discover** (charts/search/preview), **Priority Stack** (automatic order/reorder), **Podcast Detail** (episode swipes), **Player** (panels plus sound controls and Shared Listening), **Up Next** (automatic order/swipes/pins), **Stats** (periods and expanded show detail), **Downloads** (device-local lifecycle), **Sleep Schedule**, **Settings** (Auto Archive/Release Radar/iCloud Sync), **Podcast Settings** (per-show rules/Play Instant), and **Download Feed Filters** (automatic-only scope, Include/Exclude precedence, All/Any matching and Preview Matches). The complete audit is `Docs/ONBOARDING_AUDIT_2026-08-29.md`. Everything taught remains permanently available through Menu → Support.
 
 ### Empty states (every new-user-reachable screen points forward)
 - **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.

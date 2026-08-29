@@ -1187,6 +1187,15 @@ least one hour, `"Xm"` from one minute, and `"Xs"` for positive values below
 one minute. All iOS-family and tvOS episode-list surfaces must call this helper
 rather than independently truncating seconds.
 
+**Player Details RSS attribution**
+
+Publisher and category values belong in the existing responsive metadata-card
+grid, never as an unlabeled line between episode artwork and description.
+`Publisher` prefers the item-level RSS author and falls back to the channel
+author. The first persisted channel category is `Category`; later unique values
+are separate `Sub-Category` cards. Suppress blank and case-insensitive duplicate
+values so malformed feeds cannot create empty or repeated cards.
+
 ---
 
 ## Podcast Title Style
@@ -1695,9 +1704,12 @@ glyph (or a `ProgressView` while a first episode downloads), a `.rounded`-bold t
 
 ## Onboarding — First-Run Components
 
-The first-run experience (ONBOARDING_PLAN.md; FEATURES.md §18) introduces a small family
-of purple-accented dark-card components. They all sit on the standard black page / sheet
-background and reuse the app's purple accent.
+The first-run experience (ONBOARDING_PLAN.md; FEATURES.md §18) uses familiar
+Autohop styling for dedicated flows, but contextual coach marks deliberately
+break from the product palette so users recognise them as temporary guidance.
+Complex child tools may own their own scoped card: Download Feed Filters uses one
+to explain automatic-only scope, rule precedence and previewing, and it disappears
+as soon as that child page is popped.
 
 **Label: `EmptyState-CTAButton`** — capsule action used in the Player / Subscriptions
 empty states and Welcome. Filled = `Color.purple` fill, white 16 pt semibold text,
@@ -1714,10 +1726,14 @@ white-filled primary, `white.opacity(0.16)` secondary, plain-text tertiary.
 `white.opacity(0.06)` rounded **download-status row** (spinner + "Downloading… N%" or a
 green check + "Ready to play"), and a purple-capsule **Play latest** primary.
 
-**Label: `Onboarding-CoachMark`** (`CoachMarkOverlay`) — a dismissible bottom card
-(`Color(red:0.12,0.12,0.15)` fill, `purple.opacity(0.35)` 1 pt stroke, soft shadow): a
-34 pt purple-circle glyph, bold 15 pt title, 13 pt grey body, and a purple "Got it"
-button. One visible at a time; floats above pages, below sheets.
+**Label: `Onboarding-CoachMark`** (`CoachMarkOverlay`) — a dismissible white bottom
+card with a 2-point black outline and strong shadow. It uses black title/body text,
+a black 42-point icon circle, an unmistakable 48-point black ✕ at top-right and a
+full-width 52-point black “Got it — close tip” button. Do not recolour this surface
+purple or apply glass: its contrast with ordinary Autohop UI is intentional. The
+requesting page owns the card through `onboardingTip(_:when:)`; leaving that page
+cancels it without persisting the seen flag. Up Next mirrors the overlay inside its
+system sheet because sheets render above RootView.
 
 **Label: `Onboarding-Checklist`** (`GettingStartedChecklist`) — top-of-Priority-Stack
 card (`white.opacity(0.06)` fill, `purple.opacity(0.25)` stroke) with a title + dismiss

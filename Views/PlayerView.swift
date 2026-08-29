@@ -22,6 +22,10 @@ import UIKit
 // The Details panel ends with the iOS-family Review in Apple Podcasts action,
 // immediately below its metadata-card grid. It resolves the current episode's
 // subscription by exact RSS identity through ApplePodcastsReviewButton.
+// RSS attribution also belongs in that grid: Publisher uses the episode author
+// with the channel author as fallback; the first persisted channel category is
+// Category and later values are Sub-Category cards. Never repeat the raw author
+// as loose text between the artwork and description.
 // LARGE-SCREEN DETAILS (2026-08-23): prose and metadata use the shared
 // editorial type scale and centred 900-point reading column; episode media is
 // capped at 720 points so imagery cannot overwhelm the text on iPad or Mac.
@@ -221,12 +225,6 @@ struct PlayerView: View {
             isPlayerVisible = true
             synchronizeSliderWithPlaybackClock()
             appState.updateIdleTimer(playerVisible: true)
-            // Coach marks: introduce the player's panels, then (later session)
-            // the speed controls. Only when there's actually an episode loaded.
-            if playbackCoordinator.currentEpisode != nil {
-                onboardingCoordinator.requestTip(.playerPanels)
-                onboardingCoordinator.requestTip(.speed)
-            }
         }
         .onDisappear {
             isSeeking = false
@@ -239,6 +237,7 @@ struct PlayerView: View {
         .onChange(of: settingsViewModel.appSettings.keepScreenAwakeDuringPlayback) { _, _ in
             appState.updateIdleTimer(playerVisible: isPlayerVisible)
         }
+        .onboardingTip(.playerPanels, when: playbackCoordinator.currentEpisode != nil)
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             audioRouteName = Self.currentAudioRouteName()
         }
@@ -1298,13 +1297,6 @@ struct PlayerView: View {
                             .padding(.bottom, 4)
                     }
 
-                    if let author = ep.author {
-                        Text(author)
-                            .font(.system(size: metrics.detailDescriptionFontSize))
-                            .foregroundStyle(Color(white: 0.33))
-                            .padding(.bottom, 14)
-                    }
-
                     if let desc = ep.description {
                         HTMLDescriptionText(
                             html: desc,
@@ -1368,6 +1360,16 @@ struct PlayerView: View {
             if let dur = ep.durationSeconds {
                 metaCard("Duration", formatDurationLong(dur))
             }
+            if let publisher = detailsPublisher(ep: ep, sub: sub) {
+                metaCard("Publisher", publisher)
+            }
+            let categories = detailsCategories(sub: sub)
+            if let category = categories.first {
+                metaCard("Category", category)
+                ForEach(Array(categories.dropFirst().enumerated()), id: \.offset) { _, subcategory in
+                    metaCard("Sub-Category", subcategory)
+                }
+            }
             if let bytes = ep.fileSizeBytes {
                 metaCard("File size", formatFileSize(bytes))
             }
@@ -1379,6 +1381,27 @@ struct PlayerView: View {
             if !ep.chapters.isEmpty {
                 metaCard("Chapters", "\(ep.chapters.count)")
             }
+        }
+    }
+
+    private func detailsPublisher(ep: Episode, sub: Subscription?) -> String? {
+        [ep.author, sub?.author]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func detailsCategories(sub: Subscription?) -> [String] {
+        guard let categories = sub?.categories else { return [] }
+        var seen = Set<String>()
+        return categories.compactMap { category in
+            let trimmed = category.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let comparisonKey = trimmed.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            guard seen.insert(comparisonKey).inserted else { return nil }
+            return trimmed
         }
     }
 

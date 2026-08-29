@@ -54,6 +54,7 @@ struct DownloadsView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
+        .onboardingTip(.downloads)
         .onAppear {
             let activities = downloadActivityStore.activeActivities
             AppLogger.shared.info(

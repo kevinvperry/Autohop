@@ -62,6 +62,7 @@ struct StatsView: View {
             historyStore: historyStore,
             initialRecapPeriod: initialRecapPeriod
         )
+        .onboardingTip(.stats)
     }
 }
 

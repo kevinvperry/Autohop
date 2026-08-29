@@ -46,10 +46,12 @@ When a phase ships, update FEATURES.md (First-Run Experience), SupportContent.sw
   (dismiss). FEATURES.md §18 updated; `xcodegen generate` run.
 - ✅ **Phase 4** — one-time download-first note in `FirstSubscribeCard`
   (`hasSeenDownloadFirstNote`); 4b first-play flag done in Phase 2.
-- ✅ **Phase 5** — `Views/CoachMark.swift` (`OnboardingTip` + `CoachMarkOverlay`);
-  AppState `requestTip`/`dismissActiveTip` (one-at-a-time, seen flags, ≤3/session);
-  triggers in `PodcastsView` (priorityStack), `PodcastDetailView` (swipeActions),
-  `PlayerView` (playerPanels + speed). Overlay mounted in `RootView` behind sheets.
+- ✅ **Phase 5** — `Views/CoachMark.swift` (`OnboardingTip` + `CoachMarkOverlay`),
+  redesigned 2026-08-29 as high-contrast page-scoped guidance. Ten triggers cover
+  Discover, Priority Stack, Podcast Detail actions, Player panels/audio, Up Next,
+  Stats, Downloads, Sleep Schedule, Settings and per-podcast automation.
+  Navigation cancels the owning page's card without marking it seen; Up Next
+  mirrors the overlay inside its system sheet.
 - ✅ **Phase 6** — Discover first-run starter-packs banner (shown only while
   `realSubscriptionCount == 0`); import success toast (`AppState.onboardingToast` →
   RootView overlay) from the Welcome + empty-state import paths.
@@ -239,38 +241,47 @@ and/or the downloading empty-player variant): `DOWNLOAD_FIRST_NOTE`. Set the fla
 **4b. First-play flag.** When playback first transitions to playing,
 set `hasPlayedFirstEpisode = true` (clears the Phase 2 re-entry rule).
 
-**4c. Post-first-play speed nudge (light).** After the first episode *starts*, queue a
-single coach mark (Phase 5) about playback speed — Autohop's defining control:
-`TIP_SPEED_TITLE` / `_BODY`. Not before first play.
+**4c. Post-first-play Player nudge (light).** Once an episode is loaded, offer the
+single Player coach mark (Phase 5) covering its panels and sound controls. It
+includes speed, Trim Silence, Vocal Boost and Shared Listening without stacking
+separate cards. Not before playback is available.
 
-**Acceptance:** note shows at most once; first-play flag flips reliably; speed tip is the
-only thing introduced at first play (no feature pile-on).
+**Acceptance:** note shows at most once; first-play flag flips reliably; one combined
+Player tip is the only coach card introduced at first play.
 
 ---
 
 ## Phase 5 — Coach-mark / tip system (P1)
 
-**Goal:** a small reusable, non-annoying tip system (strategy §6).
+**Goal:** a small reusable, unmistakable and navigation-safe tip system (strategy §6).
 
-**Files:** new `Views/CoachMark.swift` (a reusable purple-accented card matching
-`Blocks-Support` / settings cards) + a tiny `TipCenter` in `AppState` that enforces
-"one visible at a time", reads/writes `tip.<key>.seen` in `UserDefaults`, and caps the
-first session at ≤3.
+**Files:** `Views/CoachMark.swift` (a reusable white/black card deliberately unlike
+ordinary Autohop UI) + `OnboardingCoordinator`, which enforces one visible card,
+reads/writes `tip.<key>.seen`, owns page-navigation cancellation and caps a process
+session at ≤3 distinct presented tips.
 
 **Tips (each fires on first arrival at its surface / first relevant event):**
 | Key | Surface / trigger | Copy keys |
 |---|---|---|
-| `priorityStack` | First time `PodcastsView` shows with ≥1 sub | `TIP_PRIORITY_TITLE` / `_BODY` |
-| `swipeActions` | First episode-list / Queue view | `TIP_SWIPE_TITLE` / `_BODY` |
-| `playerPanels` | First time the Player has an episode | `TIP_PANELS_TITLE` / `_BODY` |
-| `speed` | After first play (Phase 4c) | `TIP_SPEED_TITLE` / `_BODY` |
+| `discover` | First Discover arrival | charts, country/category browsing, search and previews |
+| `priorityStack` | `PodcastsView` with ≥1 show | automatic order and reordering |
+| `swipeActions` | Subscribed Podcast Detail | episode quick actions |
+| `playerPanels` | Player with an episode | panels, processing controls and Shared Listening |
+| `upNext` | First Up Next arrival | automatic order, swipes and pins |
+| `stats` | First Stats arrival | periods and expandable show detail |
+| `downloads` | First Downloads arrival | transfers, device storage and archive lifecycle |
+| `sleepSchedule` | First Sleep Schedule arrival | prompt/fade/rewind behavior |
+| `settings` | First Settings arrival | Auto Archive, Release Radar and iCloud Sync |
+| `subscriptionAutomation` | First Podcast Settings arrival | per-show rules, Play Instant and Auto Archive |
+| `feedFilters` | First Download Feed Filters arrival | automatic-only scope, Include/Exclude precedence, All/Any and Preview Matches |
 
-Rules: one at a time; "Got it" dismisses + sets seen; outside-tap dismisses; everything a
-tip teaches is also permanently in Menu → Support. Power-feature tips (Sleep Schedule,
-Trim Silence, Shared Listening) are spread across later sessions, not first-run.
+Rules: one at a time; the prominent ✕ or full-width confirmation dismisses + sets
+seen; navigating away cancels without setting seen; everything taught is also
+permanently in Menu → Support. The ≤3/session budget spreads coverage naturally.
 
-**Acceptance:** never more than one visible; never re-shows after "Got it"; ≤3 in session 1;
-all dismissible; no blocking modality.
+**Acceptance:** never more than one visible; never re-shows after explicit close;
+never survives its owning page; ≤3 explicitly dismissed in session 1; all controls
+remain reachable with large Dynamic Type.
 
 ---
 
@@ -367,10 +378,8 @@ Park these in `FUTURE_VERSIONS.md`; build after P0/P1 prove out.
 - `TIP_SWIPE_TITLE` — "Swipe for quick actions"
 - `TIP_SWIPE_BODY` — "Swipe any episode to Play Next or Play Last, or to Archive it. No menus needed."
 - `TIP_PANELS_TITLE` — "Three swipes, one player"
-- `TIP_PANELS_BODY` — "Swipe across to see episode details and chapters. Everything stays in one place while you listen."
-- `TIP_SPEED_TITLE` — "Find your speed"
-- `TIP_SPEED_BODY` — "Tap the sound controls to set your speed and trim silences. Each show remembers its own settings."
-- `TIP_GOT_IT` — "Got it"
+- `TIP_PANELS_BODY` — "Swipe between Playing, Details and Chapters. Sound Controls sets speed, Trim Silence, Vocal Boost and Shared Listening; each show remembers its own choices."
+- `TIP_GOT_IT` — "Got it — close tip"
 
 ### OPML import (Phase 6)
 - `IMPORT_HINT` — "Coming from another app? Import your subscriptions in seconds."
