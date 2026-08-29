@@ -37,6 +37,15 @@ import UIKit
 // never a full-height solid colour slab, so it matches every episode-list swipe.
 // Its runtime/remaining metadata uses episodeListTimeLabel(_:) so a positive
 // final minute is expressed in seconds consistently with every episode list.
+// AUDIO ROUTE LABEL (2026-08-29): always render the active output's portName
+// beside the AirPlay icon, truncating long personalised device names instead of
+// replacing the entire label with an icon-only ViewThatFits fallback. Route
+// notifications can precede AVAudioSession.currentRoute settling, so refresh
+// immediately and again after short delays; keep this independent of playback.
+// MINI-PLAYER RETURN CONTRACT (2026-08-30): PlayerView is permanently mounted,
+// so selectedPanel intentionally survives ordinary navigation. RootView posts
+// .autohopShowNowPlayingPanel only for explicit mini-player/return-to-Player
+// actions; handle it here by selecting Now Playing before the root is revealed.
 // QueueCoordinator, and SubscriptionStore. AppState remains only for
 // cross-domain player commands and compatibility state not yet assigned to a
 // dedicated observable owner.
@@ -148,6 +157,7 @@ struct PlayerView: View {
     @State private var pictureInPictureStartToken = 0
     @State private var isPlayerVisible = false
     @State private var audioRouteName = PlayerView.currentAudioRouteName()
+    @State private var audioRouteRefreshTask: Task<Void, Never>?
     @State private var queueFlashArtworkURL: URL?
     @State private var queueFlashTask: Task<Void, Never>?
 
@@ -224,11 +234,14 @@ struct PlayerView: View {
         .onAppear {
             isPlayerVisible = true
             synchronizeSliderWithPlaybackClock()
+            scheduleAudioRouteNameRefresh()
             appState.updateIdleTimer(playerVisible: true)
         }
         .onDisappear {
             isSeeking = false
             isPlayerVisible = false
+            audioRouteRefreshTask?.cancel()
+            audioRouteRefreshTask = nil
             appState.updateIdleTimer(playerVisible: false)
         }
         .onChange(of: playbackCoordinator.isPlaying) { _, _ in
@@ -239,12 +252,20 @@ struct PlayerView: View {
         }
         .onboardingTip(.playerPanels, when: playbackCoordinator.currentEpisode != nil)
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
-            audioRouteName = Self.currentAudioRouteName()
+            scheduleAudioRouteNameRefresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: .autohopOpenUpNext)) { _ in
             showQueue = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .autohopShowNowPlayingPanel)) { _ in
+            withAnimation(.easeInOut(duration: 0.22)) {
+                selectedPanel = PlayerPanel.nowPlaying.rawValue
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                scheduleAudioRouteNameRefresh()
+            }
             // When the scene becomes inactive (home button, lock screen, app switch)
             // during inline video playback, kick off PiP via VideoPictureInPictureHost
             // so iOS doesn't pause the AVPlayer. Full-screen video has its own PiP
@@ -1193,22 +1214,20 @@ struct PlayerView: View {
 
     private var audioSourceButton: some View {
         ZStack {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 7) {
-                    Image(systemName: "airplayaudio")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(Color.purple.opacity(0.9))
-
-                    Text(audioRouteName)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color(white: 0.55))
-                        .lineLimit(1)
-                }
+            HStack(spacing: 7) {
                 Image(systemName: "airplayaudio")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(Color.purple.opacity(0.9))
-                    .frame(width: 44, height: 44)
+                    .fixedSize()
+
+                Text(audioRouteName)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(white: 0.55))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.8)
             }
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .allowsHitTesting(false)
@@ -1626,6 +1645,22 @@ struct PlayerView: View {
             return "HDMI"
         default:
             return "Audio Source"
+        }
+    }
+
+    /// AVAudioSession can publish a route-change notification while
+    /// `currentRoute` still describes the previous device. Refreshing across the
+    /// short transition window makes personalised Bluetooth names reliable
+    /// without polling continuously or coupling the label to playback ticks.
+    private func scheduleAudioRouteNameRefresh() {
+        audioRouteRefreshTask?.cancel()
+        audioRouteName = Self.currentAudioRouteName()
+        audioRouteRefreshTask = Task { @MainActor in
+            for delay in [200_000_000, 650_000_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled else { return }
+                audioRouteName = Self.currentAudioRouteName()
+            }
         }
     }
 

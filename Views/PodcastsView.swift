@@ -31,13 +31,15 @@ import UniformTypeIdentifiers
 // (in-place OPML fileImporter → AppState.importOPML), and Starter Packs
 // (StarterPacksView). The non-empty list shows the dismissible
 // GettingStartedChecklist at the top; onMove records the "reorder" onboarding step
-// (GettingStartedChecklist.reorderedKey) and requests the priorityStack coach mark.
+// (GettingStartedChecklist.reorderedKey). The checklist supersedes and marks seen
+// the redundant Priority Stack coach mark, so two onboarding cards never stack.
 struct PodcastsView: View {
     @Environment(\.adaptiveViewportWidth) private var viewportWidth
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
     @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.scenePhase) private var scenePhase
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
@@ -64,6 +66,11 @@ struct PodcastsView: View {
 
     private var inactiveSubscriptions: [Subscription] {
         visibleSubscriptions.filter(\.excludeFromAutoFeedRefresh)
+    }
+
+    private var showsGettingStartedChecklist: Bool {
+        !visibleSubscriptions.isEmpty
+            && GettingStartedChecklist.shouldShow(settings: settingsViewModel.appSettings)
     }
 
     /// Stable reorder source: existing draft IDs first, then any active
@@ -206,7 +213,10 @@ struct PodcastsView: View {
                 MiniPlayerBar()
             }
         }
-        .onboardingTip(.priorityStack, when: !visibleSubscriptions.isEmpty)
+        .onboardingTip(
+            .priorityStack,
+            when: !visibleSubscriptions.isEmpty && !showsGettingStartedChecklist
+        )
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active, editMode == .active else { return }
             finishReorderSession(reason: "scene.\(phase)")

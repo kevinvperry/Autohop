@@ -466,7 +466,9 @@ labelled `Sub-Category`. Empty and duplicate category values are omitted.
 
 **Sleep Timer button:** Opens `SleepTimerSheetView`.
 
-**Audio row (below the transport controls):** Sound Settings · Sleep Timer · AirPlay route picker (shows the current output name) · Share · Archive.
+**Audio row (below the transport controls):** Sound Settings · Sleep Timer · AirPlay route picker (shows the current system-provided output name, including personalised AirPods names) · Share · Archive. Long route names truncate at the trailing edge rather than collapsing the selector to an unexplained icon, and the label performs short delayed refreshes because AVAudioSession can announce a route change before its current route has settled.
+
+**Mini-player return behavior:** Tapping the compact Mini Player on any pushed page or the larger player card in the Main Menu clears the navigation stack and explicitly selects the Main Player's Playing pane. Transport controls remain independently tappable. Details and Chapters remain persistent during ordinary navigation but are never the destination of a mini-player tap.
 
 **Audio route changes:** Removing AirPods/headphones still pauses playback and requires deliberate user action to resume, but Autohop waits briefly to confirm the route loss before pausing so AirPods/Speaker transition storms do not immediately stop playback. If a new or non-built-in output appears during that confirmation window, the pending pause is cancelled. Active output transitions on the AVAudioEngine path schedule a delayed buffer-loop restart from the current playback position, including messy iOS `unknown` / `categoryChange` AirPods notifications. Route-loss confirmation cancels stale restart timers, and a replacement route reschedules the restart only after the route has settled, so the render watchdog is less likely to be the first recovery path.
 
@@ -1382,6 +1384,13 @@ A high-contrast contextual tip system (`Views/CoachMark.swift`, `OnboardingTip`)
 
 The deliberately non-Autohop white/black card covers eleven current surfaces: **Discover** (charts/search/preview), **Priority Stack** (automatic order/reorder), **Podcast Detail** (episode swipes), **Player** (panels plus sound controls and Shared Listening), **Up Next** (automatic order/swipes/pins), **Stats** (periods and expanded show detail), **Downloads** (device-local lifecycle), **Sleep Schedule**, **Settings** (Auto Archive/Release Radar/iCloud Sync), **Podcast Settings** (per-show rules/Play Instant), and **Download Feed Filters** (automatic-only scope, Include/Exclude precedence, All/Any matching and Preview Matches). The complete audit is `Docs/ONBOARDING_AUDIT_2026-08-29.md`. Everything taught remains permanently available through Menu → Support.
 
+Dedicated first-run cards follow the same contrast rule. **Getting Started** and
+the **You're all set** first-subscription sheet use white surfaces, black text and
+prominent black 48-point close controls; Discover's Starter Packs nudge is also
+white/black. Onboarding surfaces are mutually exclusive per page: Getting Started
+supersedes and marks seen the redundant Priority Stack coach mark, while Discover
+defers its general tip until the zero-subscription Starter Packs nudge is absent.
+
 ### Empty states (every new-user-reachable screen points forward)
 - **Player** (`PlayerView`): when there's nothing to play, shows a first-run state — *no subscriptions* → "Nothing playing yet" + **Find shows** (Discover); *subscribed but the first episode is still downloading* → "Getting your first episode" with a spinner + **View subscriptions**. A quiet leading nav button keeps it from ever being a dead end.
 - **Subscriptions** (`PodcastsView`): "Your Priority Stack is empty" with **Find shows** and a working **Import subscriptions** (OPML).
@@ -1531,8 +1540,11 @@ StandBy families are accessory circular and accessory rectangular.
   Up Next episodes.
 - If no current/queue episode is available, recently downloaded playable
   episodes are used before showing the Discover empty state.
-- Remaining time is a static checkpoint refreshed after meaningful playback
-  events, not a simulated live countdown.
+- Episode time reflects playback state: untouched episodes show total length
+  (`5 mins`), while partially played episodes show the saved time left
+  (`5 min remaining`). Positive values below one minute use seconds. Remaining
+  time is a static checkpoint refreshed after meaningful playback events, not a
+  simulated live countdown.
 - Small/medium/large widgets load at most 1/2/5 app-prepared 300-pixel JPEGs.
   The extension never downloads artwork or opens Autohop's database.
 - Every Home Screen family applies its square crop after sizing, so widescreen

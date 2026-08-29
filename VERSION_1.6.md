@@ -16,6 +16,38 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-30 Widget Episode-Time Labels — post-submission
+
+- Corrected every Now Playing & Up Next widget family treating untouched
+  episodes as though they were partially played. The app-side snapshot now
+  publishes remaining time only after positive playback progress exists.
+- Unplayed episodes display their total length (`5 mins`); partially played
+  episodes display the time left (`5 min remaining`). Sub-minute values use
+  seconds, and longer durations retain compact hour/minute formatting.
+- Centralised the widget wording in one renderer helper used by small, medium
+  and large Home Screen compositions so current and Up Next rows remain aligned.
+
+## 2026-08-30 Mini-Player Return Destination — post-submission
+
+- Corrected both the persistent page Mini Player and the larger Main Menu
+  player so tapping their non-control surface always returns to the Playing
+  pane of the permanent Main Player.
+- Preserved the Player's panel selection during ordinary navigation while
+  adding an explicit return-only reset signal, so deliberate Details and
+  Chapters navigation is not unexpectedly discarded by unrelated view updates.
+
+## 2026-08-29 Player Audio Output Name — post-submission
+
+- Fixed the Player audio-output selector dropping its text whenever a
+  personalised route name, such as an AirPods name, exceeded the centre
+  column's intrinsic width. The label now remains visible and truncates only at
+  its trailing edge.
+- Made route-name observation resilient to AVAudioSession transition timing by
+  reading the route immediately, after two short settling delays, and whenever
+  the Player returns to the foreground. Built-in output retains the familiar
+  iPhone Speaker label while Bluetooth, AirPlay and other routes use the actual
+  system-provided device name whenever available.
+
 ## 2026-08-29 Contextual Onboarding Redesign — post-submission
 
 - Audited the Welcome flow, first-subscription milestone, Starter Packs,
@@ -33,6 +65,13 @@ of the implementation definition of done.
   only scope, rule precedence, All/Any matching and Preview Matches.
 - Preserved the one-at-a-time, once-after-dismissal and three-per-session limits
   so broader coverage does not become a first-session barrage.
+- Removed overlapping onboarding on Subscriptions: the Getting Started checklist
+  now supersedes the redundant Priority Stack tip and marks that lesson seen.
+- Converted Getting Started, the first-subscription sheet and Discover's Starter
+  Packs nudge to the same high-contrast white/black onboarding language; dedicated
+  cards use prominent 48-point close controls.
+- Deferred the general Discover coach mark while its zero-subscription Starter
+  Packs nudge is visible, preventing another two-card collision.
 
 ## 2026-08-29 Player Details RSS Metadata — post-submission
 

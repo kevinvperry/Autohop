@@ -8,7 +8,9 @@ import SwiftUI
 // tap: if the file isn't ready yet, tapping Play arms a wait and playback starts
 // the instant the download lands — no autoplay ambush, just a cued first listen.
 // Looks the subscription/episode up live from the store each render so download
-// progress and the downloaded transition drive the UI reactively.
+// progress and the downloaded transition drive the UI reactively. As a dedicated
+// onboarding card it uses the same high-contrast white/black language and
+// prominent 48-point close control as coach marks and the Getting Started card.
 struct FirstSubscribeCard: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
@@ -24,8 +26,7 @@ struct FirstSubscribeCard: View {
     @State private var showDownloadNote = false
 
     private var pageBackground: Color {
-        if #available(iOS 26, *) { return .clear }
-        return Color(red: 0.08, green: 0.08, blue: 0.10)
+        .white
     }
 
     private var subscription: Subscription? {
@@ -41,15 +42,29 @@ struct FirstSubscribeCard: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-            Capsule()
-                .fill(Color(white: 0.35))
-                .frame(width: 38, height: 5)
-                .padding(.top, 10)
-                .padding(.bottom, 18)
+            HStack {
+                Text("FIRST SUBSCRIPTION")
+                    .font(.caption.weight(.black))
+                    .tracking(1.2)
+                    .foregroundStyle(.black.opacity(0.62))
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 19, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(Color.black))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close first subscription card")
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
 
             CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 96, height: 96)) {
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(white: 0.12))
+                    .fill(Color.black.opacity(0.08))
                     .overlay(
                         Image(systemName: "waveform")
                             .font(.system(size: 30, weight: .semibold))
@@ -62,12 +77,12 @@ struct FirstSubscribeCard: View {
 
             Text("You're all set 🎧")
                 .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.black)
                 .padding(.bottom, 8)
 
             Text("Autohop is downloading the latest episode of \(subscription?.title ?? "your show"). When it's ready it'll start Up Next — no tapping play, episode after episode.")
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color(white: 0.64))
+                .foregroundStyle(.black.opacity(0.68))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 28)
@@ -80,7 +95,7 @@ struct FirstSubscribeCard: View {
             if showDownloadNote && !isDownloaded {
                 Text("Autohop downloads episodes before playing, so they start instantly and work offline — even with no signal.")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(.black.opacity(0.62))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 28)
@@ -94,7 +109,7 @@ struct FirstSubscribeCard: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
-                        .background(Capsule().fill(Color.purple))
+                        .background(Capsule().fill(Color.black))
                 }
                 .buttonStyle(.plain)
 
@@ -107,7 +122,7 @@ struct FirstSubscribeCard: View {
                 } label: {
                     Text("Add more shows")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                 }
@@ -120,7 +135,7 @@ struct FirstSubscribeCard: View {
             .adaptiveContentWidth(.form)
         }
         .background(pageBackground.ignoresSafeArea())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
         .onAppear(perform: handleAppear)
@@ -138,24 +153,24 @@ struct FirstSubscribeCard: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                 Text("Ready to play")
-                    .foregroundStyle(Color(white: 0.8))
+                    .foregroundStyle(.black.opacity(0.8))
             } else {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.purple)
+                    .tint(.black)
                 Text(progress.map { "Downloading… \(Int($0 * 100))%" } ?? "Starting download…")
-                    .foregroundStyle(Color(white: 0.8))
+                    .foregroundStyle(.black.opacity(0.8))
             }
             Spacer()
         }
         .font(.subheadline.weight(.semibold))
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
-        if #available(iOS 26, *) {
-            content.glassCard(cornerRadius: 12)
-        } else {
-            content.background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
-        }
+        content.background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.07))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black.opacity(0.16), lineWidth: 1))
+        )
     }
 
     private var playButtonTitle: String {

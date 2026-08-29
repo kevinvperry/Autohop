@@ -358,7 +358,9 @@ progress strip as the only edge-to-edge element, positioned above an opaque
 glass continuation through the bottom safe area. Continuous rounded top corners
 separate the player cleanly from page content. Skip
 controls inherit the common surface and Play/Pause is the sole solid-purple
-emphasis. Tapping outside its controls returns to Player. Hidden on Subscriptions
+emphasis. Tapping outside its controls clears pushed navigation and explicitly
+selects the permanent Player's Playing pane; it must not reveal a retained
+Details or Chapters selection. Hidden on Subscriptions
 while Reorder mode is active.
 
 **Label: `MiniPlayer-Menu`** — `MenuMiniPlayer` (`Views/MenuSheetView.swift`),
@@ -366,7 +368,9 @@ fixed beneath the root Menu's independently scrolling links and hidden when no
 episode is loaded. It uses larger responsive artwork, episode and podcast
 identity, a display-only purple progress track, elapsed/remaining labels and the
 user’s configured Skip Back/Play-Pause/Skip Forward controls. The remaining card
-surface returns to the permanent Player. Its 760-point maximum width preserves a
+surface returns to the permanent Player and explicitly selects its Playing pane,
+matching `MiniPlayer-Bar` rather than preserving a prior Details/Chapters pane.
+Its 760-point maximum width preserves a
 compact glass-card composition on iPad and Mac; iOS 26 uses purple-tinted Liquid
 Glass and older systems use the matching material fallback. It is deliberately
 root-only: destinations pushed inside the Menu use `MiniPlayer-Bar` instead.
@@ -1710,6 +1714,12 @@ break from the product palette so users recognise them as temporary guidance.
 Complex child tools may own their own scoped card: Download Feed Filters uses one
 to explain automatic-only scope, rule precedence and previewing, and it disappears
 as soon as that child page is popped.
+The dedicated `GettingStartedChecklist` and `FirstSubscribeCard` share the white
+surface, black typography and 48-point black close control. The first-run Discover
+Starter Packs nudge uses the same white/black contrast. Never place one of these
+surfaces behind or alongside a coach mark on the same page: Getting Started owns
+the Priority Stack lesson, and the zero-subscription nudge temporarily owns
+Discover onboarding.
 
 **Label: `EmptyState-CTAButton`** — capsule action used in the Player / Subscriptions
 empty states and Welcome. Filled = `Color.purple` fill, white 16 pt semibold text,
@@ -2210,7 +2220,7 @@ A five-button `HStack` below the controls, providing access to audio settings, o
 
 **Sleep Timer button** (`moon.zzz` / `moon.zzz.fill`) — `Button-PlayerAction` style. When the sleep timer is **inactive**, icon is `Color.purple.opacity(0.85)` on neutral glass. When **active**, the pill becomes purple-tinted glass with a `.white` icon (`highlighted` state). A small badge capsule (purple background, white text) overlays the top-trailing corner showing either a countdown (`"m:ss"` / `"Xh"`) for duration mode or `"Nep"` for episode mode. Opens `SleepTimerSheetView`.
 
-**AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the current audio output name from `AVAudioSession.currentRoute.outputs.first`. Route-change stability is handled below the UI in `PlaybackEngine`: brief AirPods/Speaker route storms should not visually change this control except for the route label itself, while confirmed device removal still leaves playback paused until the user resumes. iOS may report real AirPods transitions as `unknown` or `categoryChange`, so the engine treats settled output changes as restart candidates even when the route reason is not tidy.
+**AirPlay button** — a visible `HStack` of `airplayaudio` icon + route name label layered under an invisible `AVRoutePickerView` (`opacity(0.02)`) that captures the tap. Shows the system-provided name from `AVAudioSession.currentRoute.outputs.first`, including personalised AirPods names. The centre label always participates in the layout and truncates at its trailing edge; never restore an intrinsic-width `ViewThatFits` icon fallback, because a long route name would make all identifying text disappear. The view refreshes immediately and after short settling delays on a route notification, and again on foreground activation, because AVAudioSession may initially expose the previous route. Route-change stability is handled below the UI in `PlaybackEngine`: brief AirPods/Speaker route storms should not visually change this control except for the route label itself, while confirmed device removal still leaves playback paused until the user resumes. iOS may report real AirPods transitions as `unknown` or `categoryChange`, so the engine treats settled output changes as restart candidates even when the route reason is not tidy.
 
 **Share button** (`square.and.arrow.up`) — `Button-PlayerAction` style. Opens
 `EpisodeShareSheet` (`Views/EpisodeShareSheet.swift`): an adaptive, internally
@@ -3070,13 +3080,18 @@ remaining a compact system surface rather than recreating a full page.
 
 | Family | Composition |
 |---|---|
-| Small | Wide rounded artwork, two-line semibold episode title, remaining-time caption, 27pt purple playback circle |
+| Small | Wide rounded artwork, two-line semibold episode title, state-aware episode-time caption, 27pt purple playback circle |
 | Medium | Current/ready column and one following row separated by a subtle divider; Up Next count is a navigation link |
-| Large | 76pt current artwork hero, headline title, high-contrast light-grey podcast/remaining metadata, 40pt playback circle, then a compact caption-sized Up Next count and four 38pt rows |
+| Large | 76pt current artwork hero, headline title, high-contrast light-grey podcast/episode-time metadata, 40pt playback circle, then a compact caption-sized Up Next count and four 38pt rows |
 | Accessory Circular | System accessory background, accentable stack glyph, monospaced Up Next count; no private title |
 | Accessory Rectangular | Accentable Now Playing/Up Next label plus one-line title/podcast marked privacy-sensitive |
 
 **Tokens and behavior:**
+- Episode-time copy is derived from the snapshot contract, not guessed by the
+  extension: `remainingSeconds == nil` means untouched and renders total length
+  (`5 mins`); non-nil means playback has commenced and renders time left
+  (`5 min remaining`). Values below one minute use seconds. All Home Screen
+  families and row styles call the same formatting helper.
 - Home Screen background is an opaque, very-dark-charcoal glass surface rather
   than pure black. It combines a charcoal diagonal gradient, deterministic
   low-density fibre/grain, a restrained purple ambient glow, a top sheen, and a

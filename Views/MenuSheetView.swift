@@ -11,6 +11,9 @@ import SwiftUI
 // PlaybackClock (never creates a timer), uses configured skip intervals and
 // opens the permanent Player when its non-control surface is tapped. Pushed
 // Menu destinations replace the root, so the card is root-only by construction.
+// Its openPlayer action uses RootView's canonical return action, which first
+// selects the Player's Playing pane and then dismisses navigation; never make
+// this card reveal whichever Details/Chapters pane happened to be selected.
 // Skip controls intentionally have no independent dark fill: they inherit the
 // card's shared purple-glass surface, while Play/Pause remains the sole solid
 // purple transport emphasis. The three transports form one centred cluster

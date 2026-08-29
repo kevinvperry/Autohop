@@ -281,7 +281,10 @@ permanently in Menu → Support. The ≤3/session budget spreads coverage natura
 
 **Acceptance:** never more than one visible; never re-shows after explicit close;
 never survives its owning page; ≤3 explicitly dismissed in session 1; all controls
-remain reachable with large Dynamic Type.
+remain reachable with large Dynamic Type. Dedicated first-run cards use the same
+white/black treatment. Getting Started supersedes Priority Stack, and the zero-
+subscription Starter Packs nudge supersedes the Discover coach mark, so those
+surfaces never overlap.
 
 ---
 

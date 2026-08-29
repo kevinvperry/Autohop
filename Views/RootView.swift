@@ -6,6 +6,10 @@ import SwiftUI
 // navigation; every other page (starting with PodcastsView via AppRoute) is
 // pushed on top. The .autohopReturnToPlayer notification pops the path to
 // reveal the player from anywhere (posted by MiniPlayerBar on pushed pages).
+// Every canonical return also posts .autohopShowNowPlayingPanel before popping,
+// so tapping either mini player always lands on Playing rather than preserving
+// a previously selected Details/Chapters panel. Ordinary Player appearances do
+// not reset panel state; this behavior belongs specifically to return actions.
 // Shared nav chrome lives here: MiniPlayerBar (+ .miniPlayerBar() modifier)
 // and SheetCloseButton. MiniPlayerBar mirrors the Menu player's purple glass
 // while preserving a compact height: larger artwork at far left, episode title
@@ -86,6 +90,9 @@ extension Notification.Name {
     static let autohopFirstSubscription = Notification.Name("autohopFirstSubscription")
     /// Internal typed-route adapter: PlayerView owns the single Up Next sheet.
     static let autohopOpenUpNext = Notification.Name("autohopOpenUpNext")
+    /// Tells the permanently mounted PlayerView to select its Playing panel.
+    /// Posted by RootView's canonical return action before it clears the path.
+    static let autohopShowNowPlayingPanel = Notification.Name("autohopShowNowPlayingPanel")
 }
 
 // Returning to Player is intentionally different from Back: the mini-player
@@ -596,6 +603,7 @@ struct RootView: View {
             "Returning to the permanent player root",
             metadata: ["pathDepth": String(navigationPath.count)]
         )
+        NotificationCenter.default.post(name: .autohopShowNowPlayingPanel, object: nil)
         navigationPath = NavigationPath()
     }
 

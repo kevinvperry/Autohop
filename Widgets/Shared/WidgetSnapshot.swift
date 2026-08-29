@@ -19,6 +19,9 @@ import Foundation
 // CloudKit identifiers, credentials, tokens, or full domain models. Keep this
 // file Foundation-only so the extension remains independent of AutohopCore,
 // GRDB, playback services, networking, and application state.
+// TIME SEMANTICS: durationSeconds is the episode's total length.
+// remainingSeconds must be nil until positive playback progress exists; once
+// partially played, it contains duration minus the saved/current position.
 
 struct WidgetEpisodeIdentity: Codable, Equatable, Hashable, Sendable {
     let subscriptionID: UUID
@@ -30,6 +33,7 @@ struct WidgetDisplayEpisode: Codable, Equatable, Sendable {
     let episodeTitle: String
     let podcastTitle: String
     let durationSeconds: TimeInterval?
+    /// Nil means unplayed; non-nil means playback has commenced.
     let remainingSeconds: TimeInterval?
     let isCurrent: Bool
     let thumbnailFilename: String?

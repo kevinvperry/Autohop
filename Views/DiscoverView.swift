@@ -248,7 +248,10 @@ struct DiscoverView: View {
         }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
-        .onboardingTip(.discover)
+        // A no-subscriptions user already sees the high-contrast Starter Packs
+        // nudge on this page. Defer the broader Discover tip until a later visit
+        // so two onboarding cards never compete at once.
+        .onboardingTip(.discover, when: onboardingCoordinator.realSubscriptionCount > 0)
         .task(id: country.code) {
             await viewModel.load(country: country.code)
         }
@@ -342,26 +345,27 @@ struct DiscoverView: View {
                     .font(.system(size: metrics.scaled(17), weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: metrics.scaled(38), height: metrics.scaled(38))
-                    .background(Circle().fill(Color.purple))
+                    .background(Circle().fill(Color.black))
                 VStack(alignment: .leading, spacing: metrics.scaled(2)) {
                     Text("New here? Try a starter pack")
                         .font(metrics.bannerTitleFont)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.black)
                     Text("Subscribe to a curated set in one tap.")
                         .font(metrics.bannerDetailFont)
-                        .foregroundStyle(Color(white: 0.62))
+                        .foregroundStyle(.black.opacity(0.64))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: metrics.scaled(13), weight: .semibold))
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(.black.opacity(0.5))
             }
             .padding(metrics.scaled(14))
             .background(
                 RoundedRectangle(cornerRadius: metrics.scaled(16))
-                    .fill(Color.purple.opacity(0.12))
-                    .overlay(RoundedRectangle(cornerRadius: metrics.scaled(16)).stroke(Color.purple.opacity(0.3), lineWidth: metrics.scaled(1)))
+                    .fill(Color.white)
+                    .overlay(RoundedRectangle(cornerRadius: metrics.scaled(16)).stroke(Color.black, lineWidth: metrics.scaled(2)))
             )
+            .shadow(color: .black.opacity(0.42), radius: metrics.scaled(16), y: metrics.scaled(6))
         }
         .buttonStyle(.plain)
     }

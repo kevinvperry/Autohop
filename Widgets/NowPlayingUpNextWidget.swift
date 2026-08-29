@@ -15,6 +15,10 @@ import WidgetKit
 // treatment on every OS because applying native glass directly to an App Intent
 // Toggle can make its label disappear in the WidgetKit host. Accessories retain
 // WidgetKit's system-rendered background.
+// Time labels use the snapshot's semantic distinction: untouched episodes show
+// total length (for example "5 mins"), while a non-nil remainingSeconds means
+// playback has started and displays resume wording ("5 min remaining"). Every
+// widget family must use episodeTimeText() so the wording cannot drift.
 //
 // DATA / PERFORMANCE:
 // There is one timeline entry and `.never` policy. App-side meaningful events
@@ -381,7 +385,7 @@ private struct WidgetSnapshotView: View {
                     .lineLimit(2)
             }
             HStack(spacing: 5) {
-                Text(remainingText(for: episode))
+                Text(episodeTimeText(for: episode))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(homeMetadataColor)
                 Spacer(minLength: 4)
@@ -409,7 +413,7 @@ private struct WidgetSnapshotView: View {
                         .lineLimit(2)
                 }
                 HStack {
-                    Text(remainingText(for: primary))
+                    Text(episodeTimeText(for: primary))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(homeMetadataColor)
                     Spacer()
@@ -463,7 +467,7 @@ private struct WidgetSnapshotView: View {
                         .font(.caption)
                         .foregroundStyle(homeMetadataColor)
                         .lineLimit(1)
-                    Text(remainingText(for: primary))
+                    Text(episodeTimeText(for: primary))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(homeMetadataColor)
                 }
@@ -609,7 +613,7 @@ private struct WidgetSnapshotView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
-                Text(remainingText(for: episode))
+                Text(episodeTimeText(for: episode))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(homeMetadataColor)
             }
@@ -653,22 +657,46 @@ private struct WidgetSnapshotView: View {
         }
     }
 
-    private func remainingText(
+    private func episodeTimeText(
         for episode: WidgetDisplayEpisode?
     ) -> String {
-        guard let seconds = episode?.remainingSeconds
-            ?? episode?.durationSeconds else {
+        guard let episode else {
             return "Downloaded"
         }
-        let minutes = max(0, Int(seconds.rounded(.up))) / 60
-        if minutes < 60 {
-            return "\(minutes) min left"
+
+        if let remaining = episode.remainingSeconds {
+            return formattedEpisodeTime(remaining, suffix: " remaining")
         }
+
+        guard let duration = episode.durationSeconds else { return "Downloaded" }
+        return formattedEpisodeTime(duration, suffix: "")
+    }
+
+    private func formattedEpisodeTime(
+        _ seconds: TimeInterval,
+        suffix: String
+    ) -> String {
+        let safeSeconds = max(0, seconds.isFinite ? seconds : 0)
+        if safeSeconds < 60 {
+            let value = max(0, Int(safeSeconds.rounded(.up)))
+            let unit = value == 1 ? "sec" : "secs"
+            return "\(value) \(unit)\(suffix)"
+        }
+
+        let minutes = max(1, Int(ceil(safeSeconds / 60)))
+        if minutes < 60 {
+            let unit = suffix.isEmpty && minutes != 1 ? "mins" : "min"
+            return "\(minutes) \(unit)\(suffix)"
+        }
+
         let hours = minutes / 60
         let remainder = minutes % 60
-        return remainder == 0
-            ? "\(hours) hr left"
-            : "\(hours) hr \(remainder) min left"
+        if remainder == 0 {
+            let unit = suffix.isEmpty && hours != 1 ? "hrs" : "hr"
+            return "\(hours) \(unit)\(suffix)"
+        }
+        let minuteUnit = suffix.isEmpty && remainder != 1 ? "mins" : "min"
+        return "\(hours) hr \(remainder) \(minuteUnit)\(suffix)"
     }
 
     private func recoveryState(

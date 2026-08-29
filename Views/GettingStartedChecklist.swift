@@ -7,9 +7,11 @@ import SwiftUI
 // UserDefaults signal set in PodcastsView.onMove. Auto-hides once all three are
 // done or the user dismisses it (AppSettings.dismissedGettingStarted). Renders
 // nothing when not applicable. Its footer carries the one-time lean-defaults
-// expectation note (Phase 7 / §5-E).
+// expectation note (Phase 7 / §5-E). This is a dedicated onboarding surface,
+// so it uses the same white/black visual language and prominent close control
+// as CoachMarkOverlay. While visible it supersedes—and marks seen—the redundant
+// Priority Stack coach mark, guaranteeing one teaching card on Subscriptions.
 struct GettingStartedChecklist: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
 
     static let reorderedKey = "onboarding.reorderedPriority"
@@ -20,9 +22,22 @@ struct GettingStartedChecklist: View {
     private var allDone: Bool { subscribed && played && reordered }
     private var dismissed: Bool { settingsViewModel.appSettings.dismissedGettingStarted }
 
+    static func shouldShow(settings: AppSettings) -> Bool {
+        let reordered = UserDefaults.standard.bool(forKey: reorderedKey)
+        let allDone = settings.hasSubscribedFirstShow
+            && settings.hasPlayedFirstEpisode
+            && reordered
+        return !settings.dismissedGettingStarted && !allDone
+    }
+
     var body: some View {
         if !dismissed && !allDone {
             card
+                .onAppear {
+                    // The checklist already teaches Priority Stack reordering;
+                    // never stack a second card carrying the same lesson.
+                    OnboardingTip.priorityStack.markSeen()
+                }
         }
     }
 
@@ -31,18 +46,19 @@ struct GettingStartedChecklist: View {
             HStack {
                 Text("Getting started")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.black)
                 Spacer()
                 Button {
                     settingsViewModel.appSettings.dismissedGettingStarted = true
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(white: 0.55))
-                        .frame(width: 44, height: 44)
+                        .font(.system(size: 19, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(Color.black))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss")
+                .accessibilityLabel("Close getting started")
             }
 
             row("Subscribe to your first show", done: subscribed)
@@ -51,33 +67,29 @@ struct GettingStartedChecklist: View {
 
             Text("Autohop keeps the latest episode and tidies older ones to save space — change this per show in its settings.")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(Color(white: 0.45))
+                .foregroundStyle(.black.opacity(0.64))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
         }
         .padding(16)
-        if #available(iOS 26, *) {
-            content
-                .glassCard(cornerRadius: 16)
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.25), lineWidth: 1))
-        } else {
-            content.background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.white.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.purple.opacity(0.25), lineWidth: 1))
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.white)
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.black, lineWidth: 2))
             )
-        }
+            .shadow(color: .black.opacity(0.42), radius: 18, y: 7)
     }
 
     private func row(_ title: String, done: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(done ? .green : Color(white: 0.4))
+                .foregroundStyle(done ? .green : Color.black.opacity(0.48))
             Text(title)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(done ? Color(white: 0.55) : .white)
-                .strikethrough(done, color: Color(white: 0.5))
+                .foregroundStyle(done ? Color.black.opacity(0.52) : .black)
+                .strikethrough(done, color: Color.black.opacity(0.45))
             Spacer()
         }
     }

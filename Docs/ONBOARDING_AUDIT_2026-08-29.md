@@ -20,12 +20,25 @@ button and a full-width black confirmation button. Each requesting view owns its
 tip through `onboardingTip(_:when:)`; `onDisappear` cancels that tip without
 marking it seen. Explicit close actions alone persist the seen flag.
 
+The follow-up visual audit found two dedicated onboarding surfaces outside the
+coach-mark renderer: the Subscriptions **Getting Started** checklist and the
+first-subscription **You're all set** sheet. Both now use the same white/black,
+high-contrast language and 48-point close control. The Discover Starter Packs
+nudge is white/black as well; Starter Pack result cards remain ordinary content
+cards because they are selectable podcast bundles rather than advice.
+
+Subscriptions never presents its checklist and Priority Stack coach mark
+together. The checklist contains the reorder lesson, so showing it marks that
+redundant coach mark seen. Discover likewise defers its general coach mark while
+the zero-subscription Starter Packs nudge is visible. Welcome remains a distinct
+full-screen purple introduction rather than a floating advice card.
+
 ## Current contextual coverage
 
 | Surface | Tip teaches | Eligibility |
 |---|---|---|
-| Discover | charts, countries/categories, search and preview-before-subscribe | first visible arrival |
-| Subscriptions | automatic Priority Stack order and manual reordering | at least one visible subscription |
+| Discover | charts, countries/categories, search and preview-before-subscribe | first arrival after the zero-subscription Starter Packs nudge no longer applies |
+| Subscriptions | automatic Priority Stack order and manual reordering | at least one visible subscription and no Getting Started checklist |
 | Podcast Detail | Play Next, Play Last and Archive swipe actions | after at least one real subscription |
 | Player | Playing/Details/Chapters panels plus speed, Trim Silence, Vocal Boost and Shared Listening | an episode is loaded |
 | Up Next | automatic queue construction, swipes and pinned overrides | first sheet arrival |

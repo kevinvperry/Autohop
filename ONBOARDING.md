@@ -155,6 +155,12 @@ owned by the page that requests it and must disappear automatically when that
 page leaves the screen. Navigation cancellation does not mark it seen. See §6
 and `Docs/ONBOARDING_AUDIT_2026-08-29.md`.
 
+Dedicated onboarding cards obey the same visual and exclusivity rules. The
+Getting Started checklist replaces the Priority Stack coach mark rather than
+appearing with it; the first-subscription sheet is white/black with a prominent
+close control; and Discover defers its coach mark while its Starter Packs nudge
+is present. Starter Pack choice cards are ordinary interactive content, not tips.
+
 ---
 
 ## 4. The phased onboarding flow

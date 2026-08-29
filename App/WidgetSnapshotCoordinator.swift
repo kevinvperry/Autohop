@@ -28,6 +28,9 @@ import WidgetKit
 // - The extension never networks or opens GRDB; only this app-side owner asks
 //   ArtworkImageCache for prepared JPEG bytes.
 // - Equivalent visible projections are hash-deduped before disk/reload work.
+// - remainingSeconds is nil for an untouched episode. A non-nil value means
+//   playback progress is positive, allowing the extension to label total
+//   duration and resumed-episode remaining time without opening app storage.
 // - Thumbnail filenames include episode identity AND artwork source identity.
 //   Existing matching files are reused without invoking ArtworkImageCache; an
 //   artwork URL change naturally creates a new filename and one fresh render.
@@ -497,9 +500,13 @@ final class WidgetSnapshotCoordinator {
                 let elapsed = isCurrent
                     ? playbackCoordinator.clock.time
                     : playbackPositionStore.savedTime(for: episode)
-                let remaining = episode.durationSeconds.map {
-                    max(0, $0 - elapsed)
-                }
+                // Preserve the semantic difference between an untouched
+                // episode and one with genuine resume progress. Publishing the
+                // full duration as "remaining" made every widget row say
+                // "left" even when playback had never begun.
+                let remaining = elapsed > 0
+                    ? episode.durationSeconds.map { max(0, $0 - elapsed) }
+                    : nil
                 return EpisodeProjection(
                     episode: episode,
                     podcastTitle: subscription.title,
