@@ -27,6 +27,9 @@ import Foundation
 //  - mediaKind (.audio/.video) selects the playback path in PlaybackEngine.
 //  - chapters are embedded (ID3/MP4) or fetched from externalChaptersURL
 //    (PodcastIndex JSON chapters) by AppState.
+// Episode-list duration/remaining metadata must use episodeListTimeLabel(_:).
+// Positive values below one minute render as 1s...59s, never 0m. This pure
+// helper is shared by iOS and tvOS list surfaces to keep the rule uniform.
 public struct Episode: Identifiable, Equatable, Codable, Sendable {
     public var id: UUID
     public var subscriptionID: UUID
@@ -185,4 +188,21 @@ public enum PlayedState: String, Codable, Sendable {
     case playing
     case played
     case archived
+}
+
+/// Canonical compact time label for episode-list runtime and remaining-time
+/// metadata across iOS and tvOS. A positive fractional final second is shown as
+/// `1s`; sub-minute values are capped at `59s` so they never become `0m` or
+/// misleadingly cross into the one-minute bucket through rounding.
+public func episodeListTimeLabel(_ seconds: TimeInterval) -> String {
+    let safeSeconds = seconds.isFinite ? max(0, seconds) : 0
+    if safeSeconds > 0, safeSeconds < 60 {
+        let wholeSeconds = min(59, max(1, Int(safeSeconds.rounded(.up))))
+        return "\(wholeSeconds)s"
+    }
+
+    let totalSeconds = Int(safeSeconds.rounded(.down))
+    let hours = totalSeconds / 3_600
+    let minutes = (totalSeconds % 3_600) / 60
+    return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
 }

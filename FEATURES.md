@@ -309,7 +309,10 @@ A single page (`PodcastDetailView`) serves every state of a podcast — an unsub
 3. **Episodes section** — "Episodes" heading + waveform icon, followed by the episode list in a card.
 
 **Toolbar:**
-- Back chevron (always) and a Share button (always).
+- Back chevron (always) and a Share button (always). Back dismisses the nearest
+  navigation destination rather than mutating RootView's outer path, preserving
+  the exact parent that opened the page: Subscriptions, Discover, Search, Top
+  Episodes, Top Podcasts, a category chart, or the Player-root route.
 - **Refresh Feed** and **Show Settings** (gear → Podcast Settings) appear for real subscriptions, including Inactive ones — never on an unsubscribed preview or browse-only page.
 
 **Episode list:**
@@ -408,6 +411,14 @@ Tapping a row navigates back to the Podcast Detail page for that podcast, refres
 - `allowsFullSwipe: false` on both edges — full swipe is disabled intentionally to prevent accidental actions.
 
 **Pin badges:** Episodes with a Play Next or Play Last override show a pin badge above the duration — blue for Play Next, orange for Play Last.
+
+**Time metadata:** Partially played episodes show remaining time and untouched
+episodes show total runtime. Every episode-list surface uses the same compact
+formatter: hours/minutes above one minute, and whole seconds for a positive
+value below one minute. The final minute therefore reads `59s`…`1s left
+remaining`, never the inaccurate `0m left remaining`. This contract also covers
+Podcast Detail, the Player preview, Search episode results, Listening History,
+Download Filter previews, Episode Detail and the matching tvOS rows.
 
 **Episode details & shortcuts:** Tapping an episode's title expands the row to reveal the full episode description. The expanded row also shows two small purple circular glass buttons in its bottom-right corner:
 - **Podcast list** (`list.bullet`) — closes the Up Next sheet and opens that podcast's **Podcast Detail** page (episode list) in its place.
@@ -1607,5 +1618,6 @@ does not upload this data. -->
   card carries the purple Autohop brand backdrop and reuses locally cached
   podcast artwork before downloading or falling back to the waveform treatment.
 - Apple TV Home Up Next mirrors iOS time metadata: partially played episodes
-  show remaining time; untouched episodes show their total runtime. Synced
+  show remaining time; untouched episodes show their total runtime. A positive
+  final minute is shown in seconds rather than being truncated to `0m`. Synced
   positions are projected before rendering, never read during focus movement.

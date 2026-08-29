@@ -33,6 +33,8 @@ import UIKit
 // per-subscription page for auto-download eligibility rules
 // (duration/title/description, include/exclude, All/Any, live read-only
 // 50-episode feed preview with greyed skipped rows);
+// The preview and Episode Detail runtime metadata use episodeListTimeLabel(_:)
+// so positive values below one minute appear in seconds on every device size.
 // since July 2026 these filters roam via iCloud Sync with the other per-podcast
 // settings (struct-level LWW on the SubscriptionState record). Play Instant is
 // stored in the same synced automation payload: only a newly auto-downloaded,
@@ -246,7 +248,7 @@ struct SubscriptionSettingsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }.accessibilityLabel("Back")
+                NavigationBackButton()
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -867,8 +869,7 @@ struct DownloadFiltersView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill").responsiveToolbarBackSymbol() }
-                    .accessibilityLabel("Back")
+                NavigationBackButton()
             }
         }
         .miniPlayerBar()
@@ -1133,10 +1134,7 @@ struct DownloadFiltersView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        episodeListTimeLabel(seconds)
     }
 
     private enum PreviewState {
@@ -1201,11 +1199,7 @@ struct EpisodeDetailView: View {
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left.circle.fill")
-                        .responsiveToolbarBackSymbol()
-                }
-                .accessibilityLabel("Back")
+                NavigationBackButton()
             }
 
             ToolbarItem(placement: .topBarTrailing) {
@@ -1506,11 +1500,7 @@ struct EpisodeDetailView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        if hours > 0 { return "\(hours)h \(minutes)m" }
-        return "\(minutes)m"
+        episodeListTimeLabel(seconds)
     }
 
     private func formatFileSize(_ bytes: Int64) -> String {

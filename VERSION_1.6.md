@@ -16,6 +16,34 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-29 Context-Preserving Back Navigation — post-submission
+
+- Fixed Podcast Detail's Back button skipping its actual parent because it
+  directly removed an entry from `RootView`'s outer navigation path.
+- Podcast Detail now dismisses its nearest SwiftUI navigation destination, so
+  it returns to Subscriptions when opened there and to the exact Discover,
+  Search, Top Episodes, Top Podcasts or category page that opened it.
+- Removed the obsolete root Back environment action to prevent another child
+  page from accidentally bypassing its owning navigation context.
+- Audited every custom iOS-family Back button: all pushed pages now use ambient
+  dismiss; Subscriptions' hamburger, sheet Close controls and the mini-player's
+  deliberate return-to-Player action remain distinct by design.
+
+## 2026-08-29 Episode-List Final-Minute Accuracy — post-submission
+
+- Fixed partially played episodes with under one minute remaining displaying
+  the inaccurate label `0m left remaining`; positive final-minute values now
+  show whole seconds from `1s` through `59s`.
+- Centralised compact episode runtime and remaining-time formatting in one
+  shared model helper and applied it to iOS Up Next, Podcast Detail, the Main
+  Player's embedded Up Next row, Search episode results, Listening History,
+  Download Filter previews and Episode Detail.
+- Applied the same rule to tvOS Up Next and Home Continue/Now Playing metadata,
+  while leaving non-playback policy ages and elapsed/remaining transport clocks
+  in their deliberately different formats.
+- Added boundary tests for fractional final seconds, the 60-second transition,
+  hour formatting, zero and invalid negative input.
+
 ## 2026-08-29 Main Player Up Next Swipe Consistency — post-submission
 
 - Replaced the Main Player's full-height solid green and purple swipe reveals

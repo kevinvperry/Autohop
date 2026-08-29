@@ -48,6 +48,10 @@ import SwiftUI
 // survive relaunch/reinstall even if the user never reopens the Recaps screen.
 // Notification taps are routed through .autohopOpenStats and open Stats directly
 // on the matching Last Week / Last Month / Last Year view.
+// BACK CONTRACT: pushed pages use SwiftUI's ambient dismiss action so Back
+// removes the nearest destination, including child destinations owned by
+// Subscriptions, Discover, Search or chart pages. Never inject a descendant
+// Back action that blindly mutates this outer NavigationPath.
 enum AppRoute: Hashable {
     case podcasts
     case stats(ListeningRecapPeriod?)
@@ -81,15 +85,9 @@ extension Notification.Name {
     static let autohopOpenUpNext = Notification.Name("autohopOpenUpNext")
 }
 
-// Root navigation actions are injected into every pushed page. Optional
-// defaults keep previews and isolated views functional, while production pages
-// avoid relying on NotificationCenter or a descendant presentation's dismiss
-// semantics to manipulate RootView's one NavigationPath.
+// Returning to Player is intentionally different from Back: the mini-player
+// clears the complete root path, while pushed-page Back uses ambient dismiss.
 private struct ReturnToPlayerActionKey: EnvironmentKey {
-    static let defaultValue: (() -> Void)? = nil
-}
-
-private struct RootBackActionKey: EnvironmentKey {
     static let defaultValue: (() -> Void)? = nil
 }
 
@@ -99,9 +97,20 @@ extension EnvironmentValues {
         set { self[ReturnToPlayerActionKey.self] = newValue }
     }
 
-    var rootBackAction: (() -> Void)? {
-        get { self[RootBackActionKey.self] }
-        set { self[RootBackActionKey.self] = newValue }
+}
+
+/// Canonical Back control for pushed iOS-family pages. It always dismisses the
+/// nearest SwiftUI navigation destination; it must never mutate RootView's
+/// outer NavigationPath directly because a nearer child path may own the page.
+struct NavigationBackButton: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "chevron.left.circle.fill")
+                .responsiveToolbarBackSymbol()
+        }
+        .accessibilityLabel("Back")
     }
 }
 
@@ -449,9 +458,6 @@ struct RootView: View {
             .environment(\.returnToPlayerAction) {
                 returnToPlayer()
             }
-            .environment(\.rootBackAction) {
-                popRootNavigation()
-            }
 
             // Onboarding coach marks float above pages but below sheets and the
             // launch splash (so they never clash with Welcome / the first-subscribe
@@ -587,16 +593,6 @@ struct RootView: View {
             metadata: ["pathDepth": String(navigationPath.count)]
         )
         navigationPath = NavigationPath()
-    }
-
-    private func popRootNavigation() {
-        guard !navigationPath.isEmpty else { return }
-        AppLogger.shared.info(
-            "navigation.rootBack",
-            "Popping one page from the root navigation path",
-            metadata: ["pathDepthBefore": String(navigationPath.count)]
-        )
-        navigationPath.removeLast()
     }
 
     private func resolveEpisode(

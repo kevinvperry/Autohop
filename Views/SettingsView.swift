@@ -36,6 +36,8 @@ import UniformTypeIdentifiers
 // Contact (website support + iOS-family Join TestFlight Beta external links),
 // About (acknowledgements, version — tapping the
 // version 5× unlocks the hidden Diagnostics section for this session only).
+// Listening History is an episode-list surface and therefore formats compact
+// runtime metadata through episodeListTimeLabel(_:), including the final minute.
 // Diagnostics uses a master normal-tier switch plus a subordinate Detailed
 // Refresh Trace toggle; normal mode retains foreground/background cycle and wake
 // summaries, while detailed mode adds high-volume per-feed Release Radar traces.
@@ -156,12 +158,7 @@ struct SettingsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left.circle.fill")
-                        .responsiveToolbarBackSymbol()
-                }
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel("Back")
+                NavigationBackButton()
             }
         }
         .miniPlayerBar()
@@ -1325,16 +1322,5 @@ private struct ListeningHistoryRow: View {
 }
 
 private func formattedDuration(_ seconds: TimeInterval) -> String {
-    let totalSeconds = max(0, Int(seconds.rounded()))
-    let hours = totalSeconds / 3600
-    let minutes = (totalSeconds % 3600) / 60
-    let seconds = totalSeconds % 60
-
-    if hours > 0 {
-        return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
-    }
-    if minutes > 0 {
-        return "\(minutes)m"
-    }
-    return "\(seconds)s"
+    episodeListTimeLabel(seconds)
 }

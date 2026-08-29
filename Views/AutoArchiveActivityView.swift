@@ -39,11 +39,7 @@ struct AutoArchiveActivityView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left.circle.fill")
-                        .responsiveToolbarBackSymbol()
-                }
-                .accessibilityLabel("Back")
+                NavigationBackButton()
             }
         }
         .miniPlayerBar()

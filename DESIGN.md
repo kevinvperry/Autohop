@@ -199,7 +199,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Text-EpisodeTitle` | Episode title: `.subheadline.bold()`, `.primary`, `lineLimit(2)` |
 | `Text-EpisodeTitleSecondary` | Priority page episode title: `.subheadline` (not bold), `.secondary`, `lineLimit(2)` |
 | `Text-MetadataRow` | Date + duration/remaining on one line, separated by `•`, caption, secondary |
-| `Text-MetadataAdaptive` | Duration shows "Xm left remaining" when partially played, full duration otherwise |
+| `Text-MetadataAdaptive` | Duration shows remaining time when partially played and full duration otherwise; positive values below one minute use `Xs`, never `0m` |
 | `Text-Duration` | Total duration: `.caption`, `.secondary`, `.monospacedDigit()` |
 | `EpisodeStatusPill` | Colour-coded capsule pill showing episode state — 8 states, each a unique colour |
 | `Badge-VideoPillSmall` | Small icon-only TV indicator — no glass or capsule; used in dense episode list rows |
@@ -334,11 +334,17 @@ announces it — a raw `Image` has no accessibility label of its own (a SwiftUI
 this labelled form:
 
 ```swift
-ToolbarItem(placement: .topBarLeading) {
-    Button { dismiss() } label: { Image(systemName: "chevron.left.circle.fill") }
-        .accessibilityLabel("Back")
-}
+ToolbarItem(placement: .topBarLeading) { NavigationBackButton() }
 ```
+
+`NavigationBackButton` owns the ambient `dismiss`; that behavior is
+architectural, not interchangeable styling. Pages such as
+Podcast Detail can be pushed by Subscriptions, Discover, Search and nested chart
+pages that own different destination state. Ambient dismiss removes the nearest
+destination in the active navigation context. Do not inject or call a root-path
+pop closure from a descendant Back button: that skips the local destination and
+removes its parent instead. Clearing RootView's entire path is reserved for the
+mini-player's explicit Return to Player behavior.
 
 **Label: `SheetClose-Standard`** — every informational sheet's only close control, top-right (`SheetCloseButton` in `Views/RootView.swift`). Text `Cancel`/`Save` buttons are reserved for editing sheets that commit data.
 
@@ -1163,8 +1169,10 @@ Button("Download") {
 **Label: `Text-MetadataAdaptive`**
 
 In the metadata row, the time display adapts based on whether the user has started the episode:
-- **Partially played:** shows `"Xm left remaining"` (time left, not total)
-- **Unplayed:** shows full duration `"Xh Ym"` or `"Xm"`
+- **Partially played:** shows `"Xm left remaining"` (time left, not total), or
+  `"Xs left remaining"` throughout the positive final minute
+- **Unplayed:** shows full duration `"Xh Ym"`, `"Xm"`, or `"Xs"` when the
+  episode itself is shorter than one minute
 
 ```swift
 let elapsed = appState.effectivePlaybackTime(for: episode)
@@ -1174,7 +1182,10 @@ Text(isPartial ? "\(formatDuration(remaining)) left remaining" : formatDuration(
     .monospacedDigit()
 ```
 
-Duration format: `"Xh Ym"` when ≥ 1 hour, otherwise `"Ym"`. No seconds.
+Duration format is owned by `episodeListTimeLabel(_:)`: `"Xh Ym"` when at
+least one hour, `"Xm"` from one minute, and `"Xs"` for positive values below
+one minute. All iOS-family and tvOS episode-list surfaces must call this helper
+rather than independently truncating seconds.
 
 ---
 

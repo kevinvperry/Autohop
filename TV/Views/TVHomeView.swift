@@ -24,6 +24,8 @@ import AutohopCore
 // re-renders on onRemoteHistoryChanged (SYNC_DESIGN.md, 2026-07-05). Phase 3
 // (§8): tapping Continue Listening or any card calls `onPlay`, which
 // TVMainTabView wires to `TVAppModel.beginPlayback` + presenting TVPlayerView.
+// Hero remaining-time metadata shares episodeListTimeLabel(_:) with iOS/tvOS
+// episode rows, preventing a positive final minute from displaying as 0m.
 struct TVHomeView: View {
     let model: TVAppModel
     let onPlay: (Episode) -> Void
@@ -193,7 +195,7 @@ struct TVHomeView: View {
                             ProgressView(value: min(positionSeconds / duration, 1.0))
                                 .tint(.purple)
                                 .frame(maxWidth: 360)
-                            Text("\(remainingLabel(duration - positionSeconds)) left")
+                            Text("\(episodeListTimeLabel(duration - positionSeconds)) left")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
@@ -241,13 +243,6 @@ struct TVHomeView: View {
             }
         }
         .focusSection()
-    }
-
-    private func remainingLabel(_ seconds: TimeInterval) -> String {
-        let totalMinutes = max(0, Int(seconds / 60))
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
     /// Queue rows, rather than only resolved Episode values, keep legacy phone

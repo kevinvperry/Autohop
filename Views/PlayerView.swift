@@ -31,6 +31,8 @@ import UIKit
 // because it lives inside the Player ScrollView/page gesture hierarchy. Its
 // custom drag must nevertheless reveal isolated rounded Play/Archive controls,
 // never a full-height solid colour slab, so it matches every episode-list swipe.
+// Its runtime/remaining metadata uses episodeListTimeLabel(_:) so a positive
+// final minute is expressed in seconds consistently with every episode list.
 // QueueCoordinator, and SubscriptionStore. AppState remains only for
 // cross-domain player commands and compatibility state not yet assigned to a
 // dedicated observable owner.
@@ -2146,10 +2148,7 @@ private struct UpNextRow: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let h = s / 3600
-        let m = (s % 3600) / 60
-        return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+        episodeListTimeLabel(seconds)
     }
 }
 

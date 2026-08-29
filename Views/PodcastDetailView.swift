@@ -24,6 +24,8 @@ import SwiftUI
 // · "Episodes" list of ListRow-EpisodeRow (badges as top-trailing overlay per
 // DESIGN.md) pushing EpisodeDetailView, with leading (Play / Play Next) and
 // trailing (far-right Download/Archive · Play Last) swipes — NO share swipe.
+// Episode runtime/remaining labels use episodeListTimeLabel(_:) across every
+// device size; positive values below one minute must be rendered in seconds.
 // The trailing FAR-RIGHT button follows the download state: a DOWNLOADED episode
 // shows Archive (purple, archivebox); an un-downloaded episode on a subscribed +
 // ACTIVE feed shows Download (teal, arrow.down.circle) which downloads into the Up
@@ -45,6 +47,10 @@ import SwiftUI
 // row window (next 12, previous 3) using ArtworkImageCache.prefetch; distant
 // prefetches are cancelled so long feeds with many distinct episode images do
 // not compete with on-screen artwork loads.
+// BACK CONTRACT (2026-08-29): the custom Back control always calls the ambient
+// SwiftUI dismiss action. Podcast Detail can be a child of Subscriptions,
+// Discover/Search/chart pages, or RootView itself; dismiss removes exactly that
+// nearest destination, whereas mutating RootView's outer path skips its parent.
 // TAP-CRASH HISTORY: intermittent (~50%) crashes when tapping an episode row to
 // push EpisodeDetailView had TWO independent causes. (1) duplicate ForEach IDs —
 // fixed at the source in updateEpisodes plus the defensive dedupe below;
@@ -63,8 +69,6 @@ struct PodcastDetailView: View {
     /// Progress ticks publish on this dedicated model (not AppState) — reading
     /// appState.downloadProgress in body would render stale.
     @EnvironmentObject private var downloadProgressModel: DownloadProgressModel
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.rootBackAction) private var rootBackAction
     @Environment(\.displayScale) private var displayScale
 
     // Identity — at most one of these is set per entry point.
@@ -236,17 +240,7 @@ struct PodcastDetailView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button {
-                if let rootBackAction {
-                    rootBackAction()
-                } else {
-                    dismiss()
-                }
-            } label: {
-                Image(systemName: "chevron.left.circle.fill")
-                    .responsiveToolbarBackSymbol()
-            }
-            .accessibilityLabel("Back")
+            NavigationBackButton()
         }
 
         if isRealSubscription {
@@ -955,10 +949,7 @@ struct PodcastDetailView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        episodeListTimeLabel(seconds)
     }
 
     private func formatPublishedDate(_ date: Date) -> String {

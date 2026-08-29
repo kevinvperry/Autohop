@@ -21,6 +21,8 @@ import SwiftUI
 // Lifecycle rules: PAGES.md "Browse Subscription Lifecycle" + FEATURES.md §2.
 // Search and Recently Viewed rows use 44 pt CachedArtworkImage thumbnails so
 // catalog/browse art participates in the same shared downsampled cache.
+// Episode-result runtime metadata uses episodeListTimeLabel(_:), including
+// second-level labels for positive durations shorter than one minute.
 // NAVIGATION CONTRACT: Search and show-detail pages append typed AppRoute
 // values to RootView's one NavigationPath. Do not reintroduce closure-only or
 // local-item destinations here: the mini-player must be able to clear the root
@@ -598,11 +600,7 @@ struct PodcastSearchView: View {
     }
 
     private func formatEpisodeDuration(_ seconds: TimeInterval) -> String {
-        let totalMinutes = max(0, Int(seconds) / 60)
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        if hours > 0 { return minutes > 0 ? "\(hours) hr \(minutes) min" : "\(hours) hr" }
-        return "\(minutes) min"
+        episodeListTimeLabel(seconds)
     }
 }
 

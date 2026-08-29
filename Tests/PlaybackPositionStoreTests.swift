@@ -6,7 +6,8 @@
 // save/clear round trips, the two legacy on-disk decode formats, and
 // most-recently-updated restore-candidate selection. If any of these change,
 // resume behavior changes on-device — treat failures as real regressions, not
-// test rot.
+// test rot. This file also pins the shared episode-list time-label boundary:
+// positive sub-minute values use seconds and never appear as 0m.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -16,6 +17,20 @@ import XCTest
 
 @MainActor
 final class PlaybackPositionStoreTests: XCTestCase {
+
+    func testEpisodeListTimeLabelUsesSecondsThroughoutFinalMinute() {
+        XCTAssertEqual(episodeListTimeLabel(0.2), "1s")
+        XCTAssertEqual(episodeListTimeLabel(1), "1s")
+        XCTAssertEqual(episodeListTimeLabel(42.1), "43s")
+        XCTAssertEqual(episodeListTimeLabel(59.9), "59s")
+    }
+
+    func testEpisodeListTimeLabelPreservesMinuteAndHourStyle() {
+        XCTAssertEqual(episodeListTimeLabel(0), "0m")
+        XCTAssertEqual(episodeListTimeLabel(60), "1m")
+        XCTAssertEqual(episodeListTimeLabel(3_661), "1h 1m")
+        XCTAssertEqual(episodeListTimeLabel(-5), "0m")
+    }
 
     private func temporaryFileURL() -> URL {
         FileManager.default.temporaryDirectory

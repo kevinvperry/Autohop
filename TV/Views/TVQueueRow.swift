@@ -5,7 +5,8 @@ import AutohopCore
 // sole queue surface: priority occupies a fixed leading column, artwork is the
 // second column, and title/publisher/time share one aligned text column. Time
 // mirrors iOS Up Next: partial episodes show remaining time, untouched episodes
-// show total runtime.
+// show total runtime. Both use episodeListTimeLabel so the final minute is
+// expressed in seconds instead of displaying 0m.
 struct TVQueueRow: View {
     let row: TVQueueRowModel
     let detailLoadFailed: Bool
@@ -119,10 +120,7 @@ struct TVQueueRow: View {
     }
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {
-        let totalMinutes = Int(seconds / 60)
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        episodeListTimeLabel(seconds)
     }
 }
 

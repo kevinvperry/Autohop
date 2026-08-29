@@ -10,6 +10,8 @@ import SwiftUI
 // pull-to-refresh for feed refresh. Swipe actions (allowsFullSwipe FALSE by
 // design): leading Play / Play Next, trailing Archive / Play Last. Pin badges
 // mark Play Next (blue) / Play Last (orange) overrides.
+// TIME METADATA: all runtime/remaining labels use episodeListTimeLabel(_:), so
+// a positive final minute is shown in seconds rather than collapsing to 0m.
 // Small Video/Explicit indicators live inside the trailing metadata stack above
 // the duration; they are never a top-trailing overlay here, so they cannot cover
 // the blue/orange pin when an episode has both media flags and a queue override.
@@ -333,10 +335,7 @@ struct QueueSheetView: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.isFinite && seconds > 0 ? seconds : 0)
-        let h = s / 3600
-        let m = (s % 3600) / 60
-        return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+        episodeListTimeLabel(seconds)
     }
 
     private func formatPublishedDate(_ date: Date) -> String {
