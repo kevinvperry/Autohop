@@ -94,8 +94,27 @@ enum OnboardingTip: String, CaseIterable {
 
 /// Mounted once in RootView (behind sheets). Renders the current `activeTip` as
 /// a dismissible bottom card; renders nothing when there is no active tip.
+///
+/// AI CONTEXT — SHEET-HOSTING CONTRACT (violated today; see the audit report).
+/// RootView mounts this overlay INSIDE its ZStack, which UIKit draws BELOW any
+/// presented sheet. Therefore a page that (a) attaches `.onboardingTip(_:)` and
+/// (b) is reached as a destination inside a presented sheet MUST also mirror
+/// `.overlay { CoachMarkOverlay() }` on itself, or its tip is set as `activeTip`
+/// and rendered behind the sheet — invisible.
+///
+/// This is not cosmetic. `OnboardingCoordinator.requestTip` guards on
+/// `activeTip == nil` and caps presentation at `maxTipsPerSession` (3), so an
+/// invisible tip ALSO blocks every other tip for as long as its page is on
+/// screen and consumes one of the three per-session slots.
+///
+/// Only `QueueSheetView` currently mirrors it. `StatsView`, `DownloadsView`,
+/// `SleepScheduleView` and `SettingsView` attach tips but are NavigationLink
+/// destinations of `MenuSheetView` (itself a `.sheet`), so `.stats`,
+/// `.downloads`, `.sleepSchedule` and `.settings` never render on that path.
+/// Stats and Sleep Schedule also exist as root `AppRoute` destinations where
+/// they DO render, which is why the defect is path-dependent and easy to miss.
+/// When adding a tip, check how its page is presented before assuming coverage.
 struct CoachMarkOverlay: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
 
     var body: some View {

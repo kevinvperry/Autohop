@@ -19,7 +19,7 @@
 //  - sleep scheduling is injected; production uses Task.sleep while tests may
 //    advance deterministically without waiting for wall-clock time.
 //
-//  This type does not implement playback, feeds, downloads, sync, Relay,
+//  This type does not implement playback, feeds, downloads, sync,
 //  archiving, onboarding, or navigation policy.
 //
 

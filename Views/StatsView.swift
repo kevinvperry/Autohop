@@ -660,6 +660,20 @@ private struct StatsContentView: View {
     /// state produced by Download Feed Filters. Restrict this to `.notDownloaded`
     /// so a manual download/play (which intentionally bypasses filters) remains
     /// valid engagement evidence even when the feed rule itself would reject it.
+    ///
+    /// AI CONTEXT — COST / REGRESSION HAZARD. This is a COMPUTED property with
+    /// no caching, evaluated inside `driftingShowsSection` on every StatsView
+    /// body pass. It walks every episode of every subscription (4,000+ on a
+    /// large library) and calls `DownloadFilterSettings.evaluation(for:)` per
+    /// episode; `evaluation` rebuilds its `activeRules` array on each call, so
+    /// the rule set is reconstructed per episode rather than once per show.
+    /// Most users have no filters enabled, in which case `activeRules` is empty
+    /// and the dominant cost is the iteration + Set construction itself.
+    /// Cheap wins if this ever shows on a main-thread trace: skip whole
+    /// subscriptions via `downloadFilterSettings.hasActiveFilters` before
+    /// touching their episodes, and hoist the result into @State keyed off the
+    /// store's mutation token rather than recomputing per body.
+    /// Do NOT relax the `.notDownloaded` guard — it is correctness, not perf.
     private var downloadFilterSkippedEpisodeIDs: Set<UUID> {
         Set(subscriptionStore.subscriptions.flatMap { subscription in
             subscription.episodes.compactMap { episode in

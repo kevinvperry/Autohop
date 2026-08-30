@@ -31,6 +31,9 @@ classification, main-thread hang context, playback tick timing, and stats-sync
 flush breadcrumbs. Playback route-change stability is covered in §4/§15.9.
 These notes are the user/product-facing counterpart to the June 2026 diagnostic
 repair work in SYNC_DESIGN.md and the AI headers in the touched Swift files.
+The Version 1.6 widget target declares the same iPhone+iPad device families as
+the containing app so Now Playing & Up Next widgets remain available on native
+iPad and compatible Designed-for-iPad Apple-silicon Mac installations.
 The iPhone and Apple TV targets use only the user's private iCloud account for
 cross-device sync. The abandoned Autohop Pro and Cloudflare relay prototypes
 have been removed from the project.
@@ -79,7 +82,8 @@ notifications, or other non-driving workflows.
 > Form. Shortcuts scroll—not replace—the right-hand content, retain focus for
 > repeated keyboard use, and disappear in narrow multitasking widths.
 > Shortcut labels exactly match visible Form headings. Headers track manual
-> scrolling, while shortcut taps bridge to the native Form collection/table and
+> scrolling through native content-offset observation, while shortcut taps
+> bridge to the native Form collection/table and
 > navigate by stable section index, including sections whose rows have not yet
 > been realized by SwiftUI virtualization. Destinations are vertically centred
 > so the heading above the first row remains visible rather than being cropped by
@@ -1173,7 +1177,7 @@ Cross-device sync over the user's private iCloud (CloudKit) database. **On by de
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| iCloud Sync | Toggle | **Off** | When on, syncs listening state through the user's private iCloud database. Version 1.3 ships only on iPhone; the retained Apple TV implementation can consume the same records during development but is not part of the 1.3 App Store offering. Synced data includes episode played/archived state, per-podcast settings, subscriptions, listening history, and the Up Next queue. |
+| iCloud Sync | Toggle | **On for new installs** | Syncs listening state through the user's private iCloud database. Existing users retain their previously saved choice. Synced data includes episode played/archived state, per-podcast settings, subscriptions, listening history, and the Up Next queue. |
 
 **What syncs:** episode user-state (played / archived / completed / last-played), subscription settings + subscribe/unsubscribe, listening history (record-level last-write-wins by `lastListenedAt`), and listening stats (additive — each device owns its own per-day partition and the Stats page sums across devices on read). **What never syncs:** downloaded media files (per-device), global app settings (`AppSettings` — poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags; these are local `UserDefaults`, roaming only via device backup-restore), the per-device Release Radar learned schedule (`refreshStats`), and catalog content (titles/descriptions/artwork re-hydrate from the feed). Per-podcast Download Filters sync as of July 2026 (they were backup/local-only in v1). Playback **position** does roam — it travels inside the listening-history record (`lastPositionSeconds`). Conflicts resolve with **field-level last-write-wins**; the episode loaded in the player on a device is never interrupted by a remote played/archived change ("active-player-wins"). Sync activity is traceable in the Diagnostic Log under `sync.*` event keys. DayStats conflict diagnostics include the stats device ID, local device ID, day key, cached system-field state, retry status, planned resolution, and per-session conflict count; repeated conflicts for the same record emit `sync.conflictStorm`. For this device's own DayStats partition, a conflict refreshes the server change tag while keeping the local full-day bucket pending, so the retry updates the server record instead of repeatedly colliding with a stale tag.
 
@@ -1191,8 +1195,22 @@ are not omitted. Sparse remote fields with no modified timestamp are treated as
 "no remote opinion" and cannot reset local settings to defaults. Priority Stack
 order is a whole-list `subscription-order:current` generation, and every
 successful upload is acknowledged against the exact version sent so a delayed
-response cannot clear newer local work. A one-shot recovery pass reads legacy
-unprefixed SubscriptionState records, restores settings only for podcasts that
+response cannot clear newer local work.
+
+**Materialisation failure recovery:** an unknown remote subscription is saved as
+a durable clean local projection before its RSS feed is fetched. If that fetch
+fails, SyncCoordinator records bounded retry work and re-reads the preserved
+projection after backoff, foreground sync, explicit sync and relaunch. This does
+not rely on CloudKit redelivering an unchanged SubscriptionState after its
+change token has advanced.
+
+**Apple TV queue-command lifetime:** Play Next and Unpin requests are transient
+commands rather than permanent queue state. The iPhone retries an unresolved
+command for up to 24 hours; after that it acknowledges the command for deletion
+to prevent surprising late application. Persistent unresolved warnings are
+rate-limited to one per command every six hours.
+
+A one-shot recovery pass reads legacy unprefixed SubscriptionState records, restores settings only for podcasts that
 still exist locally, and re-uploads complete `subscription:` records. Old
 unprefixed CloudKit records may remain as recovery orphans until the namespaced
 data is verified.
@@ -1233,6 +1251,13 @@ data is verified.
 **Access:** Menu (☰) → **Support** (the last menu item). Code: `Views/SupportView.swift`; content data: `Views/SupportContent.swift` (`SupportGuide.sections`).
 
 **What it is:** A native, dark-themed in-app User Guide that **mirrors the website Support page** (`kevmarl-site/support.html`). The two are kept in sync by hand — any change to support information is applied in both places.
+
+**Public mirror audit (30 August 2026):** The website explicitly covers CarPlay,
+Home/Lock Screen Widgets, Play Instant, Listening Recaps, Volume Adjustment and
+Mono Audio. Its notification guidance uses the current model: the top New
+Episode Notifications control seeds future subscriptions only; existing shows
+retain independent choices. The public Intelligence page describes only
+verified local policies and never relabels deterministic scheduling as AI.
 
 **Structure:** Drill-down navigation. Support opens to a scannable list of topic rows (purple icon tile + title + one-line summary); tapping a topic pushes a detail page rendering just that section. Topics: Getting Started, Priority Stack, Up Next, Player, Audio Controls, CarPlay, Chapters, Downloads, Per-Podcast Settings, Sleep Timer, Sleep Schedule, Video Podcasts, Notifications, OPML Import & Export, iCloud Sync, Listening History, Stats, App Settings.
 
@@ -1382,7 +1407,14 @@ The first time the first-subscribe card runs a download (`hasSeenDownloadFirstNo
 ### Coach marks (tips)
 A high-contrast contextual tip system (`Views/CoachMark.swift`, `OnboardingTip`). `OnboardingCoordinator` enforces **one visible at a time**, **never re-shown after explicit dismissal** (per-tip `tip.<case>.seen` in `UserDefaults`), and **at most 3 per session**. Each page requests through `onboardingTip(_:when:)`, which also owns cleanup: leaving the relevant page cancels its card immediately without marking it read, so guidance can never remain stuck over unrelated screens. Explicit close is available through both a prominent 48-point black ✕ and a full-width “Got it — close tip” action.
 
-The deliberately non-Autohop white/black card covers eleven current surfaces: **Discover** (charts/search/preview), **Priority Stack** (automatic order/reorder), **Podcast Detail** (episode swipes), **Player** (panels plus sound controls and Shared Listening), **Up Next** (automatic order/swipes/pins), **Stats** (periods and expanded show detail), **Downloads** (device-local lifecycle), **Sleep Schedule**, **Settings** (Auto Archive/Release Radar/iCloud Sync), **Podcast Settings** (per-show rules/Play Instant), and **Download Feed Filters** (automatic-only scope, Include/Exclude precedence, All/Any matching and Preview Matches). The complete audit is `Docs/ONBOARDING_AUDIT_2026-08-29.md`. Everything taught remains permanently available through Menu → Support.
+The deliberately non-Autohop white/black card is **declared** on eleven surfaces: **Discover** (charts/search/preview), **Priority Stack** (automatic order/reorder), **Podcast Detail** (episode swipes), **Player** (panels plus sound controls and Shared Listening), **Up Next** (automatic order/swipes/pins), **Stats** (periods and expanded show detail), **Downloads** (device-local lifecycle), **Sleep Schedule**, **Settings** (Auto Archive/Release Radar/iCloud Sync), **Podcast Settings** (per-show rules/Play Instant), and **Download Feed Filters** (automatic-only scope, Include/Exclude precedence, All/Any matching and Preview Matches). The complete audit is `Docs/ONBOARDING_AUDIT_2026-08-29.md`. Everything taught remains permanently available through Menu → Support.
+
+`CoachMarkOverlay` is mounted both in RootView and above MenuSheetView's own
+NavigationStack. The Menu-local host is required because UIKit draws a
+presented sheet above RootView; it makes the Stats, Downloads, Sleep Schedule
+and Settings tips visible on their primary Menu paths without consuming an
+invisible session slot. QueueSheetView likewise owns an overlay for the same
+presentation-layer reason.
 
 Dedicated first-run cards follow the same contrast rule. **Getting Started** and
 the **You're all set** first-subscription sheet use white surfaces, black text and

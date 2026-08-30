@@ -346,7 +346,10 @@ struct SubscriptionSettingsView: View {
         .background(
             FormSectionScrollController(
                 section: requestedFormSection,
-                requestID: formScrollRequestID
+                requestID: formScrollRequestID,
+                onVisibleSectionChanged: { section in
+                    activeShortcut = shortcut(forFormSection: section, subscription: sub)
+                }
             )
         )
     }
@@ -365,6 +368,21 @@ struct SubscriptionSettingsView: View {
         case .chapters: return 6
         case .feed: return hasChapters ? 7 : 6
         case .unsubscribe: return hasChapters ? 8 : 7
+        }
+    }
+
+    private func shortcut(forFormSection section: Int, subscription: Subscription) -> SubscriptionShortcut {
+        let hasChapters = chapterSettingsEpisode(for: subscription) != nil
+        switch section {
+        case 0: return .general
+        case 1: return .downloadFilters
+        case 2...3: return .playback
+        case 4: return .automation
+        case 5: return .autoArchive
+        case 6 where hasChapters: return .chapters
+        case 6: return .feed
+        case 7 where hasChapters: return .feed
+        default: return .unsubscribe
         }
     }
 
@@ -433,7 +451,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Playback", id: .playback)
         } footer: {
-            Text("Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only).")
+            Text("Mono Audio centres presenters mixed toward the left or right. Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only).")
         }
 
         Section {
@@ -694,7 +712,6 @@ struct SubscriptionSettingsView: View {
 
     private func shortcutHeader(_ title: String, id: SubscriptionShortcut) -> some View {
         Text(title)
-            .onAppear { activeShortcut = id }
     }
 
     // MARK: - Bindings

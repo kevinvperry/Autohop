@@ -754,6 +754,16 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    /// Every durable subscription projection, including clean remote rows.
+    /// Materialisation recovery needs this scan because CKSyncEngine may have
+    /// advanced past an unchanged record before its RSS feed became reachable.
+    func allSubscriptionSyncStates() throws -> [SubscriptionSyncState] {
+        try dbQueue.read { db in
+            try SubscriptionSyncRow.fetchAll(db)
+                .compactMap { try? decoder.decode(SubscriptionSyncState.self, from: $0.payload) }
+        }
+    }
+
     /// Clears the dirty stamps on the given projections after a successful push.
     func markSynced(episodeSyncKeys: [String], subscriptionIDs: [UUID], historyIDs: [String] = [], statsDayKeys: [String] = []) throws {
         try writeAndHarden { db in

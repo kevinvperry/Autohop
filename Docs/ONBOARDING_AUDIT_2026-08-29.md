@@ -33,6 +33,16 @@ redundant coach mark seen. Discover likewise defers its general coach mark while
 the zero-subscription Starter Packs nudge is visible. Welcome remains a distinct
 full-screen purple introduction rather than a floating advice card.
 
+## Correction appended 30 August 2026 — Menu presentation-layer repair
+
+The coverage table below records both declaration and presentation. A follow-up
+review on 30 August 2026 found four Menu-hosted tips were initially drawn below
+the presented sheet; `MenuSheetView` now mirrors `CoachMarkOverlay` above its own
+NavigationStack. Stats, Downloads, Sleep Schedule and Settings therefore render
+visibly on their primary Menu paths and no longer consume or block the session
+allowance invisibly. `QueueSheetView` retains its own overlay for the same
+presentation-layer reason.
+
 ## Current contextual coverage
 
 | Surface | Tip teaches | Eligibility |

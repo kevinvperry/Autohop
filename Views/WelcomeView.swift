@@ -19,7 +19,6 @@ enum WelcomeOutcome {
 }
 
 struct WelcomeView: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var importCoordinator: SubscriptionImportCoordinator
     @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     let onComplete: (WelcomeOutcome) -> Void

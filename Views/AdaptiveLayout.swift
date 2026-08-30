@@ -548,6 +548,7 @@ struct SettingsShortcutSidebar<ID: Hashable>: View {
 struct FormSectionScrollController: UIViewRepresentable {
     let section: Int?
     let requestID: UUID
+    let onVisibleSectionChanged: (Int) -> Void
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView(frame: .zero)
@@ -557,6 +558,13 @@ struct FormSectionScrollController: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onVisibleSectionChanged = onVisibleSectionChanged
+        DispatchQueue.main.async {
+            guard let window = view.window,
+                  let scrollView = bestFormScrollView(of: window) else { return }
+            context.coordinator.observe(scrollView)
+        }
+
         guard let section, context.coordinator.lastRequestID != requestID else { return }
         context.coordinator.lastRequestID = requestID
         DispatchQueue.main.async {
@@ -575,6 +583,55 @@ struct FormSectionScrollController: UIViewRepresentable {
 
     final class Coordinator {
         var lastRequestID: UUID?
+        var onVisibleSectionChanged: (Int) -> Void = { _ in }
+        private weak var observedScrollView: UIScrollView?
+        private var contentOffsetObservation: NSKeyValueObservation?
+        private var lastVisibleSection: Int?
+
+        func observe(_ scrollView: UIScrollView) {
+            guard observedScrollView !== scrollView else {
+                reportVisibleSection(in: scrollView)
+                return
+            }
+            contentOffsetObservation?.invalidate()
+            observedScrollView = scrollView
+            contentOffsetObservation = scrollView.observe(
+                \.contentOffset,
+                options: [.initial, .new]
+            ) { [weak self, weak scrollView] _, _ in
+                guard let self, let scrollView else { return }
+                DispatchQueue.main.async {
+                    self.reportVisibleSection(in: scrollView)
+                }
+            }
+        }
+
+        private func reportVisibleSection(in scrollView: UIScrollView) {
+            let probeY = scrollView.contentOffset.y + scrollView.adjustedContentInset.top + 36
+            let section: Int?
+            if let collection = scrollView as? UICollectionView {
+                let attributes = collection.collectionViewLayout
+                    .layoutAttributesForElements(in: collection.bounds) ?? []
+                section = attributes
+                    .filter { $0.representedElementCategory == .cell && $0.frame.maxY >= probeY }
+                    .min(by: { $0.frame.minY < $1.frame.minY })?
+                    .indexPath.section
+                    ?? collection.indexPathsForVisibleItems.sorted {
+                        ($0.section, $0.item) < ($1.section, $1.item)
+                    }.first?.section
+            } else if let table = scrollView as? UITableView {
+                let point = CGPoint(x: table.bounds.midX, y: probeY)
+                section = table.indexPathForRow(at: point)?.section
+                    ?? table.indexPathsForVisibleRows?.sorted {
+                        ($0.section, $0.row) < ($1.section, $1.row)
+                    }.first?.section
+            } else {
+                section = nil
+            }
+            guard let section, section != lastVisibleSection else { return }
+            lastVisibleSection = section
+            onVisibleSectionChanged(section)
+        }
     }
 
     @discardableResult
@@ -642,6 +699,19 @@ struct FormSectionScrollController: UIViewRepresentable {
             let lhsExtent = max($0.contentSize.height, $0.bounds.height)
             let rhsExtent = max($1.contentSize.height, $1.bounds.height)
             return lhsExtent < rhsExtent
+        }
+    }
+
+    private func bestFormScrollView(of root: UIView) -> UIScrollView? {
+        let collection = bestFormScrollView(of: root, type: UICollectionView.self)
+        let table = bestFormScrollView(of: root, type: UITableView.self)
+        switch (collection, table) {
+        case let (collection?, table?):
+            return max(collection.contentSize.height, collection.bounds.height)
+                >= max(table.contentSize.height, table.bounds.height) ? collection : table
+        case let (collection?, nil): return collection
+        case let (nil, table?): return table
+        case (nil, nil): return nil
         }
     }
 }

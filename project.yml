@@ -260,9 +260,36 @@ targets:
         # Relations in June 2026; keep in XcodeGen so regenerated projects
         # preserve the managed capability.
         com.apple.developer.carplay-audio: true
-        # Push entitlement for CKSyncEngine silent change pushes. "development"
-        # is correct for debug/sandbox; Xcode rewrites it to "production" when
-        # archiving for distribution.
+        # Push entitlement for CKSyncEngine silent change pushes.
+        #
+        # AI CONTEXT — OPEN RISK, DO NOT TREAT AS SETTLED. This relies on Xcode
+        # rewriting "development" to "production" during distribution signing.
+        # The tvOS target below deliberately does NOT rely on that: it pins a
+        # separate TV/AutohopTV.Release.entitlements with
+        # aps-environment: production, with the comment "so an App Store archive
+        # cannot claim the sandbox environment even if source generation/signing
+        # drifts." Both statements cannot be right. iOS is the target that still
+        # takes the risk.
+        #
+        # Consequence if the rewrite does not happen: the shipped iPhone build
+        # registers an APNs SANDBOX token, production CloudKit pushes are never
+        # delivered, and cross-device sync silently degrades to the foreground
+        # prime in AppRuntimeWorkflow/SyncCoordinator — changes made on Apple TV
+        # or a second iPhone appear only when the user next foregrounds the app.
+        # It fails quietly: no error, no log, just latency.
+        #
+        # EXISTING MITIGATION (do not remove): Scripts/validate-release.sh
+        # --archive <path> reads the SIGNED entitlements from the .xcarchive and
+        # hard-fails unless aps-environment == "production". That check cannot
+        # run in CI (an unsigned checkout has no signed entitlements), so
+        # .github/workflows/release-guards.yml runs only --configuration-only,
+        # which explicitly skips it. The APNs guarantee is therefore a MANUAL
+        # pre-upload step, not an automated one.
+        #
+        # Suggested hardening (mirrors tvOS, makes the manual step a
+        # confirmation rather than the sole defence): add
+        # Autohop.Release.entitlements with aps-environment: production and set
+        # CODE_SIGN_ENTITLEMENTS per configuration, as the tvOS target does.
         aps-environment: development
 
     # System frameworks — AVKit pulls in AVFoundation transitively but listed
@@ -312,7 +339,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.widgets
         PRODUCT_NAME: AutohopWidgets
-        TARGETED_DEVICE_FAMILY: "1"
+        # AI CONTEXT — Keep the embedded widget in lockstep with the universal
+        # iOS app. A phone-only extension would silently withhold widgets from
+        # native iPad and compatible Designed-for-iPad Mac installations.
+        TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "1.6"
         CURRENT_PROJECT_VERSION: "10"
         CODE_SIGN_STYLE: Automatic

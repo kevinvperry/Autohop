@@ -18,6 +18,15 @@ Scrollable settings provide stable nearby focus stops and avoid recomputing
 filesystem, memory, sync or artwork state during focus movement. Top Shelf
 extensions read a prebuilt local projection and never perform networking or
 image processing.
+
+Public website feature cards use the same user-visible names as the app and
+Support guide. Intelligence cards must distinguish deterministic, on-device
+policy from machine learning: resource-aware refresh, fairness, circuit
+breakers, Auto Archive, Feed Filters and Play Instant are described by their
+observable rules rather than by visual or marketing-only inference claims.
+The embedded Version 1.6 widget follows the containing app's iPhone+iPad device
+families. Its family-specific compositions remain responsive rather than
+silently disappearing on iPad or compatible Apple-silicon Mac installations.
 -->
 
 > Large-screen asset policy is container-driven: scale hierarchy-bearing titles,
@@ -142,12 +151,13 @@ ascenders/descenders before it expands its toolbar slot.
 240-point left rail contains purple-accented SF Symbol + label shortcuts; the
 existing Form remains a separately scrolling, maximum-720-point right pane.
 Selection animates to stable section IDs and the rail stays visible and focused
-for repeated keyboard navigation. The highlighted shortcut follows sections as
-they appear. Never replace the Form with mutually exclusive detail fragments:
+for repeated keyboard navigation. The highlighted shortcut follows the native
+Form content offset at a probe just below its top inset, not SwiftUI header
+creation order. Never replace the Form with mutually exclusive detail fragments:
 compact iPhone and narrow multitasking layouts retain the original single column.
-Shortcut labels must exactly match visible section headings. Header appearance
-drives manual-scroll highlighting. Do not use header or row IDs for shortcut
-commands: `Form` virtualizes distant rows, so those views may not exist when a
+Shortcut labels must exactly match visible section headings. Do not use header
+`onAppear` or row IDs for shortcut selection or commands: `Form` virtualizes
+distant rows, so those views may not exist when a
 user taps the rail. `FormSectionScrollController` locates the native Form
 collection/table and scrolls to the explicit section index instead. Its mappings
 must count every rendered section, including non-shortcut and conditional ones.

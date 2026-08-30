@@ -1,3 +1,5 @@
+> **SUPERSEDED — historical record only.** Current canonical assessment: `ASSESSMENT_2026-08-30.md`. Do not cite figures from this file as current.
+
 # Autohop AppState Decomposition Proposal
 
 <!--

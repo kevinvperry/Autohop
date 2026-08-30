@@ -33,6 +33,9 @@ import Foundation
 // AppState.refreshSubscription so show art and author changes from RSS refreshes
 // reach every cached-artwork call site),
 // Release Radar history seeding for newly added subscriptions
+// DUPLICATE IDENTITY: every insertion path compares canonical feed identities
+// (case/default-port/trailing-slash insensitive), so CloudKit and redirect
+// spellings cannot coexist in memory before SQLite enforces uniqueness.
 // (seedReleaseObservations records initial ParsedFeed episodes into
 // RefreshStats.releaseObservations so the learned scheduler starts with the
 // feed's current RSS publish-date evidence),
@@ -493,7 +496,9 @@ public final class SubscriptionStore: ObservableObject {
         reindexRanks: Bool = true,
         initialNotificationsEnabled: Bool? = nil
     ) throws -> Subscription {
-        guard !subscriptions.contains(where: { $0.feedURL == feedURL }) else {
+        guard !subscriptions.contains(where: {
+            Self.canonicalFeedKey($0.feedURL) == Self.canonicalFeedKey(feedURL)
+        }) else {
             throw SubscriptionStoreError.duplicateFeed
         }
 
@@ -1911,6 +1916,28 @@ public final class SubscriptionStore: ObservableObject {
     /// phone while its RSS fetch was failing.
     public func syncedSubscriptionWantsMembership(id: UUID) -> Bool? {
         try? database?.subscriptionSyncState(id: id)?.subscribed
+    }
+
+    /// Returns the durable remote projection used to retry iPhone feed
+    /// materialisation after a transient RSS/network failure. The CloudKit
+    /// change token may already have advanced, so retry workers must read this
+    /// local copy rather than rely on the unchanged record being delivered again.
+    public func syncedSubscriptionState(id: UUID) -> SubscriptionSyncState? {
+        try? database?.subscriptionSyncState(id: id)
+    }
+
+    /// Clean remote rows whose subscribed podcast is still absent locally.
+    /// This also recovers failures created by an older app build before the
+    /// explicit retry queue existed.
+    public func unmaterializedSyncedSubscriptionStates() -> [SubscriptionSyncState] {
+        guard let states = try? database?.allSubscriptionSyncStates() else { return [] }
+        return states.filter { state in
+            state.subscribed
+                && !subscriptions.contains { subscription in
+                    subscription.id == state.subscriptionID
+                        || Self.canonicalFeedKey(subscription.feedURL) == Self.canonicalFeedKey(state.feedURL)
+                }
+        }
     }
 
     /// Applies a remote subscription-settings record with field-level LWW.

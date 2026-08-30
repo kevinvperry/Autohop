@@ -1,3 +1,5 @@
+> **SUPERSEDED — historical record only.** Current canonical assessment: `ASSESSMENT_2026-08-30.md`, which corrects several figures stated here (notably the 219 fixed-font count, now measured at 263, and the aps-environment framing).
+
 # Autohop Whole-Project Assessment — Independent Pass — 2026-07-24
 
 <!--

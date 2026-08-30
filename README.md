@@ -5,7 +5,10 @@ AI CONTEXT — README.md
 High-level product, feature, documentation, build, and licensing index for AI
 agents. Treat FEATURES.md as the behaviour/default source of truth, PAGES.md as
 the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
-of truth, and ASSESSMENT_2026-07-24.md as the newest assessment report. The
+of truth, and ASSESSMENT_2026-08-30.md as the newest assessment report (it supersedes
+ASSESSMENT_2026-07-24.md, ASSESSMENT.md and every DEEP_SCAN_*.md, and records
+corrections to figures those documents state — notably the fixed-font count and
+the true coach-mark coverage). The
 visible playback-order sheet is "Up Next"; the Swift implementation still uses
 legacy `Queue*` type/property names in several places.
 Priority Stack reordering uses a stable active-subscription UUID draft and one

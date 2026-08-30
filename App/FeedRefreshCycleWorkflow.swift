@@ -5,7 +5,7 @@ import Network
 //
 // PURPOSE / OWNERSHIP:
 // Exclusive multi-feed refresh-cycle state machine. It owns manual, timed,
-// background-audio, BGAppRefresh, BGProcessing, and Relay-targeted cycle
+// background-audio, BGAppRefresh, and BGProcessing cycle
 // requests; active-cycle join/follow-up rules; expiration cancellation; adaptive
 // device-pressure budgets; Release Radar selection; deferred-feed fairness;
 // sequential item execution; memory batch boundaries; background rescheduling;
@@ -19,7 +19,9 @@ import Network
 //
 // INVARIANTS:
 // - A BG task joins existing work instead of reporting premature completion.
-// - Relay-targeted work may request one follow-up after a joined capped cycle.
+// - A joined capped cycle may grant its requester one follow-up batch. (The
+//   abandoned Cloudflare Relay prototype was removed; no external nudge source
+//   exists. Only local timers, BGTask wakes, and user actions request cycles.)
 // - BG expiration detaches when foreground or active audio still owns the cycle.
 // - Backoff, inactive-feed exclusion, protected Radar slots, urgent cap bypass,
 //   and oldest-deferred fairness remain explicit.

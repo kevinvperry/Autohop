@@ -54,9 +54,13 @@ release_conditions="$(
 [[ "$release_conditions" == '""' ]] \
   || fail "Release compilation conditions must be empty; found: $release_conditions"
 
+for retired_directory in "$repo_root/Relay" "$repo_root/Store"; do
+  [[ ! -e "$retired_directory" ]] \
+    || fail "Retired production directory has returned: ${retired_directory#$repo_root/}"
+done
+
 if rg -n 'AUTOHOP_(PRO|RELAY)_ENABLED|AutohopProStore|RelayCoordinator|RelayClient' \
-  "$repo_root/App" "$repo_root/Store" "$repo_root/Views" "$repo_root/TV" \
-  "$repo_root/Relay" "$project_file" 2>/dev/null; then
+  "$repo_root/App" "$repo_root/Views" "$repo_root/TV" "$project_file" 2>/dev/null; then
   fail "Retired Autohop Pro or relay production code has returned"
 fi
 require_literal \

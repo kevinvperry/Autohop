@@ -66,7 +66,6 @@ import SwiftUI
 // type, symbols and hit targets. Do not revert them to unqualified toolbar
 // defaults or use UIScreen/device-family checks.
 struct DiscoverView: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
     @Environment(\.dismiss) private var dismiss
@@ -88,6 +87,20 @@ struct DiscoverView: View {
     @State private var resolvingEpisodeID: String?
 
     /// Auto-advance cadence for the hero cards.
+    ///
+    /// AI CONTEXT — two known hazards, both deliberate-looking but worth
+    /// understanding before touching this line:
+    ///  1. It is a plain `let` on a View STRUCT, so a fresh publisher is built
+    ///     every time SwiftUI re-initialises DiscoverView. `.onReceive` then
+    ///     re-subscribes to the new instance and tears down the old one. Moving
+    ///     it to `@State` (or a shared clock) makes the subscription stable.
+    ///  2. It fires on `.common`, so it keeps ticking — and keeps running
+    ///     `withAnimation` state mutations that re-render this view — whenever
+    ///     DiscoverView remains in the hierarchy but is not the visible page.
+    ///     It stops only when the process suspends. Two `.onReceive(heroTimer)`
+    ///     sites (episode heroes and podcast heroes) both react per tick.
+    /// If Discover is ever kept alive off-screen (tabs, split view, iPad
+    /// sidebar), gate the advance on visibility rather than raising the period.
     private let heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     private enum Route: Hashable {

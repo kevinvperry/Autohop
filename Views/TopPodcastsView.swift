@@ -37,7 +37,6 @@ struct TopPodcastsView: View {
     let genre: ChartGenre?
     @AppStorage("discoverCountryCode") private var storedCountryCode = ""
 
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
 

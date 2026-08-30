@@ -16,6 +16,69 @@ entries and omit internal implementation detail. Updating this ledger is part
 of the implementation definition of done.
 -->
 
+## 2026-08-30 Universal Widget and iOS Release Verification — post-submission
+
+- Aligned the embedded Now Playing & Up Next widget with the containing app's
+  iPhone+iPad device-family declaration. The extension is no longer withheld
+  from native iPad or compatible Designed-for-iPad Mac installations.
+- Regenerated the checked-in Xcode project from `project.yml` so the canonical
+  configuration and generated target settings agree for the Version 1.6
+  release candidate.
+- Re-established the hosted iOS XCTest suite as a signed-simulator release
+  gate. CloudKit construction requires the app entitlement, so disabling code
+  signing is explicitly not a valid test invocation for this suite.
+- Restored a green full-suite signal on an iPhone 17 Pro Max simulator. The
+  remote/materialisation insertion path now rejects canonical duplicate feed
+  identities before persistence, and diagnostic-redaction tests reflect the
+  current stronger policy that pseudonymises complete URLs after stripping
+  credentials, queries and fragments.
+- Verified Release builds on iPhone 17 Pro Max, iPad Pro 13-inch and an
+  Apple-silicon Mac running the Designed-for-iPad app. The iPad build compiles
+  and embeds the newly universal widget target.
+
+## 2026-08-30 Public Documentation Reconciliation and Dependency Hygiene — post-submission
+
+- Synchronised the public Autohop overview and Support guide with the current
+  app. The website now documents CarPlay, Home/Lock Screen Widgets, Play
+  Instant, Listening Recaps, Volume Adjustment and Mono Audio, and no longer
+  describes the retired notification master-switch behaviour.
+- Expanded the privacy policy with the exact diagnostic-export field classes
+  and redaction boundary, plus carefully scoped CarPlay and Apple TestFlight
+  data boundaries that do not imply Autohop receives Apple account data.
+- Expanded Autohop Intelligence using only implemented deterministic behavior:
+  battery/thermal/network-aware feed budgets, conditional requests, deferred
+  fairness, circuit breakers, Auto Archive, Download Feed Filters and Play
+  Instant.
+- Removed seven verified-unused `AppState` environment dependencies from
+  onboarding, Discover chart, notification, welcome and RSS-entry views. This
+  reduces unnecessary environment crash surface without claiming a render-time
+  performance change.
+- Removed the empty retired `Relay/` and `Store/` directories. The release guard
+  now fails if either directory returns and continues scanning active production
+  sources for retired Pro/Relay symbols.
+
+## 2026-08-30 Audit Repair Set — post-submission
+
+- Made Stats, Downloads, Sleep Schedule and Settings onboarding tips visible
+  when those pages are opened inside the Menu sheet. The Menu now owns a
+  coach-mark overlay above its navigation stack, so invisible cards cannot
+  consume the session allowance or block later guidance.
+- Replaced Settings and Podcast Settings header-appearance shortcut selection
+  with native Form content-offset observation. Shortcut taps still centre the
+  destination, while manual scrolling now highlights the section at the
+  reader's top reading position instead of the lowest newly-created header.
+- Preserved failed remote subscription materialisation as durable retry work.
+  The stored remote projection is retried after foreground sync, explicit sync,
+  relaunch and bounded in-process backoff, without relying on CloudKit to
+  redeliver an unchanged record after token advancement.
+- Added a 24-hour lifetime for unresolvable Apple TV Play Next/Unpin commands.
+  Expired commands are acknowledged for deletion, while unresolved warnings are
+  persisted at most every six hours instead of on every replay.
+- Corrected the public Support page's Auto Archive interval from 30 minutes to
+  the implemented 25 minutes.
+- Expanded Podcast Settings playback guidance to explain Mono Audio alongside
+  the existing Volume Adjustment, Vocal Boost and Trim Silence controls.
+
 ## 2026-08-30 Widget Episode-Time Labels — post-submission
 
 - Corrected every Now Playing & Up Next widget family treating untouched

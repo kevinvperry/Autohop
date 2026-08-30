@@ -115,6 +115,15 @@ final class OnboardingCoordinator: ObservableObject {
         }
     }
 
+    /// AI CONTEXT — the session cap counts tips that were PRESENTED, including
+    /// ones the user never dismissed (navigating away calls `cancelActiveTip`,
+    /// which clears `activeTip` but leaves the tip in `tipsPresentedThisSession`).
+    /// A re-request of an already-presented tip bypasses the cap via
+    /// `contains(tip)`, so a returning user still sees it — but three
+    /// glanced-at-and-left pages exhaust the budget for genuinely new tips in
+    /// that process session. Intentional (anti-overload) but easy to misread as
+    /// a bug; do not "fix" it by decrementing on cancel without deciding what
+    /// stops a navigation loop from replaying tips indefinitely.
     func requestTip(_ tip: OnboardingTip) {
         guard activeTip == nil,
               !tip.isSeen,

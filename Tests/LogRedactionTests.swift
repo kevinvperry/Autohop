@@ -1,8 +1,9 @@
 // AI CONTEXT — Tests/LogRedactionTests.swift. Covers AppLogger.redactSensitiveText
 // (AH-P2-015): signed query strings, URL user-info/fragments, key=value
-// credentials, and bearer tokens must be stripped from diagnostic log text,
-// while ordinary values remain intact. Also pins the 2026-07-21 lazy metadata
-// gate so disabled diagnostics cannot perform expensive caller-side projection.
+// credentials, and bearer tokens must be stripped from diagnostic log text.
+// URLs are then replaced with stable privacy-safe pseudonyms, so tests must not
+// require even a sanitised host/path to survive. Also pins the 2026-07-21 lazy
+// metadata gate so disabled diagnostics cannot perform expensive projection.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -15,13 +16,15 @@ final class LogRedactionTests: XCTestCase {
     func testStripsQueryString() {
         let out = AppLogger.redactSensitiveText("GET https://cdn.example.com/a.mp3?token=secret123&exp=999 ok")
         XCTAssertFalse(out.contains("secret123"))
-        XCTAssertTrue(out.contains("https://cdn.example.com/a.mp3?[redacted]"))
+        XCTAssertFalse(out.contains("cdn.example.com"))
+        XCTAssertTrue(out.contains("[url:"))
     }
 
     func testStripsUrlFragment() {
         let out = AppLogger.redactSensitiveText("url https://host.example/path#token=abc.def")
         XCTAssertFalse(out.contains("abc.def"))
-        XCTAssertTrue(out.contains("#[redacted]"))
+        XCTAssertFalse(out.contains("host.example"))
+        XCTAssertTrue(out.contains("[url:"))
     }
 
     func testStripsURLUserInformation() {
@@ -29,7 +32,8 @@ final class LogRedactionTests: XCTestCase {
             "GET https://member:privatePassword@example.com/audio.mp3"
         )
         XCTAssertFalse(out.contains("member:privatePassword"))
-        XCTAssertTrue(out.contains("https://[redacted]@example.com"))
+        XCTAssertFalse(out.contains("example.com"))
+        XCTAssertTrue(out.contains("[url:"))
     }
 
     func testRedactsAuthorizationAndCookieKeys() {

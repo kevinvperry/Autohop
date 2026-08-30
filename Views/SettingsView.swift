@@ -43,7 +43,8 @@ import UniformTypeIdentifiers
 // summaries, while detailed mode adds high-volume per-feed Release Radar traces.
 // All section footer copy here must stay in sync with FEATURES.md §15 and the
 // website Support page. Copy describes best-effort iOS background opportunities
-// accurately and never implies Relay or Pro availability when those gates are off.
+// accurately. There is no Relay, Autohop account, or paid Pro tier — those
+// prototypes were removed; never reintroduce copy implying any of them exist.
 // Visual style: iOS 26 uses "defined glass" — native Form glass sections over a
 // subtle dark base (black.opacity(0.5)) with a faint white.opacity(0.05) tint on
 // each section card so edges read clearly, 48 pt listSectionSpacing between
@@ -221,11 +222,27 @@ struct SettingsView: View {
         .background(
             FormSectionScrollController(
                 section: requestedFormSection,
-                requestID: formScrollRequestID
+                requestID: formScrollRequestID,
+                onVisibleSectionChanged: { section in
+                    activeShortcut = shortcut(forFormSection: section)
+                }
             )
         )
     }
 
+    /// AI CONTEXT — REGRESSION HAZARD (hand-maintained index map).
+    /// These are POSITIONAL indexes into `settingsForm`'s Section list, not IDs.
+    /// FormSectionScrollController scrolls by section index, so the mapping must
+    /// match the emission order of `settingsForm` exactly:
+    ///   0 startup · 1 polling · 2 autoArchive · 3 downloading · 4 controls
+    ///   5+6 defaultPlaybackSection (TWO Sections: Default Playback + Default
+    ///       Episode Trim — it has no shortcut of its own, hence the gap)
+    ///   7 subscriptions · 8 sync · 9 storage · 10 diagnostics (conditional)
+    ///   then contact/about, shifted by developerModeUnlocked.
+    /// Adding, removing, splitting, or reordering ANY Section in `settingsForm`
+    /// silently sends every sidebar shortcut below it to the wrong place — the
+    /// compiler cannot catch this. Update this table in the same edit, and keep
+    /// the conditional `diagnosticsSection` offset arithmetic correct.
     /// Native Form section indexes include the two Default Playback sections,
     /// even though they intentionally have no shortcut of their own.
     private func formSection(for shortcut: SettingsShortcut) -> Int {
@@ -241,6 +258,26 @@ struct SettingsView: View {
         case .diagnostics: return 10
         case .support: return developerModeUnlocked ? 11 : 10
         case .about: return developerModeUnlocked ? 12 : 11
+        }
+    }
+
+    /// Mirrors formSection(for:) for manual-scroll highlighting. Sections 5
+    /// and 6 are both part of Default Playback and therefore keep Playback
+    /// selected while either is the reader's top visible section.
+    private func shortcut(forFormSection section: Int) -> SettingsShortcut {
+        switch section {
+        case 0: return .general
+        case 1: return .releaseRadar
+        case 2: return .automation
+        case 3: return .downloads
+        case 4...6: return .playback
+        case 7: return .podcasts
+        case 8: return .sync
+        case 9: return .storage
+        case 10 where developerModeUnlocked: return .diagnostics
+        case 10: return .support
+        case 11 where developerModeUnlocked: return .support
+        default: return .about
         }
     }
 
@@ -697,6 +734,15 @@ struct SettingsView: View {
     @ViewBuilder
     private var storageSection: some View {
         Section {
+            // AI CONTEXT — COST: this flattens EVERY episode of EVERY
+            // subscription (4,000+ on a large library) and allocates two arrays
+            // on each `settingsForm` body pass, i.e. on every SubscriptionStore
+            // objectWillChange and every toggle tap on this page — not just when
+            // the Storage section is on screen. It is a known main-actor cost,
+            // deliberately left simple. If this page ever feels sluggish, count
+            // with `reduce(0)` instead of materialising arrays, or cache it in
+            // @State beside `totalDownloadedBytes` (which is already computed
+            // off-main). Do not "optimise" by moving the filter into the store.
             let downloadedEpisodes = subscriptionStore.subscriptions
                 .flatMap(\.episodes)
                 .filter { $0.downloadState == .downloaded }
@@ -738,7 +784,6 @@ struct SettingsView: View {
 
     private func shortcutHeader(_ title: String, id: SettingsShortcut) -> some View {
         Text(title)
-            .onAppear { activeShortcut = id }
     }
 
     // MARK: - Bindings

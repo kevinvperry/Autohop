@@ -12,15 +12,14 @@ import UserNotifications
 // system settings page is shown. NewEpisodeNotificationWorkflow consults only
 // the subscription's snapshotted choice; iOS authorization remains a separate
 // system requirement.
-// Subscription rows observe SubscriptionStore directly; AppState remains only
-// for settings and notification commands that cross domain boundaries.
+// Subscription rows observe SubscriptionStore directly; this page has no
+// dependency on the cross-domain AppState command facade.
 // "Listening Recaps" has its own headed section and presents RecapSettingsView
 // (also at the bottom of this file) as a sheet — the opt-in weekly/monthly/yearly
 // stats-summary notifications. Weekly recaps default ON for fresh installs.
 // Subscription rows use 44 pt CachedArtworkImage thumbnails, sharing the same
 // downsampled cache used by Priority, Queue, Downloads, and Stats.
 struct NotificationSettingsView: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.scenePhase) private var scenePhase

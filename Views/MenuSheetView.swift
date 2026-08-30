@@ -24,6 +24,9 @@ import SwiftUI
 // secondarySystemGroupedBackground for the menu group.
 // The Menu also dismisses when a Listening Recap notification posts
 // .autohopOpenStats, so the app-level Stats route is visible immediately.
+// Menu-hosted destinations render CoachMarkOverlay above this sheet's own
+// NavigationStack. RootView's overlay is below presented sheets and cannot show
+// tips requested by Stats, Downloads, Sleep Schedule or Settings.
 // NavRules: one path per page; Find Podcasts lives behind + only; OPML import
 // lives in Settings → Subscriptions.
 struct MenuSheetView: View {
@@ -129,6 +132,9 @@ struct MenuSheetView: View {
         }
         .presentationBackground(menuPageBackground)
         .preferredColorScheme(.dark)
+        .overlay {
+            CoachMarkOverlay()
+        }
         .onAppear {
             let t = Date()
             appearTime = t

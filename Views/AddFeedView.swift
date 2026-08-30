@@ -2,10 +2,9 @@ import SwiftUI
 
 // AI CONTEXT — Views/AddFeedView.swift ("Add RSS Feed" page). Manual feed-URL
 // entry fallback for podcasts not in the iTunes catalog. Uses
-// FeedPreviewViewModel to fetch/preview the feed, then subscribes via
-// AppState/SubscriptionStore. Reached from PodcastSearchView and App Settings.
+// FeedPreviewViewModel to fetch/preview the feed, then subscribes through
+// SubscriptionStore. Reached from PodcastSearchView and App Settings.
 struct AddFeedView: View {
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @StateObject private var viewModel = FeedPreviewViewModel()
     @Environment(\.dismiss) private var dismiss

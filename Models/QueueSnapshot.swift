@@ -261,3 +261,21 @@ public struct QueuePlayNextRequest: Codable, Equatable, Sendable, Identifiable {
         sourceDeviceID = try container.decode(String.self, forKey: .sourceDeviceID)
     }
 }
+
+/// Companion commands are user intent, not permanent queue state. A command
+/// that the phone cannot resolve within one day must be acknowledged and
+/// removed rather than replayed forever or unexpectedly mutating a much later
+/// queue. Future-dated timestamps are treated as fresh to tolerate clock skew.
+public enum QueueCommandResolutionPolicy {
+    public static let unresolvedLifetime: TimeInterval = 24 * 60 * 60
+    public static let persistentWarningInterval: TimeInterval = 6 * 60 * 60
+
+    public static func isExpired(createdAt: Date, now: Date = Date()) -> Bool {
+        now.timeIntervalSince(createdAt) >= unresolvedLifetime
+    }
+
+    public static func shouldPersistWarning(lastLoggedAt: Date?, now: Date = Date()) -> Bool {
+        guard let lastLoggedAt else { return true }
+        return now.timeIntervalSince(lastLoggedAt) >= persistentWarningInterval
+    }
+}

@@ -2,7 +2,10 @@ import Foundation
 
 // AI CONTEXT — tvOS foreground-sync safety-net policy.
 //
-// CloudKit change notifications and Relay nudges remain the primary fast path.
+// CloudKit change notifications are the intended fast path (there is no Relay;
+// that prototype was removed). Treat push as BEST-EFFORT, not guaranteed: it
+// depends on the app's APNs environment matching the CloudKit environment, so
+// this deterministic foreground poll is the only convergence guarantee.
 // This policy owns only the deterministic foreground fallback. The prior code
 // slept five minutes and then skipped snapshots younger than five minutes,
 // permitting almost ten minutes of stale Up Next state while its comment

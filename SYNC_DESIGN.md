@@ -492,7 +492,12 @@ adopted clean. Settings sub-structs
    `applyRemoteSubscriptionState` updates settings /
    processes unsubscribe / signals `.needsMaterialization`;
    `SyncCoordinator.materializeRemoteSubscription` fetches the feed via FeedService and
-   creates the podcast, then applies settings. Migration v4 caches subscription
+   creates the podcast, then applies settings. The remote projection is already
+   durable before this fetch begins; a failed fetch is therefore retained as a
+   persistent retry entry and retried from that projection after bounded
+   backoff, foreground/explicit sync and relaunch. Change-token advancement
+   never makes successful future materialisation depend on CloudKit redelivery.
+   Migration v4 caches subscription
    system fields. Migration v9 and the `SubscriptionOrder` singleton
    (`subscription-order:current`) synchronize Priority Stack order atomically;
    materialization reapplies the stored order rather than trusting record

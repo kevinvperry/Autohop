@@ -10,6 +10,8 @@
 // snapshot is marked clean, the current singleton must remain readable so a late
 // or repeated CKSyncEngine save request can still build `queue:current`. A stale
 // acknowledgement must leave a newer locally authored snapshot pending.
+// Queue-command policy tests also bound unresolved Apple TV command lifetime
+// and persistent-warning frequency so stale intent cannot replay forever.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -68,6 +70,35 @@ final class QueueSnapshotSyncTests: XCTestCase {
         let legacyData = try JSONSerialization.data(withJSONObject: object)
 
         XCTAssertEqual(try JSONDecoder().decode(QueuePlayNextRequest.self, from: legacyData).action, .playNext)
+    }
+
+    func testUnresolvableQueueCommandExpiresAfterOneDay() {
+        let now = Date(timeIntervalSince1970: 200_000)
+        XCTAssertFalse(QueueCommandResolutionPolicy.isExpired(
+            createdAt: now.addingTimeInterval(-QueueCommandResolutionPolicy.unresolvedLifetime + 1),
+            now: now
+        ))
+        XCTAssertTrue(QueueCommandResolutionPolicy.isExpired(
+            createdAt: now.addingTimeInterval(-QueueCommandResolutionPolicy.unresolvedLifetime),
+            now: now
+        ))
+        XCTAssertFalse(QueueCommandResolutionPolicy.isExpired(
+            createdAt: now.addingTimeInterval(60),
+            now: now
+        ))
+    }
+
+    func testUnresolvedQueueCommandWarningsAreRateLimited() {
+        let now = Date(timeIntervalSince1970: 200_000)
+        XCTAssertTrue(QueueCommandResolutionPolicy.shouldPersistWarning(lastLoggedAt: nil, now: now))
+        XCTAssertFalse(QueueCommandResolutionPolicy.shouldPersistWarning(
+            lastLoggedAt: now.addingTimeInterval(-60),
+            now: now
+        ))
+        XCTAssertTrue(QueueCommandResolutionPolicy.shouldPersistWarning(
+            lastLoggedAt: now.addingTimeInterval(-QueueCommandResolutionPolicy.persistentWarningInterval),
+            now: now
+        ))
     }
 
 
