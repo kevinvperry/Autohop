@@ -335,6 +335,12 @@ targets:
         excludes:
           - Info.plist
           - AutohopWidgets.entitlements
+      # AI CONTEXT — The widget reads shared UserDefaults and file-backed snapshot
+      # metadata independently of the containing app. Embed the same required-
+      # reason API declaration in the extension bundle; app-level coverage must
+      # not be assumed to satisfy App Store validation for an embedded executable.
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.widgets

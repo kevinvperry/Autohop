@@ -35,6 +35,10 @@ of the implementation definition of done.
 - Verified Release builds on iPhone 17 Pro Max, iPad Pro 13-inch and an
   Apple-silicon Mac running the Designed-for-iPad app. The iPad build compiles
   and embeds the newly universal widget target.
+- Embedded the required-reason API privacy manifest directly in the widget
+  extension bundle. The widget independently reads shared UserDefaults and
+  file-backed snapshot metadata, so archive validation does not rely on the
+  containing app's manifest being treated as extension coverage.
 
 ## 2026-08-30 Public Documentation Reconciliation and Dependency Hygiene — post-submission
 

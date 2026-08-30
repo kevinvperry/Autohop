@@ -170,6 +170,7 @@
 		7A63542649B51E2E577F8B6E /* TVEpisodeDescriptionTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD9E6062F0187E4A0B0A44A3 /* TVEpisodeDescriptionTextTests.swift */; };
 		7C336F2FC7117E89325B2A0F /* HistorySyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D5A368146F470AC4791427 /* HistorySyncTests.swift */; };
 		7C909C1645B71F7FFDEB641B /* PlayAutohopEpisodeIntent+Widget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8083562AB2D83F1A58FDFFA /* PlayAutohopEpisodeIntent+Widget.swift */; };
+		7D0D596EA27663FD9C06CCAB /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8DADDACDF13F7D6B46ED8FB8 /* PrivacyInfo.xcprivacy */; };
 		7D372DE55DDBC1F6EF5B94A1 /* TVListeningHistoryWriteBackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F38D560351E3FAB2BF21ED9 /* TVListeningHistoryWriteBackTests.swift */; };
 		7D50AD5CA0F595CC56F83FC2 /* CarPlayActionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E16EECCF23494439707AF21 /* CarPlayActionRouter.swift */; };
 		7D675BFDEDE23E3EB01DD9AA /* CarPlay.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10DE052AEEE355CE584840FF /* CarPlay.framework */; };
@@ -287,6 +288,7 @@
 		DBE70F960622E5424CE3CC7A /* PlaybackChapterWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D94CEB8CD4E1F618EE38EFC /* PlaybackChapterWorkflow.swift */; };
 		DD09006541935702499298DA /* ParsedFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF6869CDF5E12D17427C2D2 /* ParsedFeed.swift */; };
 		DF2AD96F04734938EEA12289 /* TopPodcastsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61DDFBA259B0D70F2A347345 /* TopPodcastsView.swift */; };
+		E01FB94152D9B9ED61C52D61 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_A22A8D52-51F4-4FF2-8918-4979A951A9DB" /* Assets.xcassets */; };
 		E042A9DF31B59F8F8D16F504 /* PlaybackStartWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F539469DBB9E5F95AA6BA63F /* PlaybackStartWorkflow.swift */; };
 		E04FCEEB8D77CB4742C11F42 /* TVForegroundSyncPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E24CF2BD9715E58F225A041 /* TVForegroundSyncPolicyTests.swift */; };
 		E05AFC98E6B1842F1BF4D15D /* PodcastSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B26404DFDADDE7CD73968A8 /* PodcastSearchView.swift */; };
@@ -318,7 +320,6 @@
 		EF1600E98AC2B56C4C400648 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A314D3A788F1F62E2CC094A5 /* RootView.swift */; };
 		EF2D04E546E8AB0E1A843F52 /* TVHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A316CF87C88DB6578599984A /* TVHistoryView.swift */; };
 		EF5F77C34474BBA802878F3B /* CarPlayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C167A434944B1A28473B436F /* CarPlayCoordinator.swift */; };
-		EF7F32A3C6A021F19C71ACE5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_EC9DC2D4-7CB6-4BBC-BBEE-D6F52DC69801" /* Assets.xcassets */; };
 		F04D8956C833756F2AD12D09 /* SubscriptionPersistenceFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8A1BFC303E1031882116A93 /* SubscriptionPersistenceFailureTests.swift */; };
 		F0DA96AE6D7BEA13DC7B4C0F /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85E0A445140C51BA0B2C6CCC /* WidgetSnapshot.swift */; };
 		F219A8B281E4313EE02BB90A /* PodcastSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3976B164B99940414D5413E2 /* PodcastSearch.swift */; };
@@ -710,12 +711,12 @@
 		FE42D79ECDDA9D6555784A64 /* WidgetSnapshotCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotCoordinator.swift; sourceTree = "<group>"; };
 		FF6BE2BC2069CC319932B58C /* TVDemoSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDemoSessionTests.swift; sourceTree = "<group>"; };
 		FF88E9F919B85877D287F42D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_1523ACBF-8BEA-4CEB-8ED0-94E3DBD42211" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_3D7F3BF4-B63E-4FA7-A4EE-7F2B223B28AD" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
-		"TEMP_9B24FD54-BDA4-4CDB-ABA3-AF5C77AD9BDD" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
-		"TEMP_D928891F-8EC2-4B2B-AA4A-17CF6D7BB73B" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
-		"TEMP_DA5FC081-FC35-4980-B52B-B08E1BAAC8EB" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
-		"TEMP_EC9DC2D4-7CB6-4BBC-BBEE-D6F52DC69801" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_6F601B3F-862A-4523-B509-8B79158D48AB" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
+		"TEMP_7A036FA1-6CD8-46E1-9A3B-256E9C761EAF" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
+		"TEMP_86273035-E441-49CC-9EDE-A7B68A848A85" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
+		"TEMP_8BB58A94-878A-45A6-AEE7-58CF73BB8A52" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
+		"TEMP_A036721B-A394-4F3F-AA08-810C3D4F673A" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_A22A8D52-51F4-4FF2-8918-4979A951A9DB" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1452,16 +1453,16 @@
 			path = Queue;
 			sourceTree = "<group>";
 		};
-		"TEMP_BF769484-5AE6-4C6E-B7EA-B5103ED3CB18" /* . */ = {
+		"TEMP_9D999251-4428-4654-A5AA-05ECD079ED07" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_D928891F-8EC2-4B2B-AA4A-17CF6D7BB73B" /* LICENSE */,
-				"TEMP_EC9DC2D4-7CB6-4BBC-BBEE-D6F52DC69801" /* Assets.xcassets */,
-				"TEMP_9B24FD54-BDA4-4CDB-ABA3-AF5C77AD9BDD" /* NOTICE */,
-				"TEMP_DA5FC081-FC35-4980-B52B-B08E1BAAC8EB" /* .gitignore */,
+				"TEMP_86273035-E441-49CC-9EDE-A7B68A848A85" /* LICENSE */,
+				"TEMP_A22A8D52-51F4-4FF2-8918-4979A951A9DB" /* Assets.xcassets */,
+				"TEMP_7A036FA1-6CD8-46E1-9A3B-256E9C761EAF" /* NOTICE */,
+				"TEMP_8BB58A94-878A-45A6-AEE7-58CF73BB8A52" /* .gitignore */,
 				8DADDACDF13F7D6B46ED8FB8 /* PrivacyInfo.xcprivacy */,
-				"TEMP_3D7F3BF4-B63E-4FA7-A4EE-7F2B223B28AD" /* Autohop.entitlements */,
-				"TEMP_1523ACBF-8BEA-4CEB-8ED0-94E3DBD42211" /* Info.plist */,
+				"TEMP_6F601B3F-862A-4523-B509-8B79158D48AB" /* Autohop.entitlements */,
+				"TEMP_A036721B-A394-4F3F-AA08-810C3D4F673A" /* Info.plist */,
 				7012122AF80BE6512A9C2E7C /* Settings */,
 				880172BFC198BC86B5F2126B /* App */,
 				378B9675C08586D4F929F770 /* CarPlay */,
@@ -1491,6 +1492,7 @@
 			buildConfigurationList = 7F784FE1CF50B49AAD10C4DE /* Build configuration list for PBXNativeTarget "AutohopWidgets" */;
 			buildPhases = (
 				385FF4D218A7EBD7555BB5D4 /* Sources */,
+				3D01F503D4D1FA3C168DBA0E /* Resources */,
 				D6304B850D397A0A808BE534 /* Frameworks */,
 			);
 			buildRules = (
@@ -1685,6 +1687,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3D01F503D4D1FA3C168DBA0E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D0D596EA27663FD9C06CCAB /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C51B23931017D79D0E0B9D37 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1698,7 +1708,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EF7F32A3C6A021F19C71ACE5 /* Assets.xcassets in Resources */,
+				E01FB94152D9B9ED61C52D61 /* Assets.xcassets in Resources */,
 				07866A46BC9C3D2BD5EA2CED /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
