@@ -1,8 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# AI CONTEXT — Runs as the final app-target build phase, before Xcode signs the
-# product. It embeds the exact checked-out commit, a dirty-tree marker, and a
+# AI CONTEXT — Runs as the final app-target build phase, after the generated
+# product Info.plist exists and before Xcode signs the product. project.yml must
+# keep that plist in this phase's inputFiles or Xcode may schedule
+# ProcessInfoPlistFile afterward and overwrite every value set here. It embeds
+# the exact checked-out commit, a dirty-tree marker, and a
 # source fingerprint in the built Info.plist so diagnostic launch records can
 # establish build boundaries without assuming that HEAD describes local edits.
 # Source/generated plists are never mutated. Non-git source exports retain the
@@ -62,5 +65,12 @@ fi
 /usr/libexec/PlistBuddy -c "Set :SourceFingerprint $source_fingerprint" "$built_plist" \
   >/dev/null 2>&1 \
   || /usr/libexec/PlistBuddy -c "Add :SourceFingerprint string $source_fingerprint" "$built_plist"
+
+# Declaring and materialising a phase output keeps the modern Xcode build graph
+# ordered: product plist generation → provenance mutation → code signing.
+if [[ -n "${SCRIPT_OUTPUT_FILE_0:-}" ]]; then
+  mkdir -p "$(dirname "$SCRIPT_OUTPUT_FILE_0")"
+  touch "$SCRIPT_OUTPUT_FILE_0"
+fi
 
 echo "Embedded GitCommitSHA=$commit GitWorkingTreeDirty=$working_tree_dirty SourceFingerprint=$source_fingerprint BuildTimestampUTC=$build_timestamp"

@@ -39,6 +39,10 @@ of the implementation definition of done.
   extension bundle. The widget independently reads shared UserDefaults and
   file-backed snapshot metadata, so archive validation does not rely on the
   containing app's manifest being treated as extension coverage.
+- Added an explicit build dependency from the provenance phase to the assembled
+  product Info.plist. Xcode previously could run the script first and then
+  overwrite its commit, clean-tree, fingerprint and timestamp values with
+  `unavailable` defaults; signed archives now retain their exact source identity.
 
 ## 2026-08-30 Public Documentation Reconciliation and Dependency Hygiene — post-submission
 
