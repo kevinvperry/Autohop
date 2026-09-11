@@ -6,8 +6,12 @@
 // protects the 2026-07-12 UI optimization: continuous playback may mutate the
 // authoritative bucket every tick, but must not publish a revision every tick
 // or publish the first tick twice when its initial persistence checkpoint runs.
+// Completed downloads are deliberately different: their discrete settlement is
+// immediately durable so background termination cannot erase the traffic fact.
 // Discrete outcome tests also protect durable per-show attribution, which is the
-// source of truth for long-range expanded Top Shows counts.
+// source of truth for long-range expanded Top Shows counts. Calendar-boundary,
+// coverage-notice and canonical-feed fixtures protect the September 2026 Stats
+// interpretation redesign.
 import XCTest
 #if AUTOHOP_SPM
 @testable import AutohopCore
@@ -73,9 +77,14 @@ final class StatsWriteCoalescingTests: XCTestCase {
     }
 
     @MainActor
-    func testDownloadAccountingDefersPersistenceUntilCheckpoint() throws {
+    func testDownloadAccountingPersistsAtSettlement() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("autohop-download-stats-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("stats.json")
         let db = try AutohopDatabase()
-        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        let store = ListeningStatsStore(fileURL: fileURL, legacyFileURL: nil)
         store.syncDatabase = db
         db._testStatsDayWriteCount = 0
 
@@ -83,17 +92,16 @@ final class StatsWriteCoalescingTests: XCTestCase {
 
         XCTAssertEqual(
             db._testStatsDayWriteCount,
-            0,
-            "Download settlement must not synchronously flush statistics"
+            1,
+            "A completed background download must persist its discrete statistics immediately"
         )
 
         store.save()
 
-        XCTAssertEqual(
-            db._testStatsDayWriteCount,
-            1,
-            "A lifecycle checkpoint must persist deferred download accounting"
-        )
+        XCTAssertGreaterThanOrEqual(db._testStatsDayWriteCount, 1)
+        let relaunched = ListeningStatsStore(fileURL: fileURL, legacyFileURL: nil)
+        XCTAssertEqual(relaunched.summary(for: .lifetime).episodesDownloaded, 1)
+        XCTAssertEqual(relaunched.summary(for: .lifetime).bytesDownloaded, 42_000)
     }
 
     @MainActor
@@ -128,5 +136,131 @@ final class StatsWriteCoalescingTests: XCTestCase {
         XCTAssertEqual(summary.wallClockSeconds, 100, accuracy: 0.001)
         XCTAssertEqual(summary.timeSavedVariableSpeed, 40, accuracy: 0.001)
         XCTAssertEqual(summary.perShowTimeSaved[show.uuidString] ?? 0, 40, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testRenderedIntervalSplitsAcrossLocalMidnightAndHourBuckets() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 10 * 3600)!
+        let store = ListeningStatsStore(
+            fileURL: nil,
+            legacyFileURL: nil,
+            protectedDataAvailable: { true },
+            calendarProvider: { calendar }
+        )
+        let midnight = calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 5, hour: 0, minute: 0, second: 0
+        ))!
+
+        store.addListeningTime(
+            2,
+            speed: 1,
+            subscriptionID: UUID(),
+            showTitle: "Show",
+            endedAt: midnight.addingTimeInterval(1)
+        )
+
+        let days = Dictionary(uniqueKeysWithValues: store.summary(for: .lifetime).days.map { ($0.dayKey, $0) })
+        XCTAssertEqual(days["2026-09-04"]?.wallClockSeconds ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(days["2026-09-04"]?.hourSeconds[23] ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(days["2026-09-05"]?.wallClockSeconds ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(days["2026-09-05"]?.hourSeconds[0] ?? 0, 1, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testCanonicalShowIdentityCombinesResubscribeStatistics() {
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        let feedURL = URL(string: "HTTPS://Example.com/podcast.xml/#fragment")!
+        let first = Subscription(feedURL: feedURL, title: "Show", priorityRank: 1)
+        let second = Subscription(
+            feedURL: URL(string: "https://example.com/podcast.xml")!,
+            title: "Show",
+            priorityRank: 1
+        )
+        store.addListeningTime(10, speed: 1, subscriptionID: first.id, showTitle: first.title)
+
+        store.registerCanonicalShows([first, second])
+        store.addListeningTime(
+            5,
+            speed: 1,
+            subscriptionID: second.id,
+            showTitle: second.title,
+            feedURL: second.feedURL
+        )
+
+        let summary = store.summary(for: .lifetime)
+        let canonical = StatsShowIdentity.key(for: second.feedURL)
+        XCTAssertEqual(summary.perShowSeconds.count, 1)
+        XCTAssertEqual(summary.perShowSeconds[canonical] ?? 0, 15, accuracy: 0.001)
+    }
+
+    func testCanonicalShowIdentityPreservesCaseSensitivePath() {
+        let upperPath = URL(string: "https://example.com/Feed.xml")!
+        let lowerPath = URL(string: "HTTPS://EXAMPLE.COM/feed.xml")!
+
+        XCTAssertNotEqual(
+            StatsShowIdentity.key(for: upperPath),
+            StatsShowIdentity.key(for: lowerPath),
+            "Only URL scheme and host are case-insensitive; feed paths may be case-sensitive"
+        )
+    }
+
+    @MainActor
+    func testLifetimeDisclosesMetricsIntroducedAfterRecordedHistoryBegan() {
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        store.importDay(DayStats(dayKey: "2026-06-01", wallClockSeconds: 60))
+
+        let metrics = Set(store.summary(for: .lifetime).coverageNotices.map(\.metric))
+
+        XCTAssertTrue(metrics.contains(.perShowTimeSaved))
+        XCTAssertTrue(metrics.contains(.downloads))
+        XCTAssertTrue(metrics.contains(.perShowOutcomes))
+        XCTAssertTrue(metrics.contains(.durableOutcomes))
+    }
+
+    @MainActor
+    func testDurableOutcomeIsIdempotentAndPreservesNaturalCompletion() {
+        let store = ListeningStatsStore(fileURL: nil, legacyFileURL: nil)
+        let subscription = Subscription(
+            feedURL: URL(string: "https://example.com/feed")!,
+            title: "Show",
+            priorityRank: 1
+        )
+        var episode = Episode(
+            subscriptionID: subscription.id,
+            guid: "episode-guid",
+            title: "Episode",
+            audioURL: URL(string: "https://example.com/episode.mp3")!
+        )
+        episode.durationSeconds = 100
+
+        store.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
+            completionKind: .finishedNaturally,
+            positionSeconds: 100
+        )
+        store.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
+            completionKind: .autoArchived,
+            positionSeconds: 100
+        )
+        store.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
+            completionKind: .finishedNaturally,
+            positionSeconds: 100
+        )
+
+        let summary = store.summary(for: .lifetime)
+        let outcomes = summary.episodeOutcomes
+        XCTAssertEqual(outcomes.count, 1)
+        XCTAssertEqual(outcomes.values.first?.completionKind, .finishedNaturally)
+        XCTAssertEqual(summary.episodesCompleted, 1)
+        XCTAssertEqual(
+            summary.perShowEpisodesCompleted[StatsShowIdentity.key(for: subscription.feedURL)],
+            1
+        )
     }
 }

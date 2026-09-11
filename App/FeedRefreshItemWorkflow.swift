@@ -21,7 +21,9 @@ import Foundation
 // - Obsolete latest media is protected when it is currently playing.
 // - Browse previews merge display data but stop before queue/download effects.
 // - Automatic intent scheduling happens only after the authoritative merged
-//   subscription is re-read.
+//   subscription is re-read. Every filter-eligible episode first observed in
+//   the current response is considered, newest first, bounded by Episode Limit;
+//   the workflow must not collapse a multi-release response to latestEpisode.
 // - Inactive-app transport drops do not poison feed-health backoff.
 //
 // This workflow refreshes exactly one feed. Cycle budgeting, joining,
@@ -198,9 +200,22 @@ final class FeedRefreshItemWorkflow {
                     RefreshStats.releaseObservationKey(for: $0)
                 ) && filters.evaluation(for: $0).isIncluded
             }
+            var newlyEligibleGUIDs = Set<String>(
+                result.episodes.compactMap { episode in
+                    guard !knownKeys.contains(
+                        RefreshStats.releaseObservationKey(for: episode)
+                    ), filters.evaluation(for: episode).isIncluded else {
+                        return nil
+                    }
+                    return episode.guid
+                }
+            )
             let latestChanged = oldLatestGUID != result.latestEpisode.guid
             let latestChangedEligible = latestChanged
                 && filters.evaluation(for: result.latestEpisode).isIncluded
+            if latestChangedEligible {
+                newlyEligibleGUIDs.insert(result.latestEpisode.guid)
+            }
             stats.recordFetch(
                 foundNewEpisode:
                     newEligibleEpisode != nil || latestChangedEligible,
@@ -213,9 +228,6 @@ final class FeedRefreshItemWorkflow {
                 subscriptionID: subscription.id,
                 stats: stats
             )
-            let oldLatestWasDownloaded =
-                subscription.latestEpisode?.downloadState == .downloaded
-
             if let oldLatest = subscription.latestEpisode,
                latestChanged,
                playback.currentEpisode?.id != oldLatest.id {
@@ -388,25 +400,23 @@ final class FeedRefreshItemWorkflow {
                     reason: "feed.refresh.\(subscription.title)"
                 )
             }
-            let updated = subscriptionStore.subscription(id: subscription.id)
-            guard let candidate = updated.flatMap({
-                autoDownloadIntentWorkflow.newestCandidate(in: $0)
-            }) else {
-                logger.verbose(
-                    "feed.refresh",
-                    "No eligible episode found for auto-download",
-                    metadata: releaseRadarWorkflow.feedMetadata(
-                        for: subscription,
-                        includeURL: false
-                    )
-                )
-                return
+            guard let updated = subscriptionStore.subscription(
+                id: subscription.id
+            ) else { return }
+            let newlyDiscovered = updated.episodes.filter { episode in
+                newlyEligibleGUIDs.contains(episode.guid)
+                    && updated.downloadFilterSettings
+                        .evaluation(for: episode)
+                        .isIncluded
             }
-            guard result.latestEpisode.guid != oldLatestGUID
-                    || oldLatestWasDownloaded == false else {
+            let candidates = AutomaticDownloadBatchPolicy.candidates(
+                from: newlyDiscovered,
+                episodeLimit: updated.autoArchiveSettings.episodeLimit.rawValue
+            )
+            guard !candidates.isEmpty else {
                 logger.verbose(
                     "feed.refresh",
-                    "No new download needed",
+                    "No newly discovered eligible episodes found for auto-download",
                     metadata: releaseRadarWorkflow.feedMetadata(
                         for: subscription,
                         includeURL: false
@@ -415,7 +425,7 @@ final class FeedRefreshItemWorkflow {
                 return
             }
             autoDownloadIntentWorkflow.schedule(
-                episode: candidate,
+                episodes: candidates,
                 subscriptionID: subscription.id,
                 podcastTitle: result.subscriptionTitle,
                 refreshUpNextAfterMerge: refreshUpNextAfterMerge,
@@ -438,7 +448,11 @@ final class FeedRefreshItemWorkflow {
                     extra: [
                         "podcast": result.subscriptionTitle,
                         "episodeCount": "\(result.episodes.count)",
-                        "autoDownload": "scheduled"
+                        "autoDownload": "scheduled",
+                        "autoDownloadCount": "\(candidates.count)",
+                        "newEligibleCount": "\(newlyEligibleGUIDs.count)",
+                        "episodeLimit":
+                            "\(updated.autoArchiveSettings.episodeLimit.rawValue)"
                     ]
                 )
             )

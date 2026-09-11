@@ -1,5 +1,8 @@
 import Foundation
 import CloudKit
+#if canImport(Security)
+import Security
+#endif
 
 // AI CONTEXT — Persistence/CloudKitSyncMapping.swift
 // Two things live here: (1) `DeviceIdentity` — the stable per-device UUID used to
@@ -26,16 +29,73 @@ import CloudKit
 // preventing mixed ordering generations across devices. Legacy rank fields stay
 // in SubscriptionState for compatibility and recovery.
 
-// Stable per-device identifier for stats partitioning (SYNC_DESIGN.md step 5b).
-// Generated once and persisted in UserDefaults — stats records are keyed by
-// (deviceID, dayKey) so each device owns its own partition and they sum on read.
+// Stable installation identifier for stats partitioning. The active identity is
+// a ThisDeviceOnly Keychain value, so restoring a device backup cannot clone the
+// partition owner onto a second live device. The old UserDefaults value is
+// exposed only as migration lineage; it is deliberately never copied into the
+// Keychain because the process cannot distinguish an upgrade from a restored
+// backup on its first launch.
 public enum DeviceIdentity {
-    private static let key = "com.autohop.sync.deviceID"
+    private static let legacyKey = "com.autohop.sync.deviceID"
+    private static let service = "com.autohop.sync.installation-identity"
+    private static let account = "stats-device-id-v2"
+    private static let identityLock = NSLock()
+    private nonisolated(unsafe) static var cachedIdentity: String?
+
+    public static var legacyIdentifier: String? {
+        UserDefaults.standard.string(forKey: legacyKey)
+    }
+
     public static var current: String {
-        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        identityLock.lock()
+        defer { identityLock.unlock() }
+        if let cachedIdentity { return cachedIdentity }
+        if let existing = keychainValue(), !existing.isEmpty {
+            cachedIdentity = existing
+            return existing
+        }
         let new = UUID().uuidString
-        UserDefaults.standard.set(new, forKey: key)
+        persistKeychainValue(new)
+        cachedIdentity = new
         return new
+    }
+
+    private static func keychainValue() -> String? {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+        #else
+        return UserDefaults.standard.string(forKey: "\(legacyKey).v2")
+        #endif
+    }
+
+    private static func persistKeychainValue(_ value: String) {
+        #if canImport(Security)
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let status = SecItemAdd(base.merging(attributes) { _, new in new } as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+        }
+        #else
+        UserDefaults.standard.set(value, forKey: "\(legacyKey).v2")
+        #endif
     }
 }
 
@@ -63,6 +123,11 @@ public enum DeviceIdentity {
 // on that distinction; otherwise clean local subscription settings become
 // absent CloudKit fields and can be decoded as destructive defaults elsewhere.
 public enum CloudKitSync {
+    public struct StatsSnapshot: Equatable {
+        public var deviceID: String
+        public var day: DayStats
+        var metadata: StatsPartitionMetadata
+    }
     public static let zoneName = "AutohopSync"
     public static let episodeRecordType = "EpisodeState"
     public static let subscriptionRecordType = "SubscriptionState"
@@ -505,7 +570,7 @@ public enum CloudKitSync {
         )
     }
 
-    // MARK: - Listening-history mapping (record-level LWW by lastListenedAt)
+    // MARK: - Listening-history mapping (recency + monotonic evidence merge)
 
     private enum HistKey {
         static let entry = "entry"
@@ -536,6 +601,9 @@ public enum CloudKitSync {
         static let deviceID = "deviceID"
         static let dayKey = "dayKey"
         static let day = "day"
+        static let generationID = "generationID"
+        static let revision = "revision"
+        static let payloadHash = "payloadHash"
     }
 
     public static func statsRecordID(deviceID: String, dayKey: String) -> CKRecord.ID {
@@ -548,19 +616,54 @@ public enum CloudKitSync {
         return record
     }
 
+    static func makeRecord(deviceID: String, projection: StatsDayProjection) -> CKRecord {
+        let record = CKRecord(
+            recordType: statsRecordType,
+            recordID: statsRecordID(deviceID: deviceID, dayKey: projection.day.dayKey)
+        )
+        populate(record, deviceID: deviceID, projection: projection)
+        return record
+    }
+
     public static func populate(_ record: CKRecord, deviceID: String, day: DayStats) {
         record[StatsKey.deviceID] = deviceID
         record[StatsKey.dayKey] = day.dayKey
         record[StatsKey.day] = try? jsonEncoder.encode(day)
     }
 
-    /// Decodes a server stats record. Returns the owning deviceID (so a device
-    /// can skip its own records) and the day partition.
-    public static func statsPartition(from record: CKRecord) -> (deviceID: String, day: DayStats)? {
+    static func populate(_ record: CKRecord, deviceID: String, projection: StatsDayProjection) {
+        populate(record, deviceID: deviceID, day: projection.day)
+        record[StatsKey.generationID] = projection.metadata.generationID
+        record[StatsKey.revision] = Int64(clamping: projection.metadata.revision)
+        record[StatsKey.payloadHash] = projection.metadata.payloadHash
+    }
+
+    public static func statsSnapshot(from record: CKRecord) -> StatsSnapshot? {
         guard let deviceID = record[StatsKey.deviceID] as? String,
               let data = record[StatsKey.day] as? Data,
               let day = try? jsonDecoder.decode(DayStats.self, from: data)
         else { return nil }
-        return (deviceID, day)
+        let generationID = record[StatsKey.generationID] as? String ?? "legacy-cloud"
+        let revision = UInt64(max(0, record[StatsKey.revision] as? Int64 ?? 0))
+        let hash = record[StatsKey.payloadHash] as? String
+            ?? (try? DurablePayloadFingerprint.make(day))
+            ?? ""
+        return StatsSnapshot(
+            deviceID: deviceID,
+            day: day,
+            metadata: StatsPartitionMetadata(
+                generationID: generationID,
+                revision: revision,
+                payloadHash: hash,
+                writerDeviceID: deviceID
+            )
+        )
+    }
+
+    /// Decodes a server stats record. Returns the owning deviceID (so a device
+    /// can skip its own records) and the day partition.
+    public static func statsPartition(from record: CKRecord) -> (deviceID: String, day: DayStats)? {
+        guard let snapshot = statsSnapshot(from: record) else { return nil }
+        return (snapshot.deviceID, snapshot.day)
     }
 }

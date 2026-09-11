@@ -83,9 +83,9 @@ import Foundation
 //
 // INVARIANTS:
 //  - Plays local files only (download-first); never streams.
-//  - onTimeUpdate ticks ~0.5 s on both paths — PlaybackCoordinator derives
-//    history/Stats, sleep services, Now Playing, and position persistence from
-//    this single tick.
+//  - onTimeUpdate ticks ~0.5 s on both paths for UI, sleep services, Now
+//    Playing, and position persistence. Listening history/Stats instead use
+//    onPlaybackInterval so seeks and trimmed source frames cannot be credited.
 //  - Video Vocal Boost stays on AVPlayer via an audioMix; track lookup uses
 //    async `loadTracks(withMediaType:)`, and live setting changes apply only if
 //    the same player item + preference level are still current when loading
@@ -118,6 +118,10 @@ final class PlaybackEngine: PlaybackControlling {
     private var timeControlStatusObservation: NSKeyValueObservation?
     private var playerRateObservation: NSKeyValueObservation?
     private var playerItemStatusObservation: NSKeyValueObservation?
+    /// Last natural AVPlayer position already emitted through
+    /// `onPlaybackInterval`. Explicit seeks clear/reseed this boundary so their
+    /// media jump can never become listening time.
+    private var playerAccountingPosition: TimeInterval?
 
     // MARK: - AVAudioEngine (engine path: strong vocal boost and/or trim silence)
 
@@ -201,6 +205,7 @@ final class PlaybackEngine: PlaybackControlling {
 
     var onEpisodeFinished: ((Episode) -> Void)?
     var onTimeUpdate: ((TimeInterval) -> Void)?
+    var onPlaybackInterval: ((PlaybackAccountingInterval) -> Void)?
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
     /// Fired after a removed output device returns (e.g. AirPods reinserted).
@@ -325,6 +330,7 @@ final class PlaybackEngine: PlaybackControlling {
                     toleranceAfter: .zero
                 )
             }
+            resetPlayerAccounting(at: pausedAtSeconds)
             newPlayer.playImmediately(atRate: validPlayerRate(preference.speed))
 
             logger.info("playback.started", "AVPlayer playback started", metadata: [
@@ -361,6 +367,9 @@ final class PlaybackEngine: PlaybackControlling {
         let resumeTime = currentPlaybackTime()
         let wasPlaying = isPlaying
         let filter = currentFilter ?? ChapterFilter()
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: resumeTime)
+        }
 
         logger.info("playback.pathReconcile", "Rebuilding playback path for live setting change", metadata: [
             "episode": episode.title,
@@ -391,6 +400,9 @@ final class PlaybackEngine: PlaybackControlling {
         routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
         pausedAtSeconds = currentPlaybackTime()
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: pausedAtSeconds)
+        }
         if engineUsesEngine {
             engineReadPaused = true
             audioPlayerNode?.pause()
@@ -424,6 +436,7 @@ final class PlaybackEngine: PlaybackControlling {
             stopEnginePlayback()
         } else if let player {
             releasedBackend = "AVPlayer"
+            reportPlayerPlaybackInterval(at: seconds)
             player.pause()
             removePlayerObservers()
             player.replaceCurrentItem(with: nil)
@@ -499,6 +512,7 @@ final class PlaybackEngine: PlaybackControlling {
             lastRenderedAt = now
         } else {
             let rate = validPlayerRate(currentPreference?.speed ?? 1.0)
+            resetPlayerAccounting(at: currentPlaybackTime())
             player?.defaultRate = rate
             player?.playImmediately(atRate: rate)
         }
@@ -552,6 +566,9 @@ final class PlaybackEngine: PlaybackControlling {
             return
         }
 
+        reportPlayerPlaybackInterval(at: currentPlaybackTime())
+        playerAccountingPosition = nil
+
         player?.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
             toleranceBefore: .zero,
@@ -559,6 +576,7 @@ final class PlaybackEngine: PlaybackControlling {
         ) { [weak self] _ in
             guard let self else { return }
             self.pausedAtSeconds = target
+            self.resetPlayerAccounting(at: target)
             self.onTimeUpdate?(target)
             if wasPlaying {
                 let rate = self.validPlayerRate(self.currentPreference?.speed ?? 1.0)
@@ -576,6 +594,9 @@ final class PlaybackEngine: PlaybackControlling {
     // MARK: - Speed / Vocal Boost / Trim Silence
 
     func updatePlaybackSpeed(_ speed: Double) {
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: currentPlaybackTime())
+        }
         currentPreference?.speed = speed
         if engineUsesEngine {
             // AVAudioUnitTimePitch.rate is a live Audio Unit parameter — it takes effect on
@@ -583,6 +604,7 @@ final class PlaybackEngine: PlaybackControlling {
             audioTimePitch?.rate = Float(speed)
         } else {
             let rate = validPlayerRate(speed)
+            resetPlayerAccounting(at: currentPlaybackTime())
             player?.defaultRate = rate
             if player?.rate != 0 {
                 player?.rate = rate
@@ -767,6 +789,9 @@ final class PlaybackEngine: PlaybackControlling {
             "backend": engineUsesEngine ? "AVAudioEngine" : "AVPlayer",
             "episode": currentEpisode?.title ?? "none"
         ])
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: currentPlaybackTime())
+        }
         removePlayerObservers()
         player?.pause()
         player = nil
@@ -1023,8 +1048,23 @@ final class PlaybackEngine: PlaybackControlling {
                         if channelMode == .mono { Self.foldStereoBufferToMono(buf) }
                         sem.wait()
                         if self.engineReadCancelled { sem.signal(); break }
-                        node.scheduleBuffer(buf, completionCallbackType: .dataRendered) { _ in
+                        let endPosition = Double(file.framePosition) / sampleRate
+                        node.scheduleBuffer(buf, completionCallbackType: .dataRendered) { [weak self] _ in
                             sem.signal()
+                            DispatchQueue.main.async {
+                                guard let self, self.engineBufferGeneration == generation else { return }
+                                self.lastRenderedAt = CFAbsoluteTimeGetCurrent()
+                                self.engineCurrentFileSeconds = endPosition
+                                let heardSeconds = Double(buf.frameLength) / sampleRate
+                                let speed = max(self.currentPreference?.speed ?? 1.0, 0.01)
+                                guard heardSeconds.isFinite, heardSeconds > 0 else { return }
+                                self.onPlaybackInterval?(PlaybackAccountingInterval(
+                                    wallClockSeconds: heardSeconds / speed,
+                                    mediaHeardSeconds: heardSeconds,
+                                    positionSeconds: endPosition,
+                                    playbackSpeed: speed
+                                ))
+                            }
                         }
                     }
 
@@ -1147,6 +1187,15 @@ final class PlaybackEngine: PlaybackControlling {
                             guard let self, self.engineBufferGeneration == generation else { return }
                             self.lastRenderedAt = CFAbsoluteTimeGetCurrent()
                             self.engineCurrentFileSeconds = chunkEndSeconds
+                            let heardSeconds = Double(buf.frameLength) / sampleRate
+                            let speed = max(self.currentPreference?.speed ?? 1.0, 0.01)
+                            guard heardSeconds.isFinite, heardSeconds > 0 else { return }
+                            self.onPlaybackInterval?(PlaybackAccountingInterval(
+                                wallClockSeconds: heardSeconds / speed,
+                                mediaHeardSeconds: heardSeconds,
+                                positionSeconds: chunkEndSeconds,
+                                playbackSpeed: speed
+                            ))
                         }
                     }
                 }
@@ -1218,6 +1267,7 @@ final class PlaybackEngine: PlaybackControlling {
         engineReadFinished = false
         engineCurrentFileSeconds = 0
         engineAnchorFileSeconds = 0
+        playerAccountingPosition = nil
         lastRenderedAt = 0
         resumedAt = 0
     }
@@ -2203,6 +2253,9 @@ final class PlaybackEngine: PlaybackControlling {
     private func tickTime() {
         guard currentEpisode != nil else { return }
         let seconds = currentPlaybackTime()
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: seconds)
+        }
         onTimeUpdate?(seconds)
         skipDisabledChapterIfNeeded(at: seconds)
         // engineCurrentFileSeconds now tracks actual file position via .dataRendered callbacks,
@@ -2237,6 +2290,30 @@ final class PlaybackEngine: PlaybackControlling {
         let clamped = durationSeconds > 0 ? min(durationSeconds, max(0, seconds)) : max(0, seconds)
         pausedAtSeconds = clamped
         return clamped
+    }
+
+    /// AVPlayer has no Trim Silence path, so natural item-time advancement is
+    /// exactly the media heard. Dividing by the rate yields rendered wall time
+    /// and naturally excludes buffering. Delayed periodic callbacks remain
+    /// accurate; explicit seeks clear the baseline before their completion.
+    private func reportPlayerPlaybackInterval(at position: TimeInterval) {
+        guard !engineUsesEngine, position.isFinite else { return }
+        defer { playerAccountingPosition = position }
+        guard player?.timeControlStatus == .playing,
+              let previous = playerAccountingPosition else { return }
+        let mediaSeconds = position - previous
+        guard mediaSeconds.isFinite, mediaSeconds > 0 else { return }
+        let speed = max(currentPreference?.speed ?? Double(player?.rate ?? 1), 0.01)
+        onPlaybackInterval?(PlaybackAccountingInterval(
+            wallClockSeconds: mediaSeconds / speed,
+            mediaHeardSeconds: mediaSeconds,
+            positionSeconds: position,
+            playbackSpeed: speed
+        ))
+    }
+
+    private func resetPlayerAccounting(at position: TimeInterval) {
+        playerAccountingPosition = position.isFinite ? position : nil
     }
 
     private func seekBy(_ delta: TimeInterval) {
@@ -2289,6 +2366,9 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func finishCurrentEpisode() {
         guard !didFinishCurrentEpisode, let episode = currentEpisode else { return }
+        if !engineUsesEngine {
+            reportPlayerPlaybackInterval(at: currentPlaybackTime())
+        }
         didFinishCurrentEpisode = true
         if engineUsesEngine {
             audioPlayerNode?.stop()

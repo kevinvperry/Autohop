@@ -1,5 +1,9 @@
 import SwiftUI
 
+// SESSION CONTRACT (2026-09-06): focusOnAppear supports the desktop Find command.
+// Creator results and episode loading/unavailable states each own a mini-player.
+// Resolved EpisodeDetailView already owns one; do not wrap it in a duplicate inset.
+
 // AI CONTEXT — Views/PodcastSearchView.swift (dedicated "Search" page pushed
 // from Discover). Search uses independent storefront-aware Apple providers for
 // shows and episodes, rendered as visibly separate sections. An All / My
@@ -45,6 +49,7 @@ struct PodcastSearchView: View {
     @State private var scope: Scope = .all
     @FocusState private var isSearchFieldFocused: Bool
     let countryCode: String
+    var focusOnAppear = false
 
     private var recentlyViewed: [Subscription] {
         subscriptionStore.subscriptions
@@ -90,6 +95,7 @@ struct PodcastSearchView: View {
                 viewModel.cancelSearch()
             }
         }
+        .task { if focusOnAppear { isSearchFieldFocused = true } }
         .navigationTitle("Search")
         .responsiveInlineNavigationTitle("Search")
         .toolbar {
@@ -644,6 +650,7 @@ private struct PodcastCreatorResultsView: View {
         }
         .navigationTitle(group.name)
         .responsiveInlineNavigationTitle(group.name)
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
     }
 }
@@ -694,7 +701,9 @@ private struct PodcastEpisodeSearchDestination: View {
             case .loading:
                 ProgressView("Opening episode…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .miniPlayerBar()
             case .found(let subscriptionID, let episodeID):
+                // EpisodeDetailView owns its mini player once resolution succeeds.
                 EpisodeDetailView(subscriptionID: subscriptionID, episodeID: episodeID)
             case .unavailable:
                 ContentUnavailableView {
@@ -713,6 +722,7 @@ private struct PodcastEpisodeSearchDestination: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
+                .miniPlayerBar()
             }
         }
         .navigationTitle("")

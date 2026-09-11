@@ -1,5 +1,14 @@
 import SwiftUI
 
+// PRESENTATION CONTRACT (2026-09-06): Menu owns the richer MenuMiniPlayer; pushed
+// destinations own their standard mini-player. Its CoachMarkOverlay takes the existing
+// coordinator explicitly: TestFlight 1.6 (14) crashed during Mac presentation when
+// the overlay attempted an EnvironmentObject lookup before environment installation.
+
+// DEPENDENCY BOUNDARY: Both Player and Subscriptions present this view with
+// appEnvironment(appState) inside their presentation closure. This supplies the
+// entire Menu, mini-player and navigation descendants before body evaluation,
+// not merely the Quick Tip overlay. Keep both entry points covered by tests.
 // AI CONTEXT — Views/MenuSheetView.swift ("Menu" sheet, hamburger ☰ on the
 // Subscriptions toolbar). The single gateway to the secondary pages —
 // Discover (top item — dismisses the Menu, then posts .autohopOpenDiscover so
@@ -19,6 +28,8 @@ import SwiftUI
 // purple transport emphasis. The three transports form one centred cluster
 // with deliberate finger-clearance between adjacent targets. Extra bottom
 // breathing room lifts the card above the sheet edge.
+// Every forward skip delegates to AppState.skipForward, including a skip that
+// crosses EOF, so completion is persisted before the queue advances.
 // Root Menu background and rows deliberately reuse the native grouped palette
 // seen on Sleep Schedule: systemGroupedBackground outside, and
 // secondarySystemGroupedBackground for the menu group.
@@ -133,7 +144,7 @@ struct MenuSheetView: View {
         .presentationBackground(menuPageBackground)
         .preferredColorScheme(.dark)
         .overlay {
-            CoachMarkOverlay()
+            CoachMarkOverlay(onboardingCoordinator: appState.onboardingCoordinator)
         }
         .onAppear {
             let t = Date()
@@ -189,17 +200,11 @@ struct MenuSheetView: View {
     }
 
     private func skipForward() {
-        guard let episode = playbackCoordinator.currentEpisode else { return }
         let interval = settingsViewModel.appSettings.skipForwardSeconds
         logger.info("player.menuMiniSkipForward", "Menu Mini Player skipped forward", metadata: [
             "seconds": "\(Int(interval))"
         ])
-        if let duration = episode.durationSeconds,
-           playbackClock.time + interval >= duration {
-            Task { await appState.playNextEpisode(excluding: [episode.id]) }
-        } else {
-            appState.skipForward(seconds: interval)
-        }
+        appState.skipForward(seconds: interval)
     }
 
 }

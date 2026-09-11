@@ -1,5 +1,12 @@
 import SwiftUI
 
+// DESKTOP CONTRACT (2026-09-06): Publish the visible subscription ID through the
+// shared miniPlayerBar modifier. Contextual menu commands must target this page,
+// not an unrelated playing or previously visited show.
+
+// ROW INTERACTION: The whole episode row is one NavigationLink to Episode Detail.
+// No nested title/description tap gestures or expansion state. Keep the compact
+// preview and both existing swipeActions unchanged; Up Next is a separate view.
 // AI CONTEXT — Views/PodcastDetailView.swift
 // Single "Podcast Detail" page, the merge of the old PodcastPreviewView and
 // SubscriptionEpisodesView. Works for every podcast state:
@@ -85,8 +92,6 @@ struct PodcastDetailView: View {
     @State private var showUnsubscribeConfirm = false
     /// Whether the header show-description is expanded to its full untruncated text.
     @State private var descriptionExpanded = false
-    /// The episode whose row is tap-expanded to show its full title + description.
-    @State private var expandedEpisodeID: UUID?
     @State private var prefetchedArtworkURLs: Set<URL> = []
     /// Header/feed-URL fallback captured from the subscription so the page stays
     /// populated (and re-subscribable) after the user taps Unsubscribe.
@@ -209,7 +214,7 @@ struct PodcastDetailView: View {
         .navigationBarBackButtonHidden(true)
         .preferredColorScheme(.dark)
         .toolbar { toolbarContent }
-        .miniPlayerBar()
+        .miniPlayerBar(subscriptionID: subscription?.id)
         .sheet(item: $episodeToShare) { ep in
             EpisodeShareSheet(episode: ep, subscription: subscription)
         }
@@ -626,6 +631,7 @@ struct PodcastDetailView: View {
                         EpisodeDetailView(subscriptionID: sub.id, episodeID: episode.id)
                     } label: {
                         episodeRow(episode, sub: sub)
+                            .contentShape(Rectangle())
                     }
                     // Idle rows are clear so the card's glass shows through; the
                     // playing row keeps the faint purple tint.
@@ -681,7 +687,6 @@ struct PodcastDetailView: View {
     // MARK: - Episode row (ListRow-EpisodeRow)
 
     private func episodeRow(_ episode: Episode, sub: Subscription) -> some View {
-        let isExpanded = expandedEpisodeID == episode.id
         let metrics = AdaptiveListRowMetrics(containerWidth: contentWidth)
         let artworkSize = metrics.artworkSize
         return VStack(alignment: .leading, spacing: 0) {
@@ -704,23 +709,18 @@ struct PodcastDetailView: View {
                     Text(episode.title)
                         .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(isExpanded ? nil : 2)
+                        .lineLimit(2)
                         // Reserve room on the right so the title never runs under
                         // the floating video/explicit pills.
                         .padding(.trailing, 30)
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                                expandedEpisodeID = isExpanded ? nil : episode.id
-                            }
-                        }
 
-                    // Episode description: first 3 lines always visible; tap the
-                    // title to expand to the full text.
+                    // Keep the preview compact; the entire row's NavigationLink
+                    // opens Episode Detail for the full description.
                     if let desc = episode.description.map(stripHTML), !desc.isEmpty {
                         Text(desc)
                             .font(.system(size: metrics.secondaryFontSize))
                             .foregroundStyle(.secondary)
-                            .lineLimit(isExpanded ? nil : 3)
+                            .lineLimit(3)
                     }
 
                     HStack(spacing: 4) {

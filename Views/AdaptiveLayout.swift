@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 // AI CONTEXT — Views/AdaptiveLayout.swift
+// Episode Detail metrics scale artwork from actual container width and keep
+// four actions centred, falling back to a balanced two-column narrow layout.
 // Central vocabulary for viewport-responsive iOS layout. Views must classify
 // the space offered by their container, never a device model or size class.
 // Keep every width threshold and readable-content maximum here so future iPad,
@@ -389,6 +391,16 @@ struct AdaptiveEditorialMetrics: Equatable {
         let cardWidth = max(availableWidth - (horizontalGutter * 2), 0)
         return min(max(cardWidth / 1.65, 200), band == .expansive ? 340 : 260)
     }
+}
+
+struct AdaptiveEpisodeDetailMetrics {
+    let containerWidth: CGFloat
+
+    // Preserve the compact phone cover while growing continuously with the
+    // actual split-view/window width; cap large iPad/Mac covers at 320 points.
+    var artworkSize: CGFloat { min(320, max(120, 120 + (containerWidth - 390) * 0.3)) }
+    var actionColumns: Int { containerWidth - 40 < 312 ? 2 : 4 }
+    var actionWidth: CGFloat { actionColumns == 2 ? 152 : 312 }
 }
 
 /// Shared density for every native List/Form and custom list-style row. Unlike

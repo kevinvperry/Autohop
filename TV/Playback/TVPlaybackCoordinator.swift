@@ -56,6 +56,8 @@ final class TVPlaybackCoordinator {
     func archiveEpisode(_ episode: Episode) {
         let isCurrent = playbackModel.isCurrentEpisode(episode)
         let canonicalEpisode = TVEpisodeResolver.canonicalized(episode)
+        let subscription = subscriptionStore.subscription(id: canonicalEpisode.subscriptionID)
+        playbackModel.recordArchivedOutcome(canonicalEpisode, subscription: subscription)
         if isCurrent { playbackModel.stopAndClear() }
         onArchiveSuppression?(PlaybackPositionStore.key(for: episode))
         subscriptionStore.markListeningHistoryArchived(episode: episode)

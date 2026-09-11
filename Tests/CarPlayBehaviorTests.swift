@@ -500,6 +500,7 @@ private final class TestDownloadManager: DownloadManaging {
 private final class PlaybackSpy: PlaybackControlling {
     var onEpisodeFinished: ((Episode) -> Void)?
     var onTimeUpdate: ((TimeInterval) -> Void)?
+    var onPlaybackInterval: ((PlaybackAccountingInterval) -> Void)?
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
     var onManualSkipForward: ((TimeInterval) -> Void)?

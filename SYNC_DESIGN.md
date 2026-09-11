@@ -3,14 +3,16 @@
 <!--
 AI CONTEXT — SYNC_DESIGN.md
 Canonical design/status note for Autohop's private iCloud sync layer. Verified
-again during the 2026-07-24 whole-project audit. Keep this
-aligned with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
-App/SyncCoordinator.swift,
-TV reader note (26 July 2026): the iPhone remains queue/subscription authority.
-TV persists only compact purgeable GRDB render projections and cannot push
-subscription, order or queue authorship.
-Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift, and
-Persistence/SubscriptionStore.swift. Episode sync identity is subscription-scoped
+again during the September 2026 Stats integrity redesign. Keep this aligned
+with Models/SyncState.swift, Persistence/CloudKitSyncMapping.swift,
+Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift,
+Persistence/SubscriptionStore.swift, App/SyncCoordinator.swift and the TV sync
+owners.
+TV reader note: the iPhone remains queue/subscription authority. TV keeps its
+authoritative local database and authored Stats JSON in Application Support;
+only compact render projections and CKSyncEngine transport state remain in
+Caches. TV cannot push subscription, order or full-queue authorship.
+Episode sync identity is subscription-scoped
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
 (`episode:`, `subscription:`, `subscription-order:`, `history:`, `stats:`)
 because record IDs are unique across record types inside a zone. Priority Stack
@@ -32,6 +34,11 @@ repairs from the same cycle are summarized in `FEATURES.md`: Release Radar
 protected background refresh slots, rolling one-item feed download cleanup,
 foreground/background refresh attribution, playback-tick timing, main-thread
 watchdog inactive-gap classification, and AirPods/Speaker route stabilization.
+September 2026 hardened Stats with ThisDeviceOnly Keychain partition identity,
+generation/revision/hash metadata, account-scoped caches, JSON/SQLite/own-
+CloudKit recovery, startup backfill, canonical feed identities, durable outcome
+facts, and a field-aware listening-history merge. Do not restore the historical
+UserDefaults identity or whole-entry history-LWW descriptions.
 -->
 
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
@@ -43,7 +50,9 @@ applied on top of CloudKit.
    iPhone and Apple TV experience works without a hidden setup step. Existing
    saved choices remain authoritative. On-device privacy
    stance holds until the user enables sync.
-2. **Local store is the source of truth** (GRDB/SQLite); CloudKit is a sidecar.
+2. **Local durable state is the source of truth** (GRDB/SQLite plus protected,
+   checksummed JSON stores); CloudKit is a sidecar and recovery source when the
+   matching installation partition proves newer or local state is absent.
 3. **Sync mutable user-state, never the catalog.** Episode title/description/
    artwork rehydrate from the feed. Stable identity = `(subscriptionID, guid)`
    for episodes and `subscriptionID` for subscriptions; the local episode UUID
@@ -64,9 +73,9 @@ type**), and `Models/{Subscription,SubscriptionOrder,AppSettings}.swift`.
 | **Episode subscriptions** (subscribe / unsubscribe) | ✅ Yes | `SubscriptionState` | Other devices re-materialise the show by fetching its feed (`SyncCoordinator.materializeRemoteSubscription` on iOS; the tvOS sync owner mirrors that transaction); unsubscribe leaves a `subscribed=false` tombstone. |
 | **Priority Stack order** | ✅ Yes | `SubscriptionOrder` singleton | One whole-list generation contains every real-subscription UUID, active first and Inactive last. It is authoritative over independently delivered legacy rank fields and prevents mixed reorder generations. |
 | **Per-episode user state** (playedState, wasCompleted, lastPlayedAt) | ✅ Yes | `EpisodeState` | Field-level LWW + active-player-wins + self-heal. |
-| **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Whole-entry record-level LWW by `lastListenedAt`. This is also how **playback position** roams. |
+| **Listening history** (incl. `lastPositionSeconds` resume point + `listenedSeconds`) | ✅ Yes | `HistoryEntry` | Resume/navigation fields follow the newest `lastListenedAt`; accumulated listening and strongest terminal evidence merge monotonically. This is also how **playback position** roams. |
 | **Individual subscription settings** | ✅ Yes | `SubscriptionState` | Synced: legacy priority rank compatibility field (+ Inactive return rank), notifications, exclude-from-auto-refresh, playbackPreference, autoArchiveSettings, chapterFilter, title, **downloadFilterSettings (since July 2026)**. The atomic `SubscriptionOrder` is authoritative for whole-list ordering. **NOT synced:** Release Radar `refreshStats` (see below). |
-| **Stats page data** | ✅ Yes | `DayStats` | Additive per-device partition `(deviceID, dayKey)`; the Stats page sums across devices on read. Pre-tracking lifetime baseline stays per-device (deferred). |
+| **Stats page data** | ✅ Yes | `DayStats` | Additive per-installation partition `(deviceID, dayKey)` with generation/revision/hash metadata. The Stats page sums partitions on read and deduplicates durable episode outcomes. Same-installation CloudKit records may restore missing/older local state. Pre-tracking lifetime baseline stays local. |
 | **Overall system settings** (`AppSettings`: poll interval, download Wi-Fi/cellular toggles, skip seconds, sleep schedule, global Default Playback, recaps, launch screen, onboarding flags, …) | ❌ **No** | — (no record type) | Local `UserDefaults` only; roams **only** via iCloud/device backup-restore, not live CloudKit sync. A fresh install starts from defaults until restored. |
 | **Per-podcast Download Filters** (`DownloadFilterSettings`) | ✅ Yes (July 2026) | `SubscriptionState` | JSON blob + stamp on the subscription record, struct-level LWW. Was backup/local-only in v1; records written before the field existed decode with a nil stamp and never reset local filters. |
 | **Release Radar learned schedule** (`refreshStats` / `releaseObservations`) | ❌ No | — | Per-device learning; relearns from the feed on each device. |
@@ -98,8 +107,9 @@ not part of the CloudKit sync projection; refresh-stat-only saves publish no
 engine. DownloadFilterSettings is persisted on the local Subscription payload
 and, since July 2026, is also part of the sync projection.
 
-AppState decomposition Stages 0–14 did not change CloudKit schemas or merge
-policy. `SyncCoordinator` owns the iOS CloudKit lifecycle, callback graph,
+AppState decomposition Stages 0–14 retained the existing CloudKit record types.
+The September 2026 Stats redesign extended DayStats payload/metadata and changed
+history conflict handling without changing record names. `SyncCoordinator` owns the iOS CloudKit lifecycle, callback graph,
 remote materialization, active-player identity provider, history/Stats routing,
 and deferred private-iCloud pushes. `PlaybackCheckpointWorkflow`
 enforces playback-position → local history/Stats → deferred-push ordering.
@@ -108,7 +118,7 @@ owns device-local Release Radar runtime, AutoDownloadIntentWorkflow owns
 device-local durable transfer intents, and AutoArchiveCoordinator owns
 device-local archive activity. AppState retains only high-level lifecycle and
 platform compatibility commands over these owners. Existing SubscriptionState,
-episode, history, Stats, queue, and order sync boundaries remain unchanged.
+episode, history, Stats, queue, and order ownership boundaries remain unchanged.
 
 ## `@Synced` wrapper + sync-state projections
 `Synced<T>` (Models/Synced.swift) auto-stamps `modifiedAt` on change → free
@@ -368,7 +378,10 @@ shows correct settings immediately. Guarded by
        fields decode as nil for legacy records, which continue through bounded
        catalog/enrichment recovery.
     3. **TV listening stats now sync** — TV creates its own
-       `ListeningStatsStore` (Caches JSON; new public
+       `ListeningStatsStore` (the original implementation used Caches JSON; the
+       September 2026 durability redesign migrates that authored JSON and the
+       authoritative TV database into Application Support while retaining only
+       render projections/transport state in Caches; public
        `attachSyncDatabase(from:)` since AutohopDatabase is internal to the
        library), and `TVPlaybackModel` records listening time (speed-aware),
        episode started/completed, and manual skip-forward. DayStats' additive
@@ -505,7 +518,9 @@ adopted clean. Settings sub-structs
    singleton remains pending.
 
 5. ✅ **Listening history + stats**
-   - 5a History: record-level LWW by `lastListenedAt` (HistoryEntry record,
+   - 5a History: `lastListenedAt` selects resume/navigation fields, while
+     `listenedSeconds` and terminal outcome evidence merge monotonically
+     (HistoryEntry record,
      current recordName = `history:<historyID>`, migration v5).
      ListeningHistoryStore (shared Persistence source; iOS orchestration) records pending on mutation +
      merges via applyRemote; denormalized title/artwork kept. Since tvOS Phase
@@ -515,20 +530,32 @@ adopted clean. Settings sub-structs
      `PlaybackPositionStore.key(for:)` as the entry id, which is byte-for-byte
      identical to ListeningHistoryStore's private `historyKey(for:)`, so
      entries from either device collide on the same id and merge rather than
-     duplicate. This is the mechanism behind a phone⇄TV resume round-trip.
+     duplicate. The merged entry—not the raw remote row—is returned for any
+     adopted navigation update, so weaker status cannot revive a completed
+     episode. This is the mechanism behind a phone⇄TV resume round-trip.
    - 5b Stats: **additive — partition by `(deviceID, dayKey)` and sum on read**
-     (never LWW). `DeviceIdentity.current` (UserDefaults UUID); DayStats record
+     (never LWW). `DeviceIdentity.current` is a
+     `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` Keychain UUID; the old
+     backup-restorable UserDefaults UUID is lineage only and is never adopted as
+     the active writer identity. DayStats records
      per device-day (current recordName = `stats:<deviceID>:<dayKey>`);
      `stats_sync_state` (this device's pending) + `remote_stats` (other devices)
-     tables (migration v6). `DayStats.merged` sums; ListeningStats `combinedDay`
+     tables (migration v6, extended by the Stats recovery migration).
+     `DayStats.merged` sums additive measures and deduplicates stable durable
+     episode outcomes; ListeningStats `combinedDay`
      folds remote partitions into every read path (summary/streaks/per-show/
-     lifetime). Engine skips its own echoed records by deviceID, but still caches
-     their server system fields/change tag; on a `serverRecordChanged` conflict
+     lifetime). Engine normally treats its own echoed record as an
+     acknowledgement, but missing/older local state may adopt it as recovery
+     material. It caches server system fields/change tags; on a
+     `serverRecordChanged` conflict
      for this device's own partition, the local full-day bucket stays dirty and
      retries with the refreshed change tag instead of repeatedly fighting the
-     same stale server record. legacyBaseline sync deferred (kept per-device for
-     v1). Unit-tested incl. cross-device summing; real-device verification
-     pending.
+     same stale server record. `legacyBaseline` remains local because it has no
+     safe per-day attribution. Unit-tested incl. cross-device summing; real-device verification
+     pending. JSON and SQLite carry generation/revision/hash metadata; startup
+     reconciles them bidirectionally and backfills missing projections. Remote
+     caches and CKSyncEngine state are scoped to a privacy-safe fingerprint of
+     the active iCloud account.
 
 6. ✅ **Active-player-wins + self-heal guards**
    - Active-player-wins: `SubscriptionStore.nowPlayingEpisodeSyncKeyProvider`
@@ -545,8 +572,8 @@ adopted clean. Settings sub-structs
 **All six sync build steps complete.** Opt-in iCloud sync covers episode
 user-state, per-podcast settings + subscribe/unsubscribe, atomic Priority Stack
 order, listening history, queue state, and additive per-device stats — with
-field-level/whole-record version-aware acknowledgements, active-player-wins, and
-self-heal.
+field-aware history merging, version-aware acknowledgements,
+active-player-wins, and self-heal.
 
 ## Namespace repair / collision containment
 June 2026 diagnostic review found a permanent CloudKit type-collision loop: a

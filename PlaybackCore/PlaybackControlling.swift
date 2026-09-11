@@ -35,9 +35,40 @@ public enum PlaybackSeekBoundaryPolicy {
     }
 }
 
+/// One interval of media that the playback backend confirms was actually
+/// rendered. This deliberately separates UI/navigation position from listening
+/// accounting: seeks and Trim Silence may advance `positionSeconds` without
+/// increasing either rendered duration.
+public struct PlaybackAccountingInterval: Equatable, Sendable {
+    public let wallClockSeconds: TimeInterval
+    public let mediaHeardSeconds: TimeInterval
+    public let positionSeconds: TimeInterval
+    public let playbackSpeed: Double
+    /// Wall-clock end of the rendered interval. Stats uses this to split a
+    /// callback that crosses an hour/day boundary in the active local zone.
+    public let endedAt: Date
+
+    public init(
+        wallClockSeconds: TimeInterval,
+        mediaHeardSeconds: TimeInterval,
+        positionSeconds: TimeInterval,
+        playbackSpeed: Double,
+        endedAt: Date = Date()
+    ) {
+        self.wallClockSeconds = wallClockSeconds
+        self.mediaHeardSeconds = mediaHeardSeconds
+        self.positionSeconds = positionSeconds
+        self.playbackSpeed = playbackSpeed
+        self.endedAt = endedAt
+    }
+}
+
 public protocol PlaybackControlling {
     var onEpisodeFinished: ((Episode) -> Void)? { get set }
     var onTimeUpdate: ((TimeInterval) -> Void)? { get set }
+    /// Fired only for media confirmed as rendered. Stats/history must use this
+    /// signal instead of inferring elapsed listening from `onTimeUpdate`.
+    var onPlaybackInterval: ((PlaybackAccountingInterval) -> Void)? { get set }
     var onPlaybackInterrupted: (() -> Void)? { get set }
     var onPlaybackResumed: (() -> Void)? { get set }
     /// Called when the user taps skip-forward. Parameter is seconds actually skipped.

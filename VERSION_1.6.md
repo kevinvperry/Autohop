@@ -1,22 +1,33 @@
-# Autohop Version 1.6 — Change Ledger
+# Autohop Version 1.6 — Submitted Release Ledger
+
+> **SUBMITTED:** The iOS-family Version 1.6 release was submitted to Apple App
+> Review on **30 August 2026** for iPhone, iPad and compatible Apple-silicon Mac
+> computers. The separate tvOS Version 1.6 build 13 was submitted on
+> **22 August 2026**. iOS 1.6 was rejected under Guideline 2.3.6
+> (Advertising age-rating metadata); 1.6.1 is approved and live (user confirmation, 8 September 2026).
+> tvOS approval/release remains unconfirmed. This ledger is closed. Record every subsequent implementation or documentation change in
+> `VERSION_1.7.md`.
+
+> **Historical label note:** Earlier sections labelled “post-submission” mean
+> after the separate tvOS build 13 submission. Unless a section explicitly says
+> otherwise, those entries were completed before and form part of the submitted
+> iOS-family Version 1.6 source line.
 
 <!--
 AI CONTEXT — VERSION_1.6.md
-Canonical running ledger for code, behaviour, diagnostics, design,
-documentation and user-visible changes implemented after the paired iOS and
-tvOS Version 1.5 builds were submitted to Apple for App Review on 9 August
-2026.
+Closed historical submission ledger for code, behaviour, diagnostics, design,
+documentation and user-visible changes included in or prepared for Version 1.6.
+The iOS-family release was submitted on 30 August 2026 after the tvOS build 13
+submission on 22 August 2026. iOS rejection/status corrections are recorded
+here; new implementation belongs to VERSION_1.7.md.
 
-Every accepted change made after that submission must be recorded here when it
-is implemented, including small fixes, performance-policy changes, diagnostic
-improvements, UI refinements, website changes and documentation corrections.
-Do not add post-submission work to VERSION_1.5.md. Do not describe planned work
-as complete. Public Version 1.6 release notes must be derived from completed
-entries and omit internal implementation detail. Updating this ledger is part
-of the implementation definition of done.
+Do not add work performed after the iOS-family submission to this file. Record
+all future implementation, documentation, website, diagnostic and design work
+in VERSION_1.7.md. Public Version 1.6 release notes may be derived from completed
+entries here and must omit internal implementation detail.
 -->
 
-## 2026-08-30 Universal Widget and iOS Release Verification — post-submission
+## 2026-08-30 Universal Widget and iOS Release Verification — included in submitted build
 
 - Aligned the embedded Now Playing & Up Next widget with the containing app's
   iPhone+iPad device-family declaration. The extension is no longer withheld
@@ -44,7 +55,7 @@ of the implementation definition of done.
   overwrite its commit, clean-tree, fingerprint and timestamp values with
   `unavailable` defaults; signed archives now retain their exact source identity.
 
-## 2026-08-30 Public Documentation Reconciliation and Dependency Hygiene — post-submission
+## 2026-08-30 Public Documentation Reconciliation and Dependency Hygiene — included in submitted build
 
 - Synchronised the public Autohop overview and Support guide with the current
   app. The website now documents CarPlay, Home/Lock Screen Widgets, Play
@@ -65,7 +76,7 @@ of the implementation definition of done.
   now fails if either directory returns and continues scanning active production
   sources for retired Pro/Relay symbols.
 
-## 2026-08-30 Audit Repair Set — post-submission
+## 2026-08-30 Audit Repair Set — included in submitted build
 
 - Made Stats, Downloads, Sleep Schedule and Settings onboarding tips visible
   when those pages are opened inside the Menu sheet. The Menu now owns a
@@ -490,6 +501,11 @@ of the implementation definition of done.
 
 ## Release status
 
+- **iOS-family submission status:** Version 1.6 build 10 was submitted to Apple
+  App Review on 30 August 2026 for iPhone, iPad and compatible Apple-silicon
+  Mac computers. Rejected under Guideline 2.3.6 on 31 August 2026. The user
+  reported Advertising changed to Yes that day; Apple requested resubmission
+  on 6 September. Version 1.6.1 supersedes this iOS candidate, and is approved/live, confirmed by the user on 8 September 2026.
 - **tvOS submission status:** Version 1.6 build 13 was submitted to Apple App
   Review on 22 August 2026. Review is pending; submission is not approval or
   public release.
@@ -497,8 +513,11 @@ of the implementation definition of done.
   explicitly labelled `post-build 13` below were committed after submission and
   are not claimed to exist in Apple's review binary. They require a new build
   number and replacement submission if they are to be reviewed.
-- **Development status:** active post-submission development continues. iOS and
-  tvOS release status must be recorded independently when they diverge.
+- **Ledger status:** closed. All development after the iOS-family submission is
+  recorded in the closed `VERSION_1.6.1.md` ledger through that release; all
+  future work now belongs in `VERSION_1.7.md`. iOS-family and tvOS
+  approval/release status must continue to be recorded independently when they
+  diverge.
 
 ## Historical proposal and implementation record
 
@@ -945,3 +964,14 @@ of the implementation definition of done.
   empty environment.
 - Added pure policy and database regression coverage, including proof that fresh
   projections are pending and old system fields are removed.
+
+### iPad App Store campaign assets
+
+- Added a complete five-feature iPad marketing set in both portrait and
+  landscape App Store dimensions, covering Player, Stats, Discover,
+  Subscriptions and native video playback.
+- Matched the established iPhone/tvOS campaign typography, editorial headline
+  hierarchy and purple-to-blue brand field while preserving every supplied
+  product capture without cropping or retouching.
+- Added a deterministic, AI-documented compositor and packaged all ten
+  submission-ready PNGs in one ZIP for repeatable App Store delivery.

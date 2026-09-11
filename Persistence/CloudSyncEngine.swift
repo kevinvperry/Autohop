@@ -82,6 +82,11 @@ import Combine
 // SubscriptionStore.applyRemote*, ListeningHistoryStore, and ListeningStatsStore;
 // a remote subscription for a podcast not present here triggers
 // `onSubscriptionNeedsMaterialization` (SyncCoordinator fetches the feed).
+// OWN-STATS RECOVERY: a DayStats record matching this installation is normally
+// an acknowledgement, but generation/revision/hash comparison may adopt it when
+// local JSON/SQLite state is absent or older. Remote Stats caches and serialized
+// engine state are scoped to a SHA-256 account fingerprint so an iCloud account
+// switch cannot expose or merge the previous account's partitions.
 //
 // Successful sends remain entirely within the user's private iCloud account.
 // No developer-operated relay or third-party sync transport is involved.
@@ -129,7 +134,8 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     private let container: CKContainer
     private let subscriptionStore: SubscriptionStore
     private let database: AutohopDatabase?
-    private let stateURL: URL?
+    private var stateURL: URL?
+    private var activeAccountFingerprint = "unscoped"
     private let logger = AppLogger.shared
 
     /// READ-ONLY SUBSCRIPTION-STATE MODE (2026-07-11, after real cross-device
@@ -232,7 +238,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
     public var onSubscriptionNeedsMaterialization: ((SubscriptionSyncState) async -> Void)?
 
     /// Invoked when a remote listening-history entry arrives — the app layer
-    /// (ListeningHistoryStore) merges it with record-level LWW. Set by AppState.
+    /// applies its field-aware recency/monotonic merge. Set by AppState.
     public var onRemoteHistoryEntry: ((ListeningHistoryEntry) async -> Void)?
 
     /// Invoked AFTER a remote history entry was applied (whichever branch) —
@@ -270,7 +276,7 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         self.container = CKContainer(identifier: containerIdentifier)
         self.subscriptionStore = subscriptionStore
         self.database = database
-        self.stateURL = Self.defaultStateURL()
+        self.stateURL = nil
         self.capabilities = capabilities
         super.init()
     }
@@ -328,7 +334,9 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             let resolvedAccountFingerprint = accountFingerprint
             await MainActor.run {
                 self.isStarting = false
-                guard status == .available, self.engine == nil else {
+                guard status == .available,
+                      resolvedAccountFingerprint != "unavailable",
+                      self.engine == nil else {
                     self.logger.warning("sync.startAborted", "Sync not started", metadata: [
                         "accountStatus": Self.accountStatusLabel(status),
                         "engineExists": "\(self.engine != nil)"
@@ -338,6 +346,17 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 self.logger.info("sync.accountResolved", "Resolved privacy-safe iCloud account identity", metadata: [
                     "accountFingerprint": resolvedAccountFingerprint
                 ], alwaysPersist: true)
+                self.activeAccountFingerprint = resolvedAccountFingerprint
+                self.stateURL = Self.defaultStateURL(accountScope: resolvedAccountFingerprint)
+                do {
+                    try self.database?.setActiveStatsAccountScope(resolvedAccountFingerprint)
+                } catch {
+                    self.logger.error("sync.accountScopePersistFailed", "Could not activate the account-scoped Stats cache", metadata: [
+                        "error": String(describing: error)
+                    ], alwaysPersist: true)
+                    return
+                }
+                Task { await self.onRemoteStatsChanged?() }
                 self.activateEngine()
             }
         }
@@ -1274,12 +1293,12 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             }
 
             // Stats partition? (current recordName == stats:<deviceID>:<dayKey>).
-            if let dayKey = statsDayKey, let day = try database.statsDay(dayKey: dayKey) {
+            if let dayKey = statsDayKey, let projection = try database.statsProjection(dayKey: dayKey) {
                 let target = cachedOrNewRecord(
                     systemFields: try? database.statsSystemFields(dayKey: dayKey),
                     recordType: CloudKitSync.statsRecordType, recordID: recordID
                 )
-                CloudKitSync.populate(target.record, deviceID: DeviceIdentity.current, day: day)
+                CloudKitSync.populate(target.record, deviceID: DeviceIdentity.current, projection: projection)
                 return target.record
             }
 
@@ -1358,6 +1377,26 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             let effect = await applyRemote(record: modification.record)
             effects[effect, default: 0] += 1
         }
+        var statsDeletionApplied = false
+        for deletion in event.deletions
+        where deletion.recordType == CloudKitSync.statsRecordType {
+            guard let identity = CloudKitSync.statsIdentity(fromRecordName: deletion.recordID.recordName) else { continue }
+            let isOwned = (try? database?.isOwnedStatsDeviceID(identity.deviceID)) ?? false
+            if identity.deviceID == DeviceIdentity.current {
+                // A remote deletion must not erase local authority. Strip the
+                // stale change tag and durably re-author the local snapshot.
+                runDB("recreateDeletedLocalStats", metadata: ["dayKey": identity.dayKey]) {
+                    try self.database?.requeueStatsDayAfterServerDeletion(dayKey: identity.dayKey)
+                }
+                engine?.state.add(pendingRecordZoneChanges: [.saveRecord(deletion.recordID)])
+            } else if !isOwned {
+                runDB("removeRemoteStatsPartition", metadata: ["dayKey": identity.dayKey]) {
+                    try self.database?.removeRemoteStatsPartition(deviceID: identity.deviceID, dayKey: identity.dayKey)
+                }
+                statsDeletionApplied = true
+            }
+        }
+        if statsDeletionApplied { await onRemoteStatsChanged?() }
         suppressPerRecordHistoryNotify = false
         if historyChangedDuringSuppressedBatch {
             historyChangedDuringSuppressedBatch = false
@@ -1386,6 +1425,9 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             "state": lastStateFingerprint,
             "statePersisted": "\(lastStatePersisted)"
         ])
+        if !event.modifications.isEmpty || !event.deletions.isEmpty {
+            try? database?.recordStatsSyncSuccess()
+        }
     }
 
     private enum RemoteApplyEffect: Hashable {
@@ -1466,8 +1508,8 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             }
             let previousHistory = try? database?.historyEntry(id: remote.id)
             if let onRemoteHistoryEntry {
-                // iOS: the app layer (ListeningHistoryStore) merges with
-                // record-level LWW and persists the clean row itself.
+                // iOS: ListeningHistoryStore performs the field-aware merge and
+                // persists either a clean server match or a pending convergence row.
                 await onRemoteHistoryEntry(remote)
             } else {
                 // BUG FIX (found via tvOS real-device testing, 2026-07-04):
@@ -1476,9 +1518,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 // records are written by the engine/store directly. A platform
                 // that never wired the callback (the TV app) silently dropped
                 // every synced history entry, i.e. every cross-device resume
-                // position. Fall back to persisting the entry as clean
-                // synced state so no consumer can ever lose it; platforms with
-                // their own in-memory history store still use the callback.
+                // position. Fall back to field-aware durable merging so no
+                // consumer can ever lose accumulated or terminal evidence. If
+                // the merged row is stronger than the server row, the database
+                // deliberately leaves it pending for convergence. Platforms
+                // with an in-memory history store still use the callback.
                 runDB("saveSyncedHistoryEntry", metadata: ["id": remote.id]) {
                     try self.database?.saveSyncedHistoryEntry(remote)
                 }
@@ -1550,25 +1594,45 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
             return .changed
 
         case CloudKitSync.statsRecordType:
-            guard let (deviceID, day) = CloudKitSync.statsPartition(from: record) else {
+            guard let snapshot = CloudKitSync.statsSnapshot(from: record) else {
                 logDecodeFailure(record)
                 return .rejected
             }
-            if deviceID == DeviceIdentity.current {
-                // This is our own per-device partition, often delivered as the
-                // server side of a serverRecordChanged conflict. Cache the server
-                // change tag, but do not mark the local full-day bucket clean:
-                // the pending local row remains the source of truth for the retry.
-                runDB("storeLocalStatsSystemFields", metadata: [
-                    "device": deviceID,
-                    "dayKey": day.dayKey
-                ]) {
-                    try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: day.dayKey)
-                }
+            let deviceID = snapshot.deviceID
+            if (try? database?.isRetiredStatsGeneration(snapshot.metadata.generationID)) == true {
                 return .unchanged
             }
+            let isOwned = (try? database?.isOwnedStatsDeviceID(deviceID)) ?? (deviceID == DeviceIdentity.current)
+            if isOwned, deviceID != DeviceIdentity.current {
+                // Retired lineage is already represented by the local inherited
+                // base and must never be imported or re-authored as a delta.
+                return .unchanged
+            }
+            if isOwned {
+                // This is our own per-device partition, often delivered as the
+                // server side of a serverRecordChanged conflict. Cache the server
+                // change tag. Missing/older local state may be restored; a newer
+                // local revision remains dirty and wins the retry.
+                var adopted = false
+                runDB("reconcileOwnedCloudStats", metadata: [
+                    "device": deviceID,
+                    "dayKey": snapshot.day.dayKey
+                ]) {
+                    adopted = try self.database?.reconcileOwnedCloudStats(
+                        day: snapshot.day,
+                        metadata: snapshot.metadata,
+                        systemFields: Self.systemFields(of: record)
+                    ) ?? false
+                }
+                if adopted { await onRemoteStatsChanged?() }
+                return adopted ? .changed : .unchanged
+            }
             runDB("applyRemoteStatsPartition", metadata: ["device": deviceID]) {
-                try self.database?.applyRemoteStatsPartition(deviceID: deviceID, day: day)
+                try self.database?.applyRemoteStatsPartition(
+                    deviceID: deviceID,
+                    day: snapshot.day,
+                    metadata: snapshot.metadata
+                )
             }
             await onRemoteStatsChanged?()
             return .changed
@@ -1730,7 +1794,8 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudKitSync.zoneID))])
                 engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
             case .unknownItem:
-                logger.info("sync.recordGone", "Record no longer on server — dropping change", metadata: [
+                prepareUnknownItemRecreation(record)
+                logger.info("sync.recordGone", "Record no longer on server — rebuilding from local state", metadata: [
                     "type": record.recordType,
                     "name": record.recordID.recordName
                 ])
@@ -1753,6 +1818,36 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 ], alwaysPersist: true)
             }
         }
+        if !event.savedRecords.isEmpty {
+            try? database?.recordStatsSyncSuccess()
+        }
+    }
+
+    private func prepareUnknownItemRecreation(_ record: CKRecord) {
+        let name = record.recordID.recordName
+        runDB("prepareUnknownItemRecreation", metadata: ["type": record.recordType]) {
+            switch record.recordType {
+            case CloudKitSync.episodeRecordType:
+                try self.database?.storeEpisodeSystemFields(nil, syncKey: CloudKitSync.episodeSyncKey(fromRecordName: name))
+            case CloudKitSync.subscriptionRecordType:
+                if let id = CloudKitSync.subscriptionID(fromRecordName: name) {
+                    try self.database?.storeSubscriptionSystemFields(nil, id: id)
+                }
+            case CloudKitSync.historyRecordType:
+                try self.database?.storeHistorySystemFields(nil, id: CloudKitSync.historyID(fromRecordName: name))
+            case CloudKitSync.statsRecordType:
+                if let key = CloudKitSync.statsDayKey(fromRecordName: name) {
+                    try self.database?.requeueStatsDayAfterServerDeletion(dayKey: key)
+                }
+            case CloudKitSync.queueSnapshotRecordType:
+                try self.database?.storeQueueSnapshotSystemFields(nil)
+            case CloudKitSync.subscriptionOrderRecordType:
+                try self.database?.storeSubscriptionOrderSystemFields(nil)
+            default:
+                break
+            }
+        }
+        engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
     }
 
     static func isPermanentRecordTypeCollision(
@@ -1906,8 +2001,11 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
                 remainsPending = true
                 runDB("markSaved.stats", metadata: ["dayKey": dayKey]) {
                     try self.database?.storeStatsSystemFields(Self.systemFields(of: record), dayKey: dayKey)
-                    guard let (_, acknowledged) = CloudKitSync.statsPartition(from: record) else { return }
-                    remainsPending = try self.database?.acknowledgeStatsDay(acknowledged) ?? false
+                    guard let acknowledged = CloudKitSync.statsSnapshot(from: record) else { return }
+                    remainsPending = try self.database?.acknowledgeStatsDay(
+                        acknowledged.day,
+                        metadata: acknowledged.metadata
+                    ) ?? false
                 }
             }
         case CloudKitSync.queueSnapshotRecordType:
@@ -1927,15 +2025,20 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         switch event.changeType {
         case .signIn:
             logger.info("sync.accountSignIn", "iCloud account signed in", metadata: ["engineExists": "\(engine != nil)"])
-            if engine == nil {
-                await MainActor.run { self.start() }
-            } else {
-                await queuePendingLocalChanges(slowLane: .flush(reason: "accountSignIn"))
+            await MainActor.run {
+                self.stop()
+                self.start()
             }
         case .signOut:
             logger.warning("sync.accountSignOut", "iCloud account signed out — local data retained, nothing pushed")
+            try? database?.setActiveStatsAccountScope("signed-out")
+            await onRemoteStatsChanged?()
         case .switchAccounts:
-            logger.warning("sync.accountSwitch", "iCloud account switched — local data retained, nothing pushed")
+            logger.warning("sync.accountSwitch", "iCloud account switched — restarting with isolated cache and token state")
+            await MainActor.run {
+                self.stop()
+                self.start()
+            }
         @unknown default:
             logger.warning("sync.accountUnknownChange", "Unknown iCloud account change type")
         }
@@ -1999,15 +2102,16 @@ public final class CloudSyncEngine: NSObject, CKSyncEngineDelegate, @unchecked S
         stableFingerprint(Data(recordName.utf8))
     }
 
-    private static func defaultStateURL() -> URL? {
+    private static func defaultStateURL(accountScope: String) -> URL? {
+        let filename = "cloudkit-sync-state-\(accountScope).json"
         #if os(tvOS)
         // The token is regenerable and belongs beside the TV's other purgeable
         // local projections. Caches is reliably writable/exported on hardware.
         return try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("Autohop/cloudkit-sync-state.json")
+            .appendingPathComponent("Autohop/\(filename)")
         #else
         return try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("Autohop/cloudkit-sync-state.json")
+            .appendingPathComponent("Autohop/\(filename)")
         #endif
     }
 

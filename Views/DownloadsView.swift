@@ -1,21 +1,21 @@
 import SwiftUI
 
-// AI CONTEXT — Views/DownloadsView.swift ("Downloads" page). Sections driven
-// by DownloadActivityStore: active downloads (progress, pause/resume/cancel),
-// failed (retry), and downloaded/recently archived episodes with file sizes
-// and delete actions routed through AppState (which owns file + model state).
-// Rows use CachedArtworkImage with a 44 pt target so this activity-heavy page
-// shares the app-wide downsampled artwork cache rather than decoding full covers.
-// LAYOUT GOTCHAS: the pause/resume/archive `controls` are `.fixedSize()` because
-// they share a row with the progress text — without it a long "NN% • X MB of Y GB"
-// compresses the buttons ("Re-sume" wraps mid-word). Media/explicit pills are
-// INLINE next to the podcast title, not a top-trailing overlay (the overlay
-// version floated over the Downloading/Paused status pill). Progress publishes
-// are coalesced in AppState.onProgressUpdate (≥1% steps) so several concurrent
-// downloads don't re-invalidate this page multiple times per second (scroll jank).
-// The page-level stack uses adaptivePageContent; keep that modifier on the inner
-// custom-scroll content so system chrome/backgrounds remain full width and the
-// outer gutter follows the live container rather than assuming a phone screen.
+// AI CONTEXT — Views/DownloadsView.swift (Downloads).
+// ROW GEOMETRY: Centre artwork beside the full text column. Titles/publisher/
+// metadata never share a horizontal band with status or transfer controls. Place
+// media/status badges in a bottom band, not a competing trailing column; archived
+// re-download controls follow the same rule. Keep swipe handlers unchanged.
+// Native List sections are required for standard swipeActions: leading Play /
+// Play Next, trailing Archive / Play Last, no full swipe. Do not move rows back
+// into a ScrollView/LazyVStack, which cannot host native row swipes.
+// GeometryReader supplies actual container width to AdaptiveListRowMetrics for
+// artwork/decode targets, titles, secondary text, badges and vertical spacing.
+// Keep transfer progress, Pause/Resume/Retry and archived Re-download controls;
+// archive is swipe-only. AppState owns file/transfer/model changes. Historical
+// entries without a live episode cannot offer playback; playing rows have no
+// destructive/requeue swipes, matching the existing podcast-list convention.
+// DownloadEpisodeSwipeActions re-resolves stable IDs after downloads and requires
+// downloaded state before play/requeue. Playback progress remains store-driven.
 struct DownloadsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var downloadCoordinator: DownloadCoordinator
@@ -24,24 +24,19 @@ struct DownloadsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                section(
-                    title: "Downloading",
-                    emptyText: "No active downloads",
-                    activities: downloadActivityStore.activeActivities
-                )
-
-                section(
-                    title: "Downloaded on Device",
-                    emptyText: "No completed downloads",
-                    activities: downloadCoordinator.downloadedActivities
-                )
-
+        GeometryReader { geometry in
+            List {
+                section(title: "Downloading", emptyText: "No active downloads",
+                        activities: downloadActivityStore.activeActivities)
+                section(title: "Downloaded on Device", emptyText: "No completed downloads",
+                        activities: downloadCoordinator.downloadedActivities)
                 archivedSection
             }
-            .padding(.vertical, 18)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .responsiveListSizing()
             .episodeListPageWidth()
+            .environment(\.adaptiveViewportWidth, geometry.size.width)
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Downloads")
@@ -77,75 +72,43 @@ struct DownloadsView: View {
             .filter { $0.status == .archived }
     }
 
-    @ViewBuilder
     private var archivedSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recently Archived")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.primary)
-
+        Section {
             if recentlyArchivedEntries.isEmpty {
                 Text("No archived episodes yet")
-                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .glassCard(cornerRadius: 16)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(recentlyArchivedEntries) { entry in
-                        ArchivedEpisodeRow(entry: entry)
-                            .environmentObject(appState)
-
-                        if entry.id != recentlyArchivedEntries.last?.id {
-                            Divider()
-                                .overlay(Color.white.opacity(0.08))
-                                .padding(.leading, 70)
-                        }
-                    }
+                ForEach(recentlyArchivedEntries) { entry in
+                    ArchivedEpisodeRow(entry: entry)
+                        .modifier(DownloadEpisodeSwipeActions(subscriptionID: entry.subscriptionID,
+                                                              episodeID: entry.episodeID))
                 }
-                .glassCard(cornerRadius: 16)
             }
+        } header: {
+            Text("Recently Archived").font(.title3.weight(.bold)).textCase(nil)
         }
+        .listRowBackground(Color.white.opacity(0.05))
     }
 
-    // MARK: - Shared section builder
-
-    @ViewBuilder
-    private func section(
-        title: String,
-        emptyText: String,
-        activities: [DownloadActivity]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.primary)
-
+    private func section(title: String, emptyText: String,
+                         activities: [DownloadActivity]) -> some View {
+        Section {
             if activities.isEmpty {
-                Text(emptyText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .glassCard(cornerRadius: 16)
+                Text(emptyText).foregroundStyle(.secondary)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(activities) { activity in
-                        DownloadActivityRow(activity: activity)
-                            .environmentObject(appState)
-
-                        if activity.id != activities.last?.id {
-                            Divider()
-                                .overlay(Color.white.opacity(0.08))
-                                .padding(.leading, 70)
-                        }
-                    }
+                ForEach(activities) { activity in
+                    DownloadActivityRow(activity: activity)
+                        .modifier(DownloadEpisodeSwipeActions(subscriptionID: activity.subscriptionID,
+                                                              episodeID: activity.episodeID,
+                                                              activity: activity))
                 }
-                .glassCard(cornerRadius: 16)
             }
+        } header: {
+            Text(title).font(.title3.weight(.bold)).textCase(nil)
         }
+        .listRowBackground(Color.white.opacity(0.05))
     }
+
 }
 
 // MARK: - Archived Episode Row
@@ -158,11 +121,15 @@ private struct ArchivedEpisodeRow: View {
 
     @State private var isRedownloading = false
 
+    private var metrics: AdaptiveListRowMetrics {
+        AdaptiveListRowMetrics(containerWidth: viewportWidth)
+    }
+
     var body: some View {
         let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         let artworkSize = metrics.artworkSize
-        HStack(alignment: .top, spacing: metrics.rowSpacing) {
-            // Artwork column — 44×44 image + badges centred below
+        HStack(alignment: .center, spacing: metrics.rowSpacing) {
+            // Artwork uses the same adaptive target size as other episode lists.
             VStack(alignment: .center, spacing: 4) {
                 CachedArtworkImage(url: entry.artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
                     placeholderArtwork
@@ -172,56 +139,52 @@ private struct ArchivedEpisodeRow: View {
 
             }
 
-            // Text stack — Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.podcastTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
+            VStack(alignment: .leading, spacing: 5) {
                 Text(entry.episodeTitle)
-                    .font(.system(size: metrics.primaryFontSize, weight: .bold))
+                    .font(.system(size: metrics.primaryFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                Text(archivedMetadata)
-                    .font(.caption)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(entry.podcastTitle)
+                    .font(.system(size: metrics.secondaryFontSize))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            // Re-download button — icon-only, bordered, purple (Button-ToolbarAction size)
-            Button {
-                isRedownloading = true
-                Task {
-                    await redownload()
-                    isRedownloading = false
-                }
-            } label: {
-                if isRedownloading {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Label("Re-download", systemImage: "arrow.down.circle")
-                        .labelStyle(.iconOnly)
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .tint(.purple)
-            .disabled(isRedownloading)
-        }
-        .padding(14)
-        .overlay(alignment: .topTrailing) {
-            if archivedEpisode?.mediaKind == .video || archivedEpisode?.isExplicit == true {
-                HStack(spacing: 3) {
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(archivedMetadata)
+                    .font(.system(size: metrics.secondaryFontSize))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
                     if archivedEpisode?.mediaKind == .video { VideoPillSmall() }
                     if archivedEpisode?.isExplicit == true { ExplicitPillSmall() }
+                    Spacer(minLength: 8)
+                    // Re-download button — icon-only, bordered, purple (Button-ToolbarAction size)
+                    Button {
+                        isRedownloading = true
+                        Task {
+                            await redownload()
+                            isRedownloading = false
+                        }
+                    } label: {
+                        if isRedownloading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Re-download", systemImage: "arrow.down.circle")
+                                .labelStyle(.iconOnly)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.purple)
+                    .disabled(isRedownloading)
                 }
+                .padding(.top, 5)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
         }
+        .padding(.vertical, metrics.verticalPadding)
     }
 
     private var archivedEpisode: Episode? {
@@ -266,59 +229,51 @@ private struct DownloadActivityRow: View {
     @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let activity: DownloadActivity
 
+    private var metrics: AdaptiveListRowMetrics {
+        AdaptiveListRowMetrics(containerWidth: viewportWidth)
+    }
+
     var body: some View {
         let metrics = AdaptiveListRowMetrics(containerWidth: viewportWidth)
         let artworkSize = metrics.artworkSize
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: metrics.rowSpacing) {
-                // Artwork column — 44×44 image + badges centred below
-                VStack(alignment: .center, spacing: 4) {
-                    CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
-                        placeholderArtwork
-                    }
-                    .frame(width: artworkSize, height: artworkSize)
-                    .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
-
+            HStack(alignment: .center, spacing: metrics.rowSpacing) {
+                CachedArtworkImage(url: artworkURL, targetSize: CGSize(width: artworkSize, height: artworkSize)) {
+                    placeholderArtwork
                 }
+                .frame(width: artworkSize, height: artworkSize)
+                .clipShape(RoundedRectangle(cornerRadius: artworkSize * 0.2))
 
-                // Text stack — Text-PodcastTitle / Text-EpisodeTitle / Text-MetadataRow
-                VStack(alignment: .leading, spacing: 2) {
-                    // Media/explicit pills live INLINE here (not a top-trailing
-                    // overlay): the overlay badges floated over the Downloading/Paused
-                    // status pill and clipped at the card edge. The inline Audio/Video
-                    // pill also already carried the media kind, so the overlay video
-                    // badge was redundant.
-                    HStack(spacing: 6) {
-                        Text(activity.podcastTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        mediaPill
-                        if episode?.isExplicit == true { ExplicitPillSmall() }
-                    }
-
+                VStack(alignment: .leading, spacing: 5) {
                     Text(activity.episodeTitle)
-                            .font(.system(size: metrics.primaryFontSize, weight: .bold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
+                        .font(.system(size: metrics.primaryFontSize, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(activity.podcastTitle)
+                        .font(.system(size: metrics.secondaryFontSize))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Text(metadataText)
-                        .font(.caption)
+                        .font(.system(size: metrics.secondaryFontSize))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Spacer(minLength: 8)
-
-                if activity.status == .completed {
-                    archiveButton
-                } else {
-                    statusPill
+                    HStack(spacing: 6) {
+                        mediaPill
+                        if episode?.isExplicit == true { ExplicitPillSmall() }
+                        Spacer(minLength: 8)
+                        statusPill
+                    }
+                    .padding(.top, 5)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // Progress / error row — indented past artwork (14 padding + 44 artwork + 12 spacing)
+            // Progress/error content aligns with the adaptive text-column inset.
             if activity.status == .downloading
                 || activity.status == .waitingToRetry
                 || activity.status == .paused {
@@ -328,7 +283,7 @@ private struct DownloadActivityRow: View {
 
                     HStack {
                         Text(progressText)
-                            .font(.caption.monospacedDigit())
+                            .font(.system(size: metrics.secondaryFontSize).monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
 
@@ -341,7 +296,7 @@ private struct DownloadActivityRow: View {
             } else if activity.status == .failed {
                 HStack {
                     Text(activity.errorMessage ?? "Download failed")
-                        .font(.caption)
+                        .font(.system(size: metrics.secondaryFontSize))
                         .foregroundStyle(.red)
                         .lineLimit(1)
 
@@ -349,10 +304,10 @@ private struct DownloadActivityRow: View {
 
                     controls
                 }
-                .padding(.leading, 56)
+                .padding(.leading, artworkSize + metrics.rowSpacing)
             }
         }
-        .padding(14)
+        .padding(.vertical, metrics.verticalPadding)
     }
 
     private var placeholderArtwork: some View {
@@ -380,7 +335,7 @@ private struct DownloadActivityRow: View {
     @ViewBuilder
     private var mediaPill: some View {
         let label = Text(activity.mediaKind == .video ? "Video" : "Audio")
-            .font(.caption2.weight(.bold))
+            .font(.system(size: metrics.secondaryFontSize - 1, weight: .bold))
             .foregroundStyle(.white)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -399,7 +354,7 @@ private struct DownloadActivityRow: View {
     @ViewBuilder
     private var statusPill: some View {
         let label = Text(statusText)
-            .font(.caption.weight(.bold))
+            .font(.system(size: metrics.secondaryFontSize, weight: .bold))
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -431,7 +386,6 @@ private struct DownloadActivityRow: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                archiveButton
 
             case .waitingToRetry:
                 Button {
@@ -443,7 +397,6 @@ private struct DownloadActivityRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
 
-                archiveButton
 
             case .paused, .failed:
                 Button {
@@ -459,25 +412,12 @@ private struct DownloadActivityRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
 
-                archiveButton
 
             case .completed:
-                archiveButton
+                EmptyView()
             }
         }
         .fixedSize()
-    }
-
-    private var archiveButton: some View {
-        Button {
-            Task { await appState.archiveDownload(activity) }
-        } label: {
-            Label("Archive", systemImage: "archivebox")
-                .labelStyle(.iconOnly)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .tint(.purple)
     }
 
     private var statusText: String {
@@ -534,5 +474,78 @@ private struct DownloadActivityRow: View {
     private func byteText(_ value: Int64?) -> String {
         guard let value, value > 0 else { return "Unknown size" }
         return ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    }
+}
+
+// AI CONTEXT — Native Downloads swipe behaviour. Use stable IDs and resolve live
+// episodes again after download; never queue a failed download or stale snapshot.
+// Activity archival must use archiveDownload so active transfers are cancelled
+// and activity/file/model state stays consistent. Full swipes are disabled.
+private struct DownloadEpisodeSwipeActions: ViewModifier {
+    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
+    let subscriptionID: UUID
+    let episodeID: UUID
+    var activity: DownloadActivity? = nil
+    @State private var isBusy = false
+
+    private var episode: Episode? {
+        subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID)
+    }
+    private var isPlaying: Bool { playbackCoordinator.currentEpisode?.id == episodeID }
+
+    func body(content: Content) -> some View {
+        content
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                if episode != nil, !isPlaying {
+                    Button { perform(.play) } label: { Label("Play", systemImage: "play.fill") }
+                        .tint(.green).disabled(isBusy)
+                    Button { perform(.next) } label: {
+                        Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                    .tint(.blue).disabled(isBusy)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !isPlaying {
+                    if activity != nil || episode != nil {
+                        Button { perform(.archive) } label: { Label("Archive", systemImage: "archivebox") }
+                            .tint(.purple).disabled(isBusy)
+                    }
+                    if episode != nil {
+                        Button { perform(.last) } label: {
+                            Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward")
+                        }
+                        .tint(.orange).disabled(isBusy)
+                    }
+                }
+            }
+    }
+
+    private enum Action { case play, next, last, archive }
+    private func perform(_ action: Action) {
+        guard !isBusy, !isPlaying else { return }
+        isBusy = true
+        Task { @MainActor in
+            defer { isBusy = false }
+            if action == .archive {
+                if let activity { await appState.archiveDownload(activity) }
+                else if let episode { await appState.archiveEpisode(episode) }
+                return
+            }
+            guard let episode else { return }
+            if episode.downloadState != .downloaded {
+                await appState.downloadEpisodeForQueue(episode)
+            }
+            guard let current = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID),
+                  current.downloadState == .downloaded, !isPlaying else { return }
+            switch action {
+            case .play: await appState.playEpisode(current)
+            case .next: appState.playEpisodeNext(current)
+            case .last: appState.playEpisodeLast(current)
+            case .archive: break
+            }
+        }
     }
 }

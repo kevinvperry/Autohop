@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // ============================================================================
@@ -52,5 +53,140 @@ enum LockedDeviceFileAccess {
             ])
         }
         #endif
+    }
+}
+
+/// Shared persistence envelope for small, user-authored JSON stores. The
+/// checksum catches truncation and accidental payload/schema drift before a
+/// caller replaces its in-memory state. `generationID` and `revision` are also
+/// recovery metadata: future reconciliation can compare snapshots without
+/// guessing from file modification dates.
+struct IntegrityCheckedStoreEnvelope<Payload: Codable>: Codable {
+    let schemaVersion: Int
+    let generationID: String
+    let revision: UInt64
+    let writerDeviceID: String
+    let updatedAt: Date
+    let payload: Payload
+    let checksum: String
+
+    private struct ChecksumMaterial: Codable {
+        let schemaVersion: Int
+        let generationID: String
+        let revision: UInt64
+        let writerDeviceID: String
+        let updatedAt: Date
+        let payload: Payload
+    }
+
+    enum ValidationError: Error {
+        case unsupportedSchema(Int)
+        case invalidMetadata
+        case checksumMismatch
+    }
+
+    static func make(
+        payload: Payload,
+        schemaVersion: Int,
+        generationID: String,
+        revision: UInt64,
+        writerDeviceID: String,
+        updatedAt: Date = Date()
+    ) throws -> Self {
+        let material = ChecksumMaterial(
+            schemaVersion: schemaVersion,
+            generationID: generationID,
+            revision: revision,
+            writerDeviceID: writerDeviceID,
+            updatedAt: updatedAt,
+            payload: payload
+        )
+        return Self(
+            schemaVersion: schemaVersion,
+            generationID: generationID,
+            revision: revision,
+            writerDeviceID: writerDeviceID,
+            updatedAt: updatedAt,
+            payload: payload,
+            checksum: try checksum(for: material)
+        )
+    }
+
+    func validated(expectedSchemaVersion: Int) throws -> Payload {
+        guard schemaVersion == expectedSchemaVersion else {
+            throw ValidationError.unsupportedSchema(schemaVersion)
+        }
+        guard !generationID.isEmpty, !writerDeviceID.isEmpty else {
+            throw ValidationError.invalidMetadata
+        }
+        let material = ChecksumMaterial(
+            schemaVersion: schemaVersion,
+            generationID: generationID,
+            revision: revision,
+            writerDeviceID: writerDeviceID,
+            updatedAt: updatedAt,
+            payload: payload
+        )
+        let expectedChecksum = try Self.checksum(for: material)
+        guard checksum == expectedChecksum else {
+            throw ValidationError.checksumMismatch
+        }
+        return payload
+    }
+
+    static func encode(_ envelope: Self) throws -> Data {
+        try encoder.encode(envelope)
+    }
+
+    static func decode(_ data: Data) throws -> Self {
+        try decoder.decode(Self.self, from: data)
+    }
+
+    private static func checksum(for material: ChecksumMaterial) throws -> String {
+        let data = try encoder.encode(material)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static var encoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        return encoder
+    }
+
+    private static var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
+    }
+}
+
+enum DurableStoreLoadState: Equatable {
+    case absent
+    case loaded
+    case recoveredFromBackup
+    case temporarilyUnavailable
+    case corruptOrIncompatible
+
+    var allowsPersistence: Bool {
+        switch self {
+        case .absent, .loaded, .recoveredFromBackup:
+            return true
+        case .temporarilyUnavailable, .corruptOrIncompatible:
+            return false
+        }
+    }
+}
+
+/// Canonical SHA-256 used by the stats file, SQLite projection and CloudKit
+/// record. Keeping one implementation prevents three stores from disagreeing
+/// merely because their encoders used different key ordering or date formats.
+enum DurablePayloadFingerprint {
+    static func make<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let digest = SHA256.hash(data: try encoder.encode(value))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

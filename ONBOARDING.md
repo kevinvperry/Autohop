@@ -23,6 +23,20 @@ Drafted 2026-06-19.
 
 ---
 
+## Onboarding card overlap and clipping — 6 September 2026
+
+While the first-subscription milestone is presented, OnboardingCoordinator hides
+Quick Tips across all overlay hosts through visibleTip. The active tip retains
+its page ownership and is not marked seen; cancellation while hidden prevents it
+returning on an unrelated page. RootView enables suppression before presenting
+and clears it when the sheet dismisses.
+
+FirstSubscribeCard opens at the large detent with Play/Add more shows in a bottom
+safe-area inset; explanatory content scrolls above those actions. Quick Tip
+scroll content uses a minimum height measured from its actual overlay bounds,
+not a fixed container-relative height, so long text can scroll to its dismissal
+button. The sheet receives the existing shared app environment explicitly.
+
 ## 1. The core problem
 
 A first-time user installs Autohop, opens it, and lands on the **empty Player**
@@ -284,9 +298,12 @@ A small reusable system rather than ad-hoc popovers.
   never auto-shown again.
 - **Trigger = first arrival** at the relevant surface (or first relevant event), not a
   timer and not launch.
-- **Dismiss** through the prominent top-right ✕ or full-width confirmation.
+- **Dismiss** through the single full-width “Got it — close tip” confirmation;
+  do not duplicate the action with a top-right close control.
 - **Navigation safety:** the requesting page owns the card. Leaving it cancels
-  the card immediately without setting the seen flag; returning may offer it again.
+  the card immediately without setting the seen flag; returning may offer it
+  again. If a child arrives before its parent's disappearance callback, queue
+  the child's request and promote it after the parent cancels.
 - **Budget:** ≤ 3 in the first session. Power-feature tips spread across later sessions.
 - **Always re-findable:** every concept a tip teaches also lives in Menu → Support
   (`§16`) so nothing is lost by dismissing.
@@ -360,3 +377,9 @@ Per the project's source-of-truth discipline:
   two must stay mirrored.
 - **FUTURE_VERSIONS.md** — park P2 items not in the immediate build there.
 - **PAGES.md** — register the Welcome screen if added.
+
+Validation: the signed iPad simulator build and all four selected onboarding
+regressions pass (milestone suppression/cancellation, environment-free overlay
+rendering, and existing page-tip cancellation/promotion). The supplied screenshot
+identified the overlapping surfaces; these automated checks are not a visual
+walkthrough of every iPad orientation or accessibility text size.

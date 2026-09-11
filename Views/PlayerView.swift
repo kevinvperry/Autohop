@@ -3,6 +3,13 @@ import AVKit
 import SwiftUI
 import UIKit
 
+// DESKTOP/PRESENTATION CONTRACT (2026-09-06): Publish the current episode/show and
+// player Space-key eligibility through DesktopCommandContext. Podcast Settings
+// presentation supplies CoachMarkOverlay its existing coordinator explicitly; preserve
+// the overlay above the modal and existing audio-control dependency injection.
+
+// MENU PRESENTATION: Inject appEnvironment inside the Menu closure; the Mac
+// bridge cannot be assumed to inherit dependencies before evaluating Menu.
 // AI CONTEXT — Views/PlayerView.swift ("Player" page). Full-screen now-playing
 // UI, permanently mounted as the NavigationStack root (see RootView). Three
 // horizontally swipeable panels: Now Playing (artwork/scrubber/transport),
@@ -19,6 +26,9 @@ import UIKit
 // publishes them). Event handlers (skip buttons) may read the AppState proxy.
 // STAGE 13 OBSERVATION: episode/playing state, queue projection, and
 // subscription metadata are observed from PlaybackCoordinator,
+// TRANSPORT INVARIANT: every skip-forward control delegates to
+// AppState.skipForward. Never advance the queue directly when a skip crosses
+// EOF; PlaybackSeekWorkflow must run the shared completion transaction first.
 // The Details panel ends with the iOS-family Review in Apple Podcasts action,
 // immediately below its metadata-card grid. It resolves the current episode's
 // subscription by exact RSS identity through ApplePodcastsReviewButton.
@@ -250,6 +260,10 @@ struct PlayerView: View {
         .onChange(of: settingsViewModel.appSettings.keepScreenAwakeDuringPlayback) { _, _ in
             appState.updateIdleTimer(playerVisible: isPlayerVisible)
         }
+        .background {
+            DesktopCommandContext(subscriptionID: episode?.subscriptionID, episodeID: episode?.id, allowsSpace: true)
+                .frame(width: 0, height: 0)
+        }
         .onboardingTip(.playerPanels, when: playbackCoordinator.currentEpisode != nil)
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             scheduleAudioRouteNameRefresh()
@@ -281,6 +295,7 @@ struct PlayerView: View {
         }
         .adaptiveNavigationPresentation(isPresented: $showMenu) {
             MenuSheetView()
+                .appEnvironment(appState)
         }
         .adaptiveNavigationPresentation(isPresented: $showQueue, onDismiss: {
             // "Replace Up Next": open the target page only after the Up Next sheet
@@ -309,6 +324,10 @@ struct PlayerView: View {
                 SubscriptionSettingsView(subscriptionID: route.id)
             }
             .environmentObject(appState)
+            // This route is a system presentation above RootView. Host the
+            // shared coach mark here so Podcast Settings and its pushed
+            // Download Feed Filters tip cannot render invisibly behind it.
+            .overlay { CoachMarkOverlay(onboardingCoordinator: onboardingCoordinator) }
         }
         .adaptiveNavigationPresentation(item: $podcastDetailRoute) { route in
             NavigationStack {
@@ -1078,19 +1097,9 @@ struct PlayerView: View {
             .accessibilityLabel(playbackCoordinator.isPlaying ? "Pause" : "Play")
 
             Button {
-                guard let dur = playbackCoordinator.currentEpisode?.durationSeconds else { return }
                 let skip = settingsViewModel.appSettings.skipForwardSeconds
-                if appState.currentPlayerTime + skip >= dur {
-                    // Overshoot — advance to next episode rather than clamping to the end.
-                    // Exclude the current episode so playNextEpisode doesn't restore it.
-                    let currentID = playbackCoordinator.currentEpisode?.id
-                    Task { await appState.playNextEpisode(excluding: currentID.map { [$0] } ?? []) }
-                } else {
-                    sliderValue = appState.currentPlayerTime + skip
-                    // Routes through skipForward (not seek) so the manual-skip time-saved
-                    // stat is credited; the overshoot branch above is an episode advance, not a skip.
-                    appState.skipForward(seconds: skip)
-                }
+                sliderValue = appState.currentPlayerTime + skip
+                appState.skipForward(seconds: skip)
             } label: {
                 SkipIntervalIcon(direction: .forward, seconds: settingsViewModel.appSettings.skipForwardSeconds)
             }

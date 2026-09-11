@@ -1328,9 +1328,10 @@ public final class SubscriptionStore: ObservableObject {
 
     // MARK: - Listening history write-back (tvOS Phase 3, §8 item 3)
     //
-    // Playback position roams via the ListeningHistoryEntry sync record, whole-
-    // entry record-level LWW by `lastListenedAt` (SYNC_DESIGN.md) — NOT via
-    // EpisodeSyncState. Historically only the iOS app-target ListeningHistoryStore
+    // Playback position roams via the ListeningHistoryEntry sync record — NOT
+    // via EpisodeSyncState. Navigation follows `lastListenedAt`, while listening
+    // totals and terminal evidence merge monotonically (SYNC_DESIGN.md).
+    // Historically only the iOS app-target ListeningHistoryStore
     // could write it. These two methods expose the same write path from
     // AutohopCore so a streaming platform (TV, later watch) can participate in
     // phone⇄device resume round-trips without a local history store of its own.
@@ -1341,7 +1342,7 @@ public final class SubscriptionStore: ObservableObject {
     // instead of duplicating. Read-modify-write against any existing entry (not
     // a bare overwrite) so a TV session's `listenedSeconds` ACCUMULATES onto
     // whatever the phone already recorded, rather than shrinking the lifetime
-    // total on the next record-level-LWW resolution.
+    // total during the next cross-device merge.
 
     /// Periodic/position write during TV playback — the tvOS analog of
     /// ListeningHistoryStore.recordProgress(). `listenedSecondsDelta` is

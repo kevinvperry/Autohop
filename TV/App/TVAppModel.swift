@@ -104,8 +104,8 @@ final class TVAppModel {
     /// all the TV has to do is record its own listening into a
     /// ListeningStatsStore wired to the sync database — the engine pushes the
     /// partitions and the phone folds them in with zero phone-side changes.
-    /// Local JSON lives in Caches (same purge posture as the TV database: the
-    /// synced CloudKit records are the durable copy). TV has no Stats UI, so
+    /// Local JSON and the authoritative SQLite rows live in Application Support;
+    /// only render projections remain purgeable. TV has no Stats UI, so
     /// onRemoteStatsChanged stays unwired here.
     let listeningStatsStore: ListeningStatsStore
     let materializationCoordinator: TVMaterializationCoordinator

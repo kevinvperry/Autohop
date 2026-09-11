@@ -8,6 +8,42 @@ import AutohopCore
 // account with no optional queue snapshot reports “iCloud connected.”
 @MainActor
 final class TVAppDecompositionTests: XCTestCase {
+    func testAuthoritativeStorageMigrationCopiesStatsAndDatabaseOutOfCaches() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tv-authoritative-migration-\(UUID().uuidString)", isDirectory: true)
+        let caches = root.appendingPathComponent("Caches", isDirectory: true)
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("database".utf8).write(to: caches.appendingPathComponent("autohop-tv.sqlite"))
+        try Data("stats".utf8).write(to: caches.appendingPathComponent("listening-stats.json"))
+
+        TVAppDependencies.migrateLegacyAuthoritativeFiles(from: caches, to: support)
+
+        XCTAssertEqual(
+            try Data(contentsOf: support.appendingPathComponent("autohop-tv.sqlite")),
+            Data("database".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: support.appendingPathComponent("listening-stats.json")),
+            Data("stats".utf8)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: caches.appendingPathComponent("listening-stats.json").path))
+    }
+
+    func testTVStatsPolicyMatchesFreshStartAndBoundedSkipSemantics() {
+        let fresh = PlaybackSessionPolicy.startResolution(resumeTime: 0, startSkipSeconds: 15)
+        let resumed = PlaybackSessionPolicy.startResolution(resumeTime: 120, startSkipSeconds: 15)
+
+        XCTAssertTrue(TVPlaybackStatsPolicy.shouldRecordStart(fresh))
+        XCTAssertFalse(TVPlaybackStatsPolicy.shouldRecordStart(resumed))
+        XCTAssertEqual(
+            TVPlaybackStatsPolicy.actualManualForwardSkip(from: 92, requested: 30, duration: 100),
+            8
+        )
+    }
+
     func testHealthyAccountWithoutQueueSnapshotUsesConnectedStatus() {
         XCTAssertEqual(TVSyncStatus.connected.label, "iCloud connected")
     }

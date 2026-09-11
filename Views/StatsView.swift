@@ -1,5 +1,10 @@
 import SwiftUI
 import Charts
+import UniformTypeIdentifiers
+
+// MINI-PLAYER CONTRACT (2026-09-06): Stats Top Shows → Show All opens
+// TopShowsListView (up to 50 shows, not the Discover episode chart). This nested
+// pushed destination owns miniPlayerBar just like the main Stats page.
 
 // AI CONTEXT — Views/StatsView.swift ("Stats" page; full layout spec in
 // FEATURES.md §12). Period selector — 7 Days / month / year / Lifetime —
@@ -32,7 +37,7 @@ import Charts
 // Monday-aligned columns) or monthly Swift Charts trend (year/Lifetime), 24-hour
 // listening clock (Canvas rose chart), data-downloaded card (total bytes +
 // episode count / average size, forward-only from June 2026), time-saved
-// breakdown, privacy footer.
+// breakdown, data-coverage disclosures, health, and a sync-aware privacy footer.
 // Lifetime adds imported pre-bucket totals to the hero/breakdown and explicitly
 // labels that those older seconds cannot be assigned to month/hour/show charts.
 // Tapping a Top Shows or
@@ -220,10 +225,14 @@ private struct StatsContentView: View {
     @State private var showRecaps = false
     @State private var driftShowToUnsubscribe: ShowEngagement?
     @State private var showDriftUnsubscribeConfirm = false
-    /// Subscription UUID string of the Top Shows row expanded into a detail card.
+    /// Stable Stats show identity of the Top Shows row expanded into a detail card.
     @State private var expandedTopShowID: String?
     /// Subscription UUID of the drifting-shows row expanded into a detail card.
     @State private var expandedDriftShowID: UUID?
+    @State private var jsonExportURL: URL?
+    @State private var csvExportURL: URL?
+    @State private var showStatsImporter = false
+    @State private var statsTransferMessage: String?
     /// Comma-joined subscription UUIDs the user muted from the drifting list.
     @AppStorage("stats.hiddenDriftShowIDs") private var hiddenDriftShowIDsRaw: String = ""
 
@@ -260,6 +269,8 @@ private struct StatsContentView: View {
 
                 responsiveStatsSections(summary)
 
+                dataCoverageSection(summary)
+                statsHealthSection
                 privacyFooter
             }
             .padding(.vertical, 18)
@@ -278,8 +289,59 @@ private struct StatsContentView: View {
                 }
                 .accessibilityLabel("Listening Recaps")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if let jsonExportURL {
+                        ShareLink(item: jsonExportURL) {
+                            Label("Export Backup (JSON)", systemImage: "externaldrive")
+                        }
+                    }
+                    if let csvExportURL {
+                        ShareLink(item: csvExportURL) {
+                            Label("Export Spreadsheet (CSV)", systemImage: "tablecells")
+                        }
+                    }
+                    Button {
+                        showStatsImporter = true
+                    } label: {
+                        Label("Import Backup", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .responsiveToolbarSymbol()
+                }
+                .accessibilityLabel("Stats data options")
+            }
         }
         .sheet(isPresented: $showRecaps) { RecapSettingsView() }
+        .task {
+            store.registerCanonicalShows(subscriptionStore.subscriptions)
+            prepareStatsExports()
+        }
+        .fileImporter(
+            isPresented: $showStatsImporter,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            do {
+                guard let url = try result.get().first else { return }
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                try store.importJSONArchive(from: url)
+                statsTransferMessage = "Stats backup imported successfully."
+                prepareStatsExports()
+            } catch {
+                statsTransferMessage = error.localizedDescription
+            }
+        }
+        .alert("Stats Data", isPresented: Binding(
+            get: { statsTransferMessage != nil },
+            set: { if !$0 { statsTransferMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { statsTransferMessage = nil }
+        } message: {
+            Text(statsTransferMessage ?? "")
+        }
         .miniPlayerBar()
         .preferredColorScheme(.dark)
         .confirmationDialog(
@@ -389,6 +451,9 @@ private struct StatsContentView: View {
             ) {
                 heroStats(summary)
             }
+            Text("A streak day means at least 1 minute of listening. Current streak is always measured across your full history.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -409,7 +474,7 @@ private struct StatsContentView: View {
         )
         heroStat(
             value: streakLabel(store.currentStreakDays),
-            label: "current streak",
+            label: "current streak · all time",
             tint: .primary
         )
     }
@@ -623,13 +688,16 @@ private struct StatsContentView: View {
                         .buttonStyle(.plain)
 
                         if expandedTopShowID == show.id {
+                            let matchingSubscriptions = statsSubscriptions(
+                                matching: show.id,
+                                in: subscriptionStore.subscriptions
+                            )
                             ShowStatsExpandedCard(
                                 detail: ShowPeriodDetail(
-                                    subscriptionID: show.id,
+                                    statsShowID: show.id,
+                                    subscriptionIDs: Set(matchingSubscriptions.map { $0.id.uuidString }),
                                     entries: historyStore.entries,
-                                    episodes: UUID(uuidString: show.id).flatMap {
-                                        subscriptionStore.subscription(id: $0)?.episodes
-                                    } ?? [],
+                                    episodes: matchingSubscriptions.flatMap(\.episodes),
                                     summary: summary,
                                     since: range.sinceDate(last: isLast),
                                     until: range.untilDate(last: isLast)
@@ -685,8 +753,9 @@ private struct StatsContentView: View {
         })
     }
 
-    /// "Shows You're Drifting From" — short ranges only: the 500-entry history cap
-    /// silently truncates longer ranges, and a year-old struggle isn't actionable.
+    /// "Shows You're Drifting From" stays on current short ranges because it is
+    /// an actionable present-tense signal. Resume history is still bounded even
+    /// after its increase to 5,000 entries, so it is not a lifetime outcome ledger.
     @ViewBuilder
     private func driftingShowsSection(_ summary: ListeningStatsSummary) -> some View {
         // Present-tense signal ("shows you're drifting from") — only meaningful for
@@ -717,7 +786,10 @@ private struct StatsContentView: View {
                             if expandedDriftShowID == show.subscriptionID {
                                 ShowStatsExpandedCard(
                                     detail: ShowPeriodDetail(
-                                        subscriptionID: show.subscriptionID.uuidString,
+                                        statsShowID: subscriptionStore.subscription(id: show.subscriptionID)
+                                            .map { StatsShowIdentity.key(for: $0.feedURL) }
+                                            ?? show.subscriptionID.uuidString,
+                                        subscriptionIDs: [show.subscriptionID.uuidString],
                                         entries: historyStore.entries,
                                         episodes: subscriptionStore.subscription(
                                             id: show.subscriptionID
@@ -758,7 +830,7 @@ private struct StatsContentView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                StatsShowArtwork(subscriptionID: show.subscriptionID.uuidString)
+                StatsShowArtwork(statsShowID: show.subscriptionID.uuidString)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(show.title)
@@ -1025,12 +1097,94 @@ private struct StatsContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "lock.shield")
                 .font(.caption)
-            Text("Your listening stats are private — kept on your device and your own iCloud, never sent to Autohop.")
+            Text(appState.settingsStore.appSettings.iCloudSyncEnabled
+                ? "Your listening stats are private — kept on this device and stored in your iCloud while Sync is enabled. Never sent to Autohop."
+                : "Your listening stats are private and kept on this device. Enable iCloud Sync to store them in your iCloud.")
                 .font(.caption)
         }
         .foregroundStyle(.tertiary)
         .frame(maxWidth: .infinity)
         .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private func dataCoverageSection(_ summary: ListeningStatsSummary) -> some View {
+        if summary.excludesPartiallyOverlappingLegacyBaseline || !summary.coverageNotices.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeading("Data Coverage", icon: "calendar.badge.exclamationmark")
+                VStack(alignment: .leading, spacing: 10) {
+                    if summary.excludesPartiallyOverlappingLegacyBaseline {
+                        coverageNotice(
+                            "This period overlaps listening from before daily tracking. That unbucketed portion is not included because it cannot be assigned accurately."
+                        )
+                    }
+                    ForEach(summary.coverageNotices) { notice in
+                        coverageNotice(
+                            "\(notice.metric.rawValue) is available from \(notice.trackedSince.formatted(date: .abbreviated, time: .omitted)); earlier values are partial."
+                        )
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .glassCard(cornerRadius: 16)
+            }
+        }
+    }
+
+    private func coverageNotice(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var statsHealthSection: some View {
+        let health = store.healthSnapshot
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionHeading("Stats Health", icon: "checkmark.shield")
+            VStack(spacing: 0) {
+                healthRow("Recorded days", value: "\(health.recordedDayCount)")
+                cardDivider
+                healthRow("Other devices", value: "\(health.remoteDeviceCount)")
+                cardDivider
+                healthRow("Pending sync days", value: "\(health.pendingDayCount)")
+                if let lastSave = health.lastLocalSave {
+                    cardDivider
+                    healthRow("Last local save", value: lastSave.formatted(date: .abbreviated, time: .shortened))
+                }
+                if appState.settingsStore.appSettings.iCloudSyncEnabled,
+                   let lastSync = health.lastSuccessfulSync {
+                    cardDivider
+                    healthRow("Last iCloud sync", value: lastSync.formatted(date: .abbreviated, time: .shortened))
+                }
+                if health.recoveryStatus != "No recovery needed" {
+                    cardDivider
+                    healthRow("Recovery", value: health.recoveryStatus)
+                }
+            }
+            .glassCard(cornerRadius: 16)
+        }
+    }
+
+    private func healthRow(_ label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.primary)
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private func prepareStatsExports() {
+        jsonExportURL = try? store.makeJSONExport()
+        csvExportURL = try? store.makeCSVExport()
     }
 }
 
@@ -1130,6 +1284,13 @@ private enum RankMovement {
     case new
 }
 
+private func statsSubscriptions(
+    matching statsShowID: String,
+    in subscriptions: [Subscription]
+) -> [Subscription] {
+    subscriptions.filter { StatsShowIdentity.matches(statsShowID, subscription: $0) }
+}
+
 private struct TopShowRow: View {
     let rank: Int
     let show: (id: String, title: String, seconds: TimeInterval)
@@ -1143,7 +1304,7 @@ private struct TopShowRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .center)
 
-            StatsShowArtwork(subscriptionID: show.id)
+            StatsShowArtwork(statsShowID: show.id)
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -1219,7 +1380,8 @@ private struct ShowPeriodDetail {
     var medianReleaseToListen: TimeInterval?
 
     init(
-        subscriptionID: String,
+        statsShowID: String,
+        subscriptionIDs: Set<String>,
         entries: [ListeningHistoryEntry],
         episodes: [Episode],
         summary: ListeningStatsSummary,
@@ -1229,7 +1391,7 @@ private struct ShowPeriodDetail {
         var percents: [Double] = []
         var releaseDelays: [TimeInterval] = []
         var completedEvidence = Set<String>()
-        for entry in entries where entry.subscriptionID.uuidString == subscriptionID {
+        for entry in entries where subscriptionIDs.contains(entry.subscriptionID.uuidString) {
             if let since, entry.lastListenedAt < since { continue }
             if let until, entry.lastListenedAt >= until { continue }
             episodesTouched += 1
@@ -1249,7 +1411,7 @@ private struct ShowPeriodDetail {
             case .archivedUnplayed, nil: break
             }
         }
-        for episode in episodes where episode.subscriptionID.uuidString == subscriptionID
+        for episode in episodes where subscriptionIDs.contains(episode.subscriptionID.uuidString)
             && episode.wasCompleted {
             guard let completedAt = episode.lastPlayedAt else { continue }
             if let since, completedAt < since { continue }
@@ -1262,9 +1424,26 @@ private struct ShowPeriodDetail {
         // so retain the larger independently evidenced count. Both sources refer
         // to the same outcomes; summing would double-count the migration overlap.
         episodesCompleted = max(
-            summary.perShowEpisodesCompleted[subscriptionID] ?? 0,
+            summary.perShowEpisodesCompleted[statsShowID] ?? 0,
             completedEvidence.count
         )
+        let durableOutcomes = summary.episodeOutcomes.filter { $0.value.showID == statsShowID }
+        let durableCompleted = durableOutcomes.values.filter {
+            $0.completionKind == .finishedNaturally
+                || ($0.completionFraction ?? 0) >= ShowEngagementAnalyzer.completedPercent
+        }.count
+        let durableAbandoned = durableOutcomes.values.filter {
+            guard $0.completionKind == .manuallyArchived || $0.completionKind == .autoArchived else { return false }
+            guard let fraction = $0.completionFraction else { return false }
+            return fraction < ShowEngagementAnalyzer.abandonedBelowPercent
+        }.count
+        episodesCompleted = max(episodesCompleted, durableCompleted)
+        episodesAbandoned = max(episodesAbandoned, durableAbandoned)
+        episodesTouched = max(episodesTouched, durableOutcomes.count)
+        let durablePercents = durableOutcomes.values.compactMap(\.completionFraction)
+        if !durablePercents.isEmpty {
+            percents = durablePercents
+        }
         if !percents.isEmpty {
             averageCompletionPercent = percents.reduce(0, +) / Double(percents.count)
         }
@@ -1272,20 +1451,20 @@ private struct ShowPeriodDetail {
             let sorted = releaseDelays.sorted()
             medianReleaseToListen = sorted[sorted.count / 2]
         }
-        seconds = summary.perShowSeconds[subscriptionID] ?? 0
+        seconds = summary.perShowSeconds[statsShowID] ?? 0
         if summary.wallClockSeconds > 0 {
             shareOfListening = seconds / summary.wallClockSeconds
         }
         // Resolve each bucket independently. Testing only the aggregate map
         // drops older buckets whenever a range also contains one modern bucket.
         for day in summary.days {
-            let showSeconds = day.perShowSeconds[subscriptionID] ?? 0
+            let showSeconds = day.perShowSeconds[statsShowID] ?? 0
             if day.perShowTimeSaved.isEmpty {
                 guard day.wallClockSeconds > 0, showSeconds > 0 else { continue }
                 timeSaved += day.totalTimeSaved * showSeconds / day.wallClockSeconds
                 timeSavedIsEstimate = true
             } else {
-                timeSaved += day.perShowTimeSaved[subscriptionID] ?? 0
+                timeSaved += day.perShowTimeSaved[statsShowID] ?? 0
             }
         }
     }
@@ -1398,11 +1577,13 @@ private struct ShowStatsExpandedCard: View {
 private struct StatsShowArtwork: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    let subscriptionID: String
+    let statsShowID: String
 
     var body: some View {
-        let subscription = UUID(uuidString: subscriptionID)
-            .flatMap { subscriptionStore.subscription(id: $0) }
+        let subscription = statsSubscriptions(
+            matching: statsShowID,
+            in: subscriptionStore.subscriptions
+        ).first
 
         CachedArtworkImage(url: subscription?.artworkURL, targetSize: CGSize(width: 44, height: 44)) {
             ZStack {
@@ -1505,13 +1686,16 @@ private struct TopShowsListView: View {
                             .buttonStyle(.plain)
 
                             if expandedShowID == show.id {
+                                let matchingSubscriptions = statsSubscriptions(
+                                    matching: show.id,
+                                    in: subscriptionStore.subscriptions
+                                )
                                 ShowStatsExpandedCard(
                                     detail: ShowPeriodDetail(
-                                        subscriptionID: show.id,
+                                        statsShowID: show.id,
+                                        subscriptionIDs: Set(matchingSubscriptions.map { $0.id.uuidString }),
                                         entries: historyStore.entries,
-                                        episodes: UUID(uuidString: show.id).flatMap {
-                                            subscriptionStore.subscription(id: $0)?.episodes
-                                        } ?? [],
+                                        episodes: matchingSubscriptions.flatMap(\.episodes),
                                         summary: summary,
                                         since: range.sinceDate(last: isLast),
                                         until: range.untilDate(last: isLast)
@@ -1543,6 +1727,7 @@ private struct TopShowsListView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Top Shows")
         .responsiveInlineNavigationTitle("Top Shows")
+        .miniPlayerBar()
         .preferredColorScheme(.dark)
     }
 

@@ -15,7 +15,19 @@ DESIGN DECISION: Autohop has no developer-operated login or shared test account.
 The production app therefore exposes a deterministic offline Demo Library that
 is available to reviewers and customers and cannot write to production storage,
 CloudKit, listening history, or statistics.
+TV 1.6.1 (1) submitted for approval, user-confirmed 8 September 2026.
+All future iOS/tvOS code changes belong together in VERSION_1.7.md.
+Screenshot confirms prior TV 1.6 (15) Ready for Distribution.
 -->
+## tvOS release update — 8 September 2026
+
+The user’s screenshot confirms tvOS 1.6 (15) Ready for Distribution; older
+build-13 submission references below are historical. tvOS 1.6.1 (1), including
+Top Shelf, is now submitted for approval (user-confirmed 8 September 2026). iOS remains 1.6.1 (17). Submission text and
+validation are in [the TV package](AppStore/tvOS-1.6.1/SUBMISSION.md).
+Approval of TV 1.6.1 is pending. All future iOS and tvOS code updates are
+tracked together in VERSION_1.7.md; the submitted TV release scope is closed.
+
 
 ## App Review Information — submitted Version 1.6 (build 13)
 

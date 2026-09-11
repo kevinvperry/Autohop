@@ -1,5 +1,13 @@
 import SwiftUI
 
+// DESKTOP/MINI-PLAYER CONTRACT (2026-09-06): Root owns desktop NavigationPath routes.
+// Sleep/audio commands present panels over the current page; ordinary commands use
+// existing destinations. miniPlayerBar also publishes visible IDs and Back context.
+// Pass the existing onboarding coordinator explicitly to CoachMarkOverlay so early
+// Mac presentation evaluation never depends on inherited environment installation.
+
+// MILESTONE: Suppress all Quick Tip hosts before presenting first subscription;
+// resume on sheet dismissal. Supply the shared app environment to the sheet.
 // AI CONTEXT — Views/RootView.swift
 // Navigation root. KEY ARCHITECTURE: PlayerView is the PERMANENT root of the
 // NavigationStack — it is never torn down, so AVFoundation state survives all
@@ -19,6 +27,9 @@ import SwiftUI
 // device's bottom safe area. The visible glass has continuous top corners.
 // NavRules: pushed page = back chevron top-left,
 // informational sheet = ✕ top-right, editing sheet = Cancel/Save.
+// Mini-player forward skips always enter AppState.skipForward. A view must not
+// call playNextEpisode for EOF overshoot because that bypasses played/archive
+// settlement and leaves the old resume position in Up Next.
 // Also shows the launch splash overlay briefly on cold start. MiniPlayerBar
 // artwork uses its responsive CachedArtworkImage target so the always-visible
 // chrome reuses the shared artwork cache without decoding full covers.
@@ -60,6 +71,7 @@ import SwiftUI
 // Subscriptions, Discover, Search or chart pages. Never inject a descendant
 // Back action that blindly mutates this outer NavigationPath.
 enum AppRoute: Hashable {
+    case desktop(DesktopDestination)
     case podcasts
     case stats(ListeningRecapPeriod?)
     case sleepSchedule
@@ -311,14 +323,8 @@ struct MiniPlayerBar: View {
     }
 
     private func skipForward() {
-        guard let episode = playbackCoordinator.currentEpisode else { return }
         let interval = settingsViewModel.appSettings.skipForwardSeconds
-        if let duration = episode.durationSeconds,
-           playbackClock.time + interval >= duration {
-            Task { await appState.playNextEpisode(excluding: [episode.id]) }
-        } else {
-            appState.skipForward(seconds: interval)
-        }
+        appState.skipForward(seconds: interval)
     }
 }
 
@@ -405,8 +411,9 @@ private struct PersistentMiniPlayerPrimaryControlSurface: ViewModifier {
 
 extension View {
     /// Docks the MiniPlayerBar at the bottom of a pushed page.
-    func miniPlayerBar() -> some View {
+    func miniPlayerBar(subscriptionID: UUID? = nil, episodeID: UUID? = nil) -> some View {
         safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayerBar() }
+            .modifier(DesktopPageContextModifier(subscriptionID: subscriptionID, episodeID: episodeID))
     }
 }
 
@@ -421,6 +428,11 @@ struct RootView: View {
     @State private var showLaunchView = true
     @State private var showWelcome = false
     @State private var firstSubscribeContext: FirstSubscribeContext?
+    private enum DesktopPanel: String, Identifiable {
+        case sleepTimer, audioControls
+        var id: String { rawValue }
+    }
+    @State private var desktopPanel: DesktopPanel?
     @State private var navigationPath = NavigationPath()
     @State private var handledExplicitLaunchRoute = false
 
@@ -443,6 +455,8 @@ struct RootView: View {
                     .toolbar(.hidden, for: .navigationBar)
                     .navigationDestination(for: AppRoute.self) { route in
                         switch route {
+                        case .desktop(let destination):
+                            desktopDestination(destination)
                         case .podcasts:
                             PodcastsView()
                         case .stats(let recapPeriod):
@@ -473,8 +487,8 @@ struct RootView: View {
             // below system sheets and the launch splash. Views attach them with
             // onboardingTip(_:when:); leaving the owner page cancels an unread
             // card. Sheets that teach their own content mirror this overlay.
-            CoachMarkOverlay()
-                .allowsHitTesting(onboardingCoordinator.activeTip != nil)
+            CoachMarkOverlay(onboardingCoordinator: onboardingCoordinator)
+                .allowsHitTesting(onboardingCoordinator.visibleTip != nil)
 
             if let toast = onboardingCoordinator.toast {
                 VStack {
@@ -506,8 +520,19 @@ struct RootView: View {
         .fullScreenCover(isPresented: $showWelcome) {
             WelcomeView { outcome in handleWelcome(outcome) }
         }
-        .sheet(item: $firstSubscribeContext) { context in
+        .sheet(item: $desktopPanel) { panel in
+            switch panel {
+            case .sleepTimer: SleepTimerSheetView(sleepTimer: appState.sleepTimerService)
+            case .audioControls:
+                AudioControlsSheetView(appState: appState, playbackCoordinator: appState.playbackCoordinator,
+                                       subscriptionStore: appState.subscriptionStore, settingsViewModel: settingsViewModel)
+            }
+        }
+        .sheet(item: $firstSubscribeContext, onDismiss: {
+            onboardingCoordinator.isPresentingFirstSubscription = false
+        }) { context in
             FirstSubscribeCard(subscriptionID: context.id)
+                .appEnvironment(appState)
         }
         .task {
             NotificationService.shared.setListeningRecapHandler { period in
@@ -551,6 +576,19 @@ struct RootView: View {
 
     private func handleRouteCommand(_ command: AppRouteCommand) {
         switch command {
+        case .openDesktop(let destination):
+            if destination == .sleepTimer { desktopPanel = .sleepTimer; return }
+            if destination == .audioControls { desktopPanel = .audioControls; return }
+            handledExplicitLaunchRoute = true
+            showWelcome = false
+            firstSubscribeContext = nil
+            navigationPath = NavigationPath()
+            switch destination {
+            case .player: returnToPlayer()
+            case .upNext:
+                NotificationCenter.default.post(name: .autohopOpenUpNext, object: nil)
+            default: navigationPath.append(AppRoute.desktop(destination))
+            }
         case .returnToPlayer:
             returnToPlayer()
         case .openUpNext:
@@ -593,7 +631,39 @@ struct RootView: View {
         case .presentWelcome:
             showWelcome = true
         case .presentFirstSubscription(let subscriptionID):
+            onboardingCoordinator.isPresentingFirstSubscription = true
             firstSubscribeContext = FirstSubscribeContext(id: subscriptionID)
+        }
+    }
+
+    private var desktopSearchCountry: ChartCountry {
+        let code = UserDefaults.standard.string(forKey: "discoverCountryCode") ?? ""
+        return code.isEmpty ? .deviceDefault : .named(code)
+    }
+
+    @ViewBuilder
+    private func desktopDestination(_ destination: DesktopDestination) -> some View {
+        switch destination {
+        case .player, .upNext: EmptyView() // Handled by the permanent root player.
+        case .subscriptions: PodcastsView()
+        case .discover: DiscoverView()
+        case .search:
+            PodcastSearchView(countryCode: desktopSearchCountry.code,
+                              focusOnAppear: true)
+        case .history: ListeningHistoryView()
+        case .stats: StatsView()
+        case .downloads: DownloadsView()
+        case .settings: SettingsView()
+        case .importSubscriptions: SettingsView(menuAction: .importSubscriptions)
+        case .exportSubscriptions: SettingsView(menuAction: .exportSubscriptions)
+        case .addFeed: AddFeedView()
+        case .sleepSchedule: SleepScheduleView()
+        case .sleepTimer, .audioControls: EmptyView() // Presented above the current page.
+        case .support: SupportView()
+        case .shortcuts: DesktopShortcutsView()
+        case .acknowledgements: AcknowledgementsView()
+        case .show(let id): PodcastDetailView(subscriptionID: id)
+        case .showSettings(let id): SubscriptionSettingsView(subscriptionID: id)
         }
     }
 

@@ -1,12 +1,14 @@
 // AI CONTEXT — Tests/HistorySyncTests.swift. Tests listening-history sync
 // (SYNC_DESIGN.md step 5a): the type-namespaced CKRecord round-trip and the
-// AutohopDatabase pending/record accessors. Record-level LWW by lastListenedAt.
+// AutohopDatabase pending/record accessors. Resume fields merge by recency while
+// accumulated listening and terminal evidence remain monotonic.
 // No CloudKit network. Decomposition Stage 2 moved ListeningHistoryStore into
-// Persistence and retained its shared-core target membership; its record-level
-// merge and local JSON format remain unchanged. The record-name parser
+// Persistence and retained its shared-core target membership. The record-name parser
 // assertions protect the Phase-2 legacy fallback
 // for old unprefixed HistoryEntry records. Version-aware acknowledgement tests
-// ensure an older in-flight save cannot clear a newer resume/history update.
+// ensure an older in-flight save cannot clear a newer resume/history update;
+// navigation-adoption tests require callers to receive the merged entry and
+// prevent an older row that only improves totals from moving playback.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -137,5 +139,90 @@ final class HistorySyncTests: XCTestCase {
         let db = try AutohopDatabase()
         try db.saveSyncedHistoryEntry(entry())
         XCTAssertTrue(try db.pendingHistoryEntries().isEmpty) // adopted from server, not re-pushed
+    }
+
+    func testDatabaseFallbackPreservesMonotonicHistoryEvidenceForTV() throws {
+        let db = try AutohopDatabase()
+        var completed = entry(listenedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        completed.listenedSeconds = 1_200
+        completed.status = .played
+        completed.completionKind = .finishedNaturally
+        completed.completionPercent = 1
+        try db.saveSyncedHistoryEntry(completed)
+
+        var newerResume = completed
+        newerResume.lastListenedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        newerResume.listenedSeconds = 60
+        newerResume.lastPositionSeconds = 90
+        newerResume.status = .listened
+        newerResume.completionKind = nil
+        newerResume.completionPercent = nil
+        try db.saveSyncedHistoryEntry(newerResume)
+
+        let merged = try XCTUnwrap(db.historyEntry(id: completed.id))
+        XCTAssertEqual(merged.lastPositionSeconds, 90)
+        XCTAssertEqual(merged.listenedSeconds, 1_200)
+        XCTAssertEqual(merged.status, .played)
+        XCTAssertEqual(merged.completionKind, .finishedNaturally)
+        XCTAssertEqual(try db.pendingHistoryEntries().map(\.id), [completed.id])
+    }
+
+    func testHistoryMergePreservesAccumulatedListeningAndTerminalOutcome() {
+        var completed = entry(listenedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        completed.listenedSeconds = 1_200
+        completed.status = .played
+        completed.completionKind = .finishedNaturally
+        completed.completionPercent = 1
+
+        var recentResume = completed
+        recentResume.lastListenedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        recentResume.listenedSeconds = 60
+        recentResume.lastPositionSeconds = 90
+        recentResume.status = .listened
+        recentResume.completionKind = nil
+        recentResume.completionPercent = nil
+
+        let merged = completed.mergedForSync(with: recentResume)
+
+        XCTAssertEqual(merged.lastListenedAt, recentResume.lastListenedAt)
+        XCTAssertEqual(merged.lastPositionSeconds, 90)
+        XCTAssertEqual(merged.listenedSeconds, 1_200)
+        XCTAssertEqual(merged.completionKind, .finishedNaturally)
+        XCTAssertEqual(merged.status, .played)
+    }
+
+    @MainActor
+    func testRemoteMergeAdoptsOnlyMergedNewerNavigationState() {
+        let store = ListeningHistoryStore(fileURL: nil)
+        var completed = entry(listenedAt: Date(timeIntervalSince1970: 1_700_000_100))
+        completed.listenedSeconds = 600
+        completed.status = .played
+        completed.completionKind = .finishedNaturally
+        completed.completionPercent = 1
+        XCTAssertNotNil(store.applyRemote(completed))
+
+        var olderLargerTotal = completed
+        olderLargerTotal.lastListenedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        olderLargerTotal.listenedSeconds = 1_200
+        olderLargerTotal.status = .listened
+        olderLargerTotal.completionKind = nil
+        olderLargerTotal.completionPercent = nil
+        XCTAssertNil(
+            store.applyRemote(olderLargerTotal),
+            "An older row may improve monotonic totals but must not move playback navigation"
+        )
+        XCTAssertEqual(store.entries.first?.listenedSeconds, 1_200)
+
+        var newerResume = olderLargerTotal
+        newerResume.lastListenedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        newerResume.lastPositionSeconds = 90
+        let navigation = store.applyRemote(newerResume)
+
+        XCTAssertEqual(navigation?.lastPositionSeconds, 90)
+        XCTAssertEqual(
+            navigation?.status,
+            .played,
+            "The caller must receive merged terminal evidence, not the weaker raw resume row"
+        )
     }
 }

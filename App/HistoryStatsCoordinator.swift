@@ -5,7 +5,7 @@ import Foundation
 //
 // PURPOSE / OWNERSHIP:
 // Stage 3 owner of iOS listening-history and listening-Stats orchestration.
-// It owns playback-tick accumulation, terminal history outcomes, derived history
+// It owns rendered-playback accumulation, terminal history outcomes, derived history
 // groups/counts, discrete Stats credits, lifecycle persistence checkpoints, and
 // the temporary CloudKit remote-apply adapters. The underlying persistence
 // formats remain owned by ListeningHistoryStore and ListeningStatsStore.
@@ -17,20 +17,20 @@ import Foundation
 //
 // CONCURRENCY / EVENTS:
 // MainActor-only. `objectWillChange` publishes only projection changes from
-// `refreshHistoryProjection`; SwiftUI observes this owner directly. Tick state
-// is episode-scoped and reset whenever playback is not active or the loaded
-// episode changes.
+// `refreshHistoryProjection`; SwiftUI observes this owner directly. Playback
+// backends provide explicit rendered intervals; UI position ticks are not an
+// accounting source.
 //
 // PERSISTENCE / SYNC INVARIANTS:
-// - Valid listening deltas are >0 and <=3 media seconds. History receives the
-//   media delta; Stats receives media delta / effective speed as elapsed time.
+// - History and Stats receive positive wall-clock duration from backend-confirmed
+//   rendered intervals. Position changes, seeks and trimmed frames are separate.
 // - History progress is buffered by ListeningHistoryStore at its existing
 //   30-second cadence; Stats retains its existing throttles.
 // - Terminal marks flush buffered history before changing completion status.
 // - Lifecycle checkpoints save history, then Stats/sync rows, then request the
 //   CloudKit deferred-push flush.
-// - Remote history remains whole-entry LWW; remote Stats remain additive
-//   per-device partitions through the existing stores.
+// - Remote history uses a monotonic outcome/listening merge; remote Stats remain
+//   additive per-device partitions through the existing stores.
 // - This coordinator must not control playback, queue, downloads, archive rules,
 //   feed refresh, CloudKit lifecycle, or SwiftUI navigation.
 @MainActor
@@ -43,14 +43,12 @@ final class HistoryStatsCoordinator: ObservableObject {
 
     private let subscriptionStore: SubscriptionStore
     private let playbackPositionStore: PlaybackPositionStore?
-    /// Invoked only after a remote history row wins LWW and is matched to a
+    /// Invoked only after a remote history merge changes navigation state and is matched to a
     /// concrete local episode. AppCompositionRoot uses this narrow seam to
     /// move an already-open, PAUSED iPhone player to the newly accepted TV
     /// position. An actively playing phone remains authoritative and is never
     /// interrupted by a remote progress update.
     var onRemotePlaybackPositionAdopted: ((Episode, TimeInterval, ListeningHistoryEntry) -> Void)?
-    private var trackingEpisodeID: UUID?
-    private var trackingLastTime: TimeInterval?
 
     init(
         historyStore: ListeningHistoryStore,
@@ -71,9 +69,8 @@ final class HistoryStatsCoordinator: ObservableObject {
     }
 
     func applyRemoteHistory(_ entry: ListeningHistoryEntry) {
-        let adopted = historyStore.applyRemote(entry)
-        if adopted {
-            applyRemotePlaybackPosition(entry)
+        if let navigationUpdate = historyStore.applyRemote(entry) {
+            applyRemotePlaybackPosition(navigationUpdate)
         } else {
             AppLogger.shared.info("sync.historyPositionIgnored", "Remote listening position did not win local history merge", metadata: [
                 "id": entry.id,
@@ -146,55 +143,37 @@ final class HistoryStatsCoordinator: ObservableObject {
         statsStore.reloadRemoteStats()
     }
 
-    func recordPlaybackProgress(
-        at time: TimeInterval,
-        isPlaying: Bool,
+    func recordPlaybackInterval(
+        _ interval: PlaybackAccountingInterval,
         episode: Episode?,
-        subscription: Subscription?,
-        effectiveSpeed: Double = 1.0
+        subscription: Subscription?
     ) {
-        guard isPlaying, let episode, let subscription else {
-            resetPlaybackTracking()
-            return
-        }
-
-        guard trackingEpisodeID == episode.id, let lastTime = trackingLastTime else {
-            trackingEpisodeID = episode.id
-            trackingLastTime = time
-            return
-        }
-
-        trackingLastTime = time
-        let delta = time - lastTime
-        guard delta > 0, delta <= 3 else { return }
+        guard let episode, let subscription,
+              interval.wallClockSeconds.isFinite,
+              interval.wallClockSeconds > 0,
+              interval.mediaHeardSeconds.isFinite,
+              interval.mediaHeardSeconds > 0,
+              interval.positionSeconds.isFinite,
+              interval.positionSeconds >= 0,
+              interval.playbackSpeed.isFinite,
+              interval.playbackSpeed > 0 else { return }
 
         historyStore.recordProgress(
             episode: episode,
             podcastTitle: subscription.title,
             artworkURL: episode.artworkURL ?? subscription.artworkURL,
-            listenedSeconds: delta,
-            positionSeconds: time,
+            listenedSeconds: interval.wallClockSeconds,
+            positionSeconds: interval.positionSeconds,
             durationSeconds: episode.durationSeconds
         )
-        // `time` is media position, so faster playback produces callbacks more
-        // frequently. Stats stores elapsed wall time; divide the natural media
-        // delta by speed to keep every chart and total independent of rate.
         statsStore.addListeningTime(
-            delta / max(effectiveSpeed, 0.01),
-            speed: effectiveSpeed,
+            interval.wallClockSeconds,
+            speed: interval.playbackSpeed,
             subscriptionID: subscription.id,
-            showTitle: subscription.title
+            showTitle: subscription.title,
+            feedURL: subscription.feedURL,
+            endedAt: interval.endedAt
         )
-    }
-
-    func beginPlaybackTracking(episodeID: UUID, at time: TimeInterval) {
-        trackingEpisodeID = episodeID
-        trackingLastTime = time
-    }
-
-    func resetPlaybackTracking() {
-        trackingEpisodeID = nil
-        trackingLastTime = nil
     }
 
     func recordListeningTime(
@@ -206,24 +185,47 @@ final class HistoryStatsCoordinator: ObservableObject {
             seconds,
             speed: speed,
             subscriptionID: subscription.id,
-            showTitle: subscription.title
+            showTitle: subscription.title,
+            feedURL: subscription.feedURL
         )
     }
 
     func recordManualSkipForward(_ seconds: TimeInterval, subscriptionID: UUID?) {
-        statsStore.addManualSkipForward(seconds, subscriptionID: subscriptionID)
+        let subscription = subscriptionID.flatMap { subscriptionStore.subscription(id: $0) }
+        statsStore.addManualSkipForward(
+            seconds,
+            subscriptionID: subscriptionID,
+            feedURL: subscription?.feedURL,
+            showTitle: subscription?.title
+        )
     }
 
     func recordAutoSkip(_ seconds: TimeInterval, subscriptionID: UUID?) {
-        statsStore.addAutoSkip(seconds, subscriptionID: subscriptionID)
+        let subscription = subscriptionID.flatMap { subscriptionStore.subscription(id: $0) }
+        statsStore.addAutoSkip(
+            seconds,
+            subscriptionID: subscriptionID,
+            feedURL: subscription?.feedURL,
+            showTitle: subscription?.title
+        )
     }
 
     func recordTrimSilenceSaved(_ seconds: TimeInterval, subscriptionID: UUID?) {
-        statsStore.addTrimSilenceSaved(seconds, subscriptionID: subscriptionID)
+        let subscription = subscriptionID.flatMap { subscriptionStore.subscription(id: $0) }
+        statsStore.addTrimSilenceSaved(
+            seconds,
+            subscriptionID: subscriptionID,
+            feedURL: subscription?.feedURL,
+            showTitle: subscription?.title
+        )
     }
 
     func recordEpisodeStarted(subscriptionID: UUID, showTitle: String) {
-        statsStore.recordEpisodeStarted(subscriptionID: subscriptionID, showTitle: showTitle)
+        statsStore.recordEpisodeStarted(
+            subscriptionID: subscriptionID,
+            showTitle: showTitle,
+            feedURL: subscriptionStore.subscription(id: subscriptionID)?.feedURL
+        )
     }
 
     /// Creates the zero-credit, fresh-recency history row used by other devices'
@@ -245,10 +247,6 @@ final class HistoryStatsCoordinator: ObservableObject {
         )
     }
 
-    func recordEpisodeCompleted(subscriptionID: UUID) {
-        statsStore.recordEpisodeCompleted(subscriptionID: subscriptionID)
-    }
-
     func recordDownload(bytes: Int64) {
         statsStore.recordDownload(bytes: bytes)
     }
@@ -265,6 +263,12 @@ final class HistoryStatsCoordinator: ObservableObject {
             podcastTitle: subscription?.title ?? episode.author ?? "Podcast",
             artworkURL: episode.artworkURL ?? subscription?.artworkURL,
             status: status,
+            completionKind: completionKind,
+            positionSeconds: positionSeconds
+        )
+        statsStore.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
             completionKind: completionKind,
             positionSeconds: positionSeconds
         )

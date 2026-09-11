@@ -1,5 +1,9 @@
 import SwiftUI
 
+// DESKTOP CONTRACT (2026-09-06): Wrap the already environment-configured RootView in
+// desktopCommandHost using the existing appState.desktopCommands. Preserve delayed
+// bootstrap and a single service graph; menu construction must not create another one.
+
 // AI CONTEXT — App/AutohopApp.swift
 // SwiftUI entry point. It intentionally does NOT bootstrap AppState in
 // AutohopApp.init: a CarPlay-only cold launch must be able to reach
@@ -45,34 +49,7 @@ private struct AutohopRootBootstrapView: View {
         Group {
             if let appState {
                 RootView()
-                    .environmentObject(appState)
-                    // 2 Hz playback tick — observed only by the scrubber/mini-player
-                    // surfaces (PERF-1), so the tick no longer wakes AppState observers.
-                    .environmentObject(appState.playbackClock)
-                    // Per-episode download progress — observed only by the
-                    // episode-row/first-subscribe surfaces that render it, so
-                    // progress ticks no longer wake AppState observers.
-                    .environmentObject(appState.downloadProgressModel)
-                    .environmentObject(appState.settingsCoordinator)
-                    // Stage 13 narrow observables. Page families can consume
-                    // their domain owner directly without broad AppState wakes.
-                    .environmentObject(appState.playbackCoordinator)
-                    // Sleep countdown/prompt services publish independently of
-                    // PlaybackCoordinator; inject them directly so Player and
-                    // Sleep Schedule avoid AppState invalidation bridges.
-                    .environmentObject(appState.sleepTimerService)
-                    .environmentObject(appState.sleepScheduleService)
-                    .environmentObject(appState.queueCoordinator)
-                    .environmentObject(appState.downloadCoordinator)
-                    .environmentObject(appState.historyStatsCoordinator)
-                    .environmentObject(appState.onboardingCoordinator)
-                    .environmentObject(appState.autoArchiveCoordinator)
-                    .environmentObject(appState.subscriptionImportCoordinator)
-                    .environmentObject(appState.subscriptionStore)
-                    .environmentObject(appState.listeningHistoryStore)
-                    .environmentObject(appState.listeningStatsStore)
-                    .environmentObject(appState.autoArchiveActivityStore)
-                    .environmentObject(appState.downloadActivityStore)
+                    .appEnvironment(appState)
                     .task {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }
@@ -105,6 +82,7 @@ private struct AutohopRootBootstrapView: View {
                             }
                         }
                     }
+                    .desktopCommandHost(handler: appState.desktopCommands)
             } else {
                 ProgressView()
                     .task {
@@ -131,5 +109,44 @@ private struct AutohopRootBootstrapView: View {
         case .background: return "background"
         @unknown default: return "unknown"
         }
+    }
+}
+
+// AI CONTEXT — Shared application/presentation dependency boundary.
+// Keep the bootstrap and explicitly hosted Menu content on the same service set.
+// A Mac presentation may evaluate content before inherited environment is ready;
+// apply this INSIDE the presentation closure, not only to its presenting page.
+// This injects existing instances and never bootstraps or creates services.
+extension View {
+    func appEnvironment(_ appState: AppState) -> some View {
+        self
+            .environmentObject(appState)
+            // 2 Hz playback tick — observed only by the scrubber/mini-player
+            // surfaces (PERF-1), so the tick no longer wakes AppState observers.
+            .environmentObject(appState.playbackClock)
+            // Per-episode download progress — observed only by the
+            // episode-row/first-subscribe surfaces that render it, so
+            // progress ticks no longer wake AppState observers.
+            .environmentObject(appState.downloadProgressModel)
+            .environmentObject(appState.settingsCoordinator)
+            // Stage 13 narrow observables. Page families can consume
+            // their domain owner directly without broad AppState wakes.
+            .environmentObject(appState.playbackCoordinator)
+            // Sleep countdown/prompt services publish independently of
+            // PlaybackCoordinator; inject them directly so Player and
+            // Sleep Schedule avoid AppState invalidation bridges.
+            .environmentObject(appState.sleepTimerService)
+            .environmentObject(appState.sleepScheduleService)
+            .environmentObject(appState.queueCoordinator)
+            .environmentObject(appState.downloadCoordinator)
+            .environmentObject(appState.historyStatsCoordinator)
+            .environmentObject(appState.onboardingCoordinator)
+            .environmentObject(appState.autoArchiveCoordinator)
+            .environmentObject(appState.subscriptionImportCoordinator)
+            .environmentObject(appState.subscriptionStore)
+            .environmentObject(appState.listeningHistoryStore)
+            .environmentObject(appState.listeningStatsStore)
+            .environmentObject(appState.autoArchiveActivityStore)
+            .environmentObject(appState.downloadActivityStore)
     }
 }

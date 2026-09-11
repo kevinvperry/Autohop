@@ -5,6 +5,16 @@ target. Every Swift source in `TV/` and every tvOS-only regression test in
 `TVTests/` must also contain its own `AI CONTEXT` header. The release validator
 enforces that rule.
 
+
+## tvOS release update — 8 September 2026
+
+The user’s screenshot confirms tvOS 1.6 (15) Ready for Distribution; older
+build-13 submission references below are historical. tvOS 1.6.1 (1), including
+Top Shelf, is now submitted for approval (user-confirmed 8 September 2026). iOS remains 1.6.1 (17). Submission text and
+validation are in [the TV package](../Docs/AppStore/tvOS-1.6.1/SUBMISSION.md).
+Approval of TV 1.6.1 is pending. All future iOS and tvOS code updates are
+tracked together in VERSION_1.7.md; the submitted TV release scope is closed.
+
 ## Platform contract
 
 - The iPhone is the durable author of subscriptions, priority ordering and the
@@ -15,8 +25,11 @@ enforces that rule.
   queue commands. Pin is the cross-device form of iOS Play Next; the phone
   applies each command and republishes the authoritative complete queue.
   Apple TV must never replace that phone-authored queue snapshot.
-- tvOS databases and projections are purgeable caches. CloudKit plus the
-  survival kit rebuild them.
+- The TV-authored database and listening Stats JSON are durable Application
+  Support state. Only compact render projections and CKSyncEngine transport
+  state are purgeable Caches. Startup migrates legacy authoritative Caches
+  files copy-before-open; CloudKit/SQLite recovery must never depend on a cache
+  surviving pressure.
 - `AutohopCore` supplies shared models, persistence and playback machinery.
   The tvOS target must not import the iPhone `AppState` runtime.
 

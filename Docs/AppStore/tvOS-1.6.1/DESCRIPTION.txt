@@ -1,0 +1,35 @@
+Your podcast library. On the big screen.
+
+Autohop for Apple TV brings your audio and video podcasts to the living room. Connect to the library you manage on iPhone through private iCloud sync, browse your subscriptions and stream episodes directly from their publishers.
+
+CONTINUE YOUR LISTENING
+
+Find your phone's Up Next queue and continue episodes on Apple TV. Playback position and listening history sync through your own iCloud account, helping you move between screens without losing your place.
+
+AUDIO AND VIDEO TOGETHER
+
+Enjoy audio podcasts through your TV sound system or watch video podcasts with native video playback. Use the Siri Remote to control playback, change speed and explore available chapters.
+
+YOUR LIBRARY, READY TO EXPLORE
+
+Browse subscriptions and episode details, revisit listening history and discover podcasts. Your iPhone manages subscriptions, priority order and the complete Up Next queue. Apple TV plays from that library and shares supported playback and archive updates back through iCloud.
+
+CLOSE AT HAND ON APPLE TV
+
+Place Autohop in the top row of your Apple TV Home Screen to access its Top Shelf content. Open an episode and get back to listening.
+
+STRONGER LISTENING RECORDS
+
+Version 1.6.1 improves listening-time accounting, episode outcomes, local storage and history recovery. Clearer time displays show seconds during an episode's final minute.
+
+TRY IT WITHOUT A LIBRARY
+
+Explore the clearly labelled Demo Library to try bundled audio and video episodes without an existing Autohop library or network connection. Demo activity stays separate from your real library and listening history.
+
+PRIVATE BY DESIGN
+
+No Autohop account. No advertising SDKs or behavioural analytics. Personal library sync uses your private iCloud account. Use the same Apple Account on iPhone and Apple TV, with iCloud Sync enabled in Autohop on iPhone.
+
+Normal podcast playback streams from publishers and requires an internet connection. Podcast episodes may contain publisher-provided advertisements and sponsorship messages.
+
+Autohop is open source under the MIT License, with identified components under the Mozilla Public License 2.0.

@@ -26,6 +26,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
 
     public var onEpisodeFinished: ((Episode) -> Void)?
     public var onTimeUpdate: ((TimeInterval) -> Void)?
+    public var onPlaybackInterval: ((PlaybackAccountingInterval) -> Void)?
     public var onPlaybackInterrupted: (() -> Void)?
     public var onPlaybackResumed: (() -> Void)?
     public var onManualSkipForward: ((TimeInterval) -> Void)?
@@ -78,6 +79,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     private var failedObserver: NSObjectProtocol?
     private var playbackGeneration: UInt64 = 0
     private var speed: Double = 1.0
+    private var accountingPosition: TimeInterval?
     private var endSkipSeconds: TimeInterval = 0
     private var didFinishCurrent = false
     private var chapters: [Chapter] = []
@@ -248,18 +250,21 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             await newPlayer.seek(to: CMTime(seconds: preference.startSkipSeconds, preferredTimescale: 600))
             onAutoSkip?(preference.startSkipSeconds)
         }
+        resetAccounting(at: currentTimeSeconds)
         applyRate(to: newPlayer)
         newPlayer.playImmediately(atRate: effectiveRate)
         transition(to: newPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate ? .buffering : .playing)
     }
 
     public func pause() {
+        reportPlaybackInterval(at: currentTimeSeconds)
         player?.pause()
         if currentEpisode != nil { transition(to: .paused) }
     }
 
     public func resume() {
         if let player {
+            resetAccounting(at: currentTimeSeconds)
             applyRate(to: player)
             player.playImmediately(atRate: effectiveRate)
         }
@@ -280,11 +285,13 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
 
     public func seek(to seconds: TimeInterval) {
         let target = max(0, seconds.isFinite ? seconds : 0)
+        reportPlaybackInterval(at: currentTimeSeconds)
+        accountingPosition = nil
         player?.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
-        )
+        ) { [weak self] _ in self?.resetAccounting(at: target) }
     }
 
     /// Performs an exact seek and waits for AVPlayer to acknowledge it. tvOS
@@ -294,15 +301,20 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     public func seekAndWait(to seconds: TimeInterval) async {
         guard let player else { return }
         let target = max(0, seconds.isFinite ? seconds : 0)
+        reportPlaybackInterval(at: currentTimeSeconds)
+        accountingPosition = nil
         await player.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
+        resetAccounting(at: target)
     }
 
     public func updatePlaybackSpeed(_ speed: Double) {
+        reportPlaybackInterval(at: currentTimeSeconds)
         self.speed = speed
+        resetAccounting(at: currentTimeSeconds)
         if let player {
             player.defaultRate = effectiveRate
             if isPlaying { player.rate = effectiveRate }
@@ -349,12 +361,14 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
     }
 
     private func stopCurrentPlayer(resetState: Bool) {
+        reportPlaybackInterval(at: currentTimeSeconds)
         removeObservers()
         player?.pause()
         player = nil
         currentEpisode = nil
         chapters = []
         didFinishCurrent = false
+        accountingPosition = nil
         if resetState { transition(to: .idle) }
     }
 
@@ -411,6 +425,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
             guard let self, generation == self.playbackGeneration, !self.didFinishCurrent else { return }
             let seconds = time.seconds
             guard seconds.isFinite else { return }
+            self.reportPlaybackInterval(at: seconds)
             self.onTimeUpdate?(seconds)
             self.skipDisabledChapterIfNeeded(at: seconds, episode: episode, item: item)
 
@@ -477,6 +492,7 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         guard !didFinishCurrent else { return }
         didFinishCurrent = true
         if autoSkipped > 0 { onAutoSkip?(autoSkipped) }
+        reportPlaybackInterval(at: currentTimeSeconds)
         player?.pause()
         transition(to: .ended)
         onEpisodeFinished?(episode)
@@ -497,6 +513,29 @@ public final class StreamingPlaybackEngine: PlaybackControlling {
         if duration.isFinite, duration > 0 {
             finishCurrentEpisode(episode, autoSkipped: max(0, duration - seconds))
         }
+    }
+
+    /// AVPlayer item-time advances only for rendered media. Explicit seeks and
+    /// rate changes reseed the boundary, while buffering contributes no item
+    /// time, so delayed callbacks remain accurate without a fixed delta cap.
+    private func reportPlaybackInterval(at position: TimeInterval) {
+        guard position.isFinite else { return }
+        defer { accountingPosition = position }
+        guard player?.timeControlStatus == .playing,
+              let previous = accountingPosition else { return }
+        let mediaSeconds = position - previous
+        guard mediaSeconds.isFinite, mediaSeconds > 0 else { return }
+        let intervalSpeed = max(speed, 0.01)
+        onPlaybackInterval?(PlaybackAccountingInterval(
+            wallClockSeconds: mediaSeconds / intervalSpeed,
+            mediaHeardSeconds: mediaSeconds,
+            positionSeconds: position,
+            playbackSpeed: intervalSpeed
+        ))
+    }
+
+    private func resetAccounting(at position: TimeInterval) {
+        accountingPosition = position.isFinite ? position : nil
     }
 
     private func transition(to newState: StreamingPlaybackState) {

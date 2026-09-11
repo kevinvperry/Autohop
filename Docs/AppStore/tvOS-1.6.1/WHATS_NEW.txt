@@ -1,0 +1,9 @@
+More reliable listening on Apple TV.
+
+• Improved listening-time accounting during faster playback, seeking and skipping.
+• More consistent episode-start, archive and completion statistics, including resumed episodes.
+• Stronger local storage and recovery for your listening history and statistics.
+• Improved private iCloud history merging and duplicate-subscription handling.
+• Clearer Home and Up Next time displays, showing seconds during the final minute.
+
+This update brings shared playback and library reliability improvements to Autohop on Apple TV. Historical listening that was never recorded cannot be recreated.

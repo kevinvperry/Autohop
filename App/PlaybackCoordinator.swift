@@ -219,11 +219,24 @@ final class PlaybackCoordinator: ObservableObject {
     /// be requested by more than one scene. Subscription identity is resolved
     /// at delivery time, matching the former AppState behavior.
     func installStatisticsCallbacks(
-        historyStatsCoordinator: HistoryStatsCoordinator
+        historyStatsCoordinator: HistoryStatsCoordinator,
+        subscriptionStore: SubscriptionStore
     ) {
         guard !statisticsCallbacksInstalled else { return }
         statisticsCallbacksInstalled = true
 
+        engine.onPlaybackInterval = {
+            [weak self, weak historyStatsCoordinator, weak subscriptionStore] interval in
+            Task { @MainActor in
+                guard let self, let historyStatsCoordinator, let subscriptionStore,
+                      let episode = self.currentEpisode else { return }
+                historyStatsCoordinator.recordPlaybackInterval(
+                    interval,
+                    episode: episode,
+                    subscription: subscriptionStore.subscription(id: episode.subscriptionID)
+                )
+            }
+        }
         engine.onManualSkipForward = { [weak self, weak historyStatsCoordinator] seconds in
             Task { @MainActor in
                 guard let self, let historyStatsCoordinator else { return }
@@ -502,14 +515,13 @@ final class PlaybackCoordinator: ObservableObject {
     /// Installs the engine's 2 Hz time callback and owns its complete pipeline.
     ///
     /// AI CONTEXT — This is the only routine writer of PlaybackClock. It ticks
-    /// both sleep services, updates Now Playing, credits history/Stats, requests
+    /// both sleep services, updates Now Playing, requests
     /// a durable position save every 20 callbacks (~10 seconds), and maintains
     /// slow-tick diagnostics. Typed collaborators provide subscription/speed
     /// policy and the position-store write owned outside playback.
     func installTimeUpdateCallback(
         subscriptionStore: SubscriptionStore,
         preferenceWorkflow: PlaybackPreferenceWorkflow,
-        historyStatsCoordinator: HistoryStatsCoordinator,
         mediaWorkflow: PlaybackMediaWorkflow,
         logger: AppLogger
     ) {
@@ -521,14 +533,12 @@ final class PlaybackCoordinator: ObservableObject {
                 weak self,
                 weak subscriptionStore,
                 weak preferenceWorkflow,
-                weak historyStatsCoordinator,
                 weak mediaWorkflow
             ] time in
             Task { @MainActor in
                 guard let self,
                       let subscriptionStore,
                       let preferenceWorkflow,
-                      let historyStatsCoordinator,
                       let mediaWorkflow else {
                     return
                 }
@@ -575,23 +585,7 @@ final class PlaybackCoordinator: ObservableObject {
                         )
                     }
                 }
-                // History persistence can occasionally take hundreds of
-                // milliseconds. Queue it behind the latency-sensitive playback
-                // tick so clock/Now Playing updates and audio controls are not
-                // held hostage by storage or CloudKit bookkeeping.
                 let historyIsPlaying = self.isPlaying
-                let historyEffectiveSpeed = tickSubscription.map {
-                    preferenceWorkflow.effectiveSpeed(for: $0)
-                } ?? 1.0
-                Task { @MainActor in
-                    historyStatsCoordinator.recordPlaybackProgress(
-                        at: time,
-                        isPlaying: historyIsPlaying,
-                        episode: tickEpisode,
-                        subscription: tickSubscription,
-                        effectiveSpeed: historyEffectiveSpeed
-                    )
-                }
                 measure("positionSave") {
                     self.positionSaveCounter += 1
                     if self.positionSaveCounter % 20 == 0 {
@@ -599,9 +593,9 @@ final class PlaybackCoordinator: ObservableObject {
                         positionSaved = true
                     }
                 }
-                // HistoryStatsCoordinator derives both heard-media and elapsed
-                // wall time from the same natural media-position delta. A fixed
-                // 0.5 credit here over-counted AVPlayer listening at >1x speed.
+                // Listening credit arrives independently through the engine's
+                // rendered-interval callback. This flag remains an eligibility
+                // breadcrumb for existing playback-tick diagnostics.
                 statsCredited = historyIsPlaying && tickEpisode != nil && tickSubscription != nil
                 self.recordTickDiagnostics(
                     startedAt: tickStartedAt,

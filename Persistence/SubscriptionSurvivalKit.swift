@@ -2,10 +2,11 @@ import Foundation
 
 // AI CONTEXT — Persistence/SubscriptionSurvivalKit.swift
 // tvOS Phase 1 (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md §6, decision T2):
-// the compact, DURABLE record of the user's library that survives tvOS purges.
-// Platform fact: on Apple TV only ~500 KB of UserDefaults persists reliably;
-// Caches (where the TV database lives) can be wiped whenever the app isn't
-// running. The kit stores just enough to rebuild from nothing — subscription
+// the compact, DURABLE recovery record for the user's library. Since the
+// September 2026 stats hardening, the authoritative TV database lives in
+// Application Support and only reproducible projections/sync caches live in
+// Caches. This kit remains a defence-in-depth identity recovery path if that
+// database is unavailable. It stores just enough to rebuild from nothing — subscription
 // IDENTITY (the UUID synced records are keyed by — losing it orphans every
 // EpisodeState/SubscriptionState record), feed URL, priority rank, and title —
 // plus the sync opt-in flag. Rebuild path: read kit → fetch each feed →

@@ -1,10 +1,16 @@
 # Stats Page Accounting Audit — 14 August 2026
 
+> **SUPERSEDED IMPLEMENTATION SNAPSHOT — 4 September 2026.** This audit records
+> the pre-redesign accounting state. Its position-delta conclusions and several
+> “corrected” results were subsequently superseded by the full integrity audit
+> and implementation. Current behavior lives in `FEATURES.md` §12,
+> `DESIGN.md` Stats Page, `SYNC_DESIGN.md`, and the live AI headers. See
+> `Docs/STATS_AUDIT_2026-08-30.md` for the later audit plus resolution summary.
+
 <!--
-AI CONTEXT — Full end-to-end audit of every Stats page section after reports of
-incorrect long-range figures. Keep this document aligned with StatsView,
-ListeningStatsStore, HistoryStatsCoordinator and tvOS playback accounting.
-It distinguishes corrected defects from unavoidable forward-only limitations.
+AI CONTEXT — Historical end-to-end audit of every Stats page section after
+reports of incorrect long-range figures. Do not keep its old source conclusions
+aligned by rewriting history; use the superseding current documents named above.
 -->
 
 ## Audit scope

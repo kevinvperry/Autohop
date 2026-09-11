@@ -1,6 +1,10 @@
 import Combine
 import Foundation
 
+// DESKTOP CONTRACT (2026-09-06): openDesktop carries DesktopDestination into RootView.
+// This coordinator remains a typed command source, not a navigation-path owner;
+// existing widget, legacy notification and launch adapters retain their contracts.
+
 // AI CONTEXT — App/AppRoutingCoordinator.swift
 //
 // PURPOSE / OWNERSHIP:
@@ -26,6 +30,7 @@ import Foundation
 //   URL from being lost before the PassthroughSubject subscriber is installed.
 // - No generic event bus or service lookup is introduced.
 enum AppRouteCommand: Equatable {
+    case openDesktop(DesktopDestination)
     case returnToPlayer
     case openUpNext
     case openEpisode(WidgetEpisodeIdentity)

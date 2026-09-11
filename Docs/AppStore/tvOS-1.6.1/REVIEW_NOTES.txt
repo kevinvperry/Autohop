@@ -1,0 +1,39 @@
+tvOS VERSION 1.6.1 (BUILD 1)
+
+This is an Apple TV maintenance update to Version 1.6. It improves listening-time and episode-outcome accounting, local history/statistics storage, recovery, private iCloud merging and final-minute time displays. It is separate from the already-released iOS Version 1.6.1.
+
+NO DEVELOPER LOGIN REQUIRED
+
+Autohop has no developer-operated account or shared test login. The personal library uses the user's private iCloud account. A complete offline Demo Library is included so review does not require an existing iPhone library or access to another user's iCloud data.
+
+CLEAN-INSTALL REVIEW PATH
+
+1. Launch Autohop on Apple TV and allow the initial library check to finish.
+2. If no personal library is available, the setup screen offers Explore Demo Library, Open Discover, Check iCloud Again and Settings.
+3. Select Explore Demo Library. Browse Home, Subscriptions, History and Settings.
+4. Select a bundled audio or video episode and test playback with the remote. Queue, archive, completion and playback-progress interactions are available in the demo.
+5. In Demo Settings, use Reset Demo to restore the sample state or Exit Demo to return to setup.
+
+The demo is clearly labelled. Its bundled audio/video works offline. Demo state is temporary, isolated in memory and never written to production CloudKit, library, history or statistics. Demo access remains available in the Release build. This access path addresses the clean-install review difficulty previously reported under Guideline 2.1(a) for tvOS 1.5.
+
+PERSONAL LIBRARY TEST
+
+Use Autohop on iPhone with Settings > Sync > iCloud Sync enabled, subscribe to a public podcast and use the same Apple Account on Apple TV. Select Check iCloud Again on the TV setup screen. The iPhone owns subscriptions, priority and the complete Up Next queue; Apple TV streams publisher media and shares playback/history/archive updates through private CloudKit. No first-party sync server is used.
+
+Normal publisher playback requires internet access. The bundled demo does not. To test cross-device statistics and recovery, use the personal library; demo activity deliberately does not modify those records.
+
+TOP SHELF
+
+Place Autohop in the top row of the Apple TV Home Screen after loading a personal library. The extension displays a shared local projection; it does not independently fetch the podcast library.
+
+ADVERTISING AND CONTENT SOURCES
+
+Public podcast episodes may contain publisher-supplied advertisements or sponsorships. The app's Advertising age-rating descriptor is Yes. Autohop does not integrate an advertising SDK or insert developer-supplied advertisements.
+
+Autohop plays openly distributed RSS podcasts. Audio/video streams directly from the publisher's declared enclosure URL. It accesses no DRM-protected or login-gated content and redistributes nothing. Apple's public podcast directory locates public RSS feeds.
+
+APP TRANSPORT SECURITY
+
+Podcast feeds, artwork and media use open-ended third-party hosts, including HTTP-only publishers. Broad transport exceptions support these public RSS sources; a fixed host list is not viable.
+
+Please use the offline Demo Library when no personal iCloud library is available; no review username or password is needed.

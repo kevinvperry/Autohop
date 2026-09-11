@@ -1,5 +1,9 @@
 import Foundation
 
+// DESKTOP CONTRACT (2026-09-06): AppState desktop Next reuses this completion
+// transaction. Preserve the same episode identity, accounting, archive and
+// queue-advance safeguards used by existing completion callers.
+
 // AI CONTEXT — App/EpisodeCompletionWorkflow.swift
 //
 // PURPOSE / OWNERSHIP:
@@ -14,8 +18,10 @@ import Foundation
 // 1. Reject stale engine generations before any mutation.
 // 2. Discard a Play Instant return point when the interrupted episode completes.
 // 3. Resolve Sleep Timer/Schedule boundary policy before queue advancement.
-// 4. Persist completion/history and clear resume state before deleting media.
-// 5. Mark the subscription episode played before selecting the next queue item.
+// 4. Persist completion/history, clear resume state, and commit the terminal
+//    subscription state before the first suspension point or media deletion.
+// 5. A subscription configured to archive After Playing is committed directly
+//    as archived; other policies retain the completed played state.
 // 6. A fired manual Sleep Timer stops all advancement.
 // 7. A completed Play Instant episode restores/advances its interrupted session.
 // 8. Ordinary completion waits 400 ms before advancing, preserving the former
@@ -132,9 +138,6 @@ final class EpisodeCompletionWorkflow {
         let sleepSchedulePrompting = !sleepTimerFired
             && playbackCoordinator.sleepScheduleService.episodeFinished()
 
-        historyStatsCoordinator.recordEpisodeCompleted(
-            subscriptionID: episode.subscriptionID
-        )
         playbackPositionStore.clear(for: episode)
         historyStatsCoordinator.mark(
             episode,
@@ -142,6 +145,23 @@ final class EpisodeCompletionWorkflow {
             completionKind: .finishedNaturally,
             positionSeconds: episode.durationSeconds
         )
+
+        // This state must settle before the first `await`. Queue advancement is
+        // allowed to follow only after the completed episode is durably removed
+        // from Up Next. The former ordering waited for file deletion first,
+        // leaving a cancellation/error window where playback could advance but
+        // the episode remained resumable at its pre-skip position.
+        subscriptionStore.markEpisodePlayed(
+            subscriptionID: episode.subscriptionID,
+            episodeID: episode.id
+        )
+        if subscriptionStore.subscription(id: episode.subscriptionID)?
+            .autoArchiveSettings.afterPlayed == .afterPlaying {
+            subscriptionStore.markEpisodeArchived(
+                subscriptionID: episode.subscriptionID,
+                episodeID: episode.id
+            )
+        }
 
         do {
             try await downloadManager.deleteLocalFile(for: episode)
@@ -155,11 +175,6 @@ final class EpisodeCompletionWorkflow {
                 ]
             )
         }
-        subscriptionStore.markEpisodePlayed(
-            subscriptionID: episode.subscriptionID,
-            episodeID: episode.id
-        )
-
         playbackCoordinator.isPlaying = false
         playbackCoordinator.clock.time = 0
 

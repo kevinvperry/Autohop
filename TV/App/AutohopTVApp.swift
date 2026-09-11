@@ -13,7 +13,8 @@ import AutohopCore
 // never compile iOS sources or reach for AppState; TVAppModel is deliberately
 // the anti-AppState (@Observable, a few hundred lines max, composed from
 // Phase 0 domain objects).
-// BOOTSTRAP (T2): the GRDB store lives in Caches (purgeable!). Cold start:
+// BOOTSTRAP (T2): authoritative GRDB/stats state lives in Application Support;
+// only render projections remain in Caches. Cold start:
 // read the survival kit (durable UserDefaults: subscription IDs + feed URLs +
 // ranks) → refetch each missing feed → SubscriptionStore.materialize with the
 // PRESERVED subscriptionID (identity is what keeps synced records applicable)

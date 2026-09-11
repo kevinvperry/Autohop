@@ -1,5 +1,9 @@
 import Foundation
 
+// DESKTOP CONTRACT (2026-09-06): Lazily owns DesktopCommandHandler. Desktop Next
+// captures the current episode, cancels Play Instant and delegates to the existing
+// EpisodeCompletionWorkflow; never implement a separate queue/statistics advance path.
+
 // AI CONTEXT — App/AppState.swift (AUTHORITATIVE, Stage 14 final architecture)
 //
 // PURPOSE:
@@ -59,6 +63,7 @@ final class AppState: ObservableObject {
     let historyStatsCoordinator: HistoryStatsCoordinator
     let queueCoordinator: QueueCoordinator
     let onboardingCoordinator: OnboardingCoordinator
+    lazy var desktopCommands = DesktopCommandHandler(appState: self)
     let routingCoordinator: AppRoutingCoordinator
     let downloadCoordinator: DownloadCoordinator
     private let feedRefreshCoordinator: FeedRefreshCoordinator
@@ -675,6 +680,16 @@ final class AppState: ObservableObject {
     /// is already true and never touches the audio session or playback state.
     func reassertNowPlayingCard(reason: String) {
         playbackPreferenceWorkflow.reassertNowPlayingCard(reason: reason)
+    }
+
+    /// Matches the remote Next command: complete once and cancel Play Instant restoration.
+    func advanceEpisodeFromDesktopCommand() async {
+        guard let episode = playbackCoordinator.currentEpisode else { return }
+        if playbackCoordinator.activePlayInstantEpisodeID != nil
+            || playbackCoordinator.playInstantTransitionTask != nil {
+            playInstantWorkflow.cancel(reason: "manualNextTrack")
+        }
+        await episodeCompletionWorkflow.handle(episode)
     }
 
     func togglePlayPause() async {

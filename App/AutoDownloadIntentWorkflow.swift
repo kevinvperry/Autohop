@@ -13,11 +13,14 @@ import Foundation
 // DURABILITY / CONCURRENCY:
 // - Intent is written before the post-refresh Task starts.
 // - AutoDownloadWorkflow serializes launch/foreground/background drains.
+// - A multi-episode feed arrival records every bounded candidate before one
+//   task downloads them sequentially, so task races cannot discard an older
+//   member of the same newly detected batch.
 // - Queued/downloading/temporarily blocked/failed work retains intent.
 // - Downloaded, played, archived, removed, browse, filter-excluded, or
-//   superseded work removes intent.
-// - The newest currently eligible episode is re-read after episode-limit
-//   enforcement so archive side effects cannot leave a stale target.
+//   no-longer-limit-eligible work removes intent.
+// - The exact scheduled episode is re-read after episode-limit enforcement so
+//   archive side effects cannot leave a stale target.
 //
 // This workflow never performs the network transfer itself and never chooses
 // feed-refresh timing.
@@ -51,22 +54,26 @@ final class AutoDownloadIntentWorkflow {
     }
 
     func newestCandidate(in subscription: Subscription) -> Episode? {
-        subscription.episodes
-            .filter { episode in
-                episode.playedState != .played
-                    && episode.playedState != .archived
-                    && episode.downloadState != .downloaded
-                    && episode.downloadState != .queued
-                    && episode.downloadState != .downloading
-                    && subscription.downloadFilterSettings
-                        .evaluation(for: episode)
-                        .isIncluded
-            }
-            .sorted {
-                ($0.publishedAt ?? .distantPast)
-                    > ($1.publishedAt ?? .distantPast)
-            }
-            .first
+        eligibleCandidates(in: subscription).first
+    }
+
+    func eligibleCandidates(in subscription: Subscription) -> [Episode] {
+        let filtered = subscription.episodes.filter { episode in
+            subscription.downloadFilterSettings
+                .evaluation(for: episode)
+                .isIncluded
+        }
+        return AutomaticDownloadBatchPolicy.candidates(
+            from: filtered,
+            episodeLimit: subscription.autoArchiveSettings.episodeLimit.rawValue
+        )
+    }
+
+    private func isEligible(
+        episodeID: UUID,
+        in subscription: Subscription
+    ) -> Bool {
+        eligibleCandidates(in: subscription).contains { $0.id == episodeID }
     }
 
     func schedule(
@@ -80,70 +87,102 @@ final class AutoDownloadIntentWorkflow {
         detectedAt: Date,
         sceneActivationSequence: Int
     ) {
-        if let failure = state.intentStore.activeFailure(
-            episodeID: episode.id,
-            mediaURL: episode.audioURL
-        ) {
-            logger.info(
-                "download.exhaustionCooldownSkipped",
-                "Unchanged exhausted enclosure remains in its durable cooldown",
-                metadata: [
-                    "podcast": podcastTitle,
-                    "episodeID": episode.id.uuidString,
-                    "exhaustions": "\(failure.consecutiveExhaustions)",
-                    "retryAfterSeconds": String(
-                        format: "%.0f",
-                        failure.retryAfter.timeIntervalSinceNow
-                    )
-                ]
-            )
-            return
-        }
-        state.intentStore.record(
-            episodeID: episode.id,
+        schedule(
+            episodes: [episode],
             subscriptionID: subscriptionID,
             podcastTitle: podcastTitle,
-            mediaURL: episode.audioURL
-        )
-        downloadCoordinator.recordEpisodeDetection(
-            episodeID: episode.id,
+            refreshUpNextAfterMerge: refreshUpNextAfterMerge,
+            detectionContext: detectionContext,
+            sceneActive: sceneActive,
+            batteryState: batteryState,
             detectedAt: detectedAt,
-            context: detectionContext,
             sceneActivationSequence: sceneActivationSequence
         )
-        logger.info(
-            "feed.autoDownloadScheduled",
-            "Auto-download scheduled after feed refresh",
-            metadata: [
-                "podcast": podcastTitle,
-                "episode": episode.title,
-                "episodeID": episode.id.uuidString,
-                "intentPersisted": "true",
-                "publishedAt":
-                    episode.publishedAt?.ISO8601Format() ?? "unknown",
-                "publicationAgeSeconds": episode.publishedAt.map {
-                    String(
-                        format: "%.1f",
-                        max(0, detectedAt.timeIntervalSince($0))
-                    )
-                } ?? "unknown",
-                "detectionContext": detectionContext,
-                "sceneActive": "\(sceneActive)",
-                "batteryState": batteryState
-            ]
-        )
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.run(
-                episode: episode,
+    }
+
+    func schedule(
+        episodes: [Episode],
+        subscriptionID: UUID,
+        podcastTitle: String,
+        refreshUpNextAfterMerge: Bool,
+        detectionContext: String,
+        sceneActive: Bool,
+        batteryState: String,
+        detectedAt: Date,
+        sceneActivationSequence: Int
+    ) {
+        var scheduled: [Episode] = []
+        for episode in episodes {
+            if let failure = state.intentStore.activeFailure(
+                episodeID: episode.id,
+                mediaURL: episode.audioURL
+            ) {
+                logger.info(
+                    "download.exhaustionCooldownSkipped",
+                    "Unchanged exhausted enclosure remains in its durable cooldown",
+                    metadata: [
+                        "podcast": podcastTitle,
+                        "episodeID": episode.id.uuidString,
+                        "exhaustions": "\(failure.consecutiveExhaustions)",
+                        "retryAfterSeconds": String(
+                            format: "%.0f",
+                            failure.retryAfter.timeIntervalSinceNow
+                        )
+                    ]
+                )
+                continue
+            }
+            state.intentStore.record(
+                episodeID: episode.id,
                 subscriptionID: subscriptionID,
                 podcastTitle: podcastTitle,
-                refreshUpNextAfterMerge: refreshUpNextAfterMerge
+                mediaURL: episode.audioURL
             )
-            self.resolveIfSettled(
+            downloadCoordinator.recordEpisodeDetection(
                 episodeID: episode.id,
-                subscriptionID: subscriptionID
+                detectedAt: detectedAt,
+                context: detectionContext,
+                sceneActivationSequence: sceneActivationSequence
             )
+            logger.info(
+                "feed.autoDownloadScheduled",
+                "Auto-download scheduled after feed refresh",
+                metadata: [
+                    "podcast": podcastTitle,
+                    "episode": episode.title,
+                    "episodeID": episode.id.uuidString,
+                    "batchCount": "\(episodes.count)",
+                    "intentPersisted": "true",
+                    "publishedAt":
+                        episode.publishedAt?.ISO8601Format() ?? "unknown",
+                    "publicationAgeSeconds": episode.publishedAt.map {
+                        String(
+                            format: "%.1f",
+                            max(0, detectedAt.timeIntervalSince($0))
+                        )
+                    } ?? "unknown",
+                    "detectionContext": detectionContext,
+                    "sceneActive": "\(sceneActive)",
+                    "batteryState": batteryState
+                ]
+            )
+            scheduled.append(episode)
+        }
+        guard !scheduled.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for episode in scheduled {
+                await self.run(
+                    episode: episode,
+                    subscriptionID: subscriptionID,
+                    podcastTitle: podcastTitle,
+                    refreshUpNextAfterMerge: refreshUpNextAfterMerge
+                )
+                self.resolveIfSettled(
+                    episodeID: episode.id,
+                    subscriptionID: subscriptionID
+                )
+            }
         }
     }
 
@@ -191,8 +230,8 @@ final class AutoDownloadIntentWorkflow {
             settle("filterExcluded")
             return
         }
-        if newestCandidate(in: subscription)?.guid != episode.guid {
-            settle("supersededByNewer")
+        if !isEligible(episodeID: episodeID, in: subscription) {
+            settle("noLongerLimitEligible")
         }
     }
 
@@ -352,8 +391,11 @@ final class AutoDownloadIntentWorkflow {
             )
             return
         }
-        guard let candidate = newestCandidate(in: subscription),
-              candidate.guid == episode.guid else {
+        guard isEligible(episodeID: episode.id, in: subscription),
+              let candidate = subscriptionStore.episode(
+                subscriptionID: subscriptionID,
+                episodeID: episode.id
+              ) else {
             logger.info(
                 "feed.autoDownloadSkipped",
                 "Auto-download skipped because the scheduled episode is no longer eligible",
@@ -424,8 +466,10 @@ final class AutoDownloadIntentWorkflow {
             subscriptionID: subscriptionID,
             incomingEpisodeID: candidate.id
         )
-        let target = subscriptionStore.subscription(id: subscriptionID)
-            .flatMap { newestCandidate(in: $0) } ?? candidate
+        let target = subscriptionStore.episode(
+            subscriptionID: subscriptionID,
+            episodeID: candidate.id
+        ) ?? candidate
         await transferWorkflow.download(
             target,
             subscriptionID: subscriptionID,

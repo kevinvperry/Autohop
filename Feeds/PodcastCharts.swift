@@ -1,5 +1,12 @@
 import Foundation
 
+// CATEGORY CONTRACT (2026-09-06): Category Top 8 episodes come from the Apple charts
+// page serialized-server-data shelf; legacy genre RSS supplies up to 100 shows.
+// Decode episodeArtwork and icon independently: JSON NSNull must not suppress
+// the show cover. Resolve 600px templates and retain fallbackArtworkURL for failures.
+// Category episode cache key artwork-v2 invalidates old missing-image entries; optional
+// fallback decoding preserves legacy caches. Never change overall chart depth to 100.
+
 // AI CONTEXT — Feeds/PodcastCharts.swift
 // Apple Podcasts charts client for the Discover page. Public endpoints only,
 // no API key: the Marketing Tools v2 feed for the overall Top podcasts (hero
@@ -30,7 +37,7 @@ import Foundation
 // PERFORMANCE INVARIANTS: (1) Discover enters its usable loaded phase before
 // network completion and publishes each hero/rail independently; one slow
 // endpoint must not block unrelated content. (2) A category child page may seed
-// itself from the current country’s already-loaded Top-15 rail while Top 50
+// itself from the current country’s already-loaded Top-15 rail while Top 100
 // arrives. (3) a fresh larger disk-cache entry is a valid ordered superset for
 // a smaller chart request, preventing duplicate Top-8/Top-15 downloads.
 // Consumed by DiscoverViewModel.
@@ -50,12 +57,32 @@ struct ChartPodcast: Identifiable, Hashable, Codable, Sendable {
     let genreName: String
 }
 
+/// Apple uses JSON null for missing episode artwork. Decode each candidate
+/// independently rather than coalescing untyped JSON values (NSNull is non-nil).
+enum CategoryEpisodeArtwork {
+    static func url(from value: Any?) -> URL? {
+        guard let artwork = value as? [String: Any],
+              let template = artwork["template"] as? String else { return nil }
+        let resolved = template
+            .replacingOccurrences(of: "{w}", with: "600")
+            .replacingOccurrences(of: "{h}", with: "600")
+            .replacingOccurrences(of: "{f}", with: "jpg")
+            .replacingOccurrences(of: "{c}", with: "bb")
+        guard !resolved.contains("{"), !resolved.contains("}"),
+              let url = URL(string: resolved),
+              let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+              let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
+}
+
 struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
     let id: String           // iTunes episode trackId
     let rank: Int
     let title: String
     let showName: String
     let artworkURL: URL?
+    var fallbackArtworkURL: URL? = nil // show cover if episode art is absent or cannot load
     var releaseDateString: String?   // enriched after chart fetch via per-podcast lookup
     let collectionId: String?        // parent podcast iTunes ID (parsed from chart url field)
 
@@ -553,6 +580,44 @@ actor PodcastChartsService {
             episodes[i].releaseDateString = dateMaps[episodes[i].id]
         }
 
+        storeEpisodes(episodes, key: key)
+        return episodes
+    }
+
+    /// The legacy category episode RSS feed is empty. Apple's public charts
+    /// page embeds the storefront's ordered episode shelf in its server data.
+    func categoryEpisodes(country: String, genre: ChartGenre) async throws -> [ChartEpisode] {
+        let key = "\(country)-genre-\(genre.id)-episodes-8-artwork-v2"
+        if let cached = cachedEpisodes(key: key) { return cached }
+        let url = URL(string: "https://podcasts.apple.com/\(country)/charts?genre=\(genre.id)")!
+        let (data, response) = try await session.data(from: url)
+        try HTTPResponseValidation.validate(response)
+        guard let html = String(data: data, encoding: .utf8),
+              let marker = html.range(of: "id=\"serialized-server-data\""),
+              let start = html.range(of: ">", range: marker.upperBound..<html.endIndex),
+              let end = html.range(of: "</script>", range: start.upperBound..<html.endIndex),
+              let json = html[start.upperBound..<end.lowerBound].data(using: .utf8),
+              let root = try JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let pages = root["data"] as? [[String: Any]],
+              let page = pages.first?["data"] as? [String: Any],
+              let shelves = page["shelves"] as? [[String: Any]],
+              let items = shelves.compactMap({ $0["items"] as? [[String: Any]] })
+                .first(where: { $0.first?["$kind"] as? String == "LegacyEpisodeLockup" })
+        else { throw URLError(.cannotParseResponse) }
+        let episodes = items.prefix(8).enumerated().compactMap { index, item -> ChartEpisode? in
+            guard let id = item["id"] as? String,
+                  let title = item["title"] as? String,
+                  let show = item["showTitle"] as? String,
+                  let collectionID = item["showAdamId"] as? String else { return nil }
+            let episodeArtwork = CategoryEpisodeArtwork.url(from: item["episodeArtwork"])
+            let showArtwork = CategoryEpisodeArtwork.url(from: item["icon"])
+            return ChartEpisode(id: id, rank: index + 1, title: title, showName: show,
+                                artworkURL: episodeArtwork ?? showArtwork,
+                                fallbackArtworkURL: showArtwork,
+                                releaseDateString: item["releaseDate"] as? String,
+                                collectionId: collectionID)
+        }
+        guard !episodes.isEmpty else { throw URLError(.cannotParseResponse) }
         storeEpisodes(episodes, key: key)
         return episodes
     }
@@ -1093,6 +1158,10 @@ final class DiscoverViewModel: ObservableObject {
     func loadedCategoryTop50(genre: ChartGenre, country: String) -> [ChartPodcast] {
         guard loaded50CategoryKey == "\(country)-\(genre.id)" else { return [] }
         return top50CategoryPodcasts
+    }
+
+    func categoryEpisodes(country: String, genre: ChartGenre) async throws -> [ChartEpisode] {
+        try await service.categoryEpisodes(country: country, genre: genre)
     }
 
     /// Resolve a chart entry to a search result with a usable RSS feed URL.

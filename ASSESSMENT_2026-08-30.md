@@ -1,9 +1,18 @@
 # Autohop — Whole-Project Assessment, 30 August 2026
 
+> **AUDIT SNAPSHOT, NOT CURRENT SOURCE — 4 September 2026.** Version 1.6.1 work
+> materially changed Stats recording, persistence, recovery, sync identity,
+> history merging and presentation after this assessment. Preserve the findings
+> below as dated evidence, but re-verify every implementation claim against the
+> live tree. Current Stats contracts are in `FEATURES.md`, `DESIGN.md`,
+> `PAGES.md`, `SYNC_DESIGN.md`, and `Docs/STATS_AUDIT_2026-08-30.md`'s resolution
+> notice.
+
 <!--
 AI CONTEXT — ASSESSMENT_2026-08-30.md
-CANONICAL assessment. Supersedes ASSESSMENT_2026-07-24.md, ASSESSMENT.md, and
-every DEEP_SCAN_*.md as the current statement of open issues.
+Latest whole-project assessment snapshot. Supersedes ASSESSMENT_2026-07-24.md,
+ASSESSMENT.md, and every DEEP_SCAN_*.md for its 30 August review baseline, but
+does not supersede later Version 1.6.1 source or living documentation.
 
 Scope of this pass: iOS + tvOS PRODUCTION source (223 Swift files, 74,736 LOC;
 the whole repo including tests is 295 files / 87,375 LOC — an earlier draft of

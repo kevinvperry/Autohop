@@ -1,0 +1,51 @@
+Your favourite podcasts. Your order. Always ready to play.
+
+Autohop is the podcast player built for effortless listening. Rank your shows once, and let automatic downloads, a priority-based queue and smart cleanup keep your listening moving. Enjoy audio and video podcasts, offline playback and powerful controls for every show — without managing a queue every day.
+
+SET YOUR PRIORITIES. KEEP LISTENING.
+
+Drag subscriptions into your preferred order. Your Priority Stack builds Up Next from the newest ready episode in each show, then keeps moving down your list. Download ahead for your commute, a long walk or time away from Wi-Fi.
+
+DISCOVER MORE. FIND FAVOURITES FASTER.
+
+Explore rotating Top 8 Episodes and Top 100 shows in each Discover category. Search your existing subscriptions by show or publisher, with results filtering as you type. Open full episode details with a tap, or swipe to Play, Play Next, Play Last or Archive. The redesigned Downloads list puts artwork, episode information and download status within easy reach.
+
+AUTOMATION THAT WORKS YOUR WAY
+
+• Release Radar learns each show's publishing rhythm.
+• Auto Archive manages played and inactive downloads.
+• Play Instant can download and start an important new episode, then return to what you were hearing.
+• Download Feed Filters check titles, descriptions, duration and episode type before automatic downloads enter your queue.
+• Per-show download, notification and playback settings let you fine-tune every subscription.
+
+MAKE EVERY SHOW SOUND RIGHT
+
+Choose playback speed, Trim Silence, Vocal Boost, Volume Adjustment, Mono Audio and custom start/end skips for each podcast. Shared Listening temporarily uses a shared playback speed and turns off Trim Silence, then restores your personal settings when switched off. Trim Silence is available for audio episodes.
+
+FALL ASLEEP WITHOUT LOSING YOUR PLACE
+
+Set your usual sleeping hours with Sleep Schedule. Autohop checks whether you're still listening, gently fades out if you don't respond, and returns to your last confirmed listening point. A separate Sleep Timer is ready whenever you need it.
+
+AUDIO, VIDEO AND CHAPTERS
+
+Enjoy audio and video podcasts in one player. Open video fullscreen, adjust playback speed and navigate publisher-provided chapters. Disable selected chapters to skip them automatically.
+
+AT HOME, ON THE GO, IN THE CAR
+
+Responsive layouts bring Autohop to iPhone, iPad and compatible Apple-silicon Macs running the Designed-for-iPad app. Mac application menus and keyboard shortcuts make playback and navigation easier. Now Playing & Up Next widgets keep listening close on iPhone and iPad.
+
+CarPlay gives you audio-first access to Now Playing, downloaded Up Next episodes and subscriptions, with confirmation before starting a new download.
+
+SEE YOUR LISTENING STORY
+
+Explore listening time, heatmaps, top shows, streaks, completed episodes, downloaded data and time saved. A 24-hour listening clock reveals your daily patterns, while optional weekly, monthly and yearly recaps bring the highlights together. Export Stats as CSV or JSON and check Stats Health and historical coverage.
+
+YOUR LIBRARY, YOUR CHOICE
+
+Import and export subscriptions using OPML. Open a show's Apple Podcasts page to leave its creator a review.
+
+No Autohop account. No advertising SDKs. No behavioural analytics. Your library stays on your devices, with optional private iCloud Sync for subscriptions, priority, queue, history and playback position. Podcast episodes may contain advertisements or sponsorships supplied by their publishers.
+
+Autohop is open source under the MIT License, with identified audio-engine components under the Mozilla Public License 2.0.
+
+Spend less time organising. Spend more time listening.

@@ -1,4 +1,10 @@
 import SwiftUI
+import Combine
+
+// CATEGORY CONTRACT (2026-09-06): Top 8 episode carousel precedes Top 100 shows.
+// Reuse DiscoverEpisodeHeroCard and AdaptiveEditorialMetrics; show heroes start at
+// rank 8 and repeat at 16 through 96. Overall chart cadence remains 1, 8, 15, etc.
+// Episode loading/retry is independent of shows; country changes reset carousel state.
 
 // AI CONTEXT — Views/TopPodcastsView.swift ("Top Podcasts" page — child of
 // Discover, reached via the "See All" button on the FIRST "Top Podcasts ·
@@ -18,9 +24,9 @@ import SwiftUI
 // satisfy the 15-entry rails. A category
 // page renders the parent Discover rail's Top 15 immediately when available,
 // then replaces/extends it with the canonical Top 100 result. LAYOUT
-// mirrors TopEpisodesView — a large feature card every 7th entry
-// ((rank - 1) % 7 == 0; depth-independent, so at 100 it runs 1, 8 … 92, 99)
-// and the rest compact ranked rows. Each
+// starts categories with eight rotating episode heroes, followed by shows
+// with feature cards at ranks 8, 16, … 96. Overall charts retain their cadence
+// of ranks 1, 8, 15, … and the rest are compact ranked rows. Each
 // entry shows ChartPodcast artwork, title, author (artist) and genre (genreName)
 // — the podcast analogue of TopEpisodesView's title/show/release-date. Tapping
 // resolves the show's RSS feed (viewModel.resolve) and pushes PodcastDetailView
@@ -43,6 +49,14 @@ struct TopPodcastsView: View {
     @State private var pendingRoute: DetailRoute?
     @State private var resolvingPodcastID: String?
     @State private var showUnavailableAlert = false
+
+    @State private var categoryEpisodes: [ChartEpisode] = []
+    @State private var episodeHeroIndex = 0
+    @State private var episodesFailed = false
+    @State private var episodesCountry: String?
+    @State private var resolvingEpisodeID: String?
+    @Environment(\.scenePhase) private var scenePhase
+    private let heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     private enum DetailRoute: Hashable {
         case preview(PodcastSearchResult)
@@ -140,10 +154,14 @@ struct TopPodcastsView: View {
         .miniPlayerBar()
         .preferredColorScheme(.dark)
         .task(id: taskID) {
-            await load()
+            async let shows: Void = load()
+            async let episodes: Void = loadCategoryEpisodes()
+            _ = await (shows, episodes)
         }
         .refreshable {
-            await reload()
+            async let shows: Void = reload()
+            async let episodes: Void = loadCategoryEpisodes()
+            _ = await (shows, episodes)
         }
         .alert("Not Available", isPresented: $showUnavailableAlert) {
             Button("OK", role: .cancel) {}
@@ -159,6 +177,13 @@ struct TopPodcastsView: View {
             let metrics = AdaptiveEditorialMetrics(containerWidth: proxy.size.width)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                if genre != nil {
+                    categoryEpisodeCarousel(metrics: metrics)
+                    Text("Top 100 Shows")
+                        .font(metrics.sectionTitleFont)
+                        .padding(.horizontal, metrics.horizontalGutter)
+                }
+
                 Text(genre.map { "Apple Podcasts · \($0.name) · \(selectedCountry.name)" }
                     ?? "Apple Podcasts · \(selectedCountry.name)")
                     .font(.caption.weight(.semibold))
@@ -167,11 +192,7 @@ struct TopPodcastsView: View {
                     .padding(.top, 4)
 
                 ForEach(podcasts) { podcast in
-                    // Large feature card every 7th entry. The formula is
-                    // depth-independent and continues unchanged now that
-                    // category pages run to 100: ranks 1, 8, 15, 22, 29, 36,
-                    // 43, 50, 57, 64, 71, 78, 85, 92, 99.
-                    if (podcast.rank - 1) % 7 == 0 {
+                    if genre != nil ? podcast.rank % 8 == 0 : (podcast.rank - 1) % 7 == 0 {
                         featureCard(podcast, metrics: metrics)
                             .padding(.horizontal, metrics.horizontalGutter)
                             .padding(.top, podcast.rank == 1 ? 4 : 24)
@@ -198,6 +219,81 @@ struct TopPodcastsView: View {
                 .padding(.top, 8)
                 .frame(maxWidth: metrics.availableWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+
+    private func categoryEpisodeCarousel(metrics: AdaptiveEditorialMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.scaled(8)) {
+            Text("Top 8 Episodes")
+                .font(metrics.sectionTitleFont)
+                .padding(.horizontal, metrics.horizontalGutter)
+            if episodesCountry == selectedCountry.code, !categoryEpisodes.isEmpty {
+                TabView(selection: $episodeHeroIndex) {
+                    ForEach(Array(categoryEpisodes.enumerated()), id: \.element.id) { index, episode in
+                        DiscoverEpisodeHeroCard(episode: episode, metrics: metrics,
+                                                resolvingEpisodeID: resolvingEpisodeID,
+                                                openEpisode: openEpisode)
+                            .padding(.horizontal, metrics.horizontalGutter)
+                            .padding(.bottom, metrics.carouselDotClearance)
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .indexViewStyle(.page(backgroundDisplayMode: .never))
+                .frame(height: metrics.heroCarouselHeight)
+                .onReceive(heroTimer) { _ in
+                    guard scenePhase == .active, pendingRoute == nil,
+                          resolvingEpisodeID == nil, categoryEpisodes.count > 1 else { return }
+                    withAnimation(.easeInOut(duration: 0.45)) {
+                        episodeHeroIndex = (episodeHeroIndex + 1) % categoryEpisodes.count
+                    }
+                }
+            } else if episodesFailed {
+                Button("Episodes unavailable — Retry") {
+                    Task { await loadCategoryEpisodes() }
+                }
+                .padding(.horizontal, metrics.horizontalGutter)
+            } else {
+                ProgressView("Loading episodes…")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: metrics.heroCarouselHeight)
+            }
+        }
+    }
+
+    private func loadCategoryEpisodes() async {
+        guard let genre else { return }
+        let country = selectedCountry.code
+        episodesFailed = false
+        categoryEpisodes = []
+        episodeHeroIndex = 0
+        do {
+            let episodes = try await viewModel.categoryEpisodes(country: country, genre: genre)
+            guard !Task.isCancelled, selectedCountry.code == country else { return }
+            categoryEpisodes = episodes
+            episodesCountry = country
+        } catch {
+            guard !Task.isCancelled, selectedCountry.code == country else { return }
+            episodesFailed = true
+        }
+    }
+
+    private func openEpisode(_ episode: ChartEpisode) {
+        guard resolvingEpisodeID == nil else { return }
+        resolvingEpisodeID = episode.id
+        Task {
+            defer { resolvingEpisodeID = nil }
+            guard let result = await viewModel.resolveEpisodePodcast(episode, country: selectedCountry.code) else {
+                showUnavailableAlert = true
+                return
+            }
+            if let subscription = subscriptionStore.subscriptions.first(where: {
+                $0.feedURL == result.feedURL && $0.browseDate == nil
+            }) {
+                pendingRoute = .episodes(subscription.id)
+            } else {
+                pendingRoute = .preview(result)
             }
         }
     }

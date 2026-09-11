@@ -1,5 +1,8 @@
 import SwiftUI
 
+// MINI-PLAYER CONTRACT (2026-09-06): This pushed diagnostic destination owns
+// miniPlayerBar. Preserve it when changing the log viewer or its toolbar actions.
+
 // AI CONTEXT — Views/DiagnosticLogView.swift ("Diagnostic Log" page, hidden
 // dev/support tool unlocked via Settings → About → tap version 5×). Renders
 // AppLogger's log file lines with share/clear actions. No feature logic. The
@@ -51,6 +54,7 @@ struct DiagnosticLogView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Diagnostic Log")
         .responsiveInlineNavigationTitle("Diagnostic Log")
+        .miniPlayerBar()
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

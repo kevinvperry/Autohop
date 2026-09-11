@@ -1,5 +1,10 @@
 import SwiftUI
 
+// CATEGORY ARTWORK CONTRACT (2026-09-06): DiscoverEpisodeHeroCard is shared with
+// TopPodcastsView category carousels. Feed the episode URL and show fallback to
+// CachedArtworkImage, preserving its validation/cache and target-size downsampling.
+// Do not replace download-failure fallback with URL nil-coalescing alone.
+
 // AI CONTEXT — Views/DiscoverView.swift ("Discover" sheet — opened by the +
 // button on the Subscriptions toolbar AND the top Menu item; parent page of
 // Podcast Search, which is now reachable only through the search shortcut
@@ -453,70 +458,8 @@ struct DiscoverView: View {
     }
 
     private func heroEpisodeCard(_ episode: ChartEpisode, metrics: AdaptiveEditorialMetrics) -> some View {
-        Button {
-            openEpisode(episode)
-        } label: {
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(
-                    colors: [Color(red: 0.20, green: 0.08, blue: 0.42).opacity(0.95),
-                             Color.black.opacity(0.85)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-
-                // Ghosted rank numeral — matches the podcast hero treatment.
-                Text("\(episode.rank)")
-                    .font(.system(size: metrics.heroGhostRankSize, weight: .black, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.07))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .offset(metrics.heroGhostRankOffset)
-                    .allowsHitTesting(false)
-
-                HStack(alignment: .center, spacing: metrics.heroContentSpacing) {
-                    chartArtwork(episode.artworkURL, size: metrics.heroArtworkSize,
-                                 cornerRadius: metrics.heroArtworkCornerRadius,
-                                 placeholderIconSize: metrics.heroPlaceholderIconSize)
-
-                    VStack(alignment: .leading, spacing: metrics.heroTextSpacing) {
-                        Text("#\(episode.rank)")
-                            .font(metrics.heroRankFont)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, metrics.heroRankHorizontalPadding)
-                            .padding(.vertical, metrics.heroRankVerticalPadding)
-                            .glassCapsule(highlighted: true)
-
-                        Text(episode.title)
-                            .font(metrics.heroTitleFont)
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(metrics.heroTitleLineLimit)
-
-                        Text(episode.showName)
-                            .font(metrics.heroMetadataFont)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        if let date = episode.releaseDate {
-                            Text(relativePublishedLabel(date))
-                                .font(metrics.heroDetailFont)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(metrics.heroContentPadding)
-
-                if resolvingEpisodeID == episode.id {
-                    resolvingOverlay
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: metrics.heroCardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius).stroke(Color.white.opacity(0.08), lineWidth: metrics.scaled(0.5)))
-        }
-        .buttonStyle(.plain)
-        .disabled(resolvingEpisodeID != nil)
+        DiscoverEpisodeHeroCard(episode: episode, metrics: metrics,
+                                resolvingEpisodeID: resolvingEpisodeID, openEpisode: openEpisode)
     }
 
     private func openEpisode(_ episode: ChartEpisode) {
@@ -945,4 +888,104 @@ struct ChartCountryPicker: View {
             }
         }
     }
+}
+
+/// Shared by Discover and category charts so episode heroes stay visually identical.
+struct DiscoverEpisodeHeroCard: View {
+    let episode: ChartEpisode
+    let metrics: AdaptiveEditorialMetrics
+    let resolvingEpisodeID: String?
+    let openEpisode: (ChartEpisode) -> Void
+
+    var body: some View {
+        Button {
+            openEpisode(episode)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                LinearGradient(
+                    colors: [Color(red: 0.20, green: 0.08, blue: 0.42).opacity(0.95),
+                             Color.black.opacity(0.85)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+
+                // Ghosted rank numeral — matches the podcast hero treatment.
+                Text("\(episode.rank)")
+                    .font(.system(size: metrics.heroGhostRankSize, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.07))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .offset(metrics.heroGhostRankOffset)
+                    .allowsHitTesting(false)
+
+                HStack(alignment: .center, spacing: metrics.heroContentSpacing) {
+                    chartArtwork(episode.artworkURL, size: metrics.heroArtworkSize,
+                                 cornerRadius: metrics.heroArtworkCornerRadius,
+                                 placeholderIconSize: metrics.heroPlaceholderIconSize)
+
+                    VStack(alignment: .leading, spacing: metrics.heroTextSpacing) {
+                        Text("#\(episode.rank)")
+                            .font(metrics.heroRankFont)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, metrics.heroRankHorizontalPadding)
+                            .padding(.vertical, metrics.heroRankVerticalPadding)
+                            .glassCapsule(highlighted: true)
+
+                        Text(episode.title)
+                            .font(metrics.heroTitleFont)
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(metrics.heroTitleLineLimit)
+
+                        Text(episode.showName)
+                            .font(metrics.heroMetadataFont)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        if let date = episode.releaseDate {
+                            Text(relativePublishedLabel(date))
+                                .font(metrics.heroDetailFont)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(metrics.heroContentPadding)
+
+                if resolvingEpisodeID == episode.id {
+                    resolvingOverlay
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: metrics.heroCardHeight)
+            .clipShape(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: metrics.heroCardCornerRadius).stroke(Color.white.opacity(0.08), lineWidth: metrics.scaled(0.5)))
+        }
+        .buttonStyle(.plain)
+        .disabled(resolvingEpisodeID != nil)
+    }
+
+    private func chartArtwork(_ url: URL?, size: CGFloat, cornerRadius: CGFloat, placeholderIconSize: CGFloat) -> some View {
+        CachedArtworkImage(url: url, fallbackURL: episode.fallbackArtworkURL, targetSize: CGSize(width: size, height: size)) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.35), Color.black.opacity(0.4)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                Image(systemName: "waveform")
+                    .font(.system(size: placeholderIconSize, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private var resolvingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+            ProgressView().tint(.white)
+        }
+    }
+
 }

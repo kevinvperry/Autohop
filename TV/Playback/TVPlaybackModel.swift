@@ -4,14 +4,32 @@ import MediaPlayer
 import Observation
 import AutohopCore
 
+enum TVPlaybackStatsPolicy {
+    static func shouldRecordStart(_ resolution: PlaybackSessionPolicy.StartResolution) -> Bool {
+        resolution.isFreshStart
+    }
+
+    static func actualManualForwardSkip(
+        from position: TimeInterval,
+        requested: TimeInterval,
+        duration: TimeInterval?
+    ) -> TimeInterval {
+        PlaybackSeekBoundaryPolicy.actualForwardSkip(
+            from: position,
+            seconds: requested,
+            duration: duration
+        )
+    }
+}
+
 // AI CONTEXT — TV/Playback/TVPlaybackModel.swift
 // Phase 3 (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md §8): the tvOS playback
 // composition — owns a single StreamingPlaybackEngine (PlaybackCore),
 // auto-advances through the streaming Priority Stack on finish (mirrors the
 // iPhone's "mark played → next queue episode" policy, minus download gating),
 // and writes position back through SubscriptionStore.recordListeningProgress /
-// markListeningHistoryFinished so a phone⇄TV resume round-trip works (history
-// entries are whole-record LWW by lastListenedAt — SYNC_DESIGN.md).
+// markListeningHistoryFinished so a phone⇄TV resume round-trip works (navigation
+// follows lastListenedAt while totals/outcomes merge monotonically — SYNC_DESIGN.md).
 // OWNERSHIP: created once by TVAppModel and handed to the tab views; its
 // `upNextProvider`/`subscriptionProvider` closures are wired by TVAppModel
 // AFTER both objects exist, avoiding an init-order back-reference.
@@ -94,6 +112,7 @@ final class TVPlaybackModel {
     private var lastHistoryWriteAt: Date?
     private var lastProgressPushRequestedAt = Date.distantPast
     private var sessionListenedSeconds: TimeInterval = 0
+    private var allowsAutomaticSkipCredit = true
     private let historyWriteInterval: TimeInterval = 20
     /// Effective playback speed for the stats time-saved calculation — seeded
     /// from the subscription's playbackPreference on play, updated by setSpeed.
@@ -112,6 +131,18 @@ final class TVPlaybackModel {
         self.statsStore = statsStore
         engine.onTimeUpdate = { [weak self] time in
             self?.handleTimeUpdate(time)
+        }
+        engine.onPlaybackInterval = { [weak self] interval in
+            self?.handlePlaybackInterval(interval)
+        }
+        engine.onAutoSkip = { [weak self] seconds in
+            guard let self, self.allowsAutomaticSkipCredit else { return }
+            self.statsStore.addAutoSkip(
+                seconds,
+                subscriptionID: self.currentSubscriptionID,
+                feedURL: self.currentSubscription?.feedURL,
+                showTitle: self.currentSubscription?.title
+            )
         }
         engine.onEpisodeFinished = { [weak self] episode in
             self?.handleFinished(episode)
@@ -206,7 +237,14 @@ final class TVPlaybackModel {
             "subscriptionID": subscription.id.uuidString,
             "catalogMatch": "\(catalogStateAuthored)"
         ], alwaysPersist: true)
-        statsStore.recordEpisodeStarted(subscriptionID: subscription.id, showTitle: subscription.title)
+        let resumePosition = resumePositionOverride
+            ?? subscriptionStore.savedListeningPosition(for: episode)
+            ?? 0
+        let start = PlaybackSessionPolicy.startResolution(
+            resumeTime: resumePosition,
+            startSkipSeconds: subscription.playbackPreference.startSkipSeconds
+        )
+        allowsAutomaticSkipCredit = TVPlaybackStatsPolicy.shouldRecordStart(start)
         do {
             try await engine.play(episode, preference: subscription.playbackPreference, filter: subscription.chapterFilter)
             guard requestOwnership.owns(requestGeneration) else { return }
@@ -216,17 +254,18 @@ final class TVPlaybackModel {
             // resume-vs-start-skip rule as iPhone (PlaybackSessionPolicy):
             // a resume beyond the start-skip wins and seeks; the engine has
             // already applied the start-skip itself otherwise.
-            let resumePosition = resumePositionOverride
-                ?? subscriptionStore.savedListeningPosition(for: episode)
-                ?? 0
-            let start = PlaybackSessionPolicy.startResolution(
-                resumeTime: resumePosition,
-                startSkipSeconds: subscription.playbackPreference.startSkipSeconds
-            )
             if let seekTarget = start.seekTarget {
                 await engine.seekAndWait(to: seekTarget)
             }
+            allowsAutomaticSkipCredit = true
             guard requestOwnership.owns(requestGeneration) else { return }
+            if TVPlaybackStatsPolicy.shouldRecordStart(start) {
+                statsStore.recordEpisodeStarted(
+                    subscriptionID: subscription.id,
+                    showTitle: subscription.title,
+                    feedURL: subscription.feedURL
+                )
+            }
             AppLogger.shared.info("tv.playbackStartResolved", "Playback settings and resume applied", metadata: [
                 "mediaKind": String(describing: episode.mediaKind),
                 "speed": String(format: "%.2f", subscription.playbackPreference.speed),
@@ -324,14 +363,33 @@ final class TVPlaybackModel {
     }
 
     func skipForward(_ seconds: TimeInterval = 30) {
+        let actual = TVPlaybackStatsPolicy.actualManualForwardSkip(
+            from: currentTime,
+            requested: seconds,
+            duration: currentEpisode?.durationSeconds
+        )
         engine.skipForward(seconds: seconds)
         // Same stats semantics as iPhone: a deliberate skip forward is time saved.
-        statsStore.addManualSkipForward(seconds, subscriptionID: currentSubscriptionID)
+        statsStore.addManualSkipForward(
+            actual,
+            subscriptionID: currentSubscriptionID,
+            feedURL: currentSubscription?.feedURL,
+            showTitle: currentSubscription?.title
+        )
         updateNowPlayingInfo()
     }
     func skipBackward(_ seconds: TimeInterval = 15) {
         engine.skipBackward(seconds: seconds)
         updateNowPlayingInfo()
+    }
+
+    func recordArchivedOutcome(_ episode: Episode, subscription: Subscription?) {
+        statsStore.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
+            completionKind: .manuallyArchived,
+            positionSeconds: isCurrentEpisode(episode) ? currentTime : nil
+        )
     }
     func setSpeed(_ speed: Double) {
         engine.updatePlaybackSpeed(speed)
@@ -388,34 +446,28 @@ final class TVPlaybackModel {
     // MARK: - Progress + auto-advance
 
     private func handleTimeUpdate(_ time: TimeInterval) {
-        if time > currentTime {
-            let delta = time - currentTime
-            // AI CONTEXT — Both lifetime history and daily Stats must use the
-            // SAME natural-playback gate. Previously only Stats rejected large
-            // forward jumps; `sessionListenedSeconds` still credited the resume
-            // seek (and any scrub) as time actually heard. That made a two-hour
-            // resume instantly add two hours to synced listening history.
-            let isNaturalDelta = TVPlaybackProgressAccountingPolicy.isNaturalPlaybackDelta(delta)
-            if isNaturalDelta {
-                sessionListenedSeconds += delta
-            }
-            if isNaturalDelta, let subscriptionID = currentSubscriptionID {
-                statsStore.addListeningTime(
-                    // StreamingPlaybackEngine reports media-position deltas.
-                    // ListeningStatsStore's cross-platform contract is elapsed
-                    // wall time, matching iOS's fixed 0.5-second tick credit.
-                    delta / max(currentSpeed, 0.01),
-                    speed: currentSpeed,
-                    subscriptionID: subscriptionID,
-                    showTitle: currentSubscriptionTitle
-                )
-            }
-        }
         currentTime = time
         if let lastHistoryWriteAt, Date().timeIntervalSince(lastHistoryWriteAt) >= historyWriteInterval {
             flushProgress()
             requestProgressPushIfDue()
         }
+    }
+
+    private func handlePlaybackInterval(_ interval: PlaybackAccountingInterval) {
+        guard interval.wallClockSeconds.isFinite,
+              interval.wallClockSeconds > 0,
+              interval.playbackSpeed.isFinite,
+              interval.playbackSpeed > 0,
+              let subscriptionID = currentSubscriptionID else { return }
+        sessionListenedSeconds += interval.wallClockSeconds
+        statsStore.addListeningTime(
+            interval.wallClockSeconds,
+            speed: interval.playbackSpeed,
+            subscriptionID: subscriptionID,
+            showTitle: currentSubscriptionTitle,
+            feedURL: currentSubscription?.feedURL,
+            endedAt: interval.endedAt
+        )
     }
 
     private func flushProgress() {
@@ -499,7 +551,12 @@ final class TVPlaybackModel {
                 preferredSubscriptionID: subscription.id
             )
         }
-        statsStore.recordEpisodeCompleted(subscriptionID: subscription.id)
+        statsStore.recordEpisodeOutcome(
+            episode: episode,
+            subscription: subscription,
+            completionKind: .finishedNaturally,
+            positionSeconds: episode.durationSeconds
+        )
 
         // Browse-only Discover playback contributes to local History/Stats but
         // must never mutate or auto-advance into the phone-authored queue.

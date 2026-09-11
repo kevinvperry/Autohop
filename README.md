@@ -4,11 +4,10 @@
 AI CONTEXT — README.md
 High-level product, feature, documentation, build, and licensing index for AI
 agents. Treat FEATURES.md as the behaviour/default source of truth, PAGES.md as
-the navigation/page-name source of truth, SYNC_DESIGN.md as the CloudKit source
-of truth, and ASSESSMENT_2026-08-30.md as the newest assessment report (it supersedes
-ASSESSMENT_2026-07-24.md, ASSESSMENT.md and every DEEP_SCAN_*.md, and records
-corrections to figures those documents state — notably the fixed-font count and
-the true coach-mark coverage). The
+the navigation/page-name source of truth, and SYNC_DESIGN.md as the CloudKit
+source of truth. ASSESSMENT_2026-08-30.md is the latest whole-project audit
+snapshot (superseding earlier assessments for that date), not a substitute for
+post-audit Version 1.6.1 source and living documents. The
 visible playback-order sheet is "Up Next"; the Swift implementation still uses
 legacy `Queue*` type/property names in several places.
 Priority Stack reordering uses a stable active-subscription UUID draft and one
@@ -16,14 +15,15 @@ atomic cross-device order generation; Inactive and hidden browse rows never shar
 its move-index space.
 The checked-in production configuration includes the full iPhone and Apple TV
 codebases. Cross-device synchronization uses only the user's private iCloud.
-VERSION_1.4.md and VERSION_1.5.md are closed historical submission ledgers.
-VERSION_1.6.md records the tvOS Version 1.6 (build 13) submission sent to Apple
-on 22 August 2026 and clearly separates later source changes.
+VERSION_1.4.md, VERSION_1.5.md and VERSION_1.6.md are closed historical
+submission ledgers. VERSION_1.6.md records the tvOS submission sent on
+22 August 2026 and the iOS-family submission sent on 30 August 2026.
+VERSION_1.7.md is the canonical running ledger for every future change.
 The abandoned Autohop Pro and Cloudflare relay prototypes have been removed.
 The post-1.4 tvOS rebuild is implemented through automated Phase 6 hardening:
 compact cached projections, targeted detail loading, truthful streaming states,
-native video and read-only sync authority. Version 1.6 (build 13) was submitted
-to Apple App Review on 22 August 2026; approval and release remain pending.
+native video and read-only sync authority. iOS Version 1.6 was rejected for advertising metadata; 1.6.1 is now
+approved and live, confirmed by the user on 8 September 2026. tvOS approval remains unconfirmed.
 AppState decomposition Stages 0–14 are implementation-complete. Domain
 coordinators and named workflows exclusively own playback, queue, downloads,
 feed refresh/Release Radar, Auto Archive, history/Stats, onboarding, import,
@@ -36,11 +36,88 @@ Version 1.4 adds one adaptive Home Screen / Lock Screen widget backed by a
 device-local App Group display snapshot. Widget playback reuses the existing
 transport workflow through AudioPlaybackIntent; the extension never opens the
 database, streams media, or performs network requests.
+Release update (2026-09-06): user confirmed Mac Menu crash resolved; issue closed.
+User confirmed iOS-family 1.6.1 approved and live on 8 September 2026.
+Its ledger is closed; all future changes belong in VERSION_1.7.md.
+TV 1.6.1 (1) submitted for approval, user-confirmed 8 September 2026.
+All future iOS/tvOS code changes belong together in VERSION_1.7.md.
+Screenshot confirms prior TV 1.6 (15) Ready for Distribution.
 -->
+## tvOS release update — 8 September 2026
+
+The user’s screenshot confirms tvOS 1.6 (15) Ready for Distribution; older
+build-13 submission references below are historical. tvOS 1.6.1 (1), including
+Top Shelf, is now submitted for approval (user-confirmed 8 September 2026). iOS remains 1.6.1 (17). Submission text and
+validation are in [the TV package](Docs/AppStore/tvOS-1.6.1/SUBMISSION.md).
+Approval of TV 1.6.1 is pending. All future iOS and tvOS code updates are
+tracked together in VERSION_1.7.md; the submitted TV release scope is closed.
+
 
 **The podcast player for people who are serious about listening.**
 
 Autohop is a native iOS podcast player built around a single idea: your time is the finite resource, not your content. Most podcast apps treat your queue like a to-do list you manage manually. Autohop manages it for you — automatically, intelligently, and indefinitely — so you can focus on everything else.
+
+## Current release — 8 September 2026
+
+Version 1.6.1 is approved and live in the App Store, confirmed by the user.
+Its release ledger is complete. All future changes belong in
+[Version 1.7](VERSION_1.7.md). Earlier preparation notes below are historical.
+
+## Version 1.6.1 resubmission preparation — 6 September 2026
+
+The iOS 1.6 rejection concerns Advertising age-rating metadata. The replacement
+1.6.1 combines both release ledgers. Copy-ready release/review text and outstanding
+checks are in [the submission record](Docs/AppStore/1.6.1/SUBMISSION.md).
+Preparation is not an upload, submission or approval.
+
+## Downloads list update — 6 September 2026
+
+Artwork is centred vertically; full-width text sits above a separate lower status
+band, matching the subscription-list hierarchy.
+
+Downloads now uses shared adaptive episode-row sizing and native Play, Play Next,
+Play Last and Archive swipes. Transfer controls remain inline; archive buttons
+are removed. See [feature reference](FEATURES.md).
+
+## Subscription search — 6 September 2026
+
+The mini-player hides while subscription search has focus and returns when editing
+ends, freeing room for results without interrupting playback.
+
+The magnifying glass beside Discover searches existing subscriptions by show or
+publisher name through an inline field. Results preserve priority order;
+Clear restores all shows. See [feature reference](FEATURES.md).
+
+## Podcast episode navigation update — 6 September 2026
+
+Episode rows on the subscription page now open Episode Detail from the whole
+row, including its title. Inline episode expansion is removed; swipe actions
+are unchanged. See [page reference](PAGES.md).
+
+## Episode Detail layout update — 6 September 2026
+
+Episode artwork now scales with the available window width, and playback/queue/
+archive actions are centred beneath the header. See [design reference](DESIGN.md).
+
+## Onboarding presentation update — 6 September 2026
+
+Quick Tips hide while the first-subscription milestone is open. That sheet now
+keeps its actions below scrolling content, and long Quick Tips can grow and
+scroll within their actual viewport. See [onboarding reference](ONBOARDING.md).
+
+## Discover and Mac updates — 6 September 2026
+
+The latest Mac report shows the tip-only fix was insufficient. Menu now receives
+its full dependency set explicitly. The user confirmed the Mac Menu crash
+resolved on 6 September 2026; this issue is complete.
+
+Category pages combine rotating Top-8 episode cards with Top-100 shows and reliable
+show-cover artwork fallback. The iPad app on Apple-silicon Macs now has application
+menus and discoverable shortcuts; a persistent status icon remains planned.
+Mini-player omissions and the Mac Menu Quick Tip crash are fixed in source.
+See the [session record](Docs/SESSION_CHANGES_2026-09-06.md),
+[Mac implementation](Docs/MAC_MENU_STAGE_1.md), and
+[mini-player audit](Docs/MINI_PLAYER_AUDIT_2026-09-06.md) for scope and verification.
 
 ## Product Vision
 
@@ -78,7 +155,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Priority Stack: reliably reorder several active shows in one session; Inactive
   shows stay fixed below them, and the complete order syncs atomically
 - Endless auto-advancing queue with Play Next / Play Last manual overrides
-- Discover page: browse Apple Podcasts charts with Top-8 heroes, quick category rails, dedicated Top-50 pages for every category, a storefront country picker, and fixed US/UK/AU country spotlights
+- Discover page: browse Apple Podcasts charts with Top-8 heroes, quick category rails, category pages with Top-8 episode carousels and Top-100 shows, a storefront country picker, and fixed US/UK/AU country spotlights
 - Podcast search via the iTunes catalog — search by name, author, or keyword; browse episode list before subscribing; 30-day recently viewed history
 - Download-first playback; background downloads via URLSession
 - Trim Silence engine (Off / Low / Medium / High, per-podcast) — RMS-based, ported from Pocket Casts algorithm
@@ -96,7 +173,7 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 - Auto-archive policies per subscription (after-played delay, inactive timeout, episode limit)
 - Episode status tracking: Unplayed / Queued / Paused / Playing / Played / Archived / Inactive / Skipped
 - Listening History: searchable per-episode log with 60-second minimum playback threshold, grouped by date
-- Stats page: time listened, time saved, episodes finished, and streaks over 7 Days / displayed month / displayed year / Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, top shows with tap-to-expand per-show detail cards (episodes finished, per-show time saved, listening share, cadence), and a "Shows You're Drifting From" engagement list; stats are computed locally and sync only through the user's private iCloud when optional iCloud Sync is enabled
+- Stats page: time listened, time saved, episodes finished, and an explicitly all-time streak over **7 Days** (the intentional Monday-to-now calendar week), displayed month/year, and Lifetime periods — with a listening heatmap, monthly trend chart, 24-hour listening clock, canonical-feed Top Shows, durable per-episode outcomes, coverage/health disclosures, JSON/CSV export and importable backup, and a "Shows You're Drifting From" engagement list; stats are computed locally and sync only through the user's private iCloud while iCloud Sync is enabled
 - Sleep timer: duration presets, end-of-episode mode with episode count, volume fade-out, and auto-restart on quick resume
 - Sleep Schedule: a recurring nightly sleep timer — during your active-hours window a soft chime asks "still listening?" over continuing playback; any control confirms, no response fades out and rewinds to where you drifted off. Includes a player top-bar indicator and a time-sensitive lock-screen "Still Listening" notification you can tap without unlocking
 - Safe sharing: adaptive episode and podcast cards, validated publisher-page
@@ -144,8 +221,11 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 | [`APPSTATE_DECOMPOSITION_BASELINE.md`](APPSTATE_DECOMPOSITION_BASELINE.md) | Stage 0 source, automated-test, diagnostic, and device-only regression baseline. |
 | [`Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md`](Docs/WIDGETS_IMPLEMENTATION_PROPOSAL.md) | Widget architecture, privacy/performance invariants, staged execution ledger, and device validation gates. |
 | [`project_autohop.md`](project_autohop.md) | Fast machine-readable project brief: architecture, feature map, sync coverage, build notes, and licensing orientation. |
-| [`ASSESSMENT_2026-07-24.md`](ASSESSMENT_2026-07-24.md) | Latest whole-project code, feature, settings, iOS/tvOS, sync, website, performance, security and design assessment. |
-| [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) / [`ASSESSMENT.md`](ASSESSMENT.md) | Historical assessment context. Re-verify every finding against current source before acting. |
+| [`VERSION_1.6.1.md`](VERSION_1.6.1.md) | Closed ledger for Version 1.6.1, approved and live. |
+| [`VERSION_1.7.md`](VERSION_1.7.md) | Canonical running ledger for all future changes after the 1.6.1 release. |
+| [`ASSESSMENT_2026-08-30.md`](ASSESSMENT_2026-08-30.md) | Latest whole-project point-in-time audit snapshot; Version 1.6.1 source and living documents supersede it where behavior changed later. |
+| [`Docs/STATS_AUDIT_2026-08-30.md`](Docs/STATS_AUDIT_2026-08-30.md) | Historical Stats audit evidence plus a prominent resolution map to the implemented September redesign. |
+| [`ASSESSMENT_2026-07-24.md`](ASSESSMENT_2026-07-24.md) / [`DEEP_SCAN_2026-06-28.md`](DEEP_SCAN_2026-06-28.md) / [`ASSESSMENT.md`](ASSESSMENT.md) | Earlier historical assessment context. Re-verify every finding against current source before acting. |
 | [`NOTICE`](NOTICE) | Third-party derivation details (Pocket Casts), per-file licence status. |
 | [`LICENSE`](LICENSE) / [`LICENSE-MPL-2.0.md`](LICENSE-MPL-2.0.md) | MIT for the project; MPL-2.0 text plus a project note listing the four covered files and acknowledging Pocket Casts as a broader source of design ideas and inspiration. |
 

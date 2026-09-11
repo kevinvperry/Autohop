@@ -1,6 +1,34 @@
 import Foundation
 import GRDB
 
+struct StatsPartitionMetadata: Codable, Equatable, Sendable {
+    var generationID: String
+    var revision: UInt64
+    var payloadHash: String
+    var writerDeviceID: String
+
+    static func make(
+        day: DayStats,
+        generationID: String,
+        revision: UInt64,
+        writerDeviceID: String
+    ) throws -> StatsPartitionMetadata {
+        StatsPartitionMetadata(
+            generationID: generationID,
+            revision: revision,
+            payloadHash: try DurablePayloadFingerprint.make(day),
+            writerDeviceID: writerDeviceID
+        )
+    }
+}
+
+struct StatsDayProjection: Equatable, Sendable {
+    var day: DayStats
+    var metadata: StatsPartitionMetadata
+    var hasPendingChanges: Bool
+    var systemFields: Data?
+}
+
 // AI CONTEXT — Persistence/AutohopDatabase.swift
 // GRDB (SQLite) backing store introduced as build-step 1 of the cross-device
 // sync work (see SYNC_DESIGN.md). Replaces the single subscriptions.json blob
@@ -34,6 +62,10 @@ import GRDB
 // Migration v7 scopes episode sync rows by
 // `subscriptionID|guid:<guid>` so identical RSS GUIDs in different feeds cannot
 // collide.
+// Stats recovery metadata adds content generation/revision/hash identity,
+// account-scoped remote partitions, owned-device lineage and retired-generation
+// tracking. ListeningStatsStore uses these rows for bidirectional startup
+// reconciliation; they are no longer a write-only CloudKit projection.
 
 /// SQLite-backed persistence for subscriptions, episodes, and their sync state.
 /// Thread-safe: GRDB's `DatabaseQueue` serialises all access; the JSON
@@ -49,6 +81,7 @@ final class AutohopDatabase: @unchecked Sendable {
     /// writing, simulating a disk-full / locked-database failure so tests can verify
     /// the store does not advance its persisted snapshot past an unwritten change.
     var _testFailNextPersist = false
+    var _testFailNextStatsDayWrite = false
 
     /// Test seam: counts how many episode-row payloads were encoded + written
     /// (inserts + value-changed updates), so tests can prove the episode-level
@@ -144,9 +177,9 @@ final class AutohopDatabase: @unchecked Sendable {
             }
         }
 
-        // Build step 5a: listening-history sync. Record-level LWW by
-        // `lastListenedAt` — the whole entry (denormalized title/artwork) is the
-        // payload, so no per-field projection is needed.
+        // Build step 5a: listening-history sync. The row stores the whole entry;
+        // current conflict handling selects navigation fields by lastListenedAt
+        // while preserving monotonic listening/outcome evidence.
         migrator.registerMigration("v5_history_sync_state") { db in
             try db.create(table: "history_sync_state") { t in
                 t.column("id", .text).primaryKey()
@@ -228,6 +261,54 @@ final class AutohopDatabase: @unchecked Sendable {
                 t.column("generationID", .text).notNull()
                 t.column("hasPendingChanges", .boolean).notNull().defaults(to: false)
                 t.column("systemFields", .blob)
+            }
+        }
+
+        // Stats recovery v2: durable content identity replaces the process-only
+        // dirty set. Remote rows and CloudKit tokens are account-scoped so an
+        // Apple Account switch cannot leak the previous account's totals into
+        // the Stats page.
+        migrator.registerMigration("v10_stats_reconciliation") { db in
+            try db.alter(table: "stats_sync_state") { t in
+                t.add(column: "generationID", .text).notNull().defaults(to: "")
+                t.add(column: "revision", .integer).notNull().defaults(to: 0)
+                t.add(column: "payloadHash", .text).notNull().defaults(to: "")
+                t.add(column: "writerDeviceID", .text).notNull().defaults(to: "")
+            }
+
+            try db.create(table: "remote_stats_v10") { t in
+                t.column("id", .text).primaryKey()
+                t.column("accountScope", .text).notNull().indexed()
+                t.column("deviceID", .text).notNull().indexed()
+                t.column("dayKey", .text).notNull().indexed()
+                t.column("payload", .blob).notNull()
+                t.column("generationID", .text).notNull().defaults(to: "")
+                t.column("revision", .integer).notNull().defaults(to: 0)
+                t.column("payloadHash", .text).notNull().defaults(to: "")
+            }
+            // Old remote rows cannot safely be attributed to the currently
+            // signed-in account. A new account-scoped CloudKit state performs a
+            // full fetch and repopulates them.
+            try db.drop(table: "remote_stats")
+            try db.rename(table: "remote_stats_v10", to: "remote_stats")
+
+            try db.create(table: "stats_sync_metadata") { t in
+                t.column("key", .text).primaryKey()
+                t.column("value", .text).notNull()
+            }
+            try db.create(table: "stats_owned_device") { t in
+                t.column("deviceID", .text).primaryKey()
+            }
+            try db.create(table: "stats_retired_generation") { t in
+                t.column("generationID", .text).primaryKey()
+            }
+        }
+
+        // Kept separate so development databases that ran an early v10 build
+        // before retired-generation tracking was added heal forward too.
+        migrator.registerMigration("v11_stats_identity_cutover") { db in
+            try db.create(table: "stats_retired_generation", options: .ifNotExists) { t in
+                t.column("generationID", .text).primaryKey()
             }
         }
 
@@ -313,13 +394,38 @@ final class AutohopDatabase: @unchecked Sendable {
         var payload: Data
         var hasPendingChanges: Bool
         var systemFields: Data?
+        var generationID: String
+        var revision: UInt64
+        var payloadHash: String
+        var writerDeviceID: String
     }
 
     private struct RemoteStatsRow: Codable, FetchableRecord, PersistableRecord {
         static let databaseTableName = "remote_stats"
         var id: String
+        var accountScope: String
+        var deviceID: String
         var dayKey: String
         var payload: Data
+        var generationID: String
+        var revision: UInt64
+        var payloadHash: String
+    }
+
+    private struct StatsSyncMetadataRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "stats_sync_metadata"
+        var key: String
+        var value: String
+    }
+
+    private struct StatsOwnedDeviceRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "stats_owned_device"
+        var deviceID: String
+    }
+
+    private struct StatsRetiredGenerationRow: Codable, FetchableRecord, PersistableRecord {
+        static let databaseTableName = "stats_retired_generation"
+        var generationID: String
     }
 
     // MARK: - Loading
@@ -842,12 +948,20 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     @discardableResult
-    func acknowledgeStatsDay(_ acknowledged: DayStats) throws -> Bool {
+    func acknowledgeStatsDay(
+        _ acknowledged: DayStats,
+        metadata: StatsPartitionMetadata? = nil
+    ) throws -> Bool {
         var remainsPending = false
         try writeAndHarden { db in
             guard var row = try StatsSyncRow.fetchOne(db, key: acknowledged.dayKey) else { return }
             let current = try? decoder.decode(DayStats.self, from: row.payload)
-            if current == acknowledged {
+            let metadataMatches = metadata.map {
+                row.generationID == $0.generationID
+                    && row.revision == $0.revision
+                    && row.payloadHash == $0.payloadHash
+            } ?? true
+            if current == acknowledged && metadataMatches {
                 row.hasPendingChanges = false
                 try row.save(db)
             }
@@ -949,16 +1063,22 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
-    /// Upserts a history entry already reconciled with the server (clean — not re-pushed).
+    /// Merges a server history entry into the durable projection. Navigation
+    /// follows recency, but accumulated listening and terminal evidence remain
+    /// monotonic even on platforms without ListeningHistoryStore (tvOS). If the
+    /// merged value contains local evidence absent from `entry`, it stays pending
+    /// so CloudKit can converge instead of treating the weaker row as authoritative.
     func saveSyncedHistoryEntry(_ entry: ListeningHistoryEntry) throws {
         try writeAndHarden { db in
-            let existing = try HistorySyncRow.fetchOne(db, key: entry.id)?.systemFields
+            let existingRow = try HistorySyncRow.fetchOne(db, key: entry.id)
+            let existingEntry = existingRow.flatMap { try? decoder.decode(ListeningHistoryEntry.self, from: $0.payload) }
+            let merged = existingEntry?.mergedForSync(with: entry) ?? entry
             let row = HistorySyncRow(
                 id: entry.id,
-                payload: try encoder.encode(entry),
-                lastListenedAt: entry.lastListenedAt.timeIntervalSince1970,
-                hasPendingChanges: false,
-                systemFields: existing
+                payload: try encoder.encode(merged),
+                lastListenedAt: merged.lastListenedAt.timeIntervalSince1970,
+                hasPendingChanges: merged != entry,
+                systemFields: existingRow?.systemFields
             )
             try row.save(db)
         }
@@ -1223,15 +1343,34 @@ final class AutohopDatabase: @unchecked Sendable {
     /// writes during playback are coalesced rather than issued ~twice a second.
     var _testStatsDayWriteCount = 0
 
-    func recordStatsDay(_ day: DayStats) throws {
+    func recordStatsDay(
+        _ day: DayStats,
+        metadata: StatsPartitionMetadata? = nil
+    ) throws {
+        if _testFailNextStatsDayWrite {
+            _testFailNextStatsDayWrite = false
+            throw _TestPersistError.injectedFailure
+        }
         _testStatsDayWriteCount += 1
+        let resolvedMetadata = try metadata ?? StatsPartitionMetadata.make(
+            day: day,
+            generationID: "legacy",
+            revision: 0,
+            writerDeviceID: DeviceIdentity.current
+        )
         try writeAndHarden { db in
-            let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)?.systemFields
+            let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)
+            let unchanged = existing?.payloadHash == resolvedMetadata.payloadHash
+                && existing?.generationID == resolvedMetadata.generationID
             let row = StatsSyncRow(
                 dayKey: day.dayKey,
                 payload: try encoder.encode(day),
-                hasPendingChanges: true,
-                systemFields: existing
+                hasPendingChanges: unchanged ? (existing?.hasPendingChanges ?? false) : true,
+                systemFields: existing?.systemFields,
+                generationID: resolvedMetadata.generationID,
+                revision: resolvedMetadata.revision,
+                payloadHash: resolvedMetadata.payloadHash,
+                writerDeviceID: resolvedMetadata.writerDeviceID
             )
             try row.save(db)
         }
@@ -1253,6 +1392,51 @@ final class AutohopDatabase: @unchecked Sendable {
         }
     }
 
+    func statsProjection(dayKey: String) throws -> StatsDayProjection? {
+        try dbQueue.read { db in
+            guard let row = try StatsSyncRow.fetchOne(db, key: dayKey),
+                  let day = try? decoder.decode(DayStats.self, from: row.payload)
+            else { return nil }
+            return StatsDayProjection(
+                day: day,
+                metadata: StatsPartitionMetadata(
+                    generationID: row.generationID,
+                    revision: row.revision,
+                    payloadHash: row.payloadHash,
+                    writerDeviceID: row.writerDeviceID
+                ),
+                hasPendingChanges: row.hasPendingChanges,
+                systemFields: row.systemFields
+            )
+        }
+    }
+
+    func allStatsDayProjections() throws -> [StatsDayProjection] {
+        try dbQueue.read { db in
+            try StatsSyncRow.fetchAll(db).compactMap { row in
+                guard let day = try? decoder.decode(DayStats.self, from: row.payload) else { return nil }
+                return StatsDayProjection(
+                    day: day,
+                    metadata: StatsPartitionMetadata(
+                        generationID: row.generationID,
+                        revision: row.revision,
+                        payloadHash: row.payloadHash,
+                        writerDeviceID: row.writerDeviceID
+                    ),
+                    hasPendingChanges: row.hasPendingChanges,
+                    systemFields: row.systemFields
+                )
+            }
+        }
+    }
+
+    func retireStatsProjections(dayKeys: Set<String>) throws {
+        guard !dayKeys.isEmpty else { return }
+        try writeAndHarden { db in
+            try StatsSyncRow.filter(dayKeys.contains(Column("dayKey"))).deleteAll(db)
+        }
+    }
+
     func statsSystemFields(dayKey: String) throws -> Data? {
         try dbQueue.read { db in
             try StatsSyncRow.fetchOne(db, key: dayKey)?.systemFields
@@ -1265,6 +1449,57 @@ final class AutohopDatabase: @unchecked Sendable {
             row.systemFields = data
             try row.save(db)
         }
+    }
+
+    /// A server-side deletion invalidates the cached change tag but not the
+    /// local authoritative day. Persist the retry marker before asking
+    /// CKSyncEngine to recreate the record so a process exit cannot strand it.
+    func requeueStatsDayAfterServerDeletion(dayKey: String) throws {
+        try writeAndHarden { db in
+            guard var row = try StatsSyncRow.fetchOne(db, key: dayKey) else { return }
+            row.systemFields = nil
+            row.hasPendingChanges = true
+            try row.save(db)
+        }
+    }
+
+    /// A same-installation CloudKit snapshot is recovery material, not a remote
+    /// additive partition. Adopt it only when local durable state is absent or
+    /// is provably an older revision of the same generation.
+    @discardableResult
+    func reconcileOwnedCloudStats(
+        day: DayStats,
+        metadata: StatsPartitionMetadata,
+        systemFields: Data?
+    ) throws -> Bool {
+        var adopted = false
+        try writeAndHarden { db in
+            let existing = try StatsSyncRow.fetchOne(db, key: day.dayKey)
+            let shouldAdopt: Bool
+            if let existing {
+                shouldAdopt = existing.generationID == metadata.generationID
+                    && metadata.revision > existing.revision
+            } else {
+                shouldAdopt = true
+            }
+            if shouldAdopt {
+                try StatsSyncRow(
+                    dayKey: day.dayKey,
+                    payload: encoder.encode(day),
+                    hasPendingChanges: false,
+                    systemFields: systemFields,
+                    generationID: metadata.generationID,
+                    revision: metadata.revision,
+                    payloadHash: metadata.payloadHash,
+                    writerDeviceID: metadata.writerDeviceID
+                ).save(db)
+                adopted = true
+            } else if var existing {
+                existing.systemFields = systemFields
+                try existing.save(db)
+            }
+        }
+        return adopted
     }
 
     enum _TestPersistError: Error { case injectedFailure }
@@ -1284,27 +1519,125 @@ final class AutohopDatabase: @unchecked Sendable {
     }
 
     /// Upserts another device's day partition (for summing on read).
-    func applyRemoteStatsPartition(deviceID: String, day: DayStats) throws {
+    func applyRemoteStatsPartition(
+        deviceID: String,
+        day: DayStats,
+        metadata: StatsPartitionMetadata? = nil
+    ) throws {
+        let scope = try activeStatsAccountScope()
+        let resolvedMetadata = try metadata ?? StatsPartitionMetadata.make(
+            day: day,
+            generationID: "legacy",
+            revision: 0,
+            writerDeviceID: deviceID
+        )
         try writeAndHarden { db in
             let row = RemoteStatsRow(
-                id: "\(deviceID):\(day.dayKey)",
+                id: "\(scope)|\(deviceID):\(day.dayKey)",
+                accountScope: scope,
+                deviceID: deviceID,
                 dayKey: day.dayKey,
-                payload: try encoder.encode(day)
+                payload: try encoder.encode(day),
+                generationID: resolvedMetadata.generationID,
+                revision: resolvedMetadata.revision,
+                payloadHash: resolvedMetadata.payloadHash
             )
             try row.save(db)
+        }
+    }
+
+    func removeRemoteStatsPartition(deviceID: String, dayKey: String) throws {
+        let scope = try activeStatsAccountScope()
+        try writeAndHarden { db in
+            _ = try RemoteStatsRow.deleteOne(db, key: "\(scope)|\(deviceID):\(dayKey)")
         }
     }
 
     /// All other-device day partitions, grouped by dayKey, for the Stats page to
     /// sum with the local buckets.
     func remoteStatsByDayKey() throws -> [String: [DayStats]] {
-        try dbQueue.read { db in
+        let scope = try activeStatsAccountScope()
+        return try dbQueue.read { db in
             var result: [String: [DayStats]] = [:]
-            for row in try RemoteStatsRow.fetchAll(db) {
+            let owned = Set(try StatsOwnedDeviceRow.fetchAll(db).map(\.deviceID))
+            for row in try RemoteStatsRow.filter(Column("accountScope") == scope).fetchAll(db) {
+                guard !owned.contains(row.deviceID) else { continue }
                 guard let day = try? decoder.decode(DayStats.self, from: row.payload) else { continue }
                 result[row.dayKey, default: []].append(day)
             }
             return result
+        }
+    }
+
+    func remoteStatsDeviceIDs() throws -> Set<String> {
+        let scope = try activeStatsAccountScope()
+        return try dbQueue.read { db in
+            let owned = Set(try StatsOwnedDeviceRow.fetchAll(db).map(\.deviceID))
+            return Set(try RemoteStatsRow.filter(Column("accountScope") == scope).fetchAll(db).map(\.deviceID))
+                .subtracting(owned)
+        }
+    }
+
+    func registerOwnedStatsDeviceIDs(_ deviceIDs: Set<String>) throws {
+        try writeAndHarden { db in
+            for deviceID in deviceIDs where !deviceID.isEmpty {
+                try StatsOwnedDeviceRow(deviceID: deviceID).save(db)
+            }
+        }
+    }
+
+    func isOwnedStatsDeviceID(_ deviceID: String) throws -> Bool {
+        try dbQueue.read { db in
+            try StatsOwnedDeviceRow.fetchOne(db, key: deviceID) != nil
+        }
+    }
+
+    func registerRetiredStatsGenerations(_ generationIDs: Set<String>) throws {
+        try writeAndHarden { db in
+            for generationID in generationIDs where !generationID.isEmpty {
+                try StatsRetiredGenerationRow(generationID: generationID).save(db)
+            }
+        }
+    }
+
+    func isRetiredStatsGeneration(_ generationID: String) throws -> Bool {
+        try dbQueue.read { db in
+            try StatsRetiredGenerationRow.fetchOne(db, key: generationID) != nil
+        }
+    }
+
+    func setActiveStatsAccountScope(_ scope: String) throws {
+        try writeAndHarden { db in
+            try StatsSyncMetadataRow(key: "activeAccountScope", value: scope).save(db)
+        }
+    }
+
+    func activeStatsAccountScope() throws -> String {
+        try dbQueue.read { db in
+            try StatsSyncMetadataRow.fetchOne(db, key: "activeAccountScope")?.value ?? "unscoped"
+        }
+    }
+
+    func recordStatsSyncSuccess(at date: Date = Date()) throws {
+        try writeAndHarden { db in
+            try StatsSyncMetadataRow(
+                key: "lastSuccessfulSync",
+                value: String(date.timeIntervalSince1970)
+            ).save(db)
+        }
+    }
+
+    func lastSuccessfulStatsSync() throws -> Date? {
+        try dbQueue.read { db in
+            guard let raw = try StatsSyncMetadataRow.fetchOne(db, key: "lastSuccessfulSync")?.value,
+                  let seconds = TimeInterval(raw) else { return nil }
+            return Date(timeIntervalSince1970: seconds)
+        }
+    }
+
+    func statsPendingDayCount() throws -> Int {
+        try dbQueue.read { db in
+            try StatsSyncRow.filter(Column("hasPendingChanges") == true).fetchCount(db)
         }
     }
 }

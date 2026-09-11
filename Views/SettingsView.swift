@@ -1,6 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// DESKTOP CONTRACT (2026-09-06): Optional menuAction starts the existing import/export
+// flow once after presentation yields. Reuse existing file workflows and safeguards;
+// do not implement separate desktop persistence or bypass the shared mini-player.
+
 // AI CONTEXT — Views/SettingsView.swift ("App Settings" page). Global
 // settings Form. Startup (Open-at-launch menu picker →
 // AppSettings.launchScreen: Player / Subscriptions / Discover; drives RootView
@@ -64,7 +68,11 @@ import UniformTypeIdentifiers
 // right pane and add a fixed SettingsShortcutSidebar on the left. Shortcuts
 // scroll to stable major-section IDs; never fork the settings into replacement
 // detail pages. Compact/narrow multitasking remains the original single column.
+enum SettingsMenuAction { case importSubscriptions, exportSubscriptions }
+
 struct SettingsView: View {
+    var menuAction: SettingsMenuAction? = nil
+    @State private var consumedMenuAction = false
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var importCoordinator: SubscriptionImportCoordinator
@@ -164,6 +172,20 @@ struct SettingsView: View {
         }
         .miniPlayerBar()
         .onboardingTip(.settings)
+        .task {
+            guard !consumedMenuAction, let menuAction else { return }
+            consumedMenuAction = true
+            // Let navigation install the file-presentation host before opening it.
+            await Task.yield()
+            switch menuAction {
+            case .importSubscriptions: showOPMLImporter = true
+            case .exportSubscriptions:
+                if let data = importCoordinator.exportOPML() {
+                    opmlDocument = OPMLDocument(data)
+                    showOPMLExporter = true
+                }
+            }
+        }
         .fileImporter(
             isPresented: $showOPMLImporter,
             allowedContentTypes: [.xml, .plainText, UTType(filenameExtension: "opml") ?? .xml],

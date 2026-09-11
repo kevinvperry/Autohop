@@ -1,5 +1,8 @@
 import SwiftUI
 
+// LAYOUT: Start at the large detent and pin Play/Add more in the bottom safe
+// area while the explanatory content scrolls. Never hide the actions below a
+// medium sheet crop. RootView suppresses Quick Tips during this milestone.
 // AI CONTEXT — Views/FirstSubscribeCard.swift ("You're all set" card).
 // The first-run "aha" moment (ONBOARDING_PLAN.md Phase 3). Presented as a sheet
 // by RootView when `.autohopFirstSubscription` fires — i.e. the user's first
@@ -102,6 +105,28 @@ struct FirstSubscribeCard: View {
                     .padding(.bottom, 18)
             }
 
+
+            Spacer(minLength: 12)
+            }
+            .adaptiveContentWidth(.form)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            actions
+                .padding(.vertical, 12)
+                .background(pageBackground)
+        }
+        .scrollIndicators(.visible)
+        .background(pageBackground.ignoresSafeArea())
+        .preferredColorScheme(.light)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.hidden)
+        .onAppear(perform: handleAppear)
+        .onChange(of: isDownloaded) { _, downloaded in
+            if downloaded && waitingToPlay { playLatest() }
+        }
+    }
+
+    private var actions: some View {
             VStack(spacing: 10) {
                 Button(action: playTapped) {
                     Text(playButtonTitle)
@@ -130,18 +155,6 @@ struct FirstSubscribeCard: View {
             }
             .padding(.horizontal, 24)
 
-            Spacer(minLength: 12)
-            }
-            .adaptiveContentWidth(.form)
-        }
-        .background(pageBackground.ignoresSafeArea())
-        .preferredColorScheme(.light)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.hidden)
-        .onAppear(perform: handleAppear)
-        .onChange(of: isDownloaded) { _, downloaded in
-            if downloaded && waitingToPlay { playLatest() }
-        }
     }
 
     // MARK: - Status row

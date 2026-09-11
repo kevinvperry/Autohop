@@ -5,9 +5,10 @@ import XCTest
 @testable import Autohop
 #endif
 
-// AI CONTEXT — Regression coverage for Episode Limit rotation. The policy
-// retains N automatic downloads, reserves room for a newly discovered episode,
-// and treats explicit downloads/queue pins as additive protected content.
+// AI CONTEXT — Regression coverage for Episode Limit rotation and multi-release
+// feed scans. Rotation retains N automatic downloads and treats explicit
+// downloads/queue pins as additive protected content. Batch selection must keep
+// every newly discovered eligible episode up to the limit, newest first.
 final class EpisodeLimitRetentionPolicyTests: XCTestCase {
     func testOnlyOneItemRollingFeedDiscardsPreviousLatest() {
         XCTAssertTrue(
@@ -33,6 +34,56 @@ final class EpisodeLimitRetentionPolicyTests: XCTestCase {
                 limit: 10
             ).isEmpty
         )
+    }
+
+    func testFeedScanSelectsAllNewEpisodesWhenLimitAllowsThem() {
+        let older = makeUnstoredEpisode(index: 1)
+        let newer = makeUnstoredEpisode(index: 2)
+
+        let candidates = AutomaticDownloadBatchPolicy.candidates(
+            from: [older, newer],
+            episodeLimit: 10
+        )
+
+        XCTAssertEqual(candidates.map(\.guid), ["episode-2", "episode-1"])
+    }
+
+    func testFeedScanBoundsNewEpisodeBatchToEpisodeLimit() {
+        let episodes = (0..<3).map { makeUnstoredEpisode(index: $0) }
+
+        let candidates = AutomaticDownloadBatchPolicy.candidates(
+            from: episodes,
+            episodeLimit: 2
+        )
+
+        XCTAssertEqual(candidates.map(\.guid), ["episode-2", "episode-1"])
+    }
+
+    func testNoLimitSelectsEveryNewEligibleEpisode() {
+        let episodes = (0..<12).map { makeUnstoredEpisode(index: $0) }
+
+        XCTAssertEqual(
+            AutomaticDownloadBatchPolicy.candidates(
+                from: episodes,
+                episodeLimit: 0
+            ).count,
+            12
+        )
+    }
+
+    func testBatchExcludesAlreadyStoredOrCompletedEpisodes() {
+        var downloaded = makeUnstoredEpisode(index: 1)
+        downloaded.downloadState = .downloaded
+        var played = makeUnstoredEpisode(index: 2)
+        played.playedState = .played
+        let eligible = makeUnstoredEpisode(index: 3)
+
+        let candidates = AutomaticDownloadBatchPolicy.candidates(
+            from: [downloaded, played, eligible],
+            episodeLimit: 10
+        )
+
+        XCTAssertEqual(candidates.map(\.guid), ["episode-3"])
     }
 
     func testIncomingAutomaticDownloadReplacesOldestManagedEpisode() {
@@ -107,6 +158,17 @@ final class EpisodeLimitRetentionPolicyTests: XCTestCase {
         )
         episode.publishedAt = Date(timeIntervalSince1970: TimeInterval(index))
         episode.localFileName = "\(index).mp3"
+        return episode
+    }
+
+    private func makeUnstoredEpisode(index: Int) -> Episode {
+        var episode = Episode(
+            subscriptionID: UUID(),
+            guid: "episode-\(index)",
+            title: "Episode \(index)",
+            audioURL: URL(string: "https://example.com/\(index).mp3")!
+        )
+        episode.publishedAt = Date(timeIntervalSince1970: TimeInterval(index))
         return episode
     }
 }

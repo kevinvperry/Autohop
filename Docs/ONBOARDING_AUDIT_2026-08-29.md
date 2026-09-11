@@ -15,8 +15,9 @@ layer was the material defect: it used app-like dark/purple styling, had a quiet
 text dismissal, knew nothing about the page that requested it, and covered only
 five features. A tip could therefore remain visible after its page disappeared.
 
-The repaired system uses a white card with black text, a 48-point black close
-button and a full-width black confirmation button. Each requesting view owns its
+The repaired system uses a white card with black text and one full-width black
+“Got it — close tip” confirmation button; the redundant top-right close action
+was removed on 6 September 2026. Each requesting view owns its
 tip through `onboardingTip(_:when:)`; `onDisappear` cancels that tip without
 marking it seen. Explicit close actions alone persist the seen flag.
 
@@ -42,6 +43,16 @@ NavigationStack. Stats, Downloads, Sleep Schedule and Settings therefore render
 visibly on their primary Menu paths and no longer consume or block the session
 allowance invisibly. `QueueSheetView` retains its own overlay for the same
 presentation-layer reason.
+
+## Correction appended 6 September 2026 — Feed Filter navigation handoff
+
+The Download Feed Filters request could still be lost when its pushed page
+appeared before Podcast Settings delivered `onDisappear`: the coordinator saw
+the parent tip as active and discarded the child request. Overlapping requests
+are now queued, removed if their owner disappears, and promoted when the active
+parent cancels. The Player/Up Next Podcast Settings presentation also hosts
+`CoachMarkOverlay` above its system sheet, covering the path that RootView's
+behind-sheet overlay cannot render.
 
 ## Current contextual coverage
 

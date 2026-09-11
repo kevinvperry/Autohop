@@ -3,6 +3,10 @@ import UIKit
 import BackgroundTasks
 import MetricKit
 
+// DESKTOP CONTRACT (2026-09-06): Install the menu builder at launch without model
+// bootstrap. Expose concrete per-command selectors as a responder fallback; validate
+// without assuming sender metadata and forward through the existing desktop handler.
+
 // AI CONTEXT — App/AppDelegate.swift
 // UIKit delegate bridged into the SwiftUI app via @UIApplicationDelegateAdaptor
 // (see AutohopApp.swift). Handles the nine things SwiftUI cannot:
@@ -84,7 +88,28 @@ import MetricKit
 //     has NO didReceiveRemoteNotification code at all), CKSyncEngine listens for
 //     its own pushes independent of this delegate — Persistence/CloudSyncEngine.swift
 //     needs no token forwarding or custom notification dispatch in this delegate.
-final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
+final class AppDelegate: UIResponder, UIApplicationDelegate, MXMetricManagerSubscriber {
+    override func buildMenu(with builder: UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        DesktopMenuBuilder.build(builder)
+    }
+
+    // Fallback target for native application-menu validation, including when
+    // the hosting controller is not first responder. Never bootstrap services.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if let command = DesktopCommand(selector: action) {
+            return appState?.desktopCommands.allows(command) ?? false
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func validate(_ command: UICommand) {
+        super.validate(command)
+        guard let action = DesktopCommand(selector: command.action) else { return }
+        if let handler = appState?.desktopCommands { handler.validate(command, command: action) }
+        else { command.attributes = [.disabled] }
+    }
+
     private static let processSessionID = UUID().uuidString
 
     private static func launchIdentityMetadata() -> [String: String] {
@@ -127,6 +152,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscri
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        DesktopMenuBuilder.configure()
         registerBackgroundTasks()
         registerMetricKitSubscriber()
         // Record how this launch began and whether iOS will grant background
@@ -896,4 +922,59 @@ final class BackgroundTaskCompletionGate: @unchecked Sendable {
         claimed = true
         return true
     }
+}
+
+// The Mac application menu can resolve actions through the delegate rather
+// than the focused hosting controller. Both adapters share the same handler.
+extension AppDelegate {
+    @objc func desktop_settings(_ sender: Any?) { appState?.desktopCommands.perform(.settings) }
+    @objc func desktop_addFeed(_ sender: Any?) { appState?.desktopCommands.perform(.addFeed) }
+    @objc func desktop_importSubscriptions(_ sender: Any?) { appState?.desktopCommands.perform(.importSubscriptions) }
+    @objc func desktop_exportSubscriptions(_ sender: Any?) { appState?.desktopCommands.perform(.exportSubscriptions) }
+    @objc func desktop_search(_ sender: Any?) { appState?.desktopCommands.perform(.search) }
+    @objc func desktop_player(_ sender: Any?) { appState?.desktopCommands.perform(.player) }
+    @objc func desktop_subscriptions(_ sender: Any?) { appState?.desktopCommands.perform(.subscriptions) }
+    @objc func desktop_discover(_ sender: Any?) { appState?.desktopCommands.perform(.discover) }
+    @objc func desktop_upNext(_ sender: Any?) { appState?.desktopCommands.perform(.upNext) }
+    @objc func desktop_history(_ sender: Any?) { appState?.desktopCommands.perform(.history) }
+    @objc func desktop_stats(_ sender: Any?) { appState?.desktopCommands.perform(.stats) }
+    @objc func desktop_downloads(_ sender: Any?) { appState?.desktopCommands.perform(.downloads) }
+    @objc func desktop_back(_ sender: Any?) { appState?.desktopCommands.perform(.back) }
+    @objc func desktop_playPause(_ sender: Any?) { appState?.desktopCommands.perform(.playPause) }
+    @objc func desktop_skipBack(_ sender: Any?) { appState?.desktopCommands.perform(.skipBack) }
+    @objc func desktop_skipForward(_ sender: Any?) { appState?.desktopCommands.perform(.skipForward) }
+    @objc func desktop_nextEpisode(_ sender: Any?) { appState?.desktopCommands.perform(.nextEpisode) }
+    @objc func desktop_previousChapter(_ sender: Any?) { appState?.desktopCommands.perform(.previousChapter) }
+    @objc func desktop_nextChapter(_ sender: Any?) { appState?.desktopCommands.perform(.nextChapter) }
+    @objc func desktop_speed100(_ sender: Any?) { appState?.desktopCommands.perform(.speed100) }
+    @objc func desktop_speed110(_ sender: Any?) { appState?.desktopCommands.perform(.speed110) }
+    @objc func desktop_speed120(_ sender: Any?) { appState?.desktopCommands.perform(.speed120) }
+    @objc func desktop_speed130(_ sender: Any?) { appState?.desktopCommands.perform(.speed130) }
+    @objc func desktop_speed140(_ sender: Any?) { appState?.desktopCommands.perform(.speed140) }
+    @objc func desktop_speed150(_ sender: Any?) { appState?.desktopCommands.perform(.speed150) }
+    @objc func desktop_speed160(_ sender: Any?) { appState?.desktopCommands.perform(.speed160) }
+    @objc func desktop_speed170(_ sender: Any?) { appState?.desktopCommands.perform(.speed170) }
+    @objc func desktop_speed180(_ sender: Any?) { appState?.desktopCommands.perform(.speed180) }
+    @objc func desktop_speed190(_ sender: Any?) { appState?.desktopCommands.perform(.speed190) }
+    @objc func desktop_speed200(_ sender: Any?) { appState?.desktopCommands.perform(.speed200) }
+    @objc func desktop_speed210(_ sender: Any?) { appState?.desktopCommands.perform(.speed210) }
+    @objc func desktop_speed220(_ sender: Any?) { appState?.desktopCommands.perform(.speed220) }
+    @objc func desktop_speed230(_ sender: Any?) { appState?.desktopCommands.perform(.speed230) }
+    @objc func desktop_speed240(_ sender: Any?) { appState?.desktopCommands.perform(.speed240) }
+    @objc func desktop_speed250(_ sender: Any?) { appState?.desktopCommands.perform(.speed250) }
+    @objc func desktop_audioControls(_ sender: Any?) { appState?.desktopCommands.perform(.audioControls) }
+    @objc func desktop_sleepTimer(_ sender: Any?) { appState?.desktopCommands.perform(.sleepTimer) }
+    @objc func desktop_sleepSchedule(_ sender: Any?) { appState?.desktopCommands.perform(.sleepSchedule) }
+    @objc func desktop_openShow(_ sender: Any?) { appState?.desktopCommands.perform(.openShow) }
+    @objc func desktop_showSettings(_ sender: Any?) { appState?.desktopCommands.perform(.showSettings) }
+    @objc func desktop_toggleSubscription(_ sender: Any?) { appState?.desktopCommands.perform(.toggleSubscription) }
+    @objc func desktop_refreshShow(_ sender: Any?) { appState?.desktopCommands.perform(.refreshShow) }
+    @objc func desktop_refreshAll(_ sender: Any?) { appState?.desktopCommands.perform(.refreshAll) }
+    @objc func desktop_download(_ sender: Any?) { appState?.desktopCommands.perform(.download) }
+    @objc func desktop_playNext(_ sender: Any?) { appState?.desktopCommands.perform(.playNext) }
+    @objc func desktop_playLast(_ sender: Any?) { appState?.desktopCommands.perform(.playLast) }
+    @objc func desktop_archive(_ sender: Any?) { appState?.desktopCommands.perform(.archive) }
+    @objc func desktop_support(_ sender: Any?) { appState?.desktopCommands.perform(.support) }
+    @objc func desktop_shortcuts(_ sender: Any?) { appState?.desktopCommands.perform(.shortcuts) }
+    @objc func desktop_acknowledgements(_ sender: Any?) { appState?.desktopCommands.perform(.acknowledgements) }
 }

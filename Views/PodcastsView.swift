@@ -1,6 +1,18 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// DESKTOP CONTRACT (2026-09-06): The direct mini-player inset retains its reorder
+// visibility rule. DesktopPageContextModifier supplies Back context on this page;
+// opening Menu uses the existing adaptive navigation presentation.
+
+// MENU PRESENTATION: Inject appEnvironment inside the Menu closure; the Mac
+// bridge cannot be assumed to inherit dependencies before evaluating Menu.
+// MINI-PLAYER: Hide its entire inset while subscription search is focused;
+// Done/Cancel or focus loss restores it. Playback continues through shared services.
+// LOCAL SEARCH: Toolbar search reveals/focuses an inline field below the title.
+// Filter real active/inactive subscriptions live by title/publisher, preserving ranks.
+// No Discover/network search. Clear resets text; Cancel clears and closes the field.
+// Search and reorder are mutually exclusive; never persist a filtered priority list.
 // AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
 // home page, see PAGES.md). Ranked list of real subscriptions (browse
 // subscriptions filtered out; Inactive subscriptions remain visible at the
@@ -21,7 +33,8 @@ import UniformTypeIdentifiers
 // latest episodes excluded by Download Feed Filters show the grey Skipped pill
 // instead of the inline Download button. Toolbar: hamburger menu
 // (MenuSheetView) leading, + (pushes DiscoverView as a full page via
-// navigationDestination — parent of Podcast Search) trailing; Reorder and
+// navigationDestination — parent of Podcast Search) plus local subscription search
+// trailing; Reorder and
 // refresh-all live on the action row under the heading. MiniPlayerBar docks
 // at the bottom except during reorder. Rows navigate to PodcastDetailView.
 // Priority-list artwork uses 44 pt CachedArtworkImage thumbnails; feed refresh
@@ -48,6 +61,9 @@ struct PodcastsView: View {
     @State private var isRefreshingAll = false
     @State private var showMenu = false
     @State private var showDiscover = false
+    @State private var showSubscriptionSearch = false
+    @FocusState private var isSubscriptionSearchFocused: Bool
+    @State private var subscriptionQuery = ""
     @State private var showOPMLImporter = false
     @State private var showStarterPacks = false
     @State private var reorderDraftIDs: [UUID] = []
@@ -66,6 +82,66 @@ struct PodcastsView: View {
 
     private var inactiveSubscriptions: [Subscription] {
         visibleSubscriptions.filter(\.excludeFromAutoFeedRefresh)
+    }
+
+    private var normalizedSubscriptionQuery: String {
+        subscriptionQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var subscriptionSearchField: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search subscriptions", text: $subscriptionQuery)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($isSubscriptionSearchFocused)
+                    .submitLabel(.done)
+                    .onSubmit { isSubscriptionSearchFocused = false }
+                    .accessibilityHint("Filters your shows and publishers as you type")
+                if !subscriptionQuery.isEmpty {
+                    Button {
+                        subscriptionQuery = ""
+                        isSubscriptionSearchFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                    }
+                    .accessibilityLabel("Clear subscription search")
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 48)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1)))
+
+            Button("Cancel") {
+                isSubscriptionSearchFocused = false
+                subscriptionQuery = ""
+                showSubscriptionSearch = false
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .episodeListPageWidth()
+        .padding(.vertical, 8)
+        .task { isSubscriptionSearchFocused = true }
+    }
+
+    // Filtering is display-only: never feed a subset into the priority transaction.
+    private func matchesSearch(_ subscription: Subscription) -> Bool {
+        normalizedSubscriptionQuery.isEmpty
+            || subscription.title.localizedStandardContains(normalizedSubscriptionQuery)
+            || (subscription.author?.localizedStandardContains(normalizedSubscriptionQuery) ?? false)
+    }
+
+    private var matchingActiveSubscriptions: [Subscription] {
+        reorderableSubscriptions.filter(matchesSearch)
+    }
+
+    private var matchingInactiveSubscriptions: [Subscription] {
+        inactiveSubscriptions.filter(matchesSearch)
     }
 
     private var showsGettingStartedChecklist: Bool {
@@ -135,6 +211,7 @@ struct PodcastsView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .disabled(showSubscriptionSearch)
 
                         if editMode == .active {
                             Text("drag active shows to set priority")
@@ -200,6 +277,21 @@ struct PodcastsView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    showSubscriptionSearch = true
+                    isSubscriptionSearchFocused = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .responsiveToolbarSymbol()
+                }
+                .accessibilityLabel("Search subscriptions")
+                .disabled(editMode == .active)
+            }
+            if #available(iOS 26, *) {
+                // Separate native glass groups so Search remains its own button.
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
                     showDiscover = true
                 } label: {
                     Label("Add Podcast", systemImage: "plus")
@@ -207,9 +299,13 @@ struct PodcastsView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if showSubscriptionSearch { subscriptionSearchField }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Hidden during reorder so the drag operation gets the full list.
-            if editMode != .active {
+            // Leave the results room while typing; removing the inset also
+            // removes its reserved height instead of moving it above the keyboard.
+            if editMode != .active && !isSubscriptionSearchFocused {
                 MiniPlayerBar()
             }
         }
@@ -235,7 +331,9 @@ struct PodcastsView: View {
         }
         .adaptiveNavigationPresentation(isPresented: $showMenu) {
             MenuSheetView()
+                .appEnvironment(appState)
         }
+        .modifier(DesktopPageContextModifier())
         .navigationDestination(isPresented: $showDiscover) { DiscoverView() }
         .fileImporter(
             isPresented: $showOPMLImporter,
@@ -355,7 +453,13 @@ struct PodcastsView: View {
     @ViewBuilder
     private var priorityListCard: some View {
         let list = List {
-            ForEach(Array(reorderableSubscriptions.enumerated()), id: \.element.id) { index, subscription in
+            if !normalizedSubscriptionQuery.isEmpty,
+               matchingActiveSubscriptions.isEmpty, matchingInactiveSubscriptions.isEmpty {
+                ContentUnavailableView("No Matching Subscriptions", systemImage: "magnifyingglass",
+                                       description: Text("Try another show or publisher name, or clear the search."))
+                    .listRowBackground(Color.clear)
+            }
+            ForEach(Array(matchingActiveSubscriptions.enumerated()), id: \.element.id) { index, subscription in
                 let isPlaying = subscription.newestEpisode.map { playbackCoordinator.currentEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)
@@ -371,7 +475,7 @@ struct PodcastsView: View {
                 .moveDisabled(editMode != .active)
             }
             .onMove { from, to in
-                guard editMode == .active else { return }
+                guard editMode == .active, !showSubscriptionSearch else { return }
                 var draft = reorderableSubscriptions.map(\.id)
                 draft.move(fromOffsets: from, toOffset: to)
                 reorderDraftIDs = draft
@@ -381,7 +485,7 @@ struct PodcastsView: View {
 
             // Inactive subscriptions remain visible for access/settings but are
             // not part of active playback priority and cannot be dragged.
-            ForEach(inactiveSubscriptions) { subscription in
+            ForEach(matchingInactiveSubscriptions) { subscription in
                 let isPlaying = subscription.newestEpisode.map { playbackCoordinator.currentEpisode?.id == $0.id } ?? false
                 NavigationLink {
                     PodcastDetailView(subscriptionID: subscription.id)

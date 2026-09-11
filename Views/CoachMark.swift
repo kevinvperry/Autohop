@@ -1,5 +1,13 @@
 import SwiftUI
 
+// PRESENTATION CONTRACT (2026-09-06): CoachMarkOverlay observes an explicitly supplied
+// OnboardingCoordinator. Root, Menu, Up Next and Player settings share the existing
+// instance. No environment lookup in overlay body, even for the nil-tip branch.
+// Keep tip ownership, cancellation, live updates and dismissal in the coordinator.
+
+// LAYOUT: Use the actual overlay bounds and a minimum scroll-content height.
+// visibleTip hides every mirrored host during the first-subscription milestone.
+// Never constrain long tip content to a fixed containerRelativeFrame height.
 // AI CONTEXT — Views/CoachMark.swift (onboarding coach marks / tips).
 // A high-contrast, page-scoped tip system (ONBOARDING_PLAN.md Phase 5).
 // `OnboardingTip` defines each tip's copy and per-tip "seen" persistence
@@ -8,7 +16,8 @@ import SwiftUI
 // session. Every requesting page must use onboardingTip(_:when:), whose
 // disappearance cancels (but does not mark seen) its tip so guidance can never
 // leak into unrelated navigation destinations. CoachMarkOverlay renders the
-// active tip as a deliberately non-Autohop white card. It scrolls only when short
+// active tip as a deliberately non-Autohop white card with one unambiguous,
+// full-width dismissal action. It scrolls only when short
 // viewports or large Dynamic Type make the whole card taller than the space
 // offered by RootView; this keeps both the copy and dismissal action reachable
 // without introducing fragile control-specific anchor coordinates. Everything
@@ -92,51 +101,33 @@ enum OnboardingTip: String, CaseIterable {
     func markSeen() { UserDefaults.standard.set(true, forKey: seenKey) }
 }
 
-/// Mounted once in RootView (behind sheets). Renders the current `activeTip` as
-/// a dismissible bottom card; renders nothing when there is no active tip.
-///
-/// AI CONTEXT — SHEET-HOSTING CONTRACT (violated today; see the audit report).
-/// RootView mounts this overlay INSIDE its ZStack, which UIKit draws BELOW any
-/// presented sheet. Therefore a page that (a) attaches `.onboardingTip(_:)` and
-/// (b) is reached as a destination inside a presented sheet MUST also mirror
-/// `.overlay { CoachMarkOverlay() }` on itself, or its tip is set as `activeTip`
-/// and rendered behind the sheet — invisible.
-///
-/// This is not cosmetic. `OnboardingCoordinator.requestTip` guards on
-/// `activeTip == nil` and caps presentation at `maxTipsPerSession` (3), so an
-/// invisible tip ALSO blocks every other tip for as long as its page is on
-/// screen and consumes one of the three per-session slots.
-///
-/// Only `QueueSheetView` currently mirrors it. `StatsView`, `DownloadsView`,
-/// `SleepScheduleView` and `SettingsView` attach tips but are NavigationLink
-/// destinations of `MenuSheetView` (itself a `.sheet`), so `.stats`,
-/// `.downloads`, `.sleepSchedule` and `.settings` never render on that path.
-/// Stats and Sleep Schedule also exist as root `AppRoute` destinations where
-/// they DO render, which is why the defect is path-dependent and easy to miss.
-/// When adding a tip, check how its page is presented before assuming coverage.
+/// RootView renders tips for pushed pages; Menu, Up Next and the Player's
+/// settings presentation mirror the overlay above their own presentation.
+/// Pass the existing coordinator explicitly: the Mac presentation bridge can
+/// evaluate this overlay before it has installed inherited environment objects.
 struct CoachMarkOverlay: View {
-    @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
+    @ObservedObject var onboardingCoordinator: OnboardingCoordinator
 
     var body: some View {
-        if let tip = onboardingCoordinator.activeTip {
-            ScrollView(.vertical) {
-                VStack {
-                    Spacer(minLength: 16)
-                    card(tip)
-                        .adaptiveContentWidth(.prose)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 28)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+        if let tip = onboardingCoordinator.visibleTip {
+            GeometryReader { geometry in
+                ScrollView(.vertical) {
+                    VStack {
+                        Spacer(minLength: 16)
+                        card(tip)
+                            .adaptiveContentWidth(.prose)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
+                    }
+                    // Minimum, never a fixed viewport height: long tips must grow
+                    // and scroll rather than crop the dismissal action.
+                    .frame(minHeight: geometry.size.height, alignment: .bottom)
+                    .frame(maxWidth: .infinity)
                 }
-                // A viewport-relative minimum keeps an ordinary coach mark at
-                // the bottom. When accessibility text makes the card taller,
-                // the content grows naturally and the ScrollView makes the
-                // complete card—including “Got it”—reachable.
-                .containerRelativeFrame(.vertical, alignment: .bottom)
+                .scrollIndicators(.visible)
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize)
-            .animation(.spring(response: 0.4, dampingFraction: 0.82), value: onboardingCoordinator.activeTip)
+
         }
     }
 
@@ -154,17 +145,7 @@ struct CoachMarkOverlay: View {
                     .tracking(1.4)
                     .foregroundStyle(.black.opacity(0.62))
 
-                Spacer(minLength: 12)
-
-                Button { onboardingCoordinator.dismissActiveTip() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 19, weight: .black))
-                        .foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(Color.black))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close tip")
+                Spacer(minLength: 0)
             }
 
             VStack(alignment: .leading, spacing: 8) {

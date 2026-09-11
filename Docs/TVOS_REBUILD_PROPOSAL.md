@@ -12,9 +12,12 @@ document remains historical evidence of the original build and repair rounds.
 STATUS: PHASES 0–6 IMPLEMENTED IN CODE ON 26 JULY 2026; PHYSICAL-DEVICE EXIT
 GATES REMAIN OPEN. Follow-up repairs now include playable legacy-history
 recovery, authoritative cross-device resume, removal of the dormant full-feed
-sweep, and an Observation-safe AVPlayer bridge. A phase is not marked COMPLETE
-until its required Apple TV scenarios pass. Record completed product work in
-VERSION_1.5.md.
+sweep, an Observation-safe AVPlayer bridge, and the September 2026 Stats
+durability split: the authored TV database/Stats JSON live in Application
+Support while `TVProjectionStore` and transport render state remain purgeable
+Caches. A phase is not marked COMPLETE until its required Apple TV scenarios
+pass. Record current completed product work in VERSION_1.7.md; VERSION_1.5.md
+is the historical ledger for the original rebuild.
 
 PRIMARY OUTCOMES:
 1. Every audio/video request reaches a truthful playing, paused, ended, or

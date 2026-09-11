@@ -1,4 +1,6 @@
-> **SUPERSEDED — historical record only.** Current canonical assessment: `ASSESSMENT_2026-08-30.md`. Do not cite figures from this file as current.
+> **SUPERSEDED — historical record only.** A newer point-in-time assessment is
+> `ASSESSMENT_2026-08-30.md`; it is also an audit snapshot, not a source of
+> current runtime truth. Do not cite figures from this file as current.
 
 # Autohop — Codebase Assessment (2026-06-17, refreshed 2026-06-19)
 

@@ -1,5 +1,8 @@
 import SwiftUI
 
+// MINI-PLAYER CONTRACT (2026-09-06): The Release Radar Data destination owns
+// miniPlayerBar; diagnostic content must remain above its bottom safe-area inset.
+
 // AI CONTEXT — Views/SubscriptionRadarDiagnosticsView.swift (pushed from Settings
 // → Release Radar → Feed Refresh Schedule → Diagnostics). Read-only diagnostic
 // screen exposing the filter-eligible inputs Release Radar derives for ONE
@@ -40,6 +43,7 @@ struct SubscriptionRadarDiagnosticsView: View {
         }
         .navigationTitle("Release Radar Data")
         .responsiveInlineNavigationTitle("Release Radar Data")
+        .miniPlayerBar()
         .responsiveListSizing()
         .scrollContentBackground(.hidden)
         .background(Color.black.ignoresSafeArea())

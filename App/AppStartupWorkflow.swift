@@ -20,6 +20,9 @@ import Foundation
 //    intents, so stale `.downloading` rows cannot suppress recovery.
 // 7. When startup occurs inside an OS BGTask wake, publish bootstrap duration to
 //    BackgroundWakeMonitor so per-wake summaries expose cold-launch budget cost.
+// 8. Attach history/Stats to SQLite before sync/runtime start. The Stats didSet
+//    performs JSON↔SQLite reconciliation and requeues missing projections before
+//    CloudKit scans for pending work.
 //
 // PROHIBITED RESPONSIBILITIES:
 // This workflow owns no mutable playback, download, queue, refresh, archive,
@@ -219,7 +222,8 @@ final class AppStartupWorkflow {
 
     private func installPlatformCallbacks() {
         playbackCoordinator.installStatisticsCallbacks(
-            historyStatsCoordinator: historyStatsCoordinator
+            historyStatsCoordinator: historyStatsCoordinator,
+            subscriptionStore: subscriptionStore
         )
         playbackCoordinator.installSessionCallbacks(
             subscriptionStore: subscriptionStore,
@@ -236,7 +240,6 @@ final class AppStartupWorkflow {
         playbackCoordinator.installTimeUpdateCallback(
             subscriptionStore: subscriptionStore,
             preferenceWorkflow: playbackPreferenceWorkflow,
-            historyStatsCoordinator: historyStatsCoordinator,
             mediaWorkflow: playbackMediaWorkflow,
             logger: logger
         )

@@ -3,6 +3,9 @@ import Foundation
 
 // AI CONTEXT — App/OnboardingCoordinator.swift
 //
+// PRESENTATION: visibleTip suppresses all mirrored overlays while the first-
+// subscription milestone is presented. Retain active/pending ownership so a
+// hidden tip is never marked seen and page cancellation still removes it.
 // PURPOSE / OWNERSHIP:
 // Stage 5 owner of first-run classification, real-subscription counting,
 // existing-user reconciliation, the first-subscription milestone, coach-mark
@@ -23,6 +26,9 @@ import Foundation
 // - One tip at a time, never after explicit dismissal, maximum three per process
 //   session. Leaving the owning page cancels an active tip without marking it
 //   seen, so stale guidance cannot survive navigation and can return later.
+// - Requests that overlap during a NavigationStack transition are queued in
+//   arrival order. When the disappearing parent cancels its tip, the visible
+//   child's request is promoted instead of being silently lost.
 // - No navigation path, playback, queue, download, feed, or sync work belongs
 //   here.
 enum OnboardingOutput: Equatable {
@@ -31,6 +37,10 @@ enum OnboardingOutput: Equatable {
 
 @MainActor
 final class OnboardingCoordinator: ObservableObject {
+    // Milestone presentation temporarily hides guidance without marking it seen.
+    @Published var isPresentingFirstSubscription = false
+    var visibleTip: OnboardingTip? { isPresentingFirstSubscription ? nil : activeTip }
+
     @Published var activeTip: OnboardingTip?
     @Published var toast: String?
 
@@ -40,6 +50,7 @@ final class OnboardingCoordinator: ObservableObject {
     private let settingsStore: SettingsStoring
     private let logger: AppLogger
     private var tipsPresentedThisSession = Set<OnboardingTip>()
+    private var pendingTips: [OnboardingTip] = []
     private let maxTipsPerSession = 3
     private var cancellables = Set<AnyCancellable>()
     private var milestoneTask: Task<Void, Never>?
@@ -125,9 +136,16 @@ final class OnboardingCoordinator: ObservableObject {
     /// a bug; do not "fix" it by decrementing on cancel without deciding what
     /// stops a navigation loop from replaying tips indefinitely.
     func requestTip(_ tip: OnboardingTip) {
-        guard activeTip == nil,
-              !tip.isSeen,
-              tipsPresentedThisSession.contains(tip)
+        guard !tip.isSeen, activeTip != tip else { return }
+        guard activeTip == nil else {
+            if !pendingTips.contains(tip) { pendingTips.append(tip) }
+            return
+        }
+        presentTipIfAllowed(tip)
+    }
+
+    private func presentTipIfAllowed(_ tip: OnboardingTip) {
+        guard tipsPresentedThisSession.contains(tip)
                 || tipsPresentedThisSession.count < maxTipsPerSession
         else { return }
         tipsPresentedThisSession.insert(tip)
@@ -138,10 +156,24 @@ final class OnboardingCoordinator: ObservableObject {
         guard let tip = activeTip else { return }
         tip.markSeen()
         activeTip = nil
+        presentNextPendingTip()
     }
 
     func cancelActiveTip(_ tip: OnboardingTip) {
+        pendingTips.removeAll { $0 == tip }
         guard activeTip == tip else { return }
         activeTip = nil
+        presentNextPendingTip()
+    }
+
+    private func presentNextPendingTip() {
+        while activeTip == nil, !pendingTips.isEmpty {
+            let next = pendingTips.removeFirst()
+            guard !next.isSeen else { continue }
+            presentTipIfAllowed(next)
+            // If the session cap rejected this request, continue draining so
+            // stale queued work cannot survive for the rest of the process.
+            if activeTip != nil { return }
+        }
     }
 }

@@ -2803,6 +2803,38 @@ public enum FeedReplacementPolicy {
     }
 }
 
+public enum AutomaticDownloadBatchPolicy {
+    /// AI CONTEXT — A single feed response may introduce several episodes.
+    /// Automatic downloading must consider every newly discovered, eligible
+    /// episode rather than collapsing the response to `latestEpisode`. The
+    /// per-podcast Episode Limit bounds the new batch (newest first); zero is
+    /// the model's No Limit value. Existing stored automatic downloads are
+    /// rotated independently before each transfer, while manual downloads and
+    /// user queue pins remain additive/protected.
+    public static func candidates(
+        from newlyDiscoveredEpisodes: [Episode],
+        episodeLimit: Int
+    ) -> [Episode] {
+        let eligible = newlyDiscoveredEpisodes
+            .filter {
+                $0.playedState != .played
+                    && $0.playedState != .archived
+                    && $0.downloadState != .downloaded
+                    && $0.downloadState != .queued
+                    && $0.downloadState != .downloading
+            }
+            .sorted {
+                if $0.publishedAt != $1.publishedAt {
+                    return ($0.publishedAt ?? .distantPast)
+                        > ($1.publishedAt ?? .distantPast)
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+        guard episodeLimit > 0 else { return eligible }
+        return Array(eligible.prefix(episodeLimit))
+    }
+}
+
 public enum FeedRefreshBudgeting {
     /// AI CONTEXT — Background-audio fairness thresholds are centralized here
     /// so the production selector and deterministic tests cannot silently drift.

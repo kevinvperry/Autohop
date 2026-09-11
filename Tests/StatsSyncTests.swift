@@ -8,7 +8,9 @@
 // invariant protects DayStats conflict repair: caching the server change tag for
 // this device's own partition must not mark the full local day bucket synced.
 // Version-aware acknowledgement coverage prevents an older day upload from
-// clearing a newer accumulated full-day value.
+// clearing a newer accumulated full-day value. Durable completion fixtures
+// ensure the same stable episode outcome authored on multiple devices is
+// counted once while ordinary numeric measures remain additive.
 import XCTest
 import CloudKit
 #if AUTOHOP_SPM
@@ -40,6 +42,29 @@ final class StatsSyncTests: XCTestCase {
         XCTAssertEqual(m.perShowEpisodesCompleted["show1"], 2)
     }
 
+    func testMergedDeduplicatesDurableCompletionAcrossDevices() {
+        let identity = "feed:show|guid:episode"
+        let outcome = DurableEpisodeOutcome(
+            showID: "feed:show",
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            completionKind: .finishedNaturally,
+            positionSeconds: 1_800,
+            durationSeconds: 1_800
+        )
+        var a = DayStats(dayKey: "2026-09-04")
+        a.episodesCompleted = 1
+        a.perShowEpisodesCompleted["feed:show"] = 1
+        a.episodeOutcomes[identity] = outcome
+        var b = a
+        b.wallClockSeconds = 30
+
+        let merged = a.merged(with: b)
+
+        XCTAssertEqual(merged.episodesCompleted, 1)
+        XCTAssertEqual(merged.perShowEpisodesCompleted["feed:show"], 1)
+        XCTAssertEqual(merged.episodeOutcomes.count, 1)
+    }
+
     func testStatsRecordRoundTripAndDeviceID() {
         let d = day("2026-06-14", seconds: 600)
         let record = CloudKitSync.makeRecord(deviceID: "deviceA", day: d)
@@ -49,6 +74,29 @@ final class StatsSyncTests: XCTestCase {
         let parsed = CloudKitSync.statsPartition(from: record)
         XCTAssertEqual(parsed?.deviceID, "deviceA")
         XCTAssertEqual(parsed?.day.wallClockSeconds, 600)
+    }
+
+    func testStatsRecordRoundTripsGenerationRevisionAndHash() throws {
+        let value = day("2026-06-14", seconds: 600)
+        let metadata = try StatsPartitionMetadata.make(
+            day: value,
+            generationID: "generation-a",
+            revision: 19,
+            writerDeviceID: "deviceA"
+        )
+        let projection = StatsDayProjection(
+            day: value,
+            metadata: metadata,
+            hasPendingChanges: true,
+            systemFields: nil
+        )
+
+        let record = CloudKitSync.makeRecord(deviceID: "deviceA", projection: projection)
+        let parsed = try XCTUnwrap(CloudKitSync.statsSnapshot(from: record))
+
+        XCTAssertEqual(parsed.deviceID, "deviceA")
+        XCTAssertEqual(parsed.day, value)
+        XCTAssertEqual(parsed.metadata, metadata)
     }
 
     func testStatsRecordNameParserAcceptsLegacyAndNamespacedIDs() {
@@ -99,6 +147,25 @@ final class StatsSyncTests: XCTestCase {
             ["2026-06-14"],
             "Caching server system fields for a DayStats conflict must keep the local full-day bucket pending"
         )
+    }
+
+    func testServerDeletionDurablyRequeuesStatsDay() throws {
+        let db = try AutohopDatabase()
+        let value = day("2026-09-03", seconds: 30)
+        let metadata = try StatsPartitionMetadata.make(
+            day: value,
+            generationID: "generation",
+            revision: 1,
+            writerDeviceID: DeviceIdentity.current
+        )
+        try db.recordStatsDay(value, metadata: metadata)
+        XCTAssertFalse(try db.acknowledgeStatsDay(value, metadata: metadata))
+        XCTAssertTrue(try db.pendingStatsDays().isEmpty)
+
+        try db.requeueStatsDayAfterServerDeletion(dayKey: value.dayKey)
+
+        XCTAssertEqual(try db.pendingStatsDays().map(\.dayKey), [value.dayKey])
+        XCTAssertNil(try db.statsSystemFields(dayKey: value.dayKey))
     }
 
     @MainActor

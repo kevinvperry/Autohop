@@ -1,6 +1,22 @@
 # ============================================================
 # Autohop — XcodeGen project specification
 # ============================================================
+# AI CONTEXT — This file is the authoritative project/target membership and
+# build-setting specification. Autohop.xcodeproj is generated from it; whenever
+# sources are added, removed, moved, or retargeted, update this file first and
+# run `xcodegen generate` so the checked-in project stays reproducible. The
+# AutohopCore package continues to own shared iOS/tvOS persistence and models.
+#
+# Release contract (2026-09-08): iOS app/widget remain 1.6.1 (17).
+# tvOS app/Top Shelf 1.6.1 (1) submitted, user-confirmed 2026-09-08.
+# Future iOS/tvOS changes share VERSION_1.7.md; retain submitted settings here
+# until a subsequent build-version update is requested.
+# See Docs/AppStore/tvOS-1.6.1/SUBMISSION.md for TV metadata and validation.
+#
+# Session contract (2026-09-06): DesktopCommands and DesktopCommandContext belong
+# to the existing iOS-family target; there is no new native Mac target/status icon.
+# Existing source-directory membership includes these files. Header/document-only
+# edits do not require project regeneration; membership/build-setting edits do.
 #
 # Prerequisites:
 #   brew install xcodegen
@@ -72,6 +88,8 @@ targets:
     # Include everything in this directory EXCEPT the SwiftPM artefacts and
     # the smoke-test executables (which all contain top-level `main.swift`
     # files that would conflict with `@main AutohopApp`).
+    # App/DesktopCommands.swift and Views/DesktopCommandContext.swift belong to
+    # this UIKit target through the source glob (also used by iPad-on-Mac).
     sources:
       - path: .
         excludes:
@@ -116,8 +134,8 @@ targets:
         # iPhone and Apple TV use only the user's private iCloud account for
         # cross-device synchronization. No subscription or relay feature gates
         # exist in either configuration.
-        MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "1.6.1"
+        CURRENT_PROJECT_VERSION: "17"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG          # Kevin Perry — keeps signing through regen
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -355,8 +373,8 @@ targets:
         # iOS app. A phone-only extension would silently withhold widgets from
         # native iPad and compatible Designed-for-iPad Mac installations.
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "1.6.1"
+        CURRENT_PROJECT_VERSION: "17"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -390,9 +408,11 @@ targets:
 
   # ── Apple TV app (tvOS Phase 1 scaffolding) ────────────────────────────────
   # Streaming-first lean-back surface (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md).
-  # Sources are TV/ + the AutohopCore package product ONLY. The database lives
-  # in Caches (purgeable, T2); durable state is the UserDefaults survival kit +
-  # CloudKit. App icon: the tvOS layered brand-assets stack (parallax layers
+  # Sources are TV/ + the AutohopCore package product ONLY. Only reproducible
+  # render projections and CloudKit transport state live in Caches;
+  # authoritative stats/history/database state is in Application Support, with
+  # the UserDefaults survival kit + CloudKit as recovery layers. App icon: the
+  # tvOS layered brand-assets stack (parallax layers
   # derived from Design/AppIcon/autohop-icon-v1.svg) is DELIBERATELY not
   # scaffolded here — add it in Xcode when the art is ready, then set
   # ASSETCATALOG_COMPILER_APPICON_NAME on this target.
@@ -428,8 +448,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop
         TARGETED_DEVICE_FAMILY: "3"          # Apple TV
-        MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "13"
+        MARKETING_VERSION: "1.6.1"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         # Set 2026-07-04 once Kevin created the tvOS App Icon & Top Shelf
@@ -516,8 +536,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinperry.autohop.TopShelf
         PRODUCT_NAME: AutohopTVTopShelf
         TARGETED_DEVICE_FAMILY: "3"
-        MARKETING_VERSION: "1.6"
-        CURRENT_PROJECT_VERSION: "13"
+        MARKETING_VERSION: "1.6.1"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QT3N6256FG
         APPLICATION_EXTENSION_API_ONLY: YES

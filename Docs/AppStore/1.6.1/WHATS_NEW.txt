@@ -1,0 +1,25 @@
+More room to listen. More ways to discover. More control over your podcasts.
+
+MADE FOR iPAD AND MAC
+Enjoy native iPad layouts and Autohop on compatible Apple-silicon Macs with the Designed-for-iPad app. Artwork, text and page layouts adapt to your window, with improved navigation, share sheets and a spacious Stats view. Mac application menus and discoverable keyboard shortcuts bring playback and navigation controls closer to hand. The Now Playing & Up Next widget now supports iPhone and iPad.
+
+DISCOVER YOUR NEXT FAVOURITE
+Every category now starts with rotating Top 8 Episodes, followed by the Top 100 shows with regular featured cards. Improved artwork loading falls back to the podcast cover when episode artwork is unavailable. Discover cards and search results scale more naturally on larger screens.
+
+FIND AND MANAGE YOUR SUBSCRIPTIONS
+Search your existing subscriptions by show or publisher name, with results filtering as you type. Your priority order is preserved, and the mini-player makes room while you edit the search. Tap anywhere on an episode row to open its full details. Episode artwork scales with your screen, with centred playback and queue buttons.
+
+A BETTER DOWNLOADS LIST
+Downloads now uses adaptive artwork and text, centred covers, more room for episode information and a separate lower status area. Swipe for Play, Play Next, Play Last or Archive, with download transfer controls still close at hand.
+
+STATS YOU CAN TRUST
+Improved listening-time, completion, Top Shows, streak and time-saved accounting, including faster playback and sessions crossing midnight. Stronger local backups and iCloud reconciliation help protect history and statistics. Export Stats as CSV or JSON, restore supported backups, and inspect Stats Health and coverage information. Older records with limited detail are identified more clearly; accounting improvements cannot recreate missing historical listening.
+
+SMOOTHER EVERYDAY PLAYBACK
+Newly released episodes from the same feed are handled more reliably within your download limits. Finishing an episode, including skipping to its end, now settles completion and Up Next more consistently. Play Instant protects the final minute of an episode. Video playback better preserves speed through fullscreen transitions, with fullscreen stability improvements. Shared Listening controls update immediately, and audio-output labels are more reliable.
+
+HELPFUL DETAILS THROUGHOUT
+Clearer first-subscription guidance and Quick Tips, with improved scrolling and accessible actions on smaller windows and larger text sizes. More consistent mini-player availability, taps that open the Playing view, and clearer final-minute time displays. Podcast details include richer publisher and category information. You can also open a show's Apple Podcasts page to leave a review.
+
+PRIVATE SYNC AND PERSONAL PREFERENCES
+Improved duplicate-subscription handling and history recovery through private iCloud sync. Sync starts enabled on new installs while existing choices are preserved. Refined per-show notification defaults and separate listening recap preferences give you clearer control. A Settings link makes joining the TestFlight beta easier.

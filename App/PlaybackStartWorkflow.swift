@@ -179,10 +179,6 @@ final class PlaybackStartWorkflow {
                 settingsStore.appSettings.hasPlayedFirstEpisode = true
             }
             playback.resetTimeUpdatePersistenceCadence()
-            historyStatsCoordinator.beginPlaybackTracking(
-                episodeID: playableEpisode.id,
-                at: playback.clock.time
-            )
             playback.message = nil
 
             historyStatsCoordinator.recordPlaybackStart(

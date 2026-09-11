@@ -1,0 +1,41 @@
+VERSION 1.6.1 RESUBMISSION - GUIDELINE 2.3.6
+
+The Advertising content descriptor in Age Ratings has been changed to Yes following the Version 1.6 review message. Autohop has no advertising SDK and does not insert developer-supplied advertisements. Independently published podcasts accessed through public RSS feeds may contain publisher-provided advertisements or sponsorship messages, including ads inserted by publishers into their media. Advertising is therefore declared Yes.
+
+This 1.6.1 submission includes a new build with functional and interface improvements. It replaces the earlier request to continue reviewing the unchanged 1.6 binary after a metadata-only correction.
+
+ACCESS AND DEVICE COVERAGE
+
+No Autohop account or login is required. Follow the introductory guidance, then use Discover to subscribe to a public podcast. An internet connection is required to retrieve feeds and download media; downloaded episodes can play offline.
+
+The iOS-family app supports iPhone, native iPad layouts and compatible Apple-silicon Macs as a Designed-for-iPad app. It includes an iPhone/iPad Now Playing & Up Next widget. This is not a separate native macOS app.
+
+CORE TEST PATH
+
+1. Discover: open a category, inspect Top 8 Episodes and Top 100 shows, and subscribe to a public podcast.
+2. Subscriptions: use the magnifying glass to filter existing subscriptions. Clear the search; use Priority to reorder shows. Open a show, then tap an episode to open its details.
+3. Download an episode and start playback. Inspect Playing, Details and Chapters (when supplied by the publisher).
+4. Menu: open Downloads and swipe an episode for playback/queue/archive actions. Inspect Stats, including its export and health controls, and Settings.
+5. On Mac, test the application menus and their displayed keyboard shortcuts, including navigation and playback while an episode is loaded.
+6. Add the widget from the Home Screen widget gallery on iPhone/iPad.
+
+SLEEP SCHEDULE
+Menu > Sleep Schedule: enable, set Active Hours to include now, select the shortest Ask Every interval and play a downloaded episode.
+
+BACKGROUND MODES
+Audio continues playback while backgrounded/locked. Fetch checks subscribed RSS feeds. Processing performs feed catch-up/download maintenance when permitted. Remote notifications receive silent CloudKit pushes for private iCloud sync.
+
+ICLOUD SYNC
+Enabled by default for new installs only; existing saved choices are preserved. User-controllable in Settings. Subscriptions, priority, queue, history, playback position and supported preferences sync through the user's private CloudKit database. No first-party account or sync server is used. Core local playback does not require iCloud sign-in.
+
+APP TRANSPORT SECURITY
+Public and user-supplied podcast feeds, enclosures and artwork use open-ended third-party hosts, including HTTP-only publishers. NSAllowsArbitraryLoads supports these sources; a fixed per-domain exception list is not viable for a general RSS client.
+
+CARPLAY
+Audio-only: Now Playing, downloaded Up Next items and subscription episodes. Selecting an undownloaded episode requires confirmation before a manual download begins.
+
+CONTENT SOURCES - GUIDELINE 5.2.3
+Version 1.1 was approved after this clarification. Autohop plays openly distributed RSS podcasts. Media downloads directly from the publisher's enclosure URL. It accesses no DRM-protected or login-gated content and redistributes nothing. Apple's public podcast directory locates public RSS feeds; Autohop does not reproduce a proprietary catalog.
+
+OPEN SOURCE
+Four Pocket Casts-derived files use MPL-2.0: SilenceDetector.swift, SilenceGapAccounting.swift, PlaybackEngine.swift and Synced.swift. See Settings > Open Source Acknowledgements.

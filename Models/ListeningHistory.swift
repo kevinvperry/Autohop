@@ -10,6 +10,9 @@ import Foundation
 // A completed/marked-played terminal event has precedence over a later automatic
 // storage cleanup. Auto Archive may change the episode library state, but must
 // not rewrite why the listening-history session ended.
+// Cross-device merge is field-aware: the newest timestamp owns resume/navigation
+// fields, while listenedSeconds and the strongest terminal evidence are
+// monotonic. Callers adopt the merged entry, never the raw remote snapshot.
 //
 // Moved out of App/AppState.swift (June 2026) so AutohopCore — and the
 // ShowEngagementAnalyzer smoke tests — can consume listening history entries.
@@ -17,7 +20,7 @@ import Foundation
 // `ListeningHistoryStore` to Persistence/ListeningHistoryStore.swift without
 // changing this model, its Codable schema, or persistence behavior.
 
-public enum ListeningHistoryStatus: String, Codable {
+public enum ListeningHistoryStatus: String, Codable, Sendable {
     case listened
     case played
     case archived
@@ -32,7 +35,7 @@ public enum ListeningHistoryStatus: String, Codable {
 }
 
 /// Describes *how* an episode's listening session ended.
-public enum CompletionKind: String, Codable {
+public enum CompletionKind: String, Codable, Sendable {
     /// Episode played to the end naturally.
     case finishedNaturally
     /// User swiped/tapped Archive while mid-episode.
@@ -181,6 +184,59 @@ public struct ListeningHistoryEntry: Identifiable, Codable, Equatable {
 }
 
 public extension ListeningHistoryEntry {
+    /// Merge policy for the mutable resume projection. Navigation fields follow
+    /// the newest snapshot, while accumulated listening and terminal outcome
+    /// evidence are monotonic so a recent short session cannot erase a larger
+    /// total or a prior completion.
+    func mergedForSync(with other: ListeningHistoryEntry) -> ListeningHistoryEntry {
+        let newer = other.lastListenedAt > lastListenedAt ? other : self
+        var result = newer
+        result.listenedSeconds = max(listenedSeconds, other.listenedSeconds)
+
+        let mineRank = Self.outcomeRank(completionKind)
+        let otherRank = Self.outcomeRank(other.completionKind)
+        let strongest = otherRank > mineRank ? other : self
+        if max(mineRank, otherRank) > 0 {
+            result.completionKind = strongest.completionKind
+            result.completionPercent = strongest.completionPercent
+            result.listenedDurationSeconds = strongest.listenedDurationSeconds
+            result.episodeDurationSeconds = strongest.episodeDurationSeconds
+            switch strongest.completionKind {
+            case .finishedNaturally, .markedPlayed:
+                result.status = .played
+            case .manuallyArchived, .autoArchived:
+                result.status = .archived
+            case .none:
+                break
+            }
+        }
+        return result
+    }
+
+    private static func outcomeRank(_ kind: CompletionKind?) -> Int {
+        switch kind {
+        case .finishedNaturally: return 4
+        case .markedPlayed: return 3
+        case .manuallyArchived: return 2
+        case .autoArchived: return 1
+        case .none: return 0
+        }
+    }
+
+    /// Rejects structurally decodable but nonsensical snapshots before they can
+    /// become the new source of truth or a last-known-good backup.
+    var isSemanticallyValid: Bool {
+        let requiredSeconds = [listenedSeconds, lastPositionSeconds]
+        let optionalSeconds = [durationSeconds, listenedDurationSeconds, episodeDurationSeconds]
+        return !id.isEmpty
+            && requiredSeconds.allSatisfy { $0.isFinite && $0 >= 0 }
+            && optionalSeconds.allSatisfy { $0.map { $0.isFinite && $0 >= 0 } ?? true }
+            && (playbackSpeed.map { $0.isFinite && $0 > 0 } ?? true)
+            && (completionPercent.map { $0.isFinite && $0 >= 0 && $0 <= 1 } ?? true)
+            && lastListenedAt.timeIntervalSinceReferenceDate.isFinite
+            && (publishedAt?.timeIntervalSinceReferenceDate.isFinite ?? true)
+    }
+
     /// Shared eligibility rule for completed-history surfaces. Natural
     /// completions (`played`) and deliberate archives (`archived`) remain
     /// visible across devices. A confirmed automatic archive is hidden only

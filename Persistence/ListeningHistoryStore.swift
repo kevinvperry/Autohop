@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // AI CONTEXT — Persistence/ListeningHistoryStore.swift
 //
@@ -12,16 +15,16 @@ import Foundation
 // IDENTITY / FORMAT:
 // Entries are keyed by subscription-scoped episode GUID/URL (`historyKey`) so a
 // re-fetched episode merges into one row without colliding across feeds. The JSON
-// path, Codable payload, bounded retention, sorting, repair behavior, batching, and
-// sync-row writes are unchanged by the move.
+// path, bounded retention, sorting, repair behavior, batching, and sync-row writes
+// remain stable. The JSON payload now sits inside a checksummed versioned envelope.
 //
 // CONCURRENCY:
-// MainActor-only. Playback ticks call `recordProgress`; remote CloudKit changes
+// MainActor-only. Rendered playback intervals call `recordProgress`; remote CloudKit changes
 // call `applyRemote`. Both serialize through MainActor. This store owns no Task
 // and must not create a second history writer.
 //
 // PERSISTENCE / SYNC:
-// Tick samples accumulate in memory and become one entry mutation/sort/sync marker
+// Rendered intervals accumulate in memory and become one entry mutation/sort/sync marker
 // per 30-second batch. Routine diagnostics are summarized at most every five
 // minutes. `save()` and terminal `mark()` flush the buffer first, preserving
 // pause/background/completion durability. `syncDatabase` is the existing
@@ -31,13 +34,15 @@ import Foundation
 // INVARIANTS / PROHIBITED RESPONSIBILITIES:
 // - A later Auto Archive storage cleanup cannot replace an existing Played,
 //   naturally finished, or marked-played listening outcome.
-// - Remote history remains whole-entry LWW by `lastListenedAt`.
+// - Remote history uses recency for resume/navigation fields while accumulated
+//   listening and terminal outcome evidence merge monotonically.
 // - The UI's >=60-second presentation threshold does not belong here.
 // - Do not add Stats, queue, playback-engine, archive-rule, or sync-lifecycle
 //   orchestration. Those move through later approved stages.
 @MainActor
 final class ListeningHistoryStore: ObservableObject {
     @Published private(set) var entries: [ListeningHistoryEntry] = []
+    private(set) var persistenceState: DurableStoreLoadState = .absent
 
     private var lastSavedAt: Date?
     // Stats uses history for outcome/cadence details that predate durable
@@ -68,6 +73,11 @@ final class ListeningHistoryStore: ObservableObject {
     var syncDatabase: AutohopDatabase?
 
     private let fileURL: URL?
+    private let protectedDataAvailable: () -> Bool
+    private var protectedDataObserver: NSObjectProtocol?
+    private var storageGenerationID = UUID().uuidString
+    private var storageRevision: UInt64 = 0
+    private static let storageSchemaVersion = 1
 
     private static let defaultFileURL: URL? = {
         guard let appSupport = try? FileManager.default.url(
@@ -85,9 +95,25 @@ final class ListeningHistoryStore: ObservableObject {
 
     /// Explicit location is a characterization-test seam. Production continues
     /// using the historical Application Support path through `init()`.
-    init(fileURL: URL?) {
+    convenience init(fileURL: URL?) {
+        self.init(
+            fileURL: fileURL,
+            protectedDataAvailable: { Self.systemProtectedDataAvailable }
+        )
+    }
+
+    init(fileURL: URL?, protectedDataAvailable: @escaping () -> Bool) {
         self.fileURL = fileURL
+        self.protectedDataAvailable = protectedDataAvailable
         load()
+    }
+
+    private static var systemProtectedDataAvailable: Bool {
+        #if canImport(UIKit)
+        UIApplication.shared.isProtectedDataAvailable
+        #else
+        true
+        #endif
     }
 
     var totalListeningSeconds: TimeInterval {
@@ -180,6 +206,7 @@ final class ListeningHistoryStore: ObservableObject {
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
+        storageRevision &+= 1
         for key in pending.keys { recordPending(id: key) }
         let now = Date()
         let routineSummaryDue = lastProgressDiagnosticAt.map({ now.timeIntervalSince($0) >= progressDiagnosticInterval }) ?? true
@@ -269,12 +296,14 @@ final class ListeningHistoryStore: ObservableObject {
             ))
         }
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        storageRevision &+= 1
         recordPending(id: key)
         save()
     }
 
     /// Records a changed entry as pending for cross-device sync.
     private func recordPending(id: String) {
+        guard persistenceState.allowsPersistence else { return }
         guard let syncDatabase, let entry = entries.first(where: { $0.id == id }) else { return }
         do {
             try syncDatabase.recordHistoryEntry(entry)
@@ -290,45 +319,77 @@ final class ListeningHistoryStore: ObservableObject {
         }
     }
 
-    /// Merges a remote history entry with record-level last-write-wins
-    /// (the entry with the newer `lastListenedAt` wins the whole record).
+    /// Merges navigation state by recency while preserving monotonic listening
+    /// totals and the strongest terminal outcome evidence.
     @discardableResult
     @MainActor
-    func applyRemote(_ remote: ListeningHistoryEntry) -> Bool {
-        // Resolve local buffered ticks before record-level LWW compares timestamps.
+    func applyRemote(_ remote: ListeningHistoryEntry) -> ListeningHistoryEntry? {
+        // Resolve local buffered ticks before the field-aware merge compares timestamps.
         flushPendingProgress(reason: "remoteMerge")
         var normalizedRemote = remote
         normalizedRemote.repairAutoArchiveOverwriteIfClearlyCompleted()
+        var navigationUpdate: ListeningHistoryEntry?
         if let index = entries.firstIndex(where: { $0.id == normalizedRemote.id }) {
-            guard normalizedRemote.lastListenedAt > entries[index].lastListenedAt else { return false } // local newer — keep, stays pending
-            entries[index] = normalizedRemote
+            let local = entries[index]
+            let merged = local.mergedForSync(with: normalizedRemote)
+            guard merged != local else { return nil }
+            entries[index] = merged
+            if normalizedRemote.lastListenedAt > local.lastListenedAt {
+                navigationUpdate = merged
+            }
+            if merged == normalizedRemote {
+                try? syncDatabase?.saveSyncedHistoryEntry(merged)
+            } else {
+                recordPending(id: merged.id)
+            }
         } else {
             entries.append(normalizedRemote)
+            navigationUpdate = normalizedRemote
+            try? syncDatabase?.saveSyncedHistoryEntry(normalizedRemote)
         }
         entries.sort { $0.lastListenedAt > $1.lastListenedAt }
         if entries.count > maxEntries {
             entries.removeLast(entries.count - maxEntries)
         }
-        try? syncDatabase?.saveSyncedHistoryEntry(normalizedRemote) // clean — don't re-push
+        storageRevision &+= 1
         save()
-        return true
+        return navigationUpdate
     }
 
     func save() {
+        guard persistenceState.allowsPersistence else {
+            AppLogger.shared.error(
+                "history.saveBlocked",
+                "Refused to overwrite listening history after an unsuccessful load",
+                metadata: ["state": String(describing: persistenceState)],
+                alwaysPersist: true
+            )
+            return
+        }
         // Lifecycle checkpoints call save(), so make buffered progress durable and
         // sync-visible before encoding. flushPendingProgress may call saveThrottled;
         // lastProgressFlushAt prevents recursion because the buffer is already empty.
         flushPendingProgress(reason: "save")
         guard let url = fileURL else { return }
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(entries)
-            try data.write(to: url, options: [.atomic])
+            if persistenceState != .recoveredFromBackup {
+                try preserveLastKnownGoodPrimary(at: url)
+            }
+            let envelope = try IntegrityCheckedStoreEnvelope.make(
+                payload: entries,
+                schemaVersion: Self.storageSchemaVersion,
+                generationID: storageGenerationID,
+                revision: storageRevision,
+                writerDeviceID: DeviceIdentity.current
+            )
+            let data = try IntegrityCheckedStoreEnvelope.encode(envelope)
+            try LockedDeviceFileAccess.writeDataAtomically(data, to: url)
             lastSavedAt = Date()
+            persistenceState = .loaded
         } catch {
-            AppLogger.shared.warning("history.saveFailed", "Could not save listening history", metadata: [
+            AppLogger.shared.error("history.saveFailed", "Could not save listening history", metadata: [
                 "error": String(describing: error)
-            ])
+            ], alwaysPersist: true)
         }
     }
 
@@ -339,14 +400,211 @@ final class ListeningHistoryStore: ObservableObject {
         save()
     }
 
+    private struct LoadedSnapshot {
+        let entries: [ListeningHistoryEntry]
+        let generationID: String
+        let revision: UInt64
+    }
+
     private func load() {
-        guard let url = fileURL,
-              FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let loadedEntries = try? JSONDecoder().decode([ListeningHistoryEntry].self, from: data)
-        else { return }
+        guard let url = fileURL else {
+            persistenceState = .absent
+            return
+        }
+        guard protectedDataAvailable() else {
+            persistenceState = .temporarilyUnavailable
+            installProtectedDataRetry()
+            AppLogger.shared.error(
+                "history.loadUnavailable",
+                "Listening history is unavailable until protected data can be read",
+                alwaysPersist: true
+            )
+            return
+        }
+        if !FileManager.default.fileExists(atPath: url.path) {
+            if restoreFromBackup(for: url) { return }
+            if let backupURL, FileManager.default.fileExists(atPath: backupURL.path) {
+                quarantinePrimary(at: backupURL)
+                persistenceState = .corruptOrIncompatible
+                AppLogger.shared.error(
+                    "history.backupRejected",
+                    "The primary history file is absent and its backup failed validation; writes are blocked",
+                    alwaysPersist: true
+                )
+                return
+            }
+            persistenceState = .absent
+            return
+        }
+        do {
+            let encoded = try Data(contentsOf: url)
+            let loaded = try decodeSnapshot(encoded)
+            applyLoadedSnapshot(loaded, state: .loaded)
+        } catch {
+            if !protectedDataAvailable() {
+                persistenceState = .temporarilyUnavailable
+                installProtectedDataRetry()
+                AppLogger.shared.error(
+                    "history.loadUnavailable",
+                    "Listening history became unavailable while loading",
+                    metadata: ["error": String(describing: error)],
+                    alwaysPersist: true
+                )
+                return
+            }
+            quarantinePrimary(at: url)
+            if restoreFromBackup(for: url) { return }
+            persistenceState = .corruptOrIncompatible
+            AppLogger.shared.error(
+                "history.loadRejected",
+                "Listening history failed validation; writes are blocked and the original is preserved",
+                metadata: ["error": String(describing: error)],
+                alwaysPersist: true
+            )
+            return
+        }
+        repairLoadedEntriesIfNeeded()
+    }
+
+    private func decodeSnapshot(_ encoded: Data) throws -> LoadedSnapshot {
+        do {
+            let envelope = try IntegrityCheckedStoreEnvelope<[ListeningHistoryEntry]>.decode(encoded)
+            let payload = try envelope.validated(expectedSchemaVersion: Self.storageSchemaVersion)
+            guard payload.allSatisfy(\.isSemanticallyValid) else {
+                throw IntegrityCheckedStoreEnvelope<[ListeningHistoryEntry]>.ValidationError.invalidMetadata
+            }
+            return LoadedSnapshot(
+                entries: payload,
+                generationID: envelope.generationID,
+                revision: envelope.revision
+            )
+        } catch {
+            if let legacy = try? JSONDecoder().decode([ListeningHistoryEntry].self, from: encoded),
+               legacy.allSatisfy(\.isSemanticallyValid) {
+                return LoadedSnapshot(entries: legacy, generationID: UUID().uuidString, revision: 0)
+            }
+            throw error
+        }
+    }
+
+    private func applyLoadedSnapshot(_ loaded: LoadedSnapshot, state: DurableStoreLoadState) {
+        entries = loaded.entries.sorted { $0.lastListenedAt > $1.lastListenedAt }
+        if entries.count > maxEntries {
+            entries.removeLast(entries.count - maxEntries)
+        }
+        storageGenerationID = loaded.generationID
+        storageRevision = loaded.revision
+        persistenceState = state
+    }
+
+    private var backupURL: URL? {
+        fileURL?.deletingPathExtension().appendingPathExtension("backup.json")
+    }
+
+    private func restoreFromBackup(for primaryURL: URL) -> Bool {
+        guard let backupURL,
+              FileManager.default.fileExists(atPath: backupURL.path),
+              let encoded = try? Data(contentsOf: backupURL),
+              let loaded = try? decodeSnapshot(encoded) else { return false }
+        applyLoadedSnapshot(loaded, state: .recoveredFromBackup)
+        repairLoadedEntriesIfNeeded()
+        AppLogger.shared.error(
+            "history.backupRecovered",
+            "Recovered listening history from the last-known-good backup",
+            metadata: ["primary": primaryURL.lastPathComponent],
+            alwaysPersist: true
+        )
+        save()
+        return true
+    }
+
+    private func preserveLastKnownGoodPrimary(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        // A read failure is not equivalent to an absent file. Abort the save so
+        // a protection/permissions race cannot overwrite the only good copy.
+        let existing = try Data(contentsOf: url)
+        guard (try? decodeSnapshot(existing)) != nil else {
+            quarantinePrimary(at: url, data: existing)
+            return
+        }
+        guard let backupURL else { return }
+        try LockedDeviceFileAccess.writeDataAtomically(existing, to: backupURL)
+    }
+
+    private func quarantinePrimary(at url: URL, data: Data? = nil) {
+        guard let encoded = data ?? (try? Data(contentsOf: url)) else { return }
+        let quarantineURL = url.deletingLastPathComponent().appendingPathComponent(
+            "\(url.deletingPathExtension().lastPathComponent).corrupt-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).json"
+        )
+        do {
+            try LockedDeviceFileAccess.writeDataAtomically(encoded, to: quarantineURL)
+            AppLogger.shared.error(
+                "history.corruptPreserved",
+                "Preserved an invalid listening history file for recovery",
+                metadata: ["file": quarantineURL.lastPathComponent],
+                alwaysPersist: true
+            )
+        } catch {
+            AppLogger.shared.error(
+                "history.corruptPreserveFailed",
+                "Could not preserve an invalid listening history file",
+                metadata: ["error": String(describing: error)],
+                alwaysPersist: true
+            )
+        }
+    }
+
+    private func installProtectedDataRetry() {
+        #if canImport(UIKit)
+        guard protectedDataObserver == nil else { return }
+        protectedDataObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.retryProtectedDataLoad() }
+        }
+        #endif
+    }
+
+    /// Internal test seam; production invokes it from the protected-data
+    /// notification installed after an unavailable launch-time read.
+    func retryProtectedDataLoad() {
+        guard persistenceState == .temporarilyUnavailable,
+              protectedDataAvailable() else { return }
+        let deferredEntries = entries
+        let deferredRevision = storageRevision
+        load()
+        guard persistenceState.allowsPersistence, deferredRevision > 0 else { return }
+        mergeDeferredEntries(deferredEntries)
+        storageRevision = max(storageRevision, deferredRevision) &+ 1
+        for entry in deferredEntries {
+            recordPending(id: entry.id)
+        }
+        save()
+    }
+
+    private func mergeDeferredEntries(_ deferredEntries: [ListeningHistoryEntry]) {
+        for deferred in deferredEntries {
+            if let index = entries.firstIndex(where: { $0.id == deferred.id }) {
+                var merged = deferred.lastListenedAt >= entries[index].lastListenedAt
+                    ? deferred
+                    : entries[index]
+                merged.listenedSeconds = entries[index].listenedSeconds + deferred.listenedSeconds
+                entries[index] = merged
+            } else {
+                entries.append(deferred)
+            }
+        }
+        entries.sort { $0.lastListenedAt > $1.lastListenedAt }
+        if entries.count > maxEntries {
+            entries.removeLast(entries.count - maxEntries)
+        }
+    }
+
+    private func repairLoadedEntriesIfNeeded() {
         var repairedCount = 0
-        entries = loadedEntries.map { entry in
+        entries = entries.map { entry in
             var normalized = entry
             if normalized.repairAutoArchiveOverwriteIfClearlyCompleted() {
                 repairedCount += 1
@@ -354,6 +612,7 @@ final class ListeningHistoryStore: ObservableObject {
             return normalized
         }.sorted { $0.lastListenedAt > $1.lastListenedAt }
         if repairedCount > 0 {
+            storageRevision &+= 1
             AppLogger.shared.info("history.autoArchiveRepair", "Repaired completed history events overwritten by automatic storage cleanup", metadata: [
                 "entryCount": "\(repairedCount)"
             ])

@@ -1,5 +1,9 @@
 import SwiftUI
 
+// PRESENTATION CONTRACT (2026-09-06): Mirror the active Up Next tip above the modal
+// using CoachMarkOverlay with appState.onboardingCoordinator explicitly supplied.
+// Do not recreate the coordinator or rely on late presentation environment injection.
+
 // AI CONTEXT — Views/QueueSheetView.swift ("Up Next" sheet — labelled "Up Next"
 // in-app; the canonical design-system reference page per DESIGN.md; internal
 // struct name remains QueueSheetView). Shows Up Next + the priority-ordered
@@ -302,7 +306,7 @@ struct QueueSheetView: View {
         .onboardingTip(.upNext)
         // System sheets render above RootView, so mirror the single global tip
         // surface here while this sheet owns the active Up Next guidance.
-        .overlay { CoachMarkOverlay() }
+        .overlay { CoachMarkOverlay(onboardingCoordinator: appState.onboardingCoordinator) }
         .onAppear {
             let t = Date()
             appearTime = t

@@ -1,11 +1,15 @@
+// DESKTOP COVERAGE (2026-09-06): These completion-transaction regressions also
+// protect the workflow reused by desktop Next. They do not simulate native
+// menu delivery; DesktopCommandTests covers command routing separately.
+
 // AI CONTEXT — Tests/EpisodeCompletionWorkflowTests.swift
 //
 // Focused Stage 14 characterization for the extracted completion transaction.
 // It proves stale engine generations are side-effect free and that an accepted
-// completion records finished history, marks the subscription episode played,
-// clears playback state, deletes media, and advances while excluding the
-// completed episode. No live audio, network, CloudKit, or notification delivery
-// is used.
+// completion records finished history, settles the subscription before media
+// deletion, honours immediate After Playing archive policy, clears playback
+// state, and advances while excluding the completed episode. No live audio,
+// network, CloudKit, or notification delivery is used.
 
 import AVFoundation
 import XCTest
@@ -62,14 +66,31 @@ final class EpisodeCompletionWorkflowTests: XCTestCase {
                 subscriptionID: fixture.episode.subscriptionID,
                 episodeID: fixture.episode.id
             )?.playedState,
-            .played
+            .archived
         )
         XCTAssertFalse(fixture.playback.isPlaying)
         XCTAssertEqual(fixture.playback.clock.time, 0)
         XCTAssertEqual(fixture.advancedExclusions.value, [fixture.episode.id])
     }
 
-    private func makeFixture() throws -> CompletionFixture {
+    func testCompletionRemainsPlayedWhenImmediateArchiveIsDisabled() async throws {
+        let fixture = try makeFixture(afterPlayed: .never)
+        fixture.playback.currentEpisode = fixture.episode
+
+        await fixture.workflow.handle(fixture.episode)
+
+        XCTAssertEqual(
+            fixture.store.episode(
+                subscriptionID: fixture.episode.subscriptionID,
+                episodeID: fixture.episode.id
+            )?.playedState,
+            .played
+        )
+    }
+
+    private func makeFixture(
+        afterPlayed: AutoArchiveSettings.AfterPlayed = .afterPlaying
+    ) throws -> CompletionFixture {
         let store = SubscriptionStore.inMemory()
         let subscriptionID = UUID()
         var episode = Episode(
@@ -92,6 +113,10 @@ final class EpisodeCompletionWorkflowTests: XCTestCase {
             author: nil,
             artworkURL: nil,
             latestEpisode: episode
+        )
+        store.updateAutoArchiveSettings(
+            subscriptionID: subscriptionID,
+            settings: AutoArchiveSettings(afterPlayed: afterPlayed)
         )
 
         let history = HistoryStatsCoordinator(
@@ -190,6 +215,7 @@ private final class CompletionDownloadManager: DownloadManaging {
 private final class CompletionPlaybackSpy: PlaybackControlling {
     var onEpisodeFinished: ((Episode) -> Void)?
     var onTimeUpdate: ((TimeInterval) -> Void)?
+    var onPlaybackInterval: ((PlaybackAccountingInterval) -> Void)?
     var onPlaybackInterrupted: (() -> Void)?
     var onPlaybackResumed: (() -> Void)?
     var onManualSkipForward: ((TimeInterval) -> Void)?

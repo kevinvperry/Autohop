@@ -73,6 +73,100 @@ silently disappearing on iPad or compatible Apple-silicon Mac installations.
 
 > **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
 
+## Downloads episode lists — 6 September 2026
+
+Artwork is vertically centred beside the full-width text column. Episode titles
+have up to three lines, publisher/show names two, and metadata can wrap. Media
+badges and status pills occupy a separate bottom band with status at the right,
+so they cannot squeeze the title or publisher. Archived rows place Re-download
+in the same lower band. Transfer progress and swipe actions are unchanged.
+
+
+Downloads uses native List sections for Downloading, Downloaded on Device and
+Recently Archived so rows support standard swipe actions. Leading actions are
+Play (green) and Play Next (blue); trailing actions are Archive (purple) and Play
+Last (orange). Full-swipe execution is disabled. Inline archive buttons are removed;
+Pause/Resume/Retry transfer controls and archived Re-download remain available.
+
+All rows use AdaptiveListRowMetrics from actual container width for artwork and
+matching cache decode targets, title/secondary fonts, spacing and status text.
+Playback actions require a live episode, download first if needed and re-resolve
+the episode after awaiting; failed downloads are not queued or played. Activity
+Archive uses archiveDownload to cancel transfers and maintain file/model/activity
+consistency. Playing episodes do not offer archive/requeue swipes. Historical
+rows without a live episode retain their information without playback actions.
+
+## Search existing subscriptions — 6 September 2026
+
+The magnifying glass beside Discover reveals a rounded inline search field below
+the Subscriptions title and focuses the keyboard. As the user types, the existing
+list filters immediately by show or publisher name using localized case/diacritic-
+insensitive matching. Surrounding whitespace is ignored. Only real subscriptions
+are searched, including inactive shows; no Discover request or remote lookup is made.
+
+The clear icon restores all rows and keeps the field open. Cancel clears the query,
+dismisses the keyboard and closes the field. Keyboard Done dismisses the keyboard
+while retaining the filtered list. A no-results message appears when nothing
+matches. Original priority numbers and active/inactive ordering remain unchanged.
+Priority is disabled while the search field is open, and Search is disabled during
+reordering, preventing filtered IDs from entering the persistence transaction.
+The mini-player inset is hidden while the search field is focused, leaving more
+room for results above the keyboard. Done, Cancel or focus loss restores it;
+playback continues. On iOS 26 a fixed toolbar spacer keeps Search
+and Discover in separate native glass groups. This replaces the initial modal
+search dialog; no separate Search confirmation is required.
+
+## Podcast episode row navigation — 6 September 2026
+
+Tapping anywhere on an episode row in Podcast Detail (the subscription page)
+opens EpisodeDetailView for that episode. Titles and description previews no
+longer expand inline: they retain two- and three-line limits respectively.
+The existing leading/trailing swipe actions and their full-swipe policy are
+unchanged. The show's header description and Up Next expansion are separate
+interactions and retain their existing behaviour.
+
+## Episode Detail artwork and actions — 6 September 2026
+
+Episode Detail measures its actual page container to scale square artwork from
+120pt on compact phones up to 320pt on large iPad/Mac windows. The cache receives
+the matching display target size. Play, Play Next, Play Last and the state-dependent
+fourth action form a centred group beneath the header. Four columns become two
+on narrow pages; Download/Archive/Unarchive behaviour remains state-dependent.
+Shared sizing lives in AdaptiveEpisodeDetailMetrics in AdaptiveLayout.swift;
+EpisodeDetailView remains nested in SubscriptionSettingsView.swift.
+
+## Onboarding card overlap and clipping — 6 September 2026
+
+While the first-subscription milestone is presented, OnboardingCoordinator hides
+Quick Tips across all overlay hosts through visibleTip. The active tip retains
+its page ownership and is not marked seen; cancellation while hidden prevents it
+returning on an unrelated page. RootView enables suppression before presenting
+and clears it when the sheet dismisses.
+
+FirstSubscribeCard opens at the large detent with Play/Add more shows in a bottom
+safe-area inset; explanatory content scrolls above those actions. Quick Tip
+scroll content uses a minimum height measured from its actual overlay bounds,
+not a fixed container-relative height, so long text can scroll to its dismissal
+button. The sheet receives the existing shared app environment explicitly.
+
+## Session design constraints — 6 September 2026
+
+The Menu presentation supplies its complete app environment explicitly; this is
+a dependency-boundary correction with no change to the adaptive Menu layout.
+
+Category episode carousels reuse DiscoverEpisodeHeroCard and the existing adaptive
+hero metrics. Episode artwork is preferred, with a show-cover fallback for missing
+or failed images; preserve square sizing, clipping and the existing placeholder.
+Category show feature ranks start at 8, while overall chart lists retain their
+existing cadence. No duplicate mini-player belongs around an Episode Detail that
+already owns one. The Menu root retains MenuMiniPlayer.
+
+Mac application menus use the same actions and page shells as the iPad app.
+Help → Keyboard Shortcuts derives from the command catalogue. A status icon/native
+Mac shell is still a proposal, not an implemented design. See
+[stage-one implementation](Docs/MAC_MENU_STAGE_1.md). Quick Tip overlays remain
+above modal content and observe the existing coordinator explicitly.
+
 ## Adaptive viewport layout
 
 <!-- AI CONTEXT — AdaptiveLayout-Bands
@@ -771,7 +865,7 @@ HStack(spacing: 12) {
 
 **Labels: `Card-TopEpisodeFeature`, `ListRow-TopEpisode`** (`Views/TopEpisodesView.swift`)
 
-The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. (Category pages built on this same layout run to Top 100; the feature-card formula is depth-independent.) A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets). **`Views/TopPodcastsView.swift` (the "Top Podcasts" page) reuses this exact layout and styling** — same `Card-TopEpisodeFeature` / `ListRow-TopEpisode` structure — but for chart *shows*: each entry shows the podcast's artwork, title, author (artist), and category (genreName) in place of the episode's title/show/relative-time, and is reached via the "See All" on the first "Top Podcasts" hero.
+The Top Episodes page (child of Discover, reached via the "See All" button on the Top Episodes hero) is an editorial Top-50 list. (Category pages run to Top 100 but use their own rank-8, 16, … 96 feature cadence beneath the episode carousel.) A **feature card every 7th rank** (1, 8, 15, 22, 29, 36, 43 — `(rank - 1) % 7 == 0`) breaks up a list of **compact rows**, on a black page in a `LazyVStack` (18 pt spacing, 20 pt horizontal page insets). **`Views/TopPodcastsView.swift` (the "Top Podcasts" page) reuses this exact layout and styling** — same `Card-TopEpisodeFeature` / `ListRow-TopEpisode` structure — but for chart *shows*: each entry shows the podcast's artwork, title, author (artist), and category (genreName) in place of the episode's title/show/relative-time, and is reached via the "See All" on the first "Top Podcasts" hero.
 
 **Feature card (`Card-TopEpisodeFeature`)** — mirrors the Discover episode-hero card, sized as a static full-width tile:
 - 232 pt tall, `cornerRadius 22`, `white.opacity(0.08)` hairline stroke
@@ -1489,75 +1583,29 @@ swipes, and unresolved retained history records remain read-only.
 
 **Label: `Row-DownloadActivity`**
 
-The row used in the "Downloading" and "Downloaded on Device" card sections. Adapts to show progress controls, error state, or an archive button depending on status.
+Native List rows in Downloading and Downloaded on Device use
+AdaptiveListRowMetrics for artwork (44/52/60pt), matching cache decode targets,
+primary/secondary fonts, spacing and vertical padding. Episode title, publisher/show name and size/date metadata use the full text
+column beside vertically centred artwork. Audio/Video, Explicit and status pills
+occupy a separate bottom band, with status right-aligned.
 
-Structure:
-- **Artwork** — 44×44, cornerRadius 9 (`Artwork-Placeholder`)
-- **Text stack** — podcast title (caption/secondary) with optional media kind pill inline · episode title (subheadline.bold/primary) · metadata line (size + date, caption/secondary)
-- **Spacer**
-- **Trailing:** archive button (when completed) OR status pill (when in-progress)
-- **Progress / error row** (when downloading/paused/failed) — indented 56 pt (past artwork)
-
-Layout rules (2026-07-02):
-- The pause/resume/archive `controls` HStack is `.fixedSize()` — it shares a row with
-  the progress/error text, and without it a long "NN% • X MB of Y GB" compresses the
-  buttons ("Re-sume" wraps mid-word). Buttons keep intrinsic size; text truncates
-  (`lineLimit(1)`).
-- Media + explicit pills are INLINE in the podcast-title row on ALL statuses — never a
-  top-trailing overlay (the overlay version floated over the Downloading/Paused status
-  pill and clipped at the card edge).
-
-Media kind pill (Video / Audio) — inline in the podcast title row (all statuses), with `ExplicitPillSmall` after it when the episode is explicit:
-```swift
-Text(mediaKind == .video ? "Video" : "Audio")
-    .font(.caption2.weight(.bold))
-    .foregroundStyle(.purple)
-    .padding(.horizontal, 7).padding(.vertical, 3)
-    .background(Color.purple.opacity(0.18), in: Capsule())
-```
-
-Download status pill colours:
-| Status | Colour |
-|---|---|
-| Downloading | Purple |
-| Paused | Orange |
-| Failed | Red |
-| Completed | Green |
-
----
+Progress/error content is indented by artwork size plus row spacing. Pause,
+Resume and Retry Now controls retain fixed intrinsic size so long progress text
+truncates rather than compressing button labels. Archive is swipe-only. Leading
+swipes expose green Play and blue Play Next; trailing swipes expose purple Archive
+and orange Play Last, with full swipes disabled. Currently playing rows do not
+offer these actions. Status colours remain purple (Downloading), orange (Paused/
+Waiting to retry), red (Failed), and green (Complete).
 
 ## Downloads Page — Archived Episode Row
 
 **Label: `Row-ArchivedEpisode`**
 
-Used in the "Recently Archived" card section. Simpler than the activity row — no controls except a re-download button.
-
-```swift
-HStack(alignment: .top, spacing: 12) {
-    // Artwork — 44×44, cornerRadius 9
-    CachedArtworkImage(url: entry.artworkURL) { placeholderArtwork }
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-
-    VStack(alignment: .leading, spacing: 2) {
-        Text(entry.podcastTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-        Text(entry.episodeTitle).font(.subheadline.bold()).foregroundStyle(.primary).lineLimit(2)
-        // Metadata: "Archived Jun 6, 2026 · Listened 73%" (completionPercent when available)
-        Text(metadataText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-    }
-
-    Spacer(minLength: 8)
-
-    // Re-download button — bordered small, purple tint
-    Button { redownload() } label: {
-        Label("Re-download", systemImage: "arrow.down.circle").labelStyle(.iconOnly)
-    }
-    .buttonStyle(.bordered).controlSize(.small).tint(.purple)
-}
-.padding(14)
-```
-
-Metadata format: `"Archived [date] · Listened [pct]%"` when completion data is available; `"Archived [date]"` for older entries without completion data.
+Recently Archived uses the same adaptive artwork/text sizing and native List
+swipe host. The inline bordered purple Re-download control is retained. Historical
+metadata reports relative archive time and listened percentage when available.
+The standard playback/archive swipes require a live episode in the store;
+historical rows without one remain informational. Downloads remain device-local.
 
 ---
 
@@ -1748,12 +1796,14 @@ green check + "Ready to play"), and a purple-capsule **Play latest** primary.
 
 **Label: `Onboarding-CoachMark`** (`CoachMarkOverlay`) — a dismissible white bottom
 card with a 2-point black outline and strong shadow. It uses black title/body text,
-a black 42-point icon circle, an unmistakable 48-point black ✕ at top-right and a
-full-width 52-point black “Got it — close tip” button. Do not recolour this surface
+a black 42-point icon circle and one unambiguous full-width 52-point black
+“Got it — close tip” button. Do not recolour this surface
 purple or apply glass: its contrast with ordinary Autohop UI is intentional. The
 requesting page owns the card through `onboardingTip(_:when:)`; leaving that page
-cancels it without persisting the seen flag. Up Next mirrors the overlay inside its
-system sheet because sheets render above RootView.
+cancels it without persisting the seen flag. Requests that overlap during a parent
+→ child navigation transition are queued and handed to the child when the parent
+disappears. Up Next and the Player-presented Podcast Settings stack mirror the
+overlay inside their system sheets because sheets render above RootView.
 
 **Label: `Onboarding-Checklist`** (`GettingStartedChecklist`) — top-of-Priority-Stack
 card (`white.opacity(0.06)` fill, `purple.opacity(0.25)` stroke) with a title + dismiss
@@ -2097,15 +2147,19 @@ later unified onto TV.
 
 **Label: `Scrubber-Player`**
 
-**AI CONTEXT — seek completion/recovery (2026-07-17):** `sliderValue` is local
+**AI CONTEXT — seek completion/recovery (updated 2026-08-31):** `sliderValue` is local
 drag state while `PlaybackClock.time` is the canonical rendered position. A normal
 Slider editing-end commits one seek. If iOS cancels the gesture without delivering
 editing-end, five seconds without thumb movement commits the same seek and clears
-`isSeeking`, preventing permanently frozen elapsed/remaining labels. A scrub or
-forward skip within 0.25 seconds of duration is an episode completion: it must use
-the played/history/position-clear/advance pipeline and must never start an engine
-buffer loop at EOF. If that episode was a Play Instant return target, completion
-cancels the return so its skipped ending cannot be resurrected later.
+`isSeeking`, preventing permanently frozen elapsed/remaining labels. A scrub that
+lands within 0.25 seconds of duration, or a forward skip that reaches/crosses the
+duration, is an episode completion. The main Player, Menu player and compact
+mini-player must all call the shared seek/skip workflow; no view may call queue
+advancement directly for an end crossing. Completion commits played state, clears
+the resume point, immediately archives the default After Playing policy, records
+history and only then advances. It must never start an engine buffer loop at EOF.
+If that episode was a Play Instant return target, completion cancels the return so
+its skipped ending cannot be resurrected later.
 
 Purple `Slider` above a two-label time row. The slider value tracks the canonical playback clock while not seeking; during seek the value is decoupled and committed on `onEditingChanged(false)`. On first appearance, the drag-local slider state is explicitly synchronised from the restored playback clock so a paused resumed episode does not render with the thumb stranded at the beginning.
 
@@ -2792,7 +2846,13 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): rank
 
 ## Stats Page — Privacy Footer
 
-Centred `.caption` `.tertiary` row: `lock.shield` icon + "Your listening stats are private — kept on your device and your own iCloud, never sent to Autohop."
+Centred `.caption` `.tertiary` row with `lock.shield`. When iCloud Sync is enabled it says stats are kept on this device and stored in the user's iCloud while Sync is enabled; when disabled it says stats remain on this device and that enabling Sync stores them in iCloud. Both variants state or imply that the data is never sent to Autohop.
+
+## Stats Page — Data Coverage
+
+**Label: `Card-StatsCoverage`**
+
+Conditional `Glass-Card` below the main statistics sections. It appears when the selected range predates the introduction of per-show time saved, download accounting, per-show outcomes or durable outcome facts, and states the exact tracking start for each affected metric. It also appears when a selected calendar range only partially overlaps the unbucketed legacy baseline, explaining that the unattributable portion is excluded rather than silently presenting a partial total as complete.
 
 ## Completion Bar
 
@@ -2820,11 +2880,11 @@ Card rows (standard `Section-CardRows` divider at `padding(.leading, 70)`): 44 p
 
 **Label: `Card-ShowStatsExpanded`**
 
-Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `Glass-Card` — kept as a faint solid inset rather than nested glass. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when any contributing day is apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. Finished counts must come from period-filtered `DayStats.perShowEpisodesCompleted`; for pre-attribution buckets, merge the strongest retained history and sticky completed-episode evidence by enclosure identity and use the greater count to avoid double-counting migration overlap. Do not derive long-range finished counts solely from the mutable history projection. Legacy time-saved fallback must be applied per day so a mixed legacy/current range cannot discard older contributions. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
+Inline per-show detail card (`ShowStatsExpandedCard` in `Views/StatsView.swift`) revealed under a Top Shows or Drifting Show row by tapping it; tap again to collapse (animated `.easeInOut(duration: 0.2)`, transition `.opacity` + `.move(edge: .top)`). Nested card styling: `white.opacity(0.05)` background, `cornerRadius 12`, padding 14, inset `padding(.horizontal, 14)` inside the parent `Glass-Card` — kept as a faint solid inset rather than nested glass. Contents: a 2-column `LazyVGrid` of stat tiles — value `.subheadline.bold.monospacedDigit` (teal for finished/time-saved, orange for stopped-partway, primary otherwise) over a `.caption2` `.secondary` label — covering episodes finished, time saved ("(est.)" suffix when any contributing day is apportioned rather than tracked), share of all listening, average completion %, stopped partway, last listened (relative date), and typical wait after release. New completion/abandonment facts come from period-filtered, idempotent `DayStats.episodeOutcomes`, which survive bounded resume history and deduplicate across devices. `perShowEpisodesCompleted` and the strongest retained history/sticky episode evidence remain compatibility sources for pre-outcome buckets; use the greater independently evidenced count rather than summing overlapping sources. Legacy time-saved fallback must be applied per day so a mixed legacy/current range cannot discard older contributions. Drift-row variant appends a purple gear + "Podcast Settings" `NavigationLink`.
 
 ## Stats Page — Accounting Integrity
 
-All time-based visuals share one source-of-truth contract: `DayStats.wallClockSeconds` is elapsed listening time, never media position. Playback adapters convert natural media progress using `mediaDelta / effectiveSpeed` before recording it. The hero, Top Shows, heatmap, monthly trend, listening clock and streak threshold must all consume the resulting daily buckets so their totals remain mutually reconcilable. Imported legacy totals remain valid for Lifetime and for a calendar range that wholly contains the baseline's known start-to-cutover interval, but must not be partially guessed across a boundary or fabricated into month, hour, or show buckets; an affected trend discloses this unattributed amount beneath the chart.
+All time-based visuals share one source-of-truth contract: `DayStats.wallClockSeconds` is elapsed listening time, never media position. Playback backends emit confirmed rendered intervals; seeks, silence removal and buffer delays do not become listening. Each interval is split at local hour/day boundaries under the current system calendar and time zone. The hero, Top Shows, heatmap, monthly trend, listening clock and streak threshold must all consume the resulting daily buckets so their totals remain mutually reconcilable. Imported legacy totals remain valid for Lifetime and for a calendar range that wholly contains the baseline's known start-to-cutover interval, but must not be partially guessed across a boundary or fabricated into month, hour, or show buckets; Data Coverage discloses any partial overlap. Per-show identity is a privacy-safe canonical-feed digest rather than the replaceable subscription UUID. Idempotent durable episode outcomes are retained independently of mutable/capped resume history and merge by strongest terminal evidence.
 
 ## Main Player — Sleep Schedule Prompt Overlay
 
@@ -3060,14 +3120,15 @@ struct ChartEpisode: Identifiable, Hashable, Codable, Sendable {
 | Episode hero rank badge | `.glassCapsule(highlighted: true)` (purple-tinted) |
 | Rail tile rank badge | `.glassCapsule()` (neutral) |
 
-## Discover — Category Top 50 Pages
+## Discover — Category Top 100 Pages
 
 `TopPodcastsView` serves both the overall Top Podcasts chart and category charts.
 Category pages are reached from both Discover chips and rail headings and use the
 title `Top 100 - <Category>`, followed by
 `Apple Podcasts · <Category> · <Country>`.
-They deliberately mirror the established Top Podcasts editorial rhythm: full-width
-feature cards at ranks 1/8/15/22/29/36/43, compact 84pt-artwork rows elsewhere,
+They begin with up to eight rotating episode heroes using DiscoverEpisodeHeroCard
+and shared AdaptiveEditorialMetrics, then full-width show feature cards at ranks
+8/16/24/32/40/48/56/64/72/80/88/96 with compact rows elsewhere,
 20pt horizontal insets, black background, brand back control, pull-to-refresh,
 and the docked mini-player. Selecting an entry resolves its RSS feed and follows
 the standard subscribed-or-preview Podcast Detail route.
@@ -3079,7 +3140,7 @@ preview when ready; preview data is storefront-keyed so a country change cannot
 flash the previous country's chart.
 
 The same `ChartCountryPicker` toolbar menu appears on Discover, Top Episodes,
-Top Podcasts, and category Top-50 pages. It binds to the shared
+Top Podcasts, and category Top-100 pages. It binds to the shared
 `discoverCountryCode` preference, so a selection reloads the visible child chart
 and remains selected after navigating back.
 
@@ -3219,6 +3280,26 @@ listening content or becoming a performance workload. -->
     poster card, with square podcast artwork centered on top. Poster geometry
     provides four visible choices while retaining Apple-owned focus and labels.
 
+# Multi-Release Feed Download Rules (Version 1.6.1)
+
+<!-- AI CONTEXT — This is a data/workflow invariant, not a visual pattern. -->
+
+1. A feed refresh must distinguish episodes first observed in the current scan
+   from older visible catalogue entries. It must not infer “new” solely from
+   `latestEpisode` changing.
+2. Every newly observed episode that passes Download Filters is a download
+   candidate. Sort the batch newest-first and cap it with the subscription's
+   Episode Limit; zero means No Limit.
+3. Persist every selected intent before starting asynchronous media work, then
+   process the batch sequentially. Independent fire-and-forget tasks can race on
+   candidate state and silently discard all but the newest episode.
+4. Revalidate the exact scheduled episode before transfer. Never replace it
+   with the newest remaining candidate after Episode Limit enforcement.
+5. Existing automatic downloads rotate normally to make room. Manual downloads,
+   active playback and Play Next/Play Last pins remain protected and additive.
+6. Queue recomputation follows each completed transfer, so every successfully
+   downloaded member of the batch appears in Up Next at normal priority order.
+
 # Fresh-Install Sync Preference Rules (Version 1.6)
 
 <!-- AI CONTEXT — A factory default and a decode fallback represent different
@@ -3230,3 +3311,31 @@ user populations. Never replace the legacy fallback with the factory default. --
    the existing user's historical state rather than silently opting them in.
 4. Settings copy must state both halves of this contract: On for new installs,
    unchanged for existing installs, and user-controllable at any time.
+
+# iPad App Store Screenshot Campaign (Version 1.6)
+
+<!-- AI CONTEXT — These rules govern marketing composites, not product UI.
+Never fabricate an interface to make a screenshot fit the campaign. -->
+
+1. iPad campaign exports use Apple's 12.9-inch submission dimensions:
+   2048×2732 portrait and 2732×2048 landscape.
+2. The visual grammar matches the iPhone and Apple TV campaign: Autohop's
+   purple-to-blue brand field, a restrained `AUTOHOP FOR IPAD` eyebrow, one
+   short white editorial headline and one complete device capture.
+3. Captured product UI is immutable. It may be scaled uniformly and framed
+   with a subtle border/shadow, but it must never be redrawn, retouched,
+   stretched or cropped.
+4. Portrait and landscape exports use the matching native capture rather than
+   deriving one orientation from the other.
+5. The reusable compositor and campaign copy live in
+   `AppStoreScreenshots/build_ipad_screenshots.py`; submission-ready files live
+   below `AppStoreScreenshots/iPadOS-1.6`.
+
+## Startup splash coverage — 12 September 2026
+
+The desktop command host now fills the window’s container safe areas. Its nested
+UIKit hosting view still supplies safe-area insets to page content, while the
+launch animation’s existing edge-to-edge purple background can cover the status
+bar and home-indicator regions. Keyboard avoidance is preserved by ignoring only
+container safe areas. Keep this boundary when changing responder-host layout;
+adding ignoresSafeArea solely inside the splash cannot expand a constrained host.

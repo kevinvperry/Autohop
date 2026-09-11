@@ -1,3 +1,11 @@
+import SwiftUI
+// PRESENTATION REGRESSION (2026-09-06): testCoachMarkRendersBeforePresentationEnvironmentIsInstalled
+// evaluates nil-tip body and renders an active tip without environment injection.
+// Use the explicit coordinator; retain navigation cancellation/promotion tests.
+// This focused test does not substitute for a TestFlight mouse-click walkthrough.
+
+// MILESTONE REGRESSION: Visibility suppression retains active tip ownership;
+// cancelling its page while hidden must prevent it reappearing after dismissal.
 // AI CONTEXT — Tests/AppStateCoordinatorExtractionTests.swift
 //
 // Characterization gates for AppState decomposition Stages 3–14. These tests
@@ -32,7 +40,7 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         super.tearDown()
     }
 
-    func testHistoryStatsCoordinatorPreservesTickBoundsCompletionAndCheckpointOrder() throws {
+    func testHistoryStatsCoordinatorRecordsRenderedIntervalsAndCheckpointOrder() throws {
         let store = SubscriptionStore.inMemory()
         let historyURL = temporaryURL("history.json")
         let statsURL = temporaryURL("stats.json")
@@ -58,28 +66,33 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         )
         episode.durationSeconds = 100
 
-        subject.recordPlaybackProgress(
-            at: 10,
-            isPlaying: true,
+        subject.recordPlaybackInterval(
+            PlaybackAccountingInterval(
+                wallClockSeconds: 0.25,
+                mediaHeardSeconds: 0.5,
+                positionSeconds: 10.5,
+                playbackSpeed: 2
+            ),
             episode: episode,
             subscription: subscription
         )
-        subject.recordPlaybackProgress(
-            at: 10.5,
-            isPlaying: true,
-            episode: episode,
-            subscription: subscription,
-            effectiveSpeed: 2
-        )
-        subject.recordPlaybackProgress(
-            at: 15,
-            isPlaying: true,
+        subject.recordPlaybackInterval(
+            PlaybackAccountingInterval(
+                wallClockSeconds: 2.25,
+                mediaHeardSeconds: 4.5,
+                positionSeconds: 15,
+                playbackSpeed: 2
+            ),
             episode: episode,
             subscription: subscription
-        ) // invalid >3 s delta
-        subject.recordPlaybackProgress(
-            at: 16,
-            isPlaying: false,
+        )
+        subject.recordPlaybackInterval(
+            PlaybackAccountingInterval(
+                wallClockSeconds: -1,
+                mediaHeardSeconds: 1,
+                positionSeconds: 16,
+                playbackSpeed: 1
+            ),
             episode: episode,
             subscription: subscription
         )
@@ -95,10 +108,10 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
 
         XCTAssertTrue(syncObservedDurableFiles)
         XCTAssertEqual(history.entries.count, 1)
-        XCTAssertEqual(history.entries[0].listenedSeconds, 0.5, accuracy: 0.001)
+        XCTAssertEqual(history.entries[0].listenedSeconds, 2.5, accuracy: 0.001)
         let statsSummary = stats.summary(for: .lifetime)
-        XCTAssertEqual(statsSummary.wallClockSeconds, 0.75, accuracy: 0.001)
-        XCTAssertEqual(statsSummary.timeSavedVariableSpeed, 0.5, accuracy: 0.001)
+        XCTAssertEqual(statsSummary.wallClockSeconds, 3, accuracy: 0.001)
+        XCTAssertEqual(statsSummary.timeSavedVariableSpeed, 2.75, accuracy: 0.001)
 
         subject.mark(
             episode,
@@ -335,6 +348,38 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertTrue(bulkSettings.appSettings.hasSubscribedFirstShow)
     }
 
+    func testFirstSubscriptionHidesTipWithoutLosingPageOwnership() {
+        let coordinator = OnboardingCoordinator(subscriptionStore: .inMemory(),
+                                                settingsStore: TestSettingsStore())
+        coordinator.activeTip = .swipeActions
+        coordinator.isPresentingFirstSubscription = true
+        XCTAssertNil(coordinator.visibleTip)
+        XCTAssertEqual(coordinator.activeTip, .swipeActions)
+        coordinator.isPresentingFirstSubscription = false
+        XCTAssertEqual(coordinator.visibleTip, .swipeActions)
+        coordinator.isPresentingFirstSubscription = true
+        coordinator.cancelActiveTip(.swipeActions)
+        coordinator.isPresentingFirstSubscription = false
+        XCTAssertNil(coordinator.visibleTip, "Leaving the page must not resurrect hidden guidance")
+    }
+
+    func testCoachMarkRendersBeforePresentationEnvironmentIsInstalled() {
+        let coordinator = OnboardingCoordinator(
+            subscriptionStore: .inMemory(),
+            settingsStore: TestSettingsStore()
+        )
+        // Mac's presentation bridge evaluates the overlay's body while creating
+        // the presentation host. There must be no environment object lookup,
+        // including when no tip is active (the TestFlight crash path).
+        let overlay = CoachMarkOverlay(onboardingCoordinator: coordinator)
+        _ = overlay.body
+        coordinator.activeTip = .settings
+        let renderer = ImageRenderer(content: overlay.frame(width: 400, height: 600))
+        XCTAssertNotNil(renderer.uiImage, "An active tip must also render without environment injection")
+        coordinator.activeTip = nil
+        _ = overlay.body
+    }
+
     func testOnboardingTipNavigationCancellationDoesNotMarkTipSeen() {
         let tip = OnboardingTip.discover
         let seenKey = "tip.\(tip.rawValue).seen"
@@ -357,6 +402,31 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         subject.dismissActiveTip()
         XCTAssertNil(subject.activeTip)
         XCTAssertTrue(tip.isSeen)
+    }
+
+    func testOnboardingTipNavigationPromotesVisibleChildRequest() {
+        let parent = OnboardingTip.subscriptionAutomation
+        let child = OnboardingTip.feedFilters
+        let keys = [parent, child].map { "tip.\($0.rawValue).seen" }
+        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        defer { keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+
+        let subject = OnboardingCoordinator(
+            subscriptionStore: .inMemory(),
+            settingsStore: TestSettingsStore()
+        )
+        subject.requestTip(parent)
+        XCTAssertEqual(subject.activeTip, parent)
+
+        // A pushed child can appear before SwiftUI reports that its parent
+        // disappeared. The child's request must wait rather than be discarded.
+        subject.requestTip(child)
+        XCTAssertEqual(subject.activeTip, parent)
+
+        subject.cancelActiveTip(parent)
+        XCTAssertEqual(subject.activeTip, child)
+        XCTAssertFalse(parent.isSeen)
+        XCTAssertFalse(child.isSeen)
     }
 
     func testRoutingCoordinatorProducesTypedLaunchAndPresentationCommands() {

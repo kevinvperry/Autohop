@@ -9,9 +9,10 @@ import Foundation
 // identities IN ORDER whenever the queue changes; read-only surfaces (tvOS,
 // future watch) render exactly that, so "3 episodes of one show queued on the
 // phone" mirrors everywhere. ONE record per account ("queue:current"),
-// whole-record LWW by `updatedAt` (like listening history) — the most recent
-// authoring device wins outright; there is no per-entry merge, because a
-// queue is one coherent ordered list, not a set of independent fields.
+// whole-record LWW by `updatedAt` — the most recent authoring device wins
+// outright; there is no per-entry merge, because a queue is one coherent
+// ordered list, not a set of independent fields. Do not copy this policy to
+// listening history: history uses field-aware recency plus monotonic evidence.
 // VERSION 2 (tvOS rebuild Phase 2, 2026-07-26): the same record is now a
 // self-contained TV projection. Each entry carries enough denormalized display
 // and streaming data to render/play without fetching its RSS feed. `generation`

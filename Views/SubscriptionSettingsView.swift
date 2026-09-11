@@ -1,6 +1,15 @@
 import SwiftUI
 import UIKit
 
+// DESKTOP CONTRACT (2026-09-06): Podcast Settings and Download Feed Filters pass
+// subscriptionID through miniPlayerBar; Episode Detail also supplies episodeID.
+// Preserve these identities when moving nested views so contextual menus stay scoped.
+
+// EPISODE NAVIGATION (2026-09-12): Show title links to PodcastDetailView.
+// Browse previews use browseSubscription so Subscribe/feed loading remain available;
+// real subscriptions use their existing ID. Navigation must not subscribe on tap.
+// Keep the show link at its intrinsic text height: a 44-point minimum introduced
+// excessive vertical space. The surrounding header supplies six-point spacing.
 // AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
 // gear icon from a podcast's episode list). Per-podcast configuration, all
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
@@ -67,7 +76,7 @@ import UIKit
 // treatment over a black.opacity(0.5) base, 48 pt section spacing; solid cards
 // below iOS 26.)
 // Settings/detail artwork uses explicit
-// CachedArtworkImage targets (120 pt header/detail variants), sharing validated
+// CachedArtworkImage targets (responsive Episode Detail, 120 pt settings variants), sharing validated
 // source bytes with episode lists while avoiding full-size cover decodes.
 // EXPANSIVE NAVIGATION: a fixed SettingsShortcutSidebar sits left of the same
 // scrolling Form and jumps to stable major-section IDs. Chapters appears only
@@ -282,7 +291,7 @@ struct SubscriptionSettingsView: View {
                 .accessibilityLabel("Share Podcast")
             }
         }
-        .miniPlayerBar()
+        .miniPlayerBar(subscriptionID: subscriptionID)
         .onboardingTip(.subscriptionAutomation)
         .sheet(isPresented: $showPodcastShare) {
             if let subscription {
@@ -893,7 +902,7 @@ struct DownloadFiltersView: View {
             }
         }
         .onboardingTip(.feedFilters, when: subscription != nil)
-        .miniPlayerBar()
+        .miniPlayerBar(subscriptionID: subscriptionID)
     }
 
     @ViewBuilder
@@ -1180,6 +1189,9 @@ struct DownloadFiltersView: View {
 }
 
 
+// Layout: Measure the actual page width for 120–320pt artwork and matching
+// cache decode size. Centre the four-action group; use two columns on narrow
+// pages. Preserve state-dependent Download/Archive/Unarchive behaviour.
 // AI CONTEXT — EpisodeDetailView ("Episode Detail" page). Full single-episode
 // view: description, chapter list with artwork, play/download/share/archive
 // actions. The fourth action mirrors PodcastDetailView's far-right trailing
@@ -1232,7 +1244,7 @@ struct EpisodeDetailView: View {
                 .disabled(episode == nil)
             }
         }
-        .miniPlayerBar()
+        .miniPlayerBar(subscriptionID: subscriptionID, episodeID: episodeID)
         .sheet(isPresented: $showShareSheet) {
             if let ep = episode {
                 EpisodeShareSheet(episode: ep, subscription: subscription)
@@ -1242,75 +1254,90 @@ struct EpisodeDetailView: View {
 
     @ViewBuilder
     private func pageContent(sub: Subscription, ep: Episode) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Centred header — artwork · title · pills · show name
-                VStack(spacing: 12) {
-                    CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: 120, height: 120)) { placeholderArtwork }
-                        .frame(width: 120, height: 120)
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-                        .onTapGesture { showExpandedArtwork = true }
-                        .sheet(isPresented: $showExpandedArtwork) {
-                            ExpandedArtworkSheet(url: ep.artworkURL ?? sub.artworkURL)
-                        }
+        GeometryReader { geometry in
+            let metrics = AdaptiveEpisodeDetailMetrics(containerWidth: geometry.size.width)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    // Centred header — artwork · title · pills · show name
+                    VStack(spacing: 12) {
+                        CachedArtworkImage(url: ep.artworkURL ?? sub.artworkURL, targetSize: CGSize(width: metrics.artworkSize, height: metrics.artworkSize)) { placeholderArtwork }
+                            .frame(width: metrics.artworkSize, height: metrics.artworkSize)
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+                            .onTapGesture { showExpandedArtwork = true }
+                            .sheet(isPresented: $showExpandedArtwork) {
+                                ExpandedArtworkSheet(url: ep.artworkURL ?? sub.artworkURL)
+                            }
 
-                    VStack(spacing: 6) {
-                        Text(ep.title)
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.center)
+                        VStack(spacing: 6) {
+                            Text(ep.title)
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.center)
 
-                        let showVideo = ep.mediaKind == .video
-                        let showExplicit = ep.isExplicit == true
-                        if showVideo || showExplicit {
-                            HStack(spacing: 6) {
-                                if showVideo { VideoPillLarge() }
-                                if showExplicit { ExplicitPillLarge() }
+                            let showVideo = ep.mediaKind == .video
+                            let showExplicit = ep.isExplicit == true
+                            if showVideo || showExplicit {
+                                HStack(spacing: 6) {
+                                    if showVideo { VideoPillLarge() }
+                                    if showExplicit { ExplicitPillLarge() }
+                                }
+                            }
+
+                            NavigationLink {
+                                if sub.browseDate != nil {
+                                    PodcastDetailView(browseSubscription: sub)
+                                } else {
+                                    PodcastDetailView(subscriptionID: sub.id)
+                                }
+                            } label: {
+                                Text(sub.title)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tint)
+                                    .multilineTextAlignment(.center)
+                                    .underline()
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Open podcast to subscribe or browse episodes")
+
+                            if !sub.categories.isEmpty {
+                                Text(sub.categories.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .multilineTextAlignment(.center)
                             }
                         }
+                    }
+                    .frame(maxWidth: .infinity)
 
-                        Text(sub.title)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                    actionButtons(ep: ep, sub: sub, metrics: metrics)
 
-                        if !sub.categories.isEmpty {
-                            Text(sub.categories.joined(separator: " · "))
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
+                    if let description = ep.description, !description.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.primary)
+                            descriptionCard(description)
                         }
                     }
+
+                    metaGrid(sub: sub, ep: ep)
                 }
-                .frame(maxWidth: .infinity)
-
-                actionButtons(ep: ep, sub: sub)
-
-                if let description = ep.description, !description.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Description")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                        descriptionCard(description)
-                    }
-                }
-
-                metaGrid(sub: sub, ep: ep)
+                .adaptiveContentWidth(.list)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 30)
             }
-            .adaptiveContentWidth(.list)
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 30)
         }
     }
 
     @ViewBuilder
-    private func actionButtons(ep: Episode, sub: Subscription) -> some View {
+    private func actionButtons(ep: Episode, sub: Subscription, metrics: AdaptiveEpisodeDetailMetrics) -> some View {
         let isDownloading = ep.downloadState == .downloading
 
         VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 8)], spacing: 10) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: metrics.actionColumns), spacing: 10) {
                 swipeStyleButton(
                     label: "Play", icon: "play.fill", color: .green,
                     disabled: isDownloading
@@ -1346,6 +1373,9 @@ struct EpisodeDetailView: View {
                 episodePrimaryActionButton(ep: ep, sub: sub, isDownloading: isDownloading)
 
             }
+
+            .frame(maxWidth: metrics.actionWidth)
+            .frame(maxWidth: .infinity, alignment: .center)
 
             if isDownloading, let progress = downloadProgressModel.progress[ep.id] {
                 ProgressView(value: progress, total: 1.0)

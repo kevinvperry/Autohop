@@ -1,5 +1,8 @@
 import SwiftUI
 
+// MINI-PLAYER CONTRACT (2026-09-06): This pushed RSS-add page owns miniPlayerBar
+// for both Search and Settings entry paths. Preserve the inset across form states.
+
 // AI CONTEXT — Views/AddFeedView.swift ("Add RSS Feed" page). Manual feed-URL
 // entry fallback for podcasts not in the iTunes catalog. Uses
 // FeedPreviewViewModel to fetch/preview the feed, then subscribes through
@@ -58,6 +61,7 @@ struct AddFeedView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Add RSS Feed")
         .responsiveInlineNavigationTitle("Add RSS Feed")
+        .miniPlayerBar()
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
