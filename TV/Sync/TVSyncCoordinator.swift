@@ -9,7 +9,10 @@ import AutohopCore
 @MainActor
 @Observable
 final class TVSyncCoordinator {
-    var status: TVSyncStatus = .updating
+    // AI: Record semantic badge transitions, not repeated body evaluations.
+    var status: TVSyncStatus = .updating {
+        didSet { AppLogger.shared.recordState("tv.sync.status", metadata: ["previous": oldValue.label, "current": status.label]) }
+    }
     internal var engine: CloudSyncEngine?
     var isSceneActive = true
 

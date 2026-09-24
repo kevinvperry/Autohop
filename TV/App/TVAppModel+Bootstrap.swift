@@ -30,9 +30,6 @@ extension TVAppModel {
             "subscriptions": "\(subscriptionStore.subscriptions.count)"
         ], alwaysPersist: true)
 
-        if let kit = survivalKitStore.load() {
-            await rebuildMissingSubscriptions(from: kit)
-        }
         // ONE-SHOT REPAIR (2026-07-11) — MUST run before startCloudSync(): a TV
         // database rebuilt from the survival kit before the materialize
         // clean-seed fix holds fully-dirty DEFAULT-settings projections for
@@ -53,6 +50,14 @@ extension TVAppModel {
         startCloudSync()
         observeStoreForKitWrites()
         startForegroundFreshnessPolling()
+        // Recovery must not gate engine activation or targeted Up Next fetches.
+        // materialize() adopts remote projections or seeds clean defaults, so
+        // background recovery never authors phone settings.
+        if let kit = survivalKitStore.load() {
+            Task { [weak self] in
+                await self?.rebuildMissingSubscriptions(from: kit)
+            }
+        }
 
         // Prime the library DIRECTLY (targeted zone queries) rather than
         // waiting for CKSyncEngine's cold-start delta stream — Kevin's

@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 // No Discover/network search. Clear resets text; Cancel clears and closes the field.
 // Search and reorder are mutually exclusive; never persist a filtered priority list.
 // AI CONTEXT — Views/PodcastsView.swift ("Subscriptions" page — the app's
+// REPLAY (Version 1.7, 2026-09-12): Replay appears alongside existing row status pills and remains visible while enabled but waiting for capacity.
 // home page, see PAGES.md). Ranked list of real subscriptions (browse
 // subscriptions filtered out; Inactive subscriptions remain visible at the
 // bottom with the orange pill). Reorder mode uses a stable local draft of ACTIVE
@@ -566,6 +567,7 @@ struct PodcastsView: View {
                         // Pills hide in Reorder mode so the row's right edge
                         // belongs to the drag grips (NavRules).
                         if editMode != .active {
+                            if sub.autoArchiveSettings.replay?.enabled == true { EpisodeStatusPill(kind: .replay) }
                             if sub.excludeFromAutoFeedRefresh {
                                 EpisodeStatusPill(kind: .inactive)
                             } else if episode.playedState == .played {

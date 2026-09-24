@@ -4,7 +4,7 @@ import XCTest
 // AI CONTEXT — Regression boundary for the route-safe Play Instant waiting
 // policy. Integration state remains MainActor-owned by PlayInstantWorkflow;
 // these tests pin its bounded lifetime, exact expiry semantics, and the final
-// 60-second no-interruption boundary so a later refactor cannot restore
+// 120-second no-interruption boundary so a later refactor cannot restore
 // indefinite pending autoplay, premature expiry, or end-of-episode disruption.
 @MainActor
 final class PlayInstantPolicyTests: XCTestCase {
@@ -39,25 +39,25 @@ final class PlayInstantPolicyTests: XCTestCase {
         )
     }
 
-    func testCurrentEpisodeWithExactlySixtySecondsRemainingIsNotInterrupted() {
+    func testCurrentEpisodeWithExactlyTwoMinutesRemainingIsNotInterrupted() {
         XCTAssertFalse(
             PlayInstantWorkflow.mayInterruptCurrentEpisode(
                 duration: 1_000,
-                position: 940
+                position: 880
             )
         )
     }
 
-    func testCurrentEpisodeAboveSixtySecondsRemainingMayBeInterrupted() {
+    func testCurrentEpisodeAboveTwoMinutesRemainingMayBeInterrupted() {
         XCTAssertTrue(
             PlayInstantWorkflow.mayInterruptCurrentEpisode(
                 duration: 1_000,
-                position: 939.999
+                position: 879.999
             )
         )
     }
 
-    func testCurrentEpisodeBelowSixtySecondsRemainingIsNotInterrupted() {
+    func testCurrentEpisodeBelowTwoMinutesRemainingIsNotInterrupted() {
         XCTAssertFalse(
             PlayInstantWorkflow.mayInterruptCurrentEpisode(
                 duration: 1_000,

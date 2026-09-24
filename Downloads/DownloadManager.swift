@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// First active-execution fallback may run without the 30-second delay; later 60/120-second
+// retries and inactive first-retry delay remain. Keep final zero-byte cancellation checks.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Foundation
 #if canImport(UIKit)
 import UIKit
@@ -1124,6 +1129,13 @@ extension DownloadManager {
     /// evaluator may already own cancellation, the task must still be running,
     /// neither live nor delegate-tracked payload bytes may have arrived, and
     /// connectivity waiting must be false.
+    // AI: One prompt fallback is allowed while audio/foreground keeps execution
+    // alive. Repeated attempts and suspended-app retries retain bounded backoff.
+    static func watchdogRetryDelay(attempt: Int, activeFallbackAvailable: Bool) -> TimeInterval {
+        if attempt == 1 && activeFallbackAvailable { return 0 }
+        return TimeInterval(30 * (1 << min(2, max(0, attempt - 1))))
+    }
+
     static func shouldCancelFirstByteTimeout(
         taskIdentityMatches: Bool,
         cancellationAlreadyClaimed: Bool,

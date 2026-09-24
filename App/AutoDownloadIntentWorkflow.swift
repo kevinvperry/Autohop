@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — App/AutoDownloadIntentWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): Enabled Replay considers only journal reservations; normal newest-arrival eligibility is suppressed. Existing filters, retry budgets and transfer constraints still apply.
 //
 // PURPOSE / OWNERSHIP:
 // Durable automatic-download orchestration that begins after a feed merge. It
@@ -58,6 +59,13 @@ final class AutoDownloadIntentWorkflow {
     }
 
     func eligibleCandidates(in subscription: Subscription) -> [Episode] {
+        guard !subscription.excludeFromAutoFeedRefresh else { return [] }
+        if subscription.autoArchiveSettings.replay?.enabled == true {
+            return subscription.replayQueueEpisodes.filter {
+                $0.downloadState != .downloaded && $0.downloadState != .queued && $0.downloadState != .downloading &&
+                subscription.downloadFilterSettings.evaluation(for: $0).isIncluded
+            }
+        }
         let filtered = subscription.episodes.filter { episode in
             subscription.downloadFilterSettings
                 .evaluation(for: episode)
@@ -218,7 +226,8 @@ final class AutoDownloadIntentWorkflow {
             settle("downloaded")
             return
         }
-        if episode.playedState == .played || episode.playedState == .archived {
+        if (episode.playedState == .played || episode.playedState == .archived)
+            && subscription.autoArchiveSettings.replay?.contains(episode) != true {
             settle("playedOrArchived")
             return
         }
@@ -235,7 +244,10 @@ final class AutoDownloadIntentWorkflow {
         }
     }
 
+    var reconcileReplay: (() async -> Void)?
+
     func drain(reason: String) async {
+        await reconcileReplay?()
         guard !state.isDraining else { return }
         let pending = state.intentStore.intents
         guard !pending.isEmpty else { return }

@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Pin identity projection is checked alongside persisted legacy pin keys and existing
+// archive/runtime contracts.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import SwiftUI
 // PRESENTATION REGRESSION (2026-09-06): testCoachMarkRendersBeforePresentationEnvironmentIsInstalled
 // evaluates nil-tip body and renders an active tip without environment injection.
@@ -252,6 +257,45 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         )
     }
 
+    func testPromptRetryWaitsForPreviousTransferSettlement() async {
+        let subject = DownloadCoordinator(activityStore: DownloadActivityStore(fileURL: temporaryURL("retry-owner.json")))
+        let id = UUID()
+        XCTAssertTrue(subject.beginTransferSettlement(id))
+        XCTAssertFalse(subject.beginTransferSettlement(id))
+        var handedOff = false
+        let waiter = Task { @MainActor in
+            await subject.waitForTransferSettlement(id)
+            handedOff = true
+        }
+        await Task.yield()
+        XCTAssertFalse(handedOff)
+        subject.finishTransferSettlement(id)
+        await waiter.value
+        XCTAssertTrue(handedOff)
+        XCTAssertTrue(subject.beginTransferSettlement(id))
+        subject.finishTransferSettlement(id)
+    }
+
+    func testCompletedDownloadProjectionReplacesOnlyItsRowAndRemovesDeletedMedia() {
+        let activities = DownloadActivityStore(fileURL: temporaryURL("completed-activities.json"))
+        let subject = DownloadCoordinator(activityStore: activities)
+        var first = makeEpisode(subscriptionID: UUID(), guid: "completed-one")
+        first.downloadState = .downloaded
+        first.localFileURL = temporaryURL("one.mp3")
+        var second = makeEpisode(subscriptionID: UUID(), guid: "completed-two")
+        second.downloadState = .downloaded
+        second.localFileURL = temporaryURL("two.mp3")
+        for episode in [first, second] {
+            activities.complete(episode: episode, podcastTitle: "Show", localFileName: episode.localFileURL!.lastPathComponent)
+            subject.refreshCompletedDownload(episodeID: episode.id, currentEpisode: episode)
+        }
+        subject.refreshCompletedDownload(episodeID: first.id, currentEpisode: first)
+        XCTAssertEqual(Set(subject.downloadedActivities.map(\.episodeID)), Set([first.id, second.id]))
+        XCTAssertEqual(subject.downloadedActivities.count, 2)
+        subject.refreshCompletedDownload(episodeID: first.id, currentEpisode: nil)
+        XCTAssertEqual(subject.downloadedActivities.map(\.episodeID), [second.id])
+    }
+
     func testQueueCoordinatorPreservesLegacyPinFileKeys() throws {
         let store = SubscriptionStore.inMemory()
         let subscriptionID = UUID()
@@ -292,6 +336,7 @@ final class AppStateCoordinatorExtractionTests: XCTestCase {
         XCTAssertNotNil(object["demotedIDs"])
         XCTAssertNil(object["playNextIDs"])
 
+        XCTAssertEqual(writer.episodeLimitProtectedIDs, Set([episode.id]))
         let reader = QueueCoordinator(
             subscriptionStore: store,
             queueService: QueueService(),

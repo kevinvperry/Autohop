@@ -1,3 +1,10 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (AutoArchiveActivityView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // AI CONTEXT — Auto Archive Activity is the user-visible audit surface for
@@ -36,12 +43,7 @@ struct AutoArchiveActivityView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Auto Archive Activity")
         .responsiveInlineNavigationTitle("Auto Archive Activity")
-        .navigationBarBackButtonHidden(true)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
-        }
+        .appNavigationBackButton()
         .miniPlayerBar()
         .preferredColorScheme(.dark)
     }

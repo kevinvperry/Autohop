@@ -10,6 +10,8 @@
 // restore settings then queue a full namespaced upload. The production-
 // environment bootstrap tests ensure Development acknowledgements/system fields
 // cannot prevent the iPhone authority from seeding an empty Production zone.
+// Filter-default coverage protects opt-in title filtering and preserves explicit
+// saved on/off choices, including enabled groups without rules.
 // Duplicate-identity coverage protects an active feed from obsolete namespaced
 // records created by historical unsubscribe/resubscribe cycles.
 import XCTest
@@ -449,6 +451,36 @@ final class SubscriptionSyncTests: XCTestCase {
     }
 
     // MARK: - Download Filters sync (joined the projection July 2026)
+
+    func testTitleFilterDefaultsOffForNewAndLegacySubscriptions() throws {
+        let fresh = makeSubscription()
+        XCTAssertFalse(fresh.downloadFilterSettings.titleEnabled)
+        let data = try JSONEncoder().encode(fresh)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "downloadFilterSettings")
+        let decoded = try JSONDecoder().decode(Subscription.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertFalse(decoded.downloadFilterSettings.titleEnabled)
+        let record = CloudKitSync.makeRecord(from: SubscriptionSyncState(subscription: fresh))
+        let synced = try XCTUnwrap(CloudKitSync.subscriptionSyncState(from: record))
+        XCTAssertFalse(synced.downloadFilterSettings.titleEnabled)
+    }
+
+    func testSavedTitleFilterChoicesSurviveReloadAndSync() throws {
+        for enabled in [false, true] {
+            for hasRules in [false, true] {
+                var sub = makeSubscription()
+                sub.downloadFilterSettings.titleEnabled = enabled
+                if hasRules {
+                    sub.downloadFilterSettings.titleRules = [.init(behavior: .exclude, operation: .contains, term: "trailer")]
+                }
+                let restored = try JSONDecoder().decode(Subscription.self, from: JSONEncoder().encode(sub))
+                XCTAssertEqual(restored.downloadFilterSettings, sub.downloadFilterSettings)
+                let record = CloudKitSync.makeRecord(from: SubscriptionSyncState(subscription: restored))
+                let synced = try XCTUnwrap(CloudKitSync.subscriptionSyncState(from: record))
+                XCTAssertEqual(synced.downloadFilterSettings, sub.downloadFilterSettings)
+            }
+        }
+    }
 
     private func makeCustomFilters() -> DownloadFilterSettings {
         var filters = DownloadFilterSettings.default

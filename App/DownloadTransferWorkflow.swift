@@ -1,3 +1,10 @@
+// AI: Completion updates one downloaded-activity row after re-resolving live media;
+// retain broad projection rebuilds for startup, deletion and reconciliation.
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Await durable off-main stats checkpoint before completion side effects. Active fallback
+// remains subject to execution availability, network policy and duplicate-task guards.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Foundation
 
 // AI CONTEXT — App/DownloadTransferWorkflow.swift
@@ -40,6 +47,8 @@ final class DownloadTransferWorkflow {
     private let logger: AppLogger
     private let mediaWorkflow: PlaybackMediaWorkflow
     private let notificationWorkflow: NewEpisodeNotificationWorkflow
+    var hasActiveDownloadExecutionWindow: Bool { runtimeWorkflow.hasActiveDownloadExecutionWindow }
+
     private let runtimeWorkflow: AppRuntimeWorkflow
     private weak var playInstantWorkflow: PlayInstantWorkflow?
 
@@ -181,9 +190,11 @@ final class DownloadTransferWorkflow {
             return
         }
 
+        guard coordinator.beginTransferSettlement(episode.id) else { return }
         coordinator.activeCount += 1
         defer {
             coordinator.activeCount -= 1
+            coordinator.finishTransferSettlement(episode.id)
             drainQueue()
         }
 
@@ -298,7 +309,7 @@ final class DownloadTransferWorkflow {
             coordinator.progressModel.progress.removeValue(forKey: episode.id)
 
             let statsStartedAt = CFAbsoluteTimeGetCurrent()
-            historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
+            await historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
             let statsMs =
                 (CFAbsoluteTimeGetCurrent() - statsStartedAt) * 1_000
             let effectsStartedAt = CFAbsoluteTimeGetCurrent()
@@ -347,14 +358,13 @@ final class DownloadTransferWorkflow {
                     subscriptionID: subscriptionID
                 )
             }
-            coordinator.rebuildDownloadedActivities(
-                from: subscriptionStore.subscriptions
-            )
+            coordinator.refreshCompletedDownload(episodeID: episode.id,
+                currentEpisode: subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episode.id))
             let effectsMs =
                 (CFAbsoluteTimeGetCurrent() - effectsStartedAt) * 1_000
             let settlementMs =
                 (CFAbsoluteTimeGetCurrent() - settlementStartedAt) * 1_000
-            if settlementMs >= 100 {
+            if storeMs + effectsMs >= 100 {
                 logger.warning(
                     "ui.mainActorOperationSlow",
                     "Download completion settlement occupied the main actor",
@@ -362,12 +372,12 @@ final class DownloadTransferWorkflow {
                         "operation": "download.settlement",
                         "durationMs": String(
                             format: "%.1f",
-                            settlementMs
+                            storeMs + effectsMs
                         ),
                         "episode": episode.title,
                         "podcast": podcastTitle,
                         "storeMs": String(format: "%.1f", storeMs),
-                        "statsMs": String(format: "%.1f", statsMs),
+                        "statsCheckpointElapsedMs": String(format: "%.1f", statsMs),
                         "effectsMs": String(format: "%.1f", effectsMs),
                         "subscriptionCount":
                             "\(subscriptionStore.subscriptions.count)"

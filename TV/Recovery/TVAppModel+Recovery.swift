@@ -17,12 +17,20 @@ extension TVAppModel {
             .sorted { $0.priorityRank < $1.priorityRank }
         guard !missing.isEmpty else { return }
         statusText = "Rebuilding your library…"
-        for entry in missing {
+        let started = Date()
+        AppLogger.shared.info("tv.recovery.begin", "Rebuilding missing subscriptions alongside sync", metadata: ["missing": "\(missing.count)"], alwaysPersist: true)
+        for (index, entry) in missing.enumerated() {
+            guard !Task.isCancelled else { return }
+            if subscriptionStore.subscription(id: entry.subscriptionID) != nil { continue }
+            if subscriptionStore.syncedSubscriptionWantsMembership(id: entry.subscriptionID) == false { continue }
+            let itemStarted = Date()
+            AppLogger.shared.info("tv.recovery.itemStart", "Recovering subscription", metadata: ["subscriptionID": entry.subscriptionID.uuidString, "index": "\(index + 1)", "total": "\(missing.count)"], alwaysPersist: true)
             let succeeded = await materializeFeed(
                 url: entry.feedURL,
                 subscriptionID: entry.subscriptionID,
                 priorityRank: entry.priorityRank
             )
+            AppLogger.shared.info("tv.recovery.itemEnd", "Recovery attempt completed", metadata: ["subscriptionID": entry.subscriptionID.uuidString, "success": "\(succeeded)", "elapsedSeconds": "\(Date().timeIntervalSince(itemStarted))", "totalElapsedSeconds": "\(Date().timeIntervalSince(started))"], alwaysPersist: true)
             if !succeeded { scheduleMaterializationRetry(entry) }
         }
     }
@@ -53,7 +61,8 @@ extension TVAppModel {
             materializationRetryTasks[subscriptionID]?.cancel()
             materializationRetryTasks[subscriptionID] = nil
             saveSurvivalKit()
-            return true
+            scheduleLibraryRefresh()
+            return subscriptionStore.subscription(id: subscriptionID) != nil
         } catch {
             AppLogger.shared.warning("tv.materializeFailed", "Could not fetch a feed during TV bootstrap", metadata: [
                 "url": url.absoluteString,

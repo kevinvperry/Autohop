@@ -1,3 +1,9 @@
+// AI CONTEXT — Modal navigation ownership, 20 September 2026.
+// Podcast Detail/Settings opened in their own NavigationStack must receive
+// isPresentationRoot=true so the shared Back policy retains explicit dismissal
+// on iOS 27. Pushed children keep the default false. Preserve playback and the
+// permanent Player root; see Docs/IOS27_NAVIGATION_BACK_AUDIT.md.
+
 import AVFoundation
 import AVKit
 import SwiftUI
@@ -321,7 +327,7 @@ struct PlayerView: View {
         }
         .adaptiveNavigationPresentation(item: $podcastSettingsRoute) { route in
             NavigationStack {
-                SubscriptionSettingsView(subscriptionID: route.id)
+                SubscriptionSettingsView(subscriptionID: route.id, isPresentationRoot: true)
             }
             .environmentObject(appState)
             // This route is a system presentation above RootView. Host the
@@ -331,7 +337,7 @@ struct PlayerView: View {
         }
         .adaptiveNavigationPresentation(item: $podcastDetailRoute) { route in
             NavigationStack {
-                PodcastDetailView(subscriptionID: route.id)
+                PodcastDetailView(subscriptionID: route.id, isPresentationRoot: true)
             }
             .environmentObject(appState)
         }

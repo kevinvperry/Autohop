@@ -68,3 +68,32 @@ search is focused, so it cannot occupy the results area above the keyboard.
 Done, Cancel or focus loss restores it, including when the query remains applied.
 The existing reorder exception remains. This is presentation-only; playback is
 not paused or restarted. Focus-based behaviour also applies to hardware keyboards.
+
+
+## Bottom safe-area repair — 20 September 2026
+
+<!-- AI CONTEXT — One background includes material, purple tint and glass through
+ the home-indicator area. Expand that background's layout to the actual safe area;
+never apply glass only above progress or offset a patch outside its bounds. -->
+
+The original Stats screenshot showed readable rows below the progress strip.
+Replacing an offset 64-point patch with a safe-area material background fixed
+coverage, but left a darker band because glass still covered only the bar. The
+follow-up screenshot confirmed that mismatch. `PersistentMiniPlayerSurface` now
+renders material, tint and glass together in one background extended into the
+bottom container safe area. The progress strip is over this continuous surface;
+it no longer separates two different treatments. Content layout and controls are
+unchanged. Both `.miniPlayerBar()` and Subscriptions' direct inset use this surface.
+
+Validation: build and hosted page/sheet captures passed on iOS 27 and iOS 26.5
+simulators. All four screenshots were inspected for both coverage and colour
+continuity. On iOS 27 the centre samples 10 pixels above/below the progress strip
+were RGB (79, 57, 85) and (79, 57, 84), confirming removal of the abrupt dark band.
+These are fixture measurements, not a promise of identical pixels over every
+backdrop; native glass retains its adaptive lighting. `git diff --check` passed.
+Result bundles: `/tmp/autohop-miniplayer-glass27.xcresult` and
+`/tmp/autohop-miniplayer-glass26.xcresult`; exports: `/tmp/autohop-glass27-images`
+and `/tmp/autohop-glass26-images`.
+The fixture uses the production surface over synthetic scrolling rows; it does
+not start audio or mutate the library. Physical-device, rotation, iPad and every
+populated destination remain unverified.

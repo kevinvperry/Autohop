@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import AutohopCore
 
 // AI CONTEXT — Aggregates read-only subsystem state for Settings & Diagnostics.
 // The view does not reach into mutable stores/coordinators directly.
@@ -27,6 +28,21 @@ extension TVAppModel {
             inactiveWatchdogGapCount: hang.inactiveGapCount,
             topShelf: topShelfPublisher.healthDiagnostics()
         )
+    }
+
+    // AI: Explicit export captures are forced; bounded lists avoid noisy/large reports.
+    func recordDiagnosticSnapshot(reason: String) {
+        let s = diagnosticsSnapshot
+        AppLogger.shared.info("tv.diagnostics.snapshot", "Current TV state (model counts, not proof of visible rows)", metadata: [
+            "reason": reason, "root": s.rootState, "sync": s.syncLabel,
+            "rows": "\(s.queueRowCount)", "playable": "\(queueRows.filter { $0.isPlayable }.count)",
+            "unresolved": "\(s.unresolvedQueue.count)", "unresolvedSample": s.unresolvedQueue.prefix(20).joined(separator: ";"),
+            "podcasts": "\(s.libraryPodcastCount)", "pendingMaterialization": "\(s.pendingMaterialization.count)",
+            "playback": s.playbackState, "position": "\(s.playbackPositionSeconds)",
+            "rate": "\(s.playerRate)", "configuredSpeed": "\(s.configuredSpeed)",
+            "historyPending": "\(s.pendingHistoryUploads)", "uptime": "\(s.appUptimeSeconds)",
+            "memoryMB": s.memoryFootprintMegabytes.map(String.init) ?? "unknown", "thermal": s.thermalState
+        ], alwaysPersist: true)
     }
 
     func refreshTopShelfDiagnostics() async {

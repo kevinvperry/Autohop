@@ -8,28 +8,21 @@ import AutohopCore
 // account with no optional queue snapshot reports “iCloud connected.”
 @MainActor
 final class TVAppDecompositionTests: XCTestCase {
-    func testAuthoritativeStorageMigrationCopiesStatsAndDatabaseOutOfCaches() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tv-authoritative-migration-\(UUID().uuidString)", isDirectory: true)
-        let caches = root.appendingPathComponent("Caches", isDirectory: true)
-        let support = root.appendingPathComponent("Application Support", isDirectory: true)
-        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    // Physical tvOS Caches must retain materialised subscriptions across reopen.
+    func testCacheDatabaseRetainsRecoveredSubscription() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        try Data("database".utf8).write(to: caches.appendingPathComponent("autohop-tv.sqlite"))
-        try Data("stats".utf8).write(to: caches.appendingPathComponent("listening-stats.json"))
-
-        TVAppDependencies.migrateLegacyAuthoritativeFiles(from: caches, to: support)
-
-        XCTAssertEqual(
-            try Data(contentsOf: support.appendingPathComponent("autohop-tv.sqlite")),
-            Data("database".utf8)
-        )
-        XCTAssertEqual(
-            try Data(contentsOf: support.appendingPathComponent("listening-stats.json")),
-            Data("stats".utf8)
-        )
-        XCTAssertTrue(FileManager.default.fileExists(atPath: caches.appendingPathComponent("listening-stats.json").path))
+        let path = root.appendingPathComponent("autohop-tv.sqlite").path
+        let store = SubscriptionStore(deferredLoadDatabasePath: path)
+        await store.completeDeferredLoad()
+        let id = UUID()
+        let feed = ParsedFeed(title: "Recovered", author: nil, artworkURL: nil, latestEpisode: nil)
+        _ = store.materialize(parsedFeed: feed, feedURL: URL(string: "https://example.com/feed")!, subscriptionID: id, priorityRank: 1)
+        await store.flushPendingSaves()
+        let reopened = SubscriptionStore(deferredLoadDatabasePath: path)
+        await reopened.completeDeferredLoad()
+        XCTAssertEqual(reopened.subscription(id: id)?.title, "Recovered")
     }
 
     func testTVStatsPolicyMatchesFreshStartAndBoundedSkipSemantics() {

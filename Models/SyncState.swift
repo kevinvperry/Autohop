@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — Models/SyncState.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay journal union is independent of AutoArchiveSettings LWW. A union differing from the server must remain dirty for upload, or remote completion can be lost.
 // The record-shaped projections that cross-device sync operates on (see
 // SYNC_DESIGN.md). They hold ONLY the mutable user-state worth syncing — never
 // catalog content (title/description/artwork rehydrate from the feed) and never
@@ -222,6 +223,9 @@ public struct SubscriptionSyncState: Codable, Equatable {
         result._autoFeedRefreshReturnPriorityRank = mergedSyncedField(local: _autoFeedRefreshReturnPriorityRank, remote: remote._autoFeedRefreshReturnPriorityRank)
         result._playbackPreference = mergedSyncedField(local: _playbackPreference, remote: remote._playbackPreference)
         result._autoArchiveSettings = mergedSyncedField(local: _autoArchiveSettings, remote: remote._autoArchiveSettings)
+        var archive = result.autoArchiveSettings
+        archive.replay = PodcastReplay.merged(autoArchiveSettings.replay, remote.autoArchiveSettings.replay)
+        result._autoArchiveSettings = Synced(wrappedValue: archive, modifiedAt: result.$autoArchiveSettings.modifiedAt ?? (archive != remote.autoArchiveSettings ? Date() : nil))
         result._chapterFilter = mergedSyncedField(local: _chapterFilter, remote: remote._chapterFilter)
         result._downloadFilterSettings = mergedSyncedField(local: _downloadFilterSettings, remote: remote._downloadFilterSettings)
         return result

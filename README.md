@@ -43,6 +43,17 @@ TV 1.6.1 (1) submitted for approval, user-confirmed 8 September 2026.
 All future iOS/tvOS code changes belong together in VERSION_1.7.md.
 Screenshot confirms prior TV 1.6 (15) Ready for Distribution.
 -->
+
+## Download Feed Filters — Version 1.7 design update
+
+Choose automatic downloads by episode length, title or description in a guided, less cluttered editor. Turn on only the groups you need, read a plain-language summary of each rule, and preview matches with clear explanations. All existing filter options and immediate saving are retained.
+
+## Podcast Replay — Version 1.7 development
+
+Listen through a podcast's available back catalogue on your own schedule. Use its dedicated Podcast Settings section and guided setup to pick a starting episode and release time, apply existing Feed Filters, and let Episode Limit pause new releases until there is space. A Replay pill identifies enabled shows; private iCloud shares the release sequence and progress across updated devices, while downloads remain local. The enabling installation schedules releases; Apple TV consumes the queue and syncs listening outcomes. See [FEATURES.md](FEATURES.md) for behaviour and [the strategy/implementation record](Docs/PODCAST_REPLAY_IMPLEMENTATION_STRATEGY.md) for architecture and remaining device checks.
+
+Choose Daily, Weekdays or your own days, with multiple release times for morning and afternoon listening. Or enable Binge Mode to prepare the next matching episode whenever a Replay episode starts, keeping one episode ahead while retaining your existing Up Next priority order. Episode Limit can be changed directly in Replay and mirrors Podcast Settings. Brief update/sync guidance replaces the device-confirmation step; the enabling device still schedules releases.
+
 ## tvOS release update — 8 September 2026
 
 The user’s screenshot confirms tvOS 1.6 (15) Ready for Distribution; older
@@ -208,6 +219,13 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 ## Documentation Map
 
+[Diagnostic reliability repairs](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md) records the current recovery, persistence and diagnostic contracts and their validation limits.
+
+[Podcast Replay implementation strategy](Docs/PODCAST_REPLAY_IMPLEMENTATION_STRATEGY.md)
+is a Version 1.7 proposal covering scheduled back-catalogue releases, Feed Filters,
+Episode Limit capacity, Replay pills and caught-up decisions. It is not implemented.
+
+
 | File | Purpose |
 |---|---|
 | [`FEATURES.md`](FEATURES.md) | **Source of truth** for every feature, setting label, default, and behaviour. Update this first when any model/view/setting changes, then propagate to the website and App Store copy. |
@@ -231,7 +249,14 @@ Autohop's positioning is deliberately premium and niche. The target user subscri
 
 Source files carry structured `AI CONTEXT` header comments (purpose,
 responsibilities, collaborators, invariants) written for machine consumption —
-read a file's header before modifying it.
+read a file's header before modifying it. Update that header in the same task
+when purpose, collaborators or invariants change, including compatibility fixes.
+Keep the affected living documents and Version 1.7 ledger aligned; appending a
+change note does not replace correcting obsolete guidance in the main sections.
+
+Current session audits: [iOS 27 navigation](Docs/IOS27_NAVIGATION_BACK_AUDIT.md)
+and [Sleep Schedule design](Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md). These distinguish
+implemented changes, simulator evidence and outstanding physical-device checks.
 
 ## Build Notes
 

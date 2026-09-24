@@ -1,3 +1,10 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Pseudonymise personal route names and arbitrary GUID values in new entries and old
+// exports; repeated export must be idempotent. Titles remain diagnostic context, so
+// exports are not anonymous. Scope change-driven deduplication by identity while
+// preserving stable structured event names for downstream log analysis.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Foundation
 
 // AI CONTEXT — Logging/AppLogger.swift
@@ -48,6 +55,11 @@ public final class AppLogger: ObservableObject {
 
     @Published private(set) var lastUpdated = Date()
     private let stateLock = NSLock()
+    // AI DIAGNOSTICS: health counters use stateLock; never recursively log IO failure.
+    private var writeFailures = 0
+    private var lastSuccessfulWrite: Date?
+    private var stateSignatures: [String: String] = [:]
+    private let recordingSession = UUID().uuidString
     private var enabledState = false
     private var verboseState = false
     private var consoleMirroringState = false
@@ -64,6 +76,20 @@ public final class AppLogger: ObservableObject {
     var isVerboseEnabled: Bool {
         get { stateLock.withLock { verboseState } }
         set { setVerboseEnabled(newValue) }
+    }
+
+    /// Bounded change-driven evidence for frequently recomputed projections.
+    public func recordState(_ event: String, metadata: [String: String], identity: String? = nil) {
+        // Identity scopes deduplication without changing the structured event name.
+        let stateKey = identity.map { event + "|" + $0 } ?? event
+        let signature = metadata.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }.joined(separator: "|")
+        let changed = stateLock.withLock {
+            if stateSignatures[stateKey] == signature { return false }
+            if stateSignatures.count >= 128 { stateSignatures.removeAll() }
+            stateSignatures[stateKey] = signature
+            return true
+        }
+        if changed { info(event, "Diagnostic state changed", metadata: metadata, alwaysPersist: true) }
     }
 
     /// Library-consumer switch (2026-07-11, TV diagnostics): `isEnabled` is
@@ -220,7 +246,9 @@ public final class AppLogger: ObservableObject {
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? "unknown"
         let header = "# Autohop Diagnostic Export version=\(version) build=\(build) normalEnabled=\(state.enabled) detailedRefreshTrace=\(state.verbose) routineEntriesDropped=\(state.dropped) exportedAt=\(dateFormatter.string(from: Date()))\n"
-        return header + Self.redactDiagnosticLog(combinedContents())
+        let contents = combinedContents()
+        let health = stateLock.withLock { "# Logger health writeFailures=\(writeFailures) lastSuccessfulWrite=\(lastSuccessfulWrite?.description ?? "none") retainedSegments=2 segmentLimitBytes=5000000\n" }
+        return header + health + Self.redactDiagnosticLog(contents)
     }
 
     public func redactedExportURL() -> URL {
@@ -354,7 +382,7 @@ public final class AppLogger: ObservableObject {
                     return "\(Self.normalized(key, limit: 80))=\(Self.redactedMetadataValue(value, key: key))"
                 }.joined(separator: " ")
             let cleanMessage = Self.redactSensitiveText(Self.normalized(message, limit: 2_048))
-            var line = "\(timestamp) [\(level)] \(Self.normalized(event, limit: 120)): \(cleanMessage)\(metadataText)\n"
+            var line = "\(timestamp) [\(level)] \(Self.normalized(event, limit: 120)): \(cleanMessage)\(metadataText) recordingSession=\(recordingSession)\n"
             if line.utf8.count > 16_384 {
                 line = String(line.prefix(16_360)) + " [truncated]\n"
             }
@@ -371,8 +399,10 @@ public final class AppLogger: ObservableObject {
                 do {
                     try handle.write(contentsOf: data)
                     self.currentFileSizeBytes = (self.currentFileSizeBytes ?? 0) + data.count
+                    self.stateLock.withLock { self.lastSuccessfulWrite = Date() }
                 } catch {
-                    // Drop this diagnostic rather than recursively logging a logger failure.
+                    stateLock.withLock { writeFailures += 1 }
+                    // Drop without recursively logging.
                 }
             }
     }
@@ -397,7 +427,9 @@ public final class AppLogger: ObservableObject {
             try? fileManager.createDirectory(at: logFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             fileManager.createFile(atPath: logFileURL.path, contents: nil)
         }
-        guard let handle = try? FileHandle(forWritingTo: logFileURL) else { return nil }
+        guard let handle = try? FileHandle(forWritingTo: logFileURL) else {
+            stateLock.withLock { writeFailures += 1 }; return nil
+        }
         do {
             let offset = try handle.seekToEnd()
             currentFileSizeBytes = Int(offset)
@@ -445,6 +477,20 @@ public final class AppLogger: ObservableObject {
         }
         redacted = pseudonymizeMatches(in: redacted, pattern: #"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"#, label: "id")
         redacted = pseudonymizeMatches(in: redacted, pattern: #"https?://[^\s]+"#, label: "url")
+        // Personal route names and non-UUID feed GUIDs need field-aware handling.
+        // Preserve pre-existing pseudonyms so repeated export is idempotent.
+        for (pattern, label) in [
+            (#"(?:audioSessionOutput|newOutput|previousOutput)=([^\[\r\n].*?)(?= [A-Za-z][A-Za-z0-9_.]*=|$)"#, "route"),
+            (#"(?<![A-Za-z0-9_\[])guid[=:]([^\[\s|]+)"#, "guid")
+        ] {
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
+            let source = redacted as NSString
+            for match in expression.matches(in: redacted, range: NSRange(location: 0, length: source.length)).reversed() {
+                let range = match.range(at: 1)
+                let value = source.substring(with: range)
+                redacted = (redacted as NSString).replacingCharacters(in: range, with: "[\(label):\(stableDiagnosticHash(value))]")
+            }
+        }
         return redacted
     }
 

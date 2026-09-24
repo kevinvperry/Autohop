@@ -1,6 +1,16 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Resume reflects engine.isPlaying while a delayed rebuild is pending; the guarded engine
+// callback publishes success. Keep sleep settings and user transport intent intact.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Foundation
 
+// PLAY INSTANT: Pause/resume of the active interruption preserves its return
+// session. Pausing the warning cancels the pending forced switch.
+// BINGE (Version 1.7): successful resume records the same idempotent Replay
+// start event, including a queued episode adopted while the player was paused.
 // AI CONTEXT — App/PlaybackTransportWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): A failed/missing Replay head blocks automatic queue scanning instead of silently skipping the reservation; explicit selection remains available.
 //
 // PURPOSE:
 // High-level playback transport and queue-selection transaction. It owns
@@ -69,8 +79,10 @@ final class PlaybackTransportWorkflow {
         }
 
         if playback.isPlaying {
-            if playback.activePlayInstantEpisodeID != nil
-                || playback.playInstantTransitionTask != nil {
+            // Pausing an already-started Instant episode must preserve its return point.
+            // Only an unfinished warning is cancelled by pause.
+            if playback.activePlayInstantEpisodeID == nil
+                && playback.playInstantTransitionTask != nil {
                 playInstantWorkflow.cancel(reason: "pausedDuringPlayInstant")
             }
             playback.engine.pause()
@@ -87,7 +99,8 @@ final class PlaybackTransportWorkflow {
         if playback.engine.currentEpisode?.id == episode.id {
             playback.engine.setVolume(1)
             playback.engine.resume()
-            playback.isPlaying = true
+            playback.isPlaying = playback.engine.isPlaying
+            subscriptionStore.recordPodcastReplayStart(subscriptionID: episode.subscriptionID, episode: episode)
             if playback.sleepTimerService.checkAutoRestart() {
                 logger.info(
                     "sleepTimer.autoRestart",
@@ -95,7 +108,7 @@ final class PlaybackTransportWorkflow {
                 )
             }
             playback.sleepScheduleService.playbackResumed()
-            updateNowPlayingTime(isPlaying: true)
+            updateNowPlayingTime(isPlaying: playback.isPlaying)
         } else if episode.downloadState == .downloaded,
                   episode.localFileURL != nil || episode.localFileName != nil {
             _ = await startWorkflow.start(
@@ -134,6 +147,10 @@ final class PlaybackTransportWorkflow {
                 episode: episode,
                 resumeFrom: playbackPositionStore.savedTime(for: episode)
             ) {
+                return
+            }
+            if subscriptionStore.subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay?.contains(episode) == true {
+                playback.message = "Waiting for this Podcast Replay episode to download. Try again when it is ready."
                 return
             }
         }

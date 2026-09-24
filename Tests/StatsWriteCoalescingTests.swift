@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Verify awaited concurrent download snapshots and synchronous lifecycle ordering preserve
+// credits and backups.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 // AI CONTEXT — Tests/StatsWriteCoalescingTests.swift. Regression test for AH-P1-004:
 // listening-stats accumulation runs every 0.5s playback tick, and each tick used to
 // issue a GRDB write transaction (recordStatsDay). These are now coalesced — the row
@@ -20,6 +25,25 @@ import XCTest
 #endif
 
 final class StatsWriteCoalescingTests: XCTestCase {
+
+    @MainActor
+    func testAwaitedDownloadSnapshotsPreserveConcurrentCreditsAndBackup() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("stats.json")
+        let store = ListeningStatsStore(fileURL: url, legacyFileURL: nil)
+        store.recordDownload(bytes: 100)
+        async let first: Void = store.recordDownloadAndSave(bytes: 200)
+        async let second: Void = store.recordDownloadAndSave(bytes: 300)
+        _ = await (first, second)
+        // A synchronous lifecycle checkpoint uses the same ordered write lane.
+        store.recordDownload(bytes: 400)
+        let loaded = ListeningStatsStore(fileURL: url, legacyFileURL: nil)
+        XCTAssertEqual(loaded.summary(for: .lifetime).bytesDownloaded, 1_000)
+        XCTAssertEqual(loaded.summary(for: .lifetime).episodesDownloaded, 4)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("stats.backup.json").path))
+    }
 
     @MainActor
     func testPerTickStatsWritesAreCoalesced() throws {

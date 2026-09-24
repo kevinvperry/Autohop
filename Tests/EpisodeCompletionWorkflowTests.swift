@@ -8,7 +8,8 @@
 // It proves stale engine generations are side-effect free and that an accepted
 // completion records finished history, settles the subscription before media
 // deletion, honours immediate After Playing archive policy, clears playback
-// state, and advances while excluding the completed episode. No live audio,
+// state, and advances while excluding the completed episode. Instant completion
+// must dispatch restoration exactly once without advancing the normal queue. No live audio,
 // network, CloudKit, or notification delivery is used.
 
 import AVFoundation
@@ -88,6 +89,18 @@ final class EpisodeCompletionWorkflowTests: XCTestCase {
         )
     }
 
+    func testInstantCompletionUsesReturnPathInsteadOfNormalQueue() async throws {
+        let fixture = try makeFixture()
+        fixture.playback.currentEpisode = fixture.episode
+        fixture.playback.activePlayInstantEpisodeID = fixture.episode.id
+
+        await fixture.workflow.handle(fixture.episode)
+
+        XCTAssertEqual(fixture.advancedExclusions.instantFinishes, 1)
+        XCTAssertTrue(fixture.advancedExclusions.value.isEmpty)
+        XCTAssertEqual(fixture.downloadManager.deletedEpisodeIDs, [fixture.episode.id])
+    }
+
     private func makeFixture(
         afterPlayed: AutoArchiveSettings.AfterPlayed = .afterPlaying
     ) throws -> CompletionFixture {
@@ -142,7 +155,7 @@ final class EpisodeCompletionWorkflowTests: XCTestCase {
             ),
             logger: .shared,
             cancelPlayInstantSession: { _ in },
-            finishPlayInstantAndAdvance: { _ in },
+            finishPlayInstantAndAdvance: { _ in advancedExclusions.instantFinishes += 1 },
             playNextEpisode: { excluded in
                 advancedExclusions.value = excluded
             }
@@ -182,6 +195,7 @@ private struct CompletionFixture {
 @MainActor
 private final class CompletionSetBox {
     var value = Set<UUID>()
+    var instantFinishes = 0
 }
 
 private final class CompletionDownloadManager: DownloadManaging {

@@ -5,6 +5,7 @@ import Foundation
 // EpisodeCompletionWorkflow; never implement a separate queue/statistics advance path.
 
 // AI CONTEXT — App/AppState.swift (AUTHORITATIVE, Stage 14 final architecture)
+// REPLAY (Version 1.7, 2026-09-12): Composes PodcastReplayCoordinator once and supplies full-feed refresh for confirmed catch-up; startup is idempotent.
 //
 // PURPOSE:
 // MainActor process singleton, composition root, and high-level compatibility
@@ -186,6 +187,11 @@ final class AppState: ObservableObject {
         transferWorkflow: downloadTransferWorkflow,
         dispositionWorkflow: episodeDispositionWorkflow
     )
+    // AI CONTEXT — Replay uses existing durable store/transfer services; one owner.
+    lazy var podcastReplayCoordinator = PodcastReplayCoordinator(
+        store: subscriptionStore, downloads: autoDownloadIntentWorkflow
+    )
+
     private lazy var autoDownloadIntentWorkflow = AutoDownloadIntentWorkflow(
         state: autoDownloadWorkflow,
         subscriptionStore: subscriptionStore,
@@ -492,6 +498,10 @@ final class AppState: ObservableObject {
             queueCoordinator: queueCoordinator,
             runtimeWorkflow: appRuntimeWorkflow
         )
+        podcastReplayCoordinator.refreshCatalogue = { [weak self] subscription in
+            await self?.refreshSubscription(subscription, episodeLimit: nil)
+        }
+        podcastReplayCoordinator.start()
     }
 
     /// Composition-only lifetime hook. Widget projection remains independently

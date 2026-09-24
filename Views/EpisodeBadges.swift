@@ -1,6 +1,7 @@
 import SwiftUI
 
 // AI CONTEXT — Views/EpisodeBadges.swift. Shared presentation components for
+// REPLAY (Version 1.7, 2026-09-12): Replay is an additive subscription automation pill, not an episode lifecycle state.
 // episode rows/detail:
 //   • Video/Explicit indicators (small icon-only variants for dense lists;
 //     glass text pills remain for large detail headers)
@@ -124,10 +125,11 @@ struct ExplicitPillSmall: View {
 // `.inactive` is used on the Priority page only.
 
 enum EpisodeStatusKind {
-    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive, skipped
+    case unplayed, queued, partiallyPlayed, nowPlaying, played, archived, inactive, skipped, replay
 
     var label: String {
         switch self {
+        case .replay:          return "Replay"
         case .unplayed:        return "Unplayed"
         case .queued:          return "Queued"
         case .partiallyPlayed: return "Paused"
@@ -141,6 +143,7 @@ enum EpisodeStatusKind {
 
     var color: Color {
         switch self {
+        case .replay:          return Color.indigo
         case .unplayed:        return Color.gray
         case .queued:          return Color.teal
         case .partiallyPlayed: return Color.yellow

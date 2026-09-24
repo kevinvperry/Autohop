@@ -54,6 +54,23 @@ User confirmed iOS-family 1.6.1 approved and live on 8 September 2026.
 Its ledger is closed; all future changes belong in VERSION_1.7.md.
 -->
 
+## Podcast Replay — Version 1.7 development
+
+Podcast Replay turns an available podcast back catalogue into a personal release schedule. Open **Podcast Settings → Podcast Replay**, or choose **Listen From Here** on an episode page. Select a starting episode and start date, then choose Daily, Weekdays (Monday–Friday), or any combination of days. Add one or more release times; each time releases one matching episode on each selected day. Its dedicated Podcast Settings section sits above Download Feed Filters. The editor guides setup through three numbered cards, with a day selector, expandable time controls and a planned-episode timeline showing the first actual eligible release. A searchable catalogue picker shows episode dates and selection. The editor loads the complete available RSS catalogue and previews matching episodes. Publishers may have removed older episodes from their feeds.
+
+- **Binge Mode**, above Set your pace, replaces scheduled releases with playback-driven preparation. It seeds one matching episode when enabled and prepares one unstarted successor when a released episode successfully starts. Pausing/resuming cannot add more episodes. Episode Limit excludes the single most-recently-started unresolved Replay episode; limit 1 permits that episode plus one upcoming episode. Other existing downloads still occupy capacity. Larger limits do not pre-download the entire backlog. Binge Mode hides the pace controls and dated preview, but keeps the previous calendar choices available when turned off. **Existing Up Next priority and manual Play Next/Play Last order are unchanged.**
+- Existing **Download Feed Filters** select automatic releases. Exclusions do not consume schedule slots. Unknown duration needed by a filter holds evaluation for more information.
+- **Auto Archive → Episode Limit** limits outstanding releases, including waiting, downloading, failed, ready and partially played episodes. Downloads already present on the scheduling device also occupy capacity. At capacity, Replay pauses; it does not evict unplayed episodes. Completion or manual archive immediately requests reconciliation and fills overdue slots within capacity. No Limit processes resumable batches of 16.
+- Normal newly published automatic downloads are suppressed while enabled. Manual episode actions remain available. Replay downloads do not trigger Play Instant or normal new-episode notifications, even when an in-flight Replay transfer finishes after disable.
+- Unresolved Replay reservations remain in Up Next before local media arrives. Waiting/downloading/retry text distinguishes readiness. Failed head playback stops automatic advancement; explicit episode selection remains possible.
+- A **Replay** pill sits beside existing subscription status pills. The individual Podcast page links to its schedule. The editor includes the mini-player, an immediately saved Episode Limit picker shared with Podcast Settings, and a direct link to Feed Filters.
+- Catch-up requires all released episodes resolved, no later matching catalogue item, and a successful feed refresh at or after the latest resolution. A notification and in-app choice offer **Keep Schedule** or **Turn Off Podcast Replay**. Dismissal retains the schedule; Keep prevents repeat prompts. Notification delivery requires permission. Turning off restores ordinary future automatic downloads and retains already downloaded queue items.
+- Scheduled mode uses the time zone recorded when enabled and respects daylight saving changes. The selected time is an earliest release opportunity: Apple background execution and network availability can delay work.
+
+**Sync contract:** settings, release identity/order, completion and Replay Play Next/Play Last overrides converge through private iCloud when enabled. Files and readiness stay local. The installation that enables the session alone assigns new releases; other updated iOS-family devices download the same reservations. That scheduling device must remain available. Apple TV reads the existing queue snapshot and sends completion/archive using its existing episode-state channel. It does not author schedules. A short message recommends keeping all devices up to date; the editor has no compatibility acknowledgement gate. It explains that the enabling device schedules releases. Capability detection and owner failover are not implemented. With iCloud disabled, this is a local schedule.
+
+The scheduling installation is deliberately fixed for this beta; automatic owner failover and a TV schedule editor are not implemented. Offline devices converge after sync rather than sharing an instantaneous distributed lock. Real-device CloudKit, background timing, notifications and visual acceptance remain release checks. See [the implementation record](Docs/PODCAST_REPLAY_IMPLEMENTATION_STRATEGY.md#implementation-record--12-september-2026).
+
 > iOS-family large-screen assets use the Discover page's container-width bands:
 > standard iPhone proportions are preserved, while page titles, toolbar actions
 > and persistent mini-player chrome grow deliberately on iPad and resizable Mac
@@ -115,8 +132,8 @@ Its ledger is closed; all future changes belong in VERSION_1.7.md.
 > and configured skip/playback controls remain visible while the Menu links
 > scroll. Tapping outside the controls returns to the permanent Player; pushed
 > Menu destinations retain the compact persistent mini-player.
-> The root Menu uses the same native grouped page/section colour hierarchy as
-> Sleep Schedule; its richer player's three transports remain closely grouped
+> The root Menu retains its native grouped page/section colour hierarchy;
+> Sleep Schedule uses glass settings cards. The Menu player's three transports remain closely grouped
 > around Play/Pause rather than spread across the card, while retaining enough
 > separation for comfortable touch targeting.
 > The compact persistent Mini Player uses the same purple-glass language without
@@ -788,8 +805,18 @@ A stepper (range: 1–10, default: 1) lets the user choose how many episodes to 
 > feature card on the kevmarl.com promo page and has its own section in the
 > support guide.
 
+<!-- AI CONTEXT — Sleep Schedule refresh, 20 September 2026. Presentation and
+explanations changed; persistence, option sets and playback services did not. -->
+
+**Page design:** Feed Filters/Podcast Replay-style dark glass cards with purple
+controls, On/Off status, native time editors, readable daytime/overnight/all-day
+summary, six full-width interval choices and expandable help. Changes save
+immediately; disabling retains saved values. Your Schedule describes configuration,
+not a live countdown. Onboarding, Back policy and mini-player remain. See
+[the audit](Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md) for validation limits.
+
 **Settings (persisted in `AppSettings`):**
-- **Toggle** — `sleepScheduleEnabled` (default off). Runs every night when on.
+- **Toggle** — `sleepScheduleEnabled` (default off). Repeats daily when on.
 - **Active Hours** — start/end time pickers (`sleepScheduleStartMinutes`/`sleepScheduleEndMinutes`, minutes from midnight; default 9:00pm–6:00am). The window may span midnight; start == end means always active.
 - **Ask Every** — duration presets 10 / 15 / 20 / 40 / 60 minutes (default 20) plus **End of Episode** (stored as `sleepScheduleDurationMinutes = 0`).
 
@@ -882,9 +909,9 @@ All settings in this section are stored in `PlaybackPreference` on the `Subscrip
 |---|---|---|
 | New episode notifications | **Future-subscription default** | Sends a notification when a new episode is published. A newly added show snapshots the current Settings → Release Radar → Notification Settings default (On on a fresh install); changing that default later never alters this podcast. |
 | Exclude from Auto Feed Refresh | **Off** | When on, Autohop stops polling this podcast's RSS feed during automatic/feed-all refresh cycles and moves it to the bottom of the Priority Stack with the Inactive pill. The podcast remains subscribed, keeps its downloaded episodes, can still be manually refreshed from its own detail page, and returns to its saved priority position when the setting is turned off. |
-| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. It does not interrupt when the current episode has exactly 60 seconds or less remaining; the arrival stays armed and may trigger after natural advancement. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing during an active Instant session, archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
+| Play Instant | **Off** | For a deliberately small number of absolute-favourite shows. When a filter-eligible new episode finishes an **automatic** download while another episode is actively playing, Autohop sounds a gentle two-note warning, waits two seconds, saves the current position, and plays the arrival ahead of Up Next. It does not interrupt when the current episode has exactly 120 seconds or less remaining; the arrival stays armed and may trigger after natural advancement. If playback or its route is temporarily inactive at completion, the episode remains armed for up to 30 minutes and triggers when safe playback resumes; Autohop never starts it unexpectedly through the phone speaker. Natural completion or Mark Played returns to the exact interrupted position. Multiple qualifying arrivals use FIFO order. Pausing an active Instant session preserves its return point. Completion resumes the interrupted episode before Play Next; other pending Instant arrivals remain in normal queue order. Archiving, choosing another episode, or manually skipping Next cancels the automatic return. Manual downloads, backlog files and filter-skipped episodes do not trigger it. Stored and synced with the podcast's `AutoArchiveSettings` payload for backward-compatible per-subscription persistence, but presented here because it is automation rather than an archive rule. |
 
-**Play Instant footer note (shown in app):** Play Instant interrupts active playback after an automatic download, except when the current episode has 60 seconds or less remaining. A temporarily unavailable route arms the episode for up to 30 minutes; it triggers only after safe playback resumes and never autoplays through the phone speaker.
+**Play Instant footer note (shown in app):** Play Instant interrupts active playback after an automatic download, except when the current episode has 120 seconds or less remaining. A temporarily unavailable route arms the episode for up to 30 minutes; it triggers only after safe playback resumes and never autoplays through the phone speaker.
 
 ---
 
@@ -918,7 +945,7 @@ Shown using the loaded episode when that podcast is currently playing; otherwise
 
 ### 10.6 Download Filters page
 
-**Access:** Podcast Settings → Feed → Download Filters.
+**Access:** Podcast Settings → Download Feed Filters, or Podcast Replay → Download Feed Filters.
 
 Download Filters are stored in `DownloadFilterSettings` on the local `Subscription` model, and since July 2026 they also roam via iCloud Sync as part of the per-podcast settings record (struct-level last-write-wins — the most recently edited device's full filter set wins). Filters affect automatic downloads from refresh, background refresh, and the priority auto-download flow; manual episode actions (Play, Play Next, Play Last, Download) bypass filters. Episodes skipped by filters are excluded from Release Radar's learned feed schedule, so their publish dates/times do not train future refresh windows.
 
@@ -929,7 +956,9 @@ Download Filters are stored in `DownloadFilterSettings` on the local `Subscripti
 | Title filters | On / Off | **Off** | Case-insensitive simple text matching. Rules support contains / does not contain. Empty text rules are ignored. |
 | Description filters | On / Off | **Off** | Case-insensitive simple text matching. Rules support contains / does not contain. Empty descriptions behave like empty text. |
 | Add rule | Plus icon button per group | — | Adds a sensible default row: duration Include · Longer than · 40 min; title Include · Contains; description Exclude · Contains. |
-| Preview Matches | Button | — | Fetches the latest RSS feed read-only and shows up to 50 current episodes. Included rows render normally; skipped rows are greyed out and show a concise reason. Preview errors show retry copy and do not fall back to stored episodes. |
+| Preview Matches | Button | — | Fetches the latest RSS feed read-only and shows up to 50 current episodes. Rows explicitly say Matches your rules or Skipped with a readable reason. Counts and results re-evaluate the fetched episodes using current settings after each edit. Five rows appear initially; Show All / Show Fewer reveals or collapses the full fetched set. Preview errors show retry copy and do not fall back to stored episodes. |
+
+The Version 1.7 editor uses Replay-style glass cards, purple controls and short examples. Disabled groups hide their editors without deleting saved rules. Enabled groups offer multiple rule panels, visible Remove Rule buttons, and separate length comparison/1–300-minute controls. Text rules explain blank terms and contains/does-not-contain behaviour. All/Any lives in “How your rules work together” with explicit Exclude precedence. All edits save immediately; the read-only preview never downloads media.
 
 When all three filter groups are off, no filtering occurs. When filters are active, automatic refresh evaluates all episodes newly detected in that response and schedules every eligible unplayed, unarchived, not-yet-downloaded arrival allowed by Episode Limit, newest first. Episodes skipped by filters remain visible with a grey **Skipped** pill, do not count toward Episode Limit because they were never downloaded, and do not influence Release Radar prediction schedules.
 
@@ -1350,7 +1379,7 @@ data is verified.
 |---|---|
 | Open Source Acknowledgements | Navigation link to the third-party licences view. |
 | Version | Displays the app version and build number (e.g. "1.0 (42)"). Tap 5 times to unlock the hidden Diagnostics section for the current session. |
-| Diagnostic Log | Hidden until Diagnostics are unlocked. Normal mode shares a compact rotating log containing foreground/background refresh plans and cycle summaries, BGTask wake summaries, backlog age, material feed changes, downloads/watchdogs, Auto Archive outcomes, sync failures/conflicts, audio recovery, slow operations and five-minute resource heartbeats. **Detailed Refresh Trace** adds verbose per-feed plan candidates, item boundaries, 304 and no-op decisions only for short Release Radar investigations. With diagnostics off, full CPU/thread sampling and the 100 ms UI watchdog stop; a log-free five-minute physical-footprint safety check remains solely to preserve proactive cache trimming. Physical footprint remains the memory intervention threshold. Healthy playback timing is summarized every ten minutes, while slow ticks remain immediate. Download progress persists at 25% milestones; failures and first-byte/active-transfer watchdog classification remain unchanged. Export is queue-consistent, redacted, length-bounded and begins with build/mode/dropped-entry metadata. |
+| Diagnostic Log | Hidden until Diagnostics are unlocked. Normal mode shares a compact rotating log containing foreground/background refresh plans and cycle summaries, BGTask wake summaries, backlog age, material feed changes, downloads/watchdogs, Auto Archive outcomes, sync failures/conflicts, audio recovery, slow operations and five-minute resource heartbeats. **Detailed Refresh Trace** adds verbose per-feed plan candidates, item boundaries, 304 and no-op decisions only for short Release Radar investigations. With diagnostics off, full CPU/thread sampling and the 100 ms UI watchdog stop; a log-free five-minute physical-footprint safety check remains solely to preserve proactive cache trimming. Physical footprint remains the memory intervention threshold. Healthy playback timing is summarized every ten minutes, while slow ticks remain immediate. Download progress persists at 25% milestones; first-byte/active-transfer cancellation safeguards remain; the first active-runtime fallback now avoids the initial 30-second retry wait. Export is queue-consistent, redacted, length-bounded and begins with build/mode/dropped-entry metadata. |
 
 ---
 
@@ -1783,3 +1812,55 @@ does not upload this data. -->
   show remaining time; untouched episodes show their total runtime. A positive
   final minute is shown in seconds rather than being truncated to `0m`. Synced
   positions are projected before rendering, never read during focus movement.
+
+### Manual RSS entry — Version 1.7, 13 September 2026
+
+Add RSS Feed now uses Podcast Replay-style glass cards with a guided link/preview/subscribe flow, clear URL entry, expandable RSS help, artwork preview and novice-friendly error guidance. Technical episode links remain expandable. Editing a link clears its previous preview; surrounding whitespace is trimmed. Existing subscription saving, navigation and mini-player remain. Build passed; runtime device checks remain outstanding. See `Docs/ADD_RSS_FEED_DESIGN_AUDIT.md`.
+
+
+### Sleep Schedule page refresh — 20 September 2026
+
+<!-- AI CONTEXT — Presentation-only refresh; preserve existing settings and
+playback contracts. Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md owns validation evidence. -->
+
+Sleep Schedule now matches Feed Filters and Podcast Replay with dark glass cards,
+purple controls, clear setup guidance, a saved-schedule summary and expandable
+help. All existing intervals, End of Episode, daytime/overnight/all-day windows,
+immediate saving, notification opt-in, onboarding and mini-player remain.
+The explanation now correctly describes a chime over continuing playback before
+an unanswered check-in fades out and rewinds. See
+[the design audit](Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md) for scope and validation.
+
+### Navigation compatibility — 20 September 2026
+
+<!-- AI CONTEXT — Shared Back ownership; retain modal-root dismissal. -->
+
+Pages using Autohop's Back policy now use native Back on iOS 27 and later,
+branded Back on older systems, and explicit dismiss for Player's modal Podcast
+Detail/Settings roots. This removes the competing Back controls reported on
+Discover while preserving the nearest navigation parent. Existing native-only
+pages are unchanged. See [navigation audit](Docs/IOS27_NAVIGATION_BACK_AUDIT.md)
+for complete source coverage, passing simulator checks and device limits.
+
+## Diagnostic reliability repairs — 20 September 2026
+
+<!-- AI CONTEXT — Keep this contract aligned with source headers and the repair record. -->
+
+Playback resume retires stale buffer waits; Pause cancels pending recovery; EOF
+uses consistent completion and render health reflects actual callbacks. Auto
+Archive reads live pin IDs without repeated catalogue scans. Download completion
+awaits ordered off-main stats-file persistence. First active-runtime fallback is
+prompt; later retries stay bounded. Sync settings reactions are deduplicated,
+foreign subscription identities remain protected, and diagnostic exports additionally
+pseudonymise personal route names/arbitrary GUIDs. MetricKit disk-write reports now
+carry byte counts and bounded stacks. Titles/timestamps remain diagnostic context.
+See [implementation and validation](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md).
+
+
+### Mini-player bottom backing — 20 September 2026
+
+<!-- AI CONTEXT — One shared glass background extends through the bottom safe area. -->
+The persistent mini-player's continuous purple glass background reaches below the
+progress strip to the bottom safe-area edge, without a separate material-only band. Shared
+controls and layout are preserved. Page/sheet screenshots were verified on iOS 27
+and iOS 26.5 simulators; see [the audit](Docs/MINI_PLAYER_AUDIT_2026-09-06.md).

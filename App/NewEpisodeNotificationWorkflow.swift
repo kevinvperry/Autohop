@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — App/NewEpisodeNotificationWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay releases never emit normal new-publisher notifications, including completion of an in-flight release after disable.
 //
 // PURPOSE / OWNERSHIP:
 // Sole application policy for notifying about a newly downloaded episode. It
@@ -27,7 +28,9 @@ final class NewEpisodeNotificationWorkflow {
         episode: Episode,
         subscription: Subscription
     ) {
-        guard subscription.notificationsEnabled else {
+        guard subscription.autoArchiveSettings.replay?.enabled != true,
+              subscription.autoArchiveSettings.replay?.releases.contains(where: { $0.key == episode.audioURL.absoluteString }) != true,
+              subscription.notificationsEnabled else {
             logger.info(
                 "notification.skipped",
                 "New episode notification skipped",

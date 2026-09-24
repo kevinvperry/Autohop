@@ -3,9 +3,9 @@ import SwiftUI
 // AI CONTEXT — Views/SupportContent.swift
 // The data model AND full content for the in-app Support / User Guide
 // (rendered by SupportView, reached from the last Menu item). This MIRRORS the
-// website Support page at kevmarl-site/support.html — the two are kept in sync
-// by hand: whenever the support info changes, edit BOTH this file and
-// support.html so the app and website always match. Content is pure data
+// website Support page at kevmarl-site/support.html. Generate its guide sections
+// using Scripts/export_support_website.py after edits; retain release labels.
+// Verify publication separately from local generation. Content is pure data
 // (SupportBlock values) so edits map cleanly onto the website's HTML blocks.
 // Inline **bold** uses Markdown (parsed via AttributedString in SupportView).
 // The website's SVG diagrams are intentionally omitted here — the surrounding
@@ -21,8 +21,8 @@ import SwiftUI
 // Listening History documentation must describe its historical event semantics:
 // its pill and timestamp record why/when the history entry was created, rather
 // than being rewritten to mirror a later episode-library state.
-// Play Instant guidance must state its final-minute protection: a qualifying
-// arrival waits when the current episode has 60 seconds or less remaining.
+// Play Instant guidance must state its final-two-minute protection: a qualifying
+// arrival waits when the current episode has 120 seconds or less remaining.
 // Apple TV setup guidance must describe the finite clean-install screen and
 // keep the offline Demo Library explicitly separate from private iCloud data.
 
@@ -108,7 +108,7 @@ enum SupportGuide {
         gettingStarted, priorityStack, queue, player, audioControls, carPlay, chapters,
         downloads, podcastSettings, sleepTimer, sleepSchedule, video,
         notifications, opml, iCloudSync, listeningHistory, stats, widgets,
-        appSettings, contact,
+        appSettings, manualRSS, podcastReplay, deviceGuide, contact,
     ]
 
     // MARK: Getting Started
@@ -118,16 +118,16 @@ enum SupportGuide {
         summary: "Add your first podcast and let the queue fill itself",
         blocks: [
             .heading("Finding and adding podcasts"),
-            .paragraph("Tap the **+** button in the top-right corner of the Priority page to open **Discover** — a browsing page of Apple Podcasts charts, with Top-8 highlights, category rows, and a country picker. Tap a category chip such as News, Comedy, or Technology to open its dedicated Top 50 for the selected country. Tap the search bar to search the catalog by show name, author, or keyword — results appear automatically as you type."),
-            .paragraph("Tap any result to open the podcast preview. You'll see the full episode list straight away. You can browse episodes, read descriptions, and even play or queue individual episodes before deciding to subscribe."),
+            .paragraph("Tap the **+** button in the top-right corner of the Subscriptions page to open **Discover** — a browsing page of Apple Podcasts charts, with Top-8 highlights, category rows, and a country picker. Tap a category chip such as News, Comedy, or Technology to open its Top 8 Episodes and Top 100 Shows for the selected country. Tap the search bar to search the catalogue by show name, author, or keyword — results appear automatically as you type."),
+            .paragraph("Show results open the podcast page. Episode results open episode details; tap the linked podcast name to browse the show and subscribe. Tap an episode row to open its details; swipe to reveal playback actions."),
             .paragraph("When you're ready, tap **Subscribe**. The podcast is added to the top of your Priority Stack and Autohop begins checking it for new episodes immediately."),
             .callout(.tip, "**Not sure yet?** Any podcast you open is automatically saved in **Recently Viewed** for 30 days. Come back to it any time from the search screen — your place in the episode list is right where you left it."),
             .heading("How the queue fills automatically"),
             .paragraph("Once you have subscriptions and at least one downloaded episode, Autohop builds your queue automatically. You don't need to add episodes manually — the queue is drawn from downloaded, unplayed episodes across all your subscriptions, ordered by each podcast's priority rank. The Priority Stack section walks through this with an example."),
             .paragraph("Tap **Play** on any episode and Autohop advances through the queue without any further input from you."),
-            .heading("The three main pages"),
+            .heading("Finding your way around"),
             .table(headers: nil, rows: [
-                ["Priority", "Your ranked list of subscriptions. Drag to reorder. This page controls the automatic queue order."],
+                ["Subscriptions", "Your ranked list of subscriptions. Drag to reorder. This page controls the automatic queue order."],
                 ["Up Next", "Your current playback queue — all downloaded, unplayed episodes in priority order, with any manual overrides applied."],
                 ["Downloads", "Active downloads, completed downloads, and archived episodes."],
             ]),
@@ -151,6 +151,8 @@ enum SupportGuide {
             .heading("How priority affects playback"),
             .paragraph("When an episode finishes, Autohop picks the next episode from the subscription with the highest priority rank that has a downloaded, unplayed episode available. If your top-ranked show has no downloaded episodes, Autohop moves to the next show, and so on."),
             .callout(.tip, "**Example:** If \"Hard Fork\" is ranked #1 and \"Huberman Lab\" is ranked #2, Autohop will always play all available Hard Fork episodes before moving to Huberman Lab — unless you use Play Next / Play Last to override."),
+            .heading("Find a subscription"),
+            .paragraph("On Subscriptions, tap the magnifying glass beside +. Type to filter your existing shows. Clear removes the search text; Cancel closes search. Use + for Discover instead."),
             .heading("Refreshing feeds manually"),
             .paragraph("Tap the **↺ refresh** button in the toolbar to check all non-Inactive subscriptions for new episodes immediately. A spinner replaces the button while the refresh is in progress. Inactive shows can still be refreshed from their own podcast page."),
             .heading("Episode status pills"),
@@ -221,8 +223,8 @@ enum SupportGuide {
             ]),
             .heading("Lock screen & Control Centre"),
             .paragraph("Autohop integrates with iOS Now Playing controls. Play/pause, skip forward, skip back, and scrubbing all work from the Lock Screen, Control Centre, and CarPlay."),
-            .heading("Return to Player button"),
-            .paragraph("The player is always running underneath every other page — playback never stops when you navigate away. Every page in the app has a **play.circle.fill** button (▶) in the top-left toolbar. Tap it to jump back to the player from anywhere."),
+            .heading("Returning to the Player"),
+            .paragraph("Playback continues as you browse. Tap the mini-player to return to the Player where it is shown. Use the back button to return to the previous page. Some editing and presentation states temporarily hide the mini-player."),
         ]
     )
 
@@ -239,14 +241,14 @@ enum SupportGuide {
             .paragraph("Tap **−** or **+** to adjust speed in 0.1× steps. Range: 1.0× to 2.5×. The default for new subscriptions is 1.6×."),
             .paragraph("Speed changes take effect immediately and persist for that podcast."),
             .heading("Trim Silence"),
-            .paragraph("Trim Silence removes quiet gaps in audio — pauses between sentences, dead air between questions — without affecting speech. The algorithm analyses audio in real time using RMS (root mean square) energy measurement. It shortens the gaps between speech, never the speech itself; higher levels remove shorter and shorter gaps."),
+            .paragraph("Trim Silence shortens quiet gaps between speech. Higher levels remove more pauses; choose a lower level for shows where pauses are part of the experience."),
             .table(headers: ["Level", "Effect", "Best for"], rows: [
                 ["Off", "No processing", "Music, narrative, sound-designed shows"],
                 ["Low", "Removes only the longest gaps", "Default — works well for most shows"],
                 ["Medium", "Removes medium and long gaps", "Conversational interviews"],
                 ["High", "Aggressively removes all gaps", "Dense panel discussions, Q&A formats"],
             ]),
-            .callout(.tip, "**Tip:** Trim Silence and Vocal Boost activate the AVAudioEngine processing path. Video episodes always use the standard AVPlayer path — Trim Silence has no effect on video podcasts."),
+            .callout(.tip, "**Audio episodes only:** Trim Silence and Vocal Boost do not process video episodes."),
             .heading("Vocal Boost"),
             .paragraph("Vocal Boost applies EQ enhancement to make speech clearer and more present — particularly useful at high speeds, in noisy environments, or with podcasts recorded on low-quality microphones."),
             .table(headers: ["Level", "Effect"], rows: [
@@ -255,7 +257,7 @@ enum SupportGuide {
                 ["Standard", "Moderate clarity enhancement"],
                 ["Strong", "Maximum clarity — default for new subscriptions"],
             ]),
-            .callout(.note, "**Note:** Vocal Boost processes audio through a high-pass filter, dynamic compressor, and peak limiter — all tuned for spoken voice. Strong also increases perceived loudness, which is intentional. Use your device volume for overall level."),
+            .callout(.note, "**Tip:** Strong makes voices more prominent and can increase perceived loudness. Use Volume Adjustment to balance individual podcasts and device volume for overall loudness."),
             .heading("Shared Listening"),
             .paragraph("Shared Listening is built for the moments you're not listening alone — a car stereo with passengers, a kitchen speaker, a road trip. If your shows are set to 1.6× or 1.7× with Trim Silence on, that's perfect through headphones but uncomfortable for a group."),
             .paragraph("Flip the **Shared Listening** toggle at the top of the Audio Controls sheet and every podcast temporarily plays at a relaxed group speed with Trim Silence switched off. Your per-podcast settings are never altered — turn the toggle off and everything returns exactly as it was."),
@@ -322,14 +324,14 @@ enum SupportGuide {
         id: "downloads", icon: "arrow.down.circle", title: "Downloads",
         summary: "Download-first playback, background & cellular",
         blocks: [
-            .paragraph("Autohop is a **download-first** player. Episodes must be downloaded before they can be played. The app never streams directly from the internet during playback."),
+            .paragraph("On iPhone, iPad and the compatible Mac app, playback uses downloaded episodes. Apple TV Discover can stream episodes; see the Apple TV guide for its different workflow."),
             .heading("Downloading an episode"),
             .paragraph("On a subscribed podcast's episode list, swipe an undownloaded episode and tap **Download**. Listening History offers the same state-aware action for episodes still available in your library. A progress bar appears in the episode row while downloading."),
-            .paragraph("You can also tap the **Download** button that appears inline in the episode metadata row for any undownloaded episode."),
+            .paragraph("You can also open an episode’s detail page and tap **Download** when available."),
             .heading("Background downloads"),
-            .paragraph("Downloads continue in the background even when Autohop is not the active app. If a download is in progress and you lock your phone or switch apps, it will complete automatically using iOS background URL sessions."),
+            .paragraph("Downloads can continue through iOS background transfers when you leave the app. Network availability and system restrictions can delay or interrupt them."),
             .heading("Pausing and cancelling"),
-            .paragraph("Open the **Downloads** page to see all active downloads. Tap a download row to pause it. Tap again to resume. Swipe left to cancel."),
+            .paragraph("Open **Menu → Downloads**. Use **Pause**, **Resume** or **Retry Now** beside an active transfer. Swipe a resolved episode for **Play**, **Play Next**, **Play Last** or **Archive**. Archive removes the download; archived entries offer **Re-download**."),
             .heading("Cellular downloads"),
             .paragraph("By default, Autohop downloads over both Wi-Fi and mobile data so the queue stays stocked. To restrict automatic downloads, go to **Settings → Downloading** and turn off **Download over cellular**, **Download over WiFi**, or both."),
             .heading("Storage"),
@@ -343,7 +345,7 @@ enum SupportGuide {
         id: "podcast-settings", icon: "gearshape", title: "Per-Podcast Settings",
         summary: "Independent speed, skips, and auto-archive rules",
         blocks: [
-            .paragraph("Every podcast has its own independent settings. To access them, tap any podcast row in the Priority page to open its episode list, then tap the **gear icon** (⚙) in the top-right toolbar."),
+            .paragraph("Every podcast has its own independent settings. To access them, tap any podcast row in the Subscriptions page to open its episode list, then tap the **gear icon** (⚙) in the top-right toolbar."),
             .heading("Playback settings"),
             .table(headers: ["Setting", "Description"], rows: [
                 ["Speed", "Playback speed for this podcast (1.0× – 2.5×). Default: 1.6×"],
@@ -371,12 +373,16 @@ enum SupportGuide {
             .heading("Play Instant"),
             .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a clear warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
             .paragraph("If playback or its audio route is temporarily unavailable when the automatic download completes, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker; if playback does not resume in time, the episode simply keeps its normal Up Next position."),
-            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. It also waits rather than interrupting when the current episode has 60 seconds or less remaining. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
+            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. It also waits rather than interrupting when the current episode has 120 seconds or less remaining. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
+            .heading("Podcast Replay — Version 1.7"),
+            .paragraph("Open the dedicated Podcast Replay section above Download Feed Filters. See Podcast Replay in this guide for schedules, Binge Mode, limits and sync."),
             .heading("Chapter Filter"),
             .paragraph("When an episode contains chapters, toggle chapter positions that Autohop should skip for this podcast. The choices apply to future episodes with the same chapter positions and update active playback immediately. While this podcast is playing, its current chapter is protected from accidental changes on this settings page."),
             .heading("Download Feed Filters"),
             .paragraph("Choose which new episodes download automatically using duration limits and title or description text rules. Filtered episodes remain visible and can still be downloaded or queued manually."),
             .paragraph("Episodes deliberately excluded by these filters do not train Release Radar and do not count as evidence in Shows You're Drifting From. Filter rules sync with your other per-podcast settings when iCloud Sync is enabled."),
+            .paragraph("In Version 1.7, switch on only the filter groups you need. Add Include or Exclude rules for length, title or description. All rules requires every Include rule; Any rule requires one. Exclude always wins. Blank text rules are ignored. Changes save automatically; switching a group off keeps its saved rules."),
+            .paragraph("Use Preview Matches to check recent entries without downloading media. Results update as rules change. Five results appear first; Show All reveals the rest. Preview eligibility does not override download limits."),
             .heading("Exclude from auto-refresh"),
             .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed during automatic/feed-all refreshes. The podcast stays subscribed, moves to the bottom with the Inactive pill, keeps its downloaded episodes and queue eligibility, and can still be manually refreshed from its own podcast page. Turning the setting off restores its saved Priority Stack position."),
             .heading("Notifications"),
@@ -455,6 +461,8 @@ enum SupportGuide {
             .heading("Per-podcast control"),
             .paragraph("On a fresh install, new subscriptions start with notifications enabled. The page lists every existing subscription with its own authoritative toggle. Changing the new-subscription default never rewrites or gates those existing choices."),
             .callout(.note, "**Note:** Autohop uses local notifications only. No data leaves your device to deliver them — they are generated entirely on-device when the app detects a new episode."),
+            .heading("Listening Recaps"),
+            .paragraph("Open Settings → Release Radar → Notification Settings → Listening Recaps. Choose weekly, monthly or yearly summaries. Recaps have their own controls and need notification permission; they do not change podcast alerts."),
         ]
     )
 
@@ -475,9 +483,9 @@ enum SupportGuide {
             .heading("Exporting your subscriptions"),
             .steps([
                 "Go to **Settings → Subscriptions → Export OPML**.",
-                "The standard iOS share sheet opens — save to Files, AirDrop, or email it to yourself.",
+                "Choose where to save the exported OPML file. You can then share that file using Files or your device’s sharing options.",
             ]),
-            .callout(.tip, "**Tip:** Export regularly as a backup. OPML files capture all your feed URLs and subscription order, so you can restore your entire library to a new device or app quickly."),
+            .callout(.tip, "**Tip:** OPML exports your subscription list. It is not a full backup of downloaded episodes, playback history or podcast settings. Use iCloud Sync separately for supported library state."),
         ]
     )
 
@@ -487,7 +495,7 @@ enum SupportGuide {
         id: "icloud-sync", icon: "icloud", title: "iCloud Sync",
         summary: "Keep your listening in step across your devices",
         blocks: [
-            .paragraph("iCloud Sync keeps your podcasts and your place in them matched across all the iPhones signed into the same iCloud account. Start an episode on one device and pick it up on another, right where you left off."),
+            .paragraph("iCloud Sync keeps your library and playback position aligned across compatible devices signed into the same iCloud account. Allow time for changes to upload and arrive on the other device."),
             .paragraph("It's **on by default for new users** so iPhone and Apple TV can stay in step without extra setup. Existing users keep their saved choice, and anyone can turn it off at any time."),
             .heading("Turning it on"),
             .steps([
@@ -509,9 +517,9 @@ enum SupportGuide {
                 "Your listening history and your stats",
             ]),
             .heading("What stays on each device"),
-            .paragraph("**Downloaded episode files** are not synced — each device downloads its own copies, so sync never uses your mobile data to move audio around. Device-specific app settings, such as which screen Autohop opens to, also stay on each device."),
+            .paragraph("**Downloaded episode files** stay on each device. Each device fetches its own media using its network settings, which may use mobile data. Global app settings, such as your starting screen, also stay local."),
             .callout(.note, "**Private by design:** Sync uses your own **private iCloud** (Apple's CloudKit). Your listening is stored in your personal iCloud account — Autohop has no server and the developer can never see your data. There's no separate account to create and no login beyond the iCloud you already use."),
-            .callout(.tip, "**Two devices at once?** If the same episode is playing in two places, the device you're actively listening on wins, so your position never jumps backwards. For everything else, the most recent change is the one that's kept."),
+            .callout(.tip, "**Two devices at once?** Sync is asynchronous. Avoid playing the same episode simultaneously on multiple devices; pause and allow time for sync before switching devices."),
         ]
     )
 
@@ -575,7 +583,7 @@ enum SupportGuide {
         title: "Home & Lock Screen Widgets",
         summary: "Now Playing and downloaded Up Next episodes at a glance",
         blocks: [
-            .paragraph("Add **Now Playing & Up Next** from the iPhone widget gallery. Small, medium, and large Home Screen sizes show your current episode and downloaded episodes that are ready next. Lock Screen and StandBy accessories offer a compact Up Next count or current/next episode summary."),
+            .paragraph("Add **Now Playing & Up Next** from the iPhone or iPad Home Screen widget gallery. Available sizes show the current episode and downloaded Up Next items. Lock Screen and StandBy options depend on your device."),
             .heading("Playing from a widget"),
             .paragraph("Tap a purple play control to start that downloaded episode immediately. If it is already current, the same control toggles play and pause. Playback can begin without opening Autohop; a stale, archived, or no-longer-downloaded row is rejected safely."),
             .table(headers: nil, rows: [
@@ -597,7 +605,7 @@ enum SupportGuide {
         id: "app-settings", icon: "wrench.and.screwdriver", title: "App Settings",
         summary: "Release Radar, downloading, controls, and more",
         blocks: [
-            .paragraph("Access global settings via the hamburger menu (☰) on the Priority page → **Settings**."),
+            .paragraph("Access global settings via the hamburger menu (☰) on the Subscriptions page → **Settings**."),
             .heading("Startup"),
             .table(headers: nil, rows: [
                 ["Open at launch", "Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. Default: Player. (New users see a quick welcome first.)"],
@@ -630,7 +638,7 @@ enum SupportGuide {
             ]),
             .heading("Subscriptions"),
             .table(headers: nil, rows: [
-                ["Manage podcasts", "Navigate to the Priority page to reorder, add, or remove subscriptions."],
+                ["Manage podcasts", "Navigate to the Subscriptions page to reorder, add, or remove subscriptions."],
                 ["Add RSS Feed", "Enter a podcast RSS URL directly to subscribe to a show not found in the search directory."],
                 ["Import OPML", "Import subscriptions from another podcast app. See the OPML Import & Export section."],
                 ["Export OPML", "Export your subscription list as an OPML file for backup or migration."],
@@ -638,7 +646,7 @@ enum SupportGuide {
             .heading("Default Playback"),
             .paragraph("Sets the speed, Stereo/Mono Audio mode, Vocal Boost, Trim Silence, and start/end skip given to every **new** subscription, and used to play feeds you're only previewing. Stereo is the factory default. Changing these never affects podcasts you've already subscribed to — adjust those from each podcast's own settings."),
             .heading("Sync"),
-            .paragraph("**iCloud Sync** keeps subscriptions, per-podcast settings, played and archived state, playback positions, Up Next order, history, and stats in step through your private iCloud database across iPhone and Apple TV. Downloaded media and global app settings remain local. It is on for new users and can be turned off at any time. See the iCloud Sync section for the full picture."),
+            .paragraph("**iCloud Sync** keeps subscriptions, per-podcast settings, played and archived state, playback positions, Up Next order, history, and stats in step through your private iCloud database across compatible devices. Downloaded media and global app settings remain local. It is on for new users and can be turned off at any time. See the iCloud Sync section for the full picture."),
             .heading("Storage"),
             .paragraph("Shows the count of currently downloaded episodes and their total size on disk. To free storage, archive episodes from Up Next or adjust the Episode Limit in your per-podcast auto-archive settings."),
             .heading("About"),
@@ -646,6 +654,48 @@ enum SupportGuide {
             .callout(.tip, "**Having an issue?** Get in touch from the Contact page at kevmarl.com — include your iOS version and a description of what happened."),
         ]
     )
+
+
+    // AI RELEASE CONTRACT: These workflow sections describe development 1.7.
+    // Website export must retain availability labels until that release is live.
+    private static let manualRSS = SupportSection(
+        id: "manual-rss", icon: "link", title: "Add RSS Feed — Version 1.7",
+        summary: "Subscribe using a publisher’s feed link",
+        blocks: [
+            .callout(.note, "Version 1.7 introduces this guided layout. Earlier versions also support manual RSS entry, with different button labels."),
+            .steps(["Open Settings → Subscriptions → Add RSS Feed.", "Paste or type the publisher’s RSS feed link. The example address is only a placeholder.", "Preview Podcast appears once you enter text. Tap it and wait for the preview.", "Check the show title and latest episode, then tap Subscribe."]),
+            .paragraph("Look for RSS on the publisher’s website. A normal web page or Apple Podcasts link is usually not a feed. Expand What is an RSS link? for help."),
+            .paragraph("If preview fails, check the address and connection, then retry. Editing the link clears the old preview. Nothing is subscribed until you confirm; duplicate or save errors appear on the page.")
+        ])
+
+    private static let podcastReplay = SupportSection(
+        id: "podcast-replay", icon: "arrow.counterclockwise", title: "Podcast Replay — Version 1.7",
+        summary: "Start earlier, schedule episodes or prepare one ahead",
+        blocks: [
+            .callout(.note, "Podcast Replay is new in Version 1.7. It is not available in the released 1.6.1 app."),
+            .steps(["Open a podcast, tap its settings gear, then Set Up Podcast Replay.", "Choose the earlier episode you want to start from.", "Choose Daily, Weekdays or Choose Days, then add the release times you want. For a commute, add a morning and afternoon time.", "Check the upcoming episodes and Episode Limit, then save the Replay setup."]),
+            .paragraph("Replay works through matching episodes in release order. Download Feed Filters still apply. While Replay is enabled, it replaces normal automatic new-episode downloading for this podcast. You can still choose episodes manually."),
+            .heading("Binge Mode"),
+            .paragraph("Turn on Binge Mode to hide the calendar controls and prepare the next matching episode when playback starts. With Episode Limit 1, it can keep one upcoming episode in addition to the playing episode. Up Next still follows your existing priority order and manual choices; Binge Mode does not force this podcast to play next."),
+            .heading("Make room for listening"),
+            .paragraph("Episode Limit is shared with this podcast’s Auto Archive settings. Changing it on either page updates both immediately. Replay waits when the limit is reached, then resumes when there is room and a release is due. The schedule itself is saved with the Replay save action."),
+            .heading("Caught up or ready to stop"),
+            .paragraph("When you catch up, review the message in Replay and choose whether to keep the schedule for future episodes or turn Replay off. Enable the caught-up notification if wanted. Turning Replay off restores normal automatic new-episode downloads. To choose a different starting episode, turn it off and set it up again."),
+            .heading("Devices and timing"),
+            .paragraph("Keep Autohop updated on all devices and use iCloud Sync for supported Replay settings and Up Next changes. The scheduling device remains responsible for preparing releases; automatic takeover by another device is not guaranteed. Keep that device available. Downloads can arrive late if the app cannot run or connect. The saved schedule’s time zone governs release times."),
+            .paragraph("A Replay pill identifies enabled subscriptions. Replay episodes do not trigger Play Instant.")
+        ])
+
+    private static let deviceGuide = SupportSection(
+        id: "devices", icon: "desktopcomputer", title: "iPad, Mac and Apple TV",
+        summary: "Choose the right controls for your device",
+        blocks: [
+            .paragraph("iPad uses adaptive layouts and supports Home Screen widgets. Wide settings windows offer section shortcuts. Narrow windows keep the single-column form."),
+            .paragraph("On compatible Apple-silicon Macs, Autohop runs as the Designed-for-iPad app. It is not a separate native macOS build. Use the application menus and keyboard shortcuts; commands depend on the current page and playback state."),
+            .table(headers: nil, rows: [["Command-comma", "Settings"], ["Command-N", "Add RSS Feed"], ["Command-1 / 2 / 3 / 4", "Player / Subscriptions / Discover / Up Next"], ["Command-Return", "Play or pause"], ["Command-left / right arrow", "Skip back / forward"]]),
+            .paragraph("Apple TV uses its own interface and release schedule. Manage subscription membership on the iOS-family app. See the Apple TV guide for setup, playback, sync and Top Shelf troubleshooting."),
+            .link(label: "Apple TV guide", urlString: "https://kevmarl.com/autohop/apple-tv#guide")
+        ])
 
     // MARK: Contact
 
@@ -655,7 +705,7 @@ enum SupportGuide {
         blocks: [
             .paragraph("Have a question, found a bug, or want to share some feedback? I'd love to hear from you — tap the button below to open the contact page."),
             .link(label: "Get in touch", urlString: "https://kevmarl.com/contact"),
-            .paragraph("Please include your iOS version and a description of what happened if you're reporting a bug — it makes it much easier to track down."),
+            .paragraph("Please include the app version/build, device, operating system, steps to reproduce, what you expected and what happened. Include the podcast and episode if relevant. Send diagnostics only when requested."),
         ]
     )
 }

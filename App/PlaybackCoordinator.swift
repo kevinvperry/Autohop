@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Ignore queued resume callbacks after a newer pause or episode switch; never publish
+// playing from stale recovery.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 //
 //  PlaybackCoordinator.swift
 //  Autohop
@@ -311,7 +316,9 @@ final class PlaybackCoordinator: ObservableObject {
             Task { @MainActor in
                 guard let self,
                       let subscriptionStore,
-                      let preferenceWorkflow else {
+                      let preferenceWorkflow,
+                      self.engine.isPlaying,
+                      self.engine.currentEpisode?.id == self.currentEpisode?.id else {
                     return
                 }
                 self.isPlaying = true

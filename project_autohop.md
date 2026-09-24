@@ -273,3 +273,46 @@ Autohop is MIT except for four MPL-2.0 files derived from Pocket Casts for iOS:
 `Playback/PlaybackEngine.swift`, and `Models/Synced.swift`. `LICENSE-MPL-2.0.md`
 and `NOTICE` also acknowledge broader Pocket Casts design ideas and inspiration
 without claiming copied UI assets or strings outside the listed files.
+
+## Navigation and Sleep Schedule — 20 September 2026
+
+<!-- AI CONTEXT — Current implementation summary; preserve these contracts when
+editing navigation or settings UI. The linked audits own detailed evidence. -->
+
+- `RootView.swift` owns `appNavigationBackButton`: native Back for pushed pages
+  on iOS 27+, branded ambient dismiss on older systems. Player's modal Podcast
+  Detail/Settings roots explicitly retain dismiss. Never add a competing Back
+  item or pop the outer path from a child. See
+  [navigation audit](Docs/IOS27_NAVIGATION_BACK_AUDIT.md).
+- Sleep Schedule uses Feed Filters/Replay glass-card styling, immediate saving,
+  native hours controls, all six interval choices, configuration summary and
+  expandable help. Disabled values, notification opt-in, onboarding and mini-player
+  remain. Chimes overlap ongoing playback; unanswered prompts fade/pause/rewind.
+  Playback services and persistence bindings are unchanged by this refresh. See
+  [Sleep Schedule audit](Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md).
+- Hosted simulator checks passed on iOS 26.5/27; Sleep Schedule also passed on
+  iPadOS 26.5 with large text. These results do not establish physical-device,
+  overnight audio, VoiceOver or notification-delivery behaviour.
+
+## Diagnostic reliability repairs — 20 September 2026
+
+<!-- AI CONTEXT — Keep this contract aligned with source headers and the repair record. -->
+
+Playback resume retires stale buffer waits; Pause cancels pending recovery; EOF
+uses consistent completion and render health reflects actual callbacks. Auto
+Archive reads live pin IDs without repeated catalogue scans. Download completion
+awaits ordered off-main stats-file persistence. First active-runtime fallback is
+prompt; later retries stay bounded. Sync settings reactions are deduplicated,
+foreign subscription identities remain protected, and diagnostic exports additionally
+pseudonymise personal route names/arbitrary GUIDs. MetricKit disk-write reports now
+carry byte counts and bounded stacks. Titles/timestamps remain diagnostic context.
+See [implementation and validation](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md).
+
+
+### Mini-player bottom backing — 20 September 2026
+
+<!-- AI CONTEXT — One shared glass background extends through the bottom safe area. -->
+The persistent mini-player's continuous purple glass background reaches below the
+progress strip to the bottom safe-area edge, without a separate material-only band. Shared
+controls and layout are preserved. Page/sheet screenshots were verified on iOS 27
+and iOS 26.5 simulators; see [the audit](Docs/MINI_PLAYER_AUDIT_2026-09-06.md).

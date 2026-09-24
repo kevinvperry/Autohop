@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — App/PlaybackStartWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): A newly reserved historical Replay pass starts from zero; subsequent playback in the pass uses normal saved progress.
 //
 // PURPOSE / OWNERSHIP:
 // Ordered transaction that turns a selected downloaded Episode into an active
@@ -99,7 +100,7 @@ final class PlaybackStartWorkflow {
             )
         }
         let safeResumeTime = PlaybackPositionStore.normalizedResumeTime(
-            resumeFrom,
+            subscription.autoArchiveSettings.replay?.resumeTime(for: playableEpisode, savedTime: resumeFrom) ?? resumeFrom,
             duration: playableEpisode.durationSeconds
         )
 

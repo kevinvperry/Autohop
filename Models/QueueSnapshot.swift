@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — Models/QueueSnapshot.swift
+// REPLAY (Version 1.7, 2026-09-12): Optional replaySessionID distinguishes fresh historical passes from stale played flags without changing legacy snapshot decoding.
 // The synced Up Next queue (2026-07-04, Kevin's decision): "the Up Next queue
 // is the centre of the Autohop project" — so its COMPOSITION now roams as a
 // first-class CloudKit record instead of each device re-deriving its own
@@ -48,6 +49,8 @@ public struct QueueSnapshotEntry: Codable, Equatable, Sendable {
     public var isExplicit: Bool?
     /// iPhone-authored queue override. Nil means natural Priority Stack order.
     public var pinState: QueuePinState?
+    /// Optional Replay session identity distinguishes a new pass from old history.
+    public var replaySessionID: UUID? = nil
 
     public init(
         episodeKey: String,

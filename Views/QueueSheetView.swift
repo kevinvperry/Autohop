@@ -5,6 +5,7 @@ import SwiftUI
 // Do not recreate the coordinator or rely on late presentation environment injection.
 
 // AI CONTEXT — Views/QueueSheetView.swift ("Up Next" sheet — labelled "Up Next"
+// REPLAY (Version 1.7, 2026-09-12): Undownloaded Replay reservations remain in order with waiting/downloading/retry text; local readiness never changes shared membership.
 // in-app; the canonical design-system reference page per DESIGN.md; internal
 // struct name remains QueueSheetView). Shows Up Next + the priority-ordered
 // downloaded queue from QueueCoordinator.episodes (overrides applied). It reads
@@ -114,6 +115,11 @@ struct QueueSheetView: View {
                                         Text(sub?.title ?? "Unknown Podcast")
                                             .font(.system(size: rowMetrics.secondaryFontSize))
                                             .foregroundStyle(.secondary)
+                                        if sub?.autoArchiveSettings.replay?.contains(episode) == true, episode.downloadState != .downloaded {
+                                            Text(episode.downloadState == .failed ? "Replay · Waiting to retry" : (episode.downloadState == .downloading ? "Replay · Downloading" : "Replay · Waiting for download"))
+                                                .font(.system(size: rowMetrics.secondaryFontSize))
+                                                .foregroundStyle(.secondary)
+                                        }
                                         Text(episode.title)
                                             .font(.system(size: rowMetrics.primaryFontSize, weight: .bold))
                                             .foregroundStyle(.primary)
@@ -335,7 +341,8 @@ struct QueueSheetView: View {
     }
 
     private func remainingTime(for episode: Episode) -> String? {
-        let elapsed = appState.effectivePlaybackTime(for: episode)
+        let savedElapsed = appState.effectivePlaybackTime(for: episode)
+        let elapsed = subscriptionStore.subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay?.resumeTime(for: episode, savedTime: savedElapsed) ?? savedElapsed
         guard elapsed > 0, let duration = episode.durationSeconds, duration > 0 else { return nil }
         let remaining = max(0, duration - elapsed)
         guard remaining > 0 else { return nil }

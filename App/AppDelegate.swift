@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// MetricKit disk-write reports include bytes, build/OS identity and bounded symbolication
+// frames. Count-only summaries cannot attribute excessive writes; preserve redaction.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import CarPlay
 import UIKit
 import BackgroundTasks
@@ -801,6 +806,17 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, MXMetricManagerSubs
                 AppLogger.shared.warning("metrics.diagnostics", "MetricKit diagnostics received", metadata: metadata)
             } else {
                 AppLogger.shared.info("metrics.diagnostics", "MetricKit diagnostic payload received", metadata: metadata)
+            }
+
+            for (diskIndex, disk) in (payload.diskWriteExceptionDiagnostics ?? []).enumerated() {
+                AppLogger.shared.warning("metrics.diskWrites", "MetricKit excessive disk-write diagnostic", metadata: [
+                    "source": source, "payloadIndex": "\(index)", "diskIndex": "\(diskIndex)",
+                    "appVersion": disk.applicationVersion,
+                    "buildVersion": disk.metaData.applicationBuildVersion,
+                    "osVersion": disk.metaData.osVersion,
+                    "totalWritesBytes": String(format: "%.0f", disk.totalWritesCaused.converted(to: .bytes).value),
+                    "stack": compactCallStack(disk.callStackTree, frameLimit: 32)
+                ], alwaysPersist: true)
             }
 
             // Per-crash detail so the NEXT crash is pinpointed, not just counted. Each

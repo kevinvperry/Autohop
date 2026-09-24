@@ -29,49 +29,19 @@ families. Its family-specific compositions remain responsive rather than
 silently disappearing on iPad or compatible Apple-silicon Mac installations.
 -->
 
-> Large-screen asset policy is container-driven: scale hierarchy-bearing titles,
-> toolbar controls, meaningful artwork and spacing through `AdaptiveLayout.swift`;
-> cap reading measures; preserve export, progress, badge, system-list and minimum
-> hit-target geometry. See the 23 August 2026 responsiveness audit.
-> `Header-SubscriptionPage` is side-by-side below 600 content points to protect
-> episode-list height, then centred at 600+ points for iPad/Mac presentation.
-> `ListRow-Responsive` uses 44/52/60-point meaningful artwork and coordinated
-> text, spacing, padding and minimum row height across standard/wide/expansive
-> content columns. Status pills and progress thickness remain semantic constants.
+## Download Feed Filters presentation — Version 1.7
 
-> Version 1.6 build 9 tvOS interaction rule: expensive diagnostic export and
-> sync projection work must not occupy the main actor. Long operations expose
-> an immediate progress state, disable duplicate activation, and preserve focus
-> and scrolling responsiveness.
+The editor mirrors Replay with black background, regular 12-point glass cards, 20-point internal padding, adaptive Form sizing, shared section spacing, purple icons/toggles and inline Back/title/mini-player conventions. Order: introduction, Episode length, Episode title, Episode description, How your rules work together, Check your matches. Disabled groups retain their saved rules but hide the detailed editors. Rule panels separate action, comparison and value; explicit Remove Rule buttons replace dependence on discovering swipe deletion. Examples explain Include/Exclude, contains/not-contains, blank terms and All/Any. Changes save immediately.
 
-> Version 1.6 iOS-family modal rule: a Player modal that reads domain models
-> must receive them explicitly at its presentation boundary. Do not depend on
-> environment-object inheritance for Audio Controls; iOS-on-Mac can host the
-> sheet in a distinct modal subtree. Keep one responsive implementation across
-> iPhone, iPad, Mac and future variable-width devices.
-> Mac uses system modal sizing without touch-oriented detents or drag chrome;
-> iPhone and iPad retain the resizable bottom-sheet presentation.
+Preview fetches up to 50 feed entries and caches their Episode values. Current settings evaluate the cached entries on every render, including changes made while a fetch was running. Five preview rows appear initially; Show All / Show Fewer retains the complete fetched results. Match/skip counts and textual outcomes supplement colour; skipped titles/reasons remain readable. Loading, retry and empty-feed states have explicit copy. The shared evaluation/storage/network policy remains unchanged. See `Docs/DOWNLOAD_FEED_FILTERS_DESIGN_AUDIT.md` for the audit and validation scope.
 
-> CloudKit subscription settings are owned by the exact active subscription
-> UUID. Canonical feed equality may prevent a second local row from being
-> materialised, but it must never transfer settings from a foreign namespaced
-> record. This protects current preferences from obsolete identities left by
-> unsubscribe/resubscribe cycles.
+## Podcast Replay presentation — Version 1.7
 
-> Player sharing uses an intrinsic-height modal: measure the complete Episode
-> Share content and expose one fitted detent. The enclosing ScrollView is the
-> constrained-height fallback; a second generic large detent is not.
+Updated 13 September 2026: Podcast Replay has its own Podcast Settings section above Download Feed Filters and its own expansive-layout sidebar shortcut. The editor uses a dark introductory glass card with a purple accent border and numbered Choose your starting point / Set your pace / See what’s coming cards. Additional cards explain capacity and notifications. Short sync/update and scheduling-device notes sit beside Enable/Save; no separate device card or acknowledgement is required. All use the shared black workspace, purple control tint, `glassCard(cornerRadius: 12)`, 20-point content padding, adaptive Form sizing and shared section spacing. Native controls, semantic headings and wrapping text avoid fixed-height clipping.
 
-> Discover navigation is part of the responsive editorial system. Its inline
-> heading and leading/trailing controls must use `AdaptiveEditorialMetrics`
-> derived from the offered container width, scaling type, symbols and hit
-> targets together rather than retaining phone toolbar defaults on wide screens.
-> Toolbar-hosted controls must remain within the system's 44-point inline bar
-> slot; enlarge their glyphs and labels without assigning a taller frame that
-> the navigation host will crop. The Search shortcut scales independently with
-> editorial content from 40 to 46 to 52 points high.
+Daily / Weekdays / Choose Days provide calendar scheduling. Choose Days reveals wrapping, selectable weekday buttons with at least one selected; Add another time reveals extra native time pickers and accessible remove buttons. Each unique time releases one episode on every selected day. Start date and the preview resolve to the first actual selected slot in the stored time zone. Duplicate times disable saving with an explanation. The Episode Limit menu writes immediately to the same setting as Podcast Settings, with this behaviour explained separately from schedule drafts. The local catalogue picker provides search, release dates, full-row selection and a selected checkmark. Save/Enable is a prominent purple action; Turn Off is red and placed at the bottom with its consequence explained. The editor and picker retain the shared Back control, inline title and mini-player. Replay remains an additive indigo status pill, distinct from action tint. See [the full audit](Docs/PODCAST_REPLAY_DESIGN_AUDIT.md).
 
-> **Page names & navigation structure** → see [`PAGES.md`](PAGES.md)
+Binge Mode has its own glass card immediately above Set your pace, with the shared purple SettingsRowLabel toggle. Enabling it hides the entire pace card, changes the preview to “when playback starts” explanations, and explains the one-upcoming-plus-playing Episode Limit rule. Schedule settings remain draft-only until Enable/Save Changes. No automatic priority promotion or playback interruption is implied.
 
 ## Downloads episode lists — 6 September 2026
 
@@ -278,7 +248,7 @@ The **Priority**, **Up Next**, **Downloads**, **Individual Subscription**, and *
 | `Accent-Purple` | Purple is the highlight colour for buttons, icons, active states, and progress |
 | `AppIcon-GlassReady` | iOS app icon source: vivid purple Liquid Glass-ready background, launch-splash-matched lavender and green waveform bars, centred white skip chevron |
 | `NavTitle-Inline` | Page title in the centre of the top bar, not as a large heading |
-| `NavBack-Standard` | Pushed pages: brand back chevron top-left, nothing else in that corner |
+| `NavBack-Standard` | Pushed pages: one Back control top-left; shared policy uses native Back on iOS 27+, branded Back on older systems. Modal roots retain explicit dismiss. |
 | `SheetClose-Standard` | Informational sheets: ✕ close button top-right, no Done/Cancel |
 | `Sheet-MaterialBackground` | Player sheets use `.presentationBackground(.regularMaterial)` (Liquid Glass on iOS 26) to match the system AirPlay picker — not a solid fill |
 | `MiniPlayer-Bar` | Compact rounded purple-glass player docked below every pushed page: enlarged left artwork, full-width episode title, podcast/countdown beside a tight transport cluster, bottom full-width progress and safe-area continuation; tap its surface to return to Player |
@@ -431,17 +401,25 @@ All navigation titles use `.inline` display mode.
 
 > Full navigation structure and the three exit patterns → see `PAGES.md`.
 
-**Label: `NavBack-Standard`** — every pushed page's only top-left control. The
-icon-only button carries an explicit `.accessibilityLabel("Back")` so VoiceOver
-announces it — a raw `Image` has no accessibility label of its own (a SwiftUI
-`Label` would derive one, but this control uses `Image`). New pushed pages MUST copy
-this labelled form:
+<!-- AI CONTEXT — Navigation compatibility, 20 September 2026. Keep the shared
+policy and modal-root exception aligned with RootView and NavigationChromeTests. -->
+
+**Label: `NavBack-Standard`** — one Back control on pushed pages. Pages using the
+branded policy apply the modifier to the destination, without another leading
+Back toolbar item:
 
 ```swift
-ToolbarItem(placement: .topBarLeading) { NavigationBackButton() }
+.appNavigationBackButton()
 ```
 
-`NavigationBackButton` owns the ambient `dismiss`; that behavior is
+The shared policy uses native Back on iOS 27 and later, and the branded,
+accessibility-labelled `NavigationBackButton` on older systems. Existing native-only
+pages retain native Back. Podcast Detail and Podcast Settings presented as modal
+stack roots from Player use `.appNavigationBackButton(isPresentationRoot: true)`
+to retain explicit dismiss on every OS; children keep the default false.
+See [the navigation audit](Docs/IOS27_NAVIGATION_BACK_AUDIT.md) for coverage.
+
+`NavigationBackButton` owns the ambient `dismiss`; that behaviour is
 architectural, not interchangeable styling. Pages such as
 Podcast Detail can be pushed by Subscriptions, Discover, Search and nested chart
 pages that own different destination state. Ambient dismiss removes the nearest
@@ -484,8 +462,8 @@ form a close centred cluster with a small responsive clearance between their
 touch targets. Bottom breathing room
 keeps the card visually inside the lower third rather than pinned to the edge.
 The containing Menu uses `systemGroupedBackground` and
-`secondarySystemGroupedBackground`, matching Sleep Schedule's native dark
-page/section hierarchy instead of introducing a separate grey palette.
+`secondarySystemGroupedBackground` for its native dark page/section hierarchy.
+Sleep Schedule now uses the Feed Filters/Replay glass settings-card treatment.
 
 **Navigation ownership:** `PlayerView` remains the permanent
 `NavigationStack` root. `AppRoutingCoordinator` emits typed launch, menu,
@@ -1864,7 +1842,7 @@ The single page (`PodcastDetailView`) for a podcast in **every** state — an un
 For an unsubscribed preview, a browse subscription is created automatically in the background when the feed finishes loading (`.task`), so the episode list is fully interactive from first load. See FEATURES.md §2.4 for the full browse subscription lifecycle.
 
 **Toolbar:**
-- Back button (`chevron.left.circle.fill`) — leading, always.
+- Back — shared `appNavigationBackButton` policy: native on iOS 27+, branded on older systems; explicit dismiss retained for modal roots.
 - Share button (`square.and.arrow.up`) — trailing, always.
 - **Refresh Feed** (`arrow.clockwise`) and **Show Settings** (`gearshape` → `SubscriptionSettingsView`, `.primaryAction`) — shown for real subscriptions (`browseDate == nil`), including Inactive ones; absent on unsubscribed previews and browse pages.
 
@@ -3339,3 +3317,58 @@ launch animation’s existing edge-to-edge purple background can cover the statu
 bar and home-indicator regions. Keyboard avoidance is preserved by ignoring only
 container safe areas. Keep this boundary when changing responder-host layout;
 adding ignoresSafeArea solely inside the splash cannot expand a constrained host.
+
+### Settings clarity — Version 1.7, 13 September 2026
+
+Audited all Main Settings and Individual Subscription Settings sections. Shortened explanations, split multi-control footers into labelled paragraphs, clarified global defaults versus existing podcast settings, and added brief RSS/OPML guidance. Existing controls, bindings, section order, sidebar IDs and safeguards remain intact. See `Docs/SETTINGS_CLARITY_AUDIT.md` for the full section-by-section review and validation limits.
+
+### Manual RSS entry — Version 1.7, 13 September 2026
+
+Add RSS Feed now uses Podcast Replay-style glass cards with a guided link/preview/subscribe flow, clear URL entry, expandable RSS help, artwork preview and novice-friendly error guidance. Technical episode links remain expandable. Editing a link clears its previous preview; surrounding whitespace is trimmed. Existing subscription saving, navigation and mini-player remain. Build passed; runtime device checks remain outstanding. See `Docs/ADD_RSS_FEED_DESIGN_AUDIT.md`.
+
+### Support content parity — Version 1.7
+
+The in-app SupportGuide is the canonical guide content. `Scripts/export_support_website.py` emits web sections from its typed blocks; keep release/platform labels and legacy anchors. Build the website worker separately. Generation does not publish. Preserve version availability notes until release is confirmed and record browser/device verification separately.
+
+
+### Sleep Schedule page refresh — 20 September 2026
+
+<!-- AI CONTEXT — Presentation-only refresh; preserve existing settings and
+playback contracts. Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md owns validation evidence. -->
+
+Sleep Schedule now matches Feed Filters and Podcast Replay with dark glass cards,
+purple controls, clear setup guidance, a saved-schedule summary and expandable
+help. All existing intervals, End of Episode, daytime/overnight/all-day windows,
+immediate saving, notification opt-in, onboarding and mini-player remain.
+The explanation now correctly describes a chime over continuing playback before
+an unanswered check-in fades out and rewinds. See
+[the design audit](Docs/SLEEP_SCHEDULE_DESIGN_AUDIT.md) for scope and validation.
+
+## Diagnostic reliability repairs — 20 September 2026
+
+<!-- AI CONTEXT — Keep this contract aligned with source headers and the repair record. -->
+
+Playback resume retires stale buffer waits; Pause cancels pending recovery; EOF
+uses consistent completion and render health reflects actual callbacks. Auto
+Archive reads live pin IDs without repeated catalogue scans. Download completion
+awaits ordered off-main stats-file persistence. First active-runtime fallback is
+prompt; later retries stay bounded. Sync settings reactions are deduplicated,
+foreign subscription identities remain protected, and diagnostic exports additionally
+pseudonymise personal route names/arbitrary GUIDs. MetricKit disk-write reports now
+carry byte counts and bounded stacks. Titles/timestamps remain diagnostic context.
+See [implementation and validation](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md).
+
+
+## Mini-player bottom backing — 20 September 2026
+
+<!-- AI CONTEXT — Shared safe-area ownership. One background includes material, tint and glass;
+never restore a fixed-height offset patch or change playback hit targets. -->
+
+The shared persistent mini-player now extends one purple glass background into
+the bottom container safe area. Material, tint and glass cover the full height,
+preventing a material-only colour band below the progress strip. This replaces the
+64-point offset patch that could be clipped below the progress strip, exposing
+page rows (reported on Stats). The same surface serves all shared mini-player
+call sites, including Subscriptions' direct inset. Controls, progress height,
+return-to-Player behaviour and page inset sizing are unchanged. See
+[the mini-player audit](Docs/MINI_PLAYER_AUDIT_2026-09-06.md) for validation.

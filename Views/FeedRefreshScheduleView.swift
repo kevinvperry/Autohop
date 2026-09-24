@@ -1,3 +1,10 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (FeedRefreshScheduleView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // AI CONTEXT — Views/FeedRefreshScheduleView.swift ("Feed Refresh Schedule" page,
@@ -124,11 +131,8 @@ struct FeedRefreshScheduleView: View {
         }
         .navigationTitle("Feed Refresh Schedule")
         .responsiveInlineNavigationTitle("Feed Refresh Schedule")
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton()
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 if let exportURL {
                     ShareLink(item: exportURL) { Image(systemName: "square.and.arrow.up").responsiveToolbarSymbol() }

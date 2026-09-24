@@ -1,3 +1,9 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Download completion awaits ordered snapshot I/O off-main. Sync lifecycle saves share the
+// serial lane; snapshots capture values and old acknowledgements cannot overwrite newer
+// state. Preserve primary/backup validation and locked-load guards.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import CryptoKit
 import Foundation
 #if canImport(UIKit)
@@ -638,6 +644,10 @@ public final class ListeningStatsStore: ObservableObject {
     private var summaryCacheRevision = -1
     private var summaryCacheDayKey = ""
     private var lastSavedAt: Date?
+    // AI: All stats snapshot writes share this serial lane. Download settlement
+    // awaits it off-main; synchronous lifecycle checkpoints drain it in order.
+    private let snapshotQueue = DispatchQueue(label: "autohop.stats.snapshot", qos: .utility)
+    private var snapshotSequence: UInt64 = 0
     /// Playback updates the authoritative in-memory bucket every 0.5 s, but Stats
     /// UI consumers do not need 2 Hz invalidations. Publish at most once per 10 s;
     /// explicit mutations and lifecycle save checkpoints force the final revision.
@@ -658,7 +668,7 @@ public final class ListeningStatsStore: ObservableObject {
     private var protectedDataObserver: NSObjectProtocol?
     private var storageGenerationID = UUID().uuidString
     private var storageRevision: UInt64 = 0
-    private static let storageSchemaVersion = 1
+    nonisolated private static let storageSchemaVersion = 1
 
     /// Record store for cross-device stats sync; connected by
     /// HistoryStatsCoordinator. nil = no sync.
@@ -1548,39 +1558,87 @@ public final class ListeningStatsStore: ObservableObject {
     // MARK: - Persistence
 
     public func save() {
-        guard persistenceState.allowsPersistence else {
-            AppLogger.shared.error(
-                "stats.saveBlocked",
-                "Refused to overwrite listening stats after an unsuccessful load",
-                metadata: ["state": String(describing: persistenceState)],
-                alwaysPersist: true
-            )
-            return
+        guard let write = prepareSnapshotWrite() else { return }
+        let sequence = snapshotSequence
+        finishSnapshotWrite(Result { try snapshotQueue.sync(execute: write) }, sequence: sequence)
+    }
+
+    /// Completion waits for the same durable checkpoint as save(), but encoding,
+    /// validation, backup and atomic replacement do not occupy the UI executor.
+    public func recordDownloadAndSave(bytes: Int64) async {
+        guard bytes > 0 else { return }
+        mutateToday(persistImmediately: false) {
+            $0.bytesDownloaded += bytes
+            $0.episodesDownloaded += 1
         }
-        // A full save is a real persistence checkpoint (pause / background / shutdown) — make sure
-        // any coalesced stats-day writes reach the sync database too.
+        guard let write = prepareSnapshotWrite() else { return }
+        let sequence = snapshotSequence
+        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+            snapshotQueue.async {
+                continuation.resume(returning: Result { try write() })
+            }
+        }
+        finishSnapshotWrite(result, sequence: sequence)
+    }
+
+    private func prepareSnapshotWrite() -> (() throws -> Void)? {
+        guard persistenceState.allowsPersistence else {
+            AppLogger.shared.error("stats.saveBlocked", "Refused to overwrite listening stats after an unsuccessful load",
+                                   metadata: ["state": String(describing: persistenceState)], alwaysPersist: true)
+            return nil
+        }
         flushPendingStatsDays(reason: "save")
         bumpPlaybackRevisionIfNeeded(now: Date(), force: true)
-        guard let url = fileURL else { return }
-        do {
-            if persistenceState != .recoveredFromBackup {
-                try preserveLastKnownGoodPrimary(at: url)
+        guard let url = fileURL else { return nil }
+        snapshotSequence &+= 1
+        let payload = data
+        let generation = storageGenerationID
+        let revision = storageRevision
+        let device = DeviceIdentity.current
+        let preservePrimary = persistenceState != .recoveredFromBackup
+        return {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            var backupBytes = 0
+            if preservePrimary, FileManager.default.fileExists(atPath: url.path) {
+                let existing = try Data(contentsOf: url)
+                if (try? Self.decodeSnapshot(existing)) != nil {
+                    let backup = url.deletingPathExtension().appendingPathExtension("backup.json")
+                    try LockedDeviceFileAccess.writeDataAtomically(existing, to: backup)
+                    backupBytes = existing.count
+                } else {
+                    // Preserve an invalid primary before replacing it. Do not
+                    // overwrite the last known-good backup with corrupt bytes.
+                    let quarantine = url.deletingLastPathComponent().appendingPathComponent("\(url.deletingPathExtension().lastPathComponent).corrupt-\(UUID().uuidString).json")
+                    try LockedDeviceFileAccess.writeDataAtomically(existing, to: quarantine)
+                    AppLogger.shared.error("stats.corruptPreserved", "Preserved invalid primary before snapshot replacement",
+                                           metadata: ["file": quarantine.lastPathComponent], alwaysPersist: true)
+                }
             }
-            let envelope = try IntegrityCheckedStoreEnvelope.make(
-                payload: data,
-                schemaVersion: Self.storageSchemaVersion,
-                generationID: storageGenerationID,
-                revision: storageRevision,
-                writerDeviceID: DeviceIdentity.current
-            )
+            let envelope = try IntegrityCheckedStoreEnvelope.make(payload: payload,
+                schemaVersion: Self.storageSchemaVersion, generationID: generation,
+                revision: revision, writerDeviceID: device)
             let encoded = try IntegrityCheckedStoreEnvelope.encode(envelope)
             try LockedDeviceFileAccess.writeDataAtomically(encoded, to: url)
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+            if elapsedMs >= 100 {
+                AppLogger.shared.info("stats.snapshotWrite", "Slow durable stats snapshot checkpoint", metadata: [
+                    "elapsedMs": String(format: "%.1f", elapsedMs),
+                    "primaryBytes": "\(encoded.count)", "backupBytes": "\(backupBytes)"
+                ])
+            }
+        }
+    }
+
+    private func finishSnapshotWrite(_ result: Result<Void, Error>, sequence: UInt64) {
+        switch result {
+        case .success:
+            // An older asynchronous acknowledgement cannot replace newer state.
+            guard sequence == snapshotSequence else { return }
             lastSavedAt = Date()
             persistenceState = .loaded
-        } catch {
-            AppLogger.shared.error("stats.saveFailed", "Could not save listening stats", metadata: [
-                "error": String(describing: error)
-            ], alwaysPersist: true)
+        case .failure(let error):
+            AppLogger.shared.error("stats.saveFailed", "Could not save listening stats",
+                                   metadata: ["error": String(describing: error)], alwaysPersist: true)
         }
     }
 
@@ -1796,7 +1854,7 @@ public final class ListeningStatsStore: ObservableObject {
 
         do {
             let encoded = try Data(contentsOf: url)
-            let loaded = try decodeSnapshot(encoded)
+            let loaded = try Self.decodeSnapshot(encoded)
             applyLoadedSnapshot(loaded, state: .loaded)
             if migrateLegacyDeviceOwnership(from: loaded.writerDeviceID) {
                 save()
@@ -1825,7 +1883,7 @@ public final class ListeningStatsStore: ObservableObject {
         }
     }
 
-    private func decodeSnapshot(_ encoded: Data) throws -> LoadedSnapshot {
+    nonisolated private static func decodeSnapshot(_ encoded: Data) throws -> LoadedSnapshot {
         do {
             let envelope = try IntegrityCheckedStoreEnvelope<ListeningStatsData>.decode(encoded)
             let payload = try envelope.validated(expectedSchemaVersion: Self.storageSchemaVersion)
@@ -1870,7 +1928,7 @@ public final class ListeningStatsStore: ObservableObject {
         guard let backupURL,
               FileManager.default.fileExists(atPath: backupURL.path),
               let encoded = try? Data(contentsOf: backupURL),
-              let loaded = try? decodeSnapshot(encoded) else { return false }
+              let loaded = try? Self.decodeSnapshot(encoded) else { return false }
         applyLoadedSnapshot(loaded, state: .recoveredFromBackup)
         _ = migrateLegacyDeviceOwnership(from: loaded.writerDeviceID)
         recordRecovery("Recovered from last-known-good backup")
@@ -1882,19 +1940,6 @@ public final class ListeningStatsStore: ObservableObject {
         )
         save()
         return true
-    }
-
-    private func preserveLastKnownGoodPrimary(at url: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        // A read failure is not equivalent to an absent file. Abort the save so
-        // a protection/permissions race cannot overwrite the only good copy.
-        let existing = try Data(contentsOf: url)
-        guard (try? decodeSnapshot(existing)) != nil else {
-            quarantinePrimary(at: url, data: existing)
-            return
-        }
-        guard let backupURL else { return }
-        try LockedDeviceFileAccess.writeDataAtomically(existing, to: backupURL)
     }
 
     private func quarantinePrimary(at url: URL, data: Data? = nil) {

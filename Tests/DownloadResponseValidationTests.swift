@@ -1,3 +1,7 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Verify prompt active fallback never removes bounded later retries or inactive-app delay.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 // AI CONTEXT — Tests/DownloadResponseValidationTests.swift. Regression coverage
 // for AH-P1-002: DownloadManager must reject non-success HTTP responses in
 // didFinishDownloadingTo so a 4xx/5xx body (HTML error/login/captive-portal page)
@@ -11,6 +15,13 @@ import XCTest
 #endif
 
 final class DownloadResponseValidationTests: XCTestCase {
+
+    func testPromptFallbackRetainsBoundedRetriesAndSuspendedAppDelay() {
+        XCTAssertEqual(DownloadManager.watchdogRetryDelay(attempt: 1, activeFallbackAvailable: true), 0)
+        XCTAssertEqual(DownloadManager.watchdogRetryDelay(attempt: 1, activeFallbackAvailable: false), 30)
+        XCTAssertEqual(DownloadManager.watchdogRetryDelay(attempt: 2, activeFallbackAvailable: true), 60)
+        XCTAssertEqual(DownloadManager.watchdogRetryDelay(attempt: 3, activeFallbackAvailable: true), 120)
+    }
 
     private func httpResponse(_ status: Int) -> HTTPURLResponse {
         HTTPURLResponse(

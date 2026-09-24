@@ -22,7 +22,10 @@ enum TVPlaybackStatsPolicy {
     }
 }
 
+// BINGE (Version 1.7): publish playing/start evidence after engine success only;
+// the scheduling installation uses the synced start to prefetch one successor.
 // AI CONTEXT — TV/Playback/TVPlaybackModel.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay starts historical passes from zero and resumes newer progress. TV completion remains on the existing episode-state sync channel; it cannot author schedules.
 // Phase 3 (Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md §8): the tvOS playback
 // composition — owns a single StreamingPlaybackEngine (PlaybackCore),
 // auto-advances through the streaming Priority Stack on finish (mirrors the
@@ -229,17 +232,10 @@ final class TVPlaybackModel {
         lastProgressPushRequestedAt = Date.distantPast
         errorMessage = nil
         currentSpeed = subscription.playbackPreference.speed
-        let catalogStateAuthored = origin == .library
-            ? subscriptionStore.markCompanionEpisodePlaying(episode, preferredSubscriptionID: subscription.id)
-            : false
-        AppLogger.shared.info("tv.playback.catalogState", "TV authored playing state for cross-device sync", metadata: [
-            "episodeID": episode.id.uuidString,
-            "subscriptionID": subscription.id.uuidString,
-            "catalogMatch": "\(catalogStateAuthored)"
-        ], alwaysPersist: true)
+        let savedResumePosition = subscriptionStore.savedListeningPosition(for: episode) ?? 0
         let resumePosition = resumePositionOverride
-            ?? subscriptionStore.savedListeningPosition(for: episode)
-            ?? 0
+            ?? subscription.autoArchiveSettings.replay?.resumeTime(for: subscription.episodes.first(where: { $0.audioURL == episode.audioURL }) ?? episode, savedTime: savedResumePosition)
+            ?? savedResumePosition
         let start = PlaybackSessionPolicy.startResolution(
             resumeTime: resumePosition,
             startSkipSeconds: subscription.playbackPreference.startSkipSeconds
@@ -272,6 +268,17 @@ final class TVPlaybackModel {
                 "resumeInput": String(format: "%.1f", resumePosition),
                 "resolvedStart": String(format: "%.1f", start.reportedStartTime)
             ], alwaysPersist: true)
+            let catalogStateAuthored = origin == .library
+                ? subscriptionStore.markCompanionEpisodePlaying(episode, preferredSubscriptionID: subscription.id)
+                : false
+            AppLogger.shared.info("tv.playback.catalogState", "TV authored playing state for cross-device sync", metadata: [
+                "episodeID": episode.id.uuidString,
+                "subscriptionID": subscription.id.uuidString,
+                "catalogMatch": "\(catalogStateAuthored)"
+            ], alwaysPersist: true)
+            if origin == .library {
+                subscriptionStore.recordPodcastReplayStart(subscriptionID: subscription.id, episode: episode)
+            }
             currentTime = start.reportedStartTime
             updateNowPlayingInfo()
             loadNowPlayingArtwork(for: episode, subscription: subscription, requestGeneration: requestGeneration)
@@ -323,6 +330,12 @@ final class TVPlaybackModel {
             // AVPlayer.defaultRate aligned, but this makes TV ownership explicit.
             engine.updatePlaybackSpeed(currentSpeed)
             engine.resume()
+            if playbackOrigin == .library, let episode = currentEpisode, let subscriptionID = currentSubscriptionID,
+               let replay = subscriptionStore.subscription(id: subscriptionID)?.autoArchiveSettings.replay,
+               replay.outstanding.contains(where: { $0.key == episode.audioURL.absoluteString && $0.startedAt == nil }) {
+                _ = subscriptionStore.markCompanionEpisodePlaying(episode, preferredSubscriptionID: subscriptionID)
+                subscriptionStore.recordPodcastReplayStart(subscriptionID: subscriptionID, episode: episode)
+            }
             AppLogger.shared.info("tv.playback.command", "Resume requested", metadata: playbackDiagnosticMetadata())
         }
         updateNowPlayingInfo()
@@ -522,6 +535,10 @@ final class TVPlaybackModel {
             "actualRate": String(format: "%.2f", Double(avPlayer?.rate ?? 0.0)),
             "defaultRate": String(format: "%.2f", Double(avPlayer?.defaultRate ?? 0.0)),
             "state": String(describing: playbackState),
+            "timeControlStatus": avPlayer.map { "\($0.timeControlStatus.rawValue)" } ?? "none",
+            "waitingReason": avPlayer?.reasonForWaitingToPlay?.rawValue ?? "none",
+            "itemStatus": avPlayer?.currentItem.map { "\($0.status.rawValue)" } ?? "none",
+            "itemError": avPlayer?.currentItem?.error?.localizedDescription ?? "none",
             "requestGeneration": "\(playbackRequestGeneration)"
         ]
     }

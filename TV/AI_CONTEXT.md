@@ -15,6 +15,10 @@ validation are in [the TV package](../Docs/AppStore/tvOS-1.6.1/SUBMISSION.md).
 Approval of TV 1.6.1 is pending. All future iOS and tvOS code updates are
 tracked together in VERSION_1.7.md; the submitted TV release scope is closed.
 
+## Podcast Replay Binge Mode — Version 1.7
+
+The shared Replay payload now contains optional Binge mode and per-release startedAt evidence. TV remains a follower: it does not assign new releases or reorder the phone-authored queue. TVPlaybackModel publishes playing/start evidence only after engine success so failed streaming attempts cannot trigger a successor download. The scheduling installation uses the existing episode-state channel and shared journal to prefetch. Real-device sync latency and buffering remain device acceptance checks.
+
 ## Platform contract
 
 - The iPhone is the durable author of subscriptions, priority ordering and the
@@ -151,3 +155,11 @@ therefore documented here and in the tvOS section of `project.yml`:
     Each subscription embeds its episode graph; use `SubscriptionStore`'s O(1)
     process-local `projectionRevision` plus explicit survival-kit invalidation
     to decide when the Library projection needs rebuilding.
+
+## Version 1.7 diagnostics
+
+See `Docs/DIAGNOSTIC_RECORDING_1.7.md`. Export captures current model state before stitching. Compare queue source, unresolved/playable model counts and Home presentation changes; a successful CloudKit fetch is not proof of a usable visible queue. Recovery timings expose serial RSS rebuild before sync. Do not interpret diagnostic instrumentation as a fix for that ordering.
+
+## TV storage/startup repair (2026-09-13)
+
+Physical-device evidence proves Application Support creation is denied. TVAppDependencies uses existing Library/Caches/Autohop for authoritative local library/stats and projections. Never revive the failed migration or copy individual SQLite WAL/SHM files. This storage is purgeable; survival-kit/CloudKit recovery remains necessary. Bootstrap must start sync before asynchronous RSS recovery; preserve the pre-start dirty-default repair and materialize() clean-seed policy. Queue snapshots should not wait for all publishers to respond.

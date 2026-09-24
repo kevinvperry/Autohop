@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 
 // AI CONTEXT — App/PlayInstantWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay-origin episodes are excluded from Play Instant; retain the independent 120-second protection and interrupted-episode restoration rules.
 //
 // PURPOSE / OWNERSHIP:
 // Exclusive Play Instant state-machine implementation. PlaybackCoordinator owns
@@ -17,14 +18,15 @@ import Foundation
 // - Active playback triggers immediately. A qualifying arrival while playback is
 //   inactive remains armed for 30 minutes and triggers only after safe playback
 //   becomes active again; it never starts through an unavailable route/speaker.
-// - Never interrupt a current episode with 60 seconds or less remaining. Keep
+// - Never interrupt a current episode with 120 seconds or less remaining. Keep
 //   the arrival armed so it may trigger after natural advancement; unknown
 //   durations preserve the established behaviour instead of disabling Instant.
 // - The interrupted episode/position is captured once per Instant session.
 // - A two-second gentle warning precedes every forced switch.
 // - Eligibility and local-file availability are revalidated after the delay.
-// - Completion restores the interrupted episode unless another Instant candidate
-//   is waiting; deliberate user navigation cancels the return point.
+// - Completion restores the interrupted episode immediately, ahead of Play Next.
+//   Other pending Instant arrivals return to normal queue order; pause preserves
+//   the return point, while deliberate episode navigation cancels it.
 // - The transition Task is stored/cancelled by PlaybackCoordinator, never AppState.
 //
 // CONCURRENCY:
@@ -34,7 +36,7 @@ import Foundation
 @MainActor
 final class PlayInstantWorkflow {
     static let pendingLifetime: TimeInterval = 30 * 60
-    static let minimumInterruptedRuntimeRemaining: TimeInterval = 60
+    static let minimumInterruptedRuntimeRemaining: TimeInterval = 120
 
     static func expiryDate(forQueuedAt queuedAt: Date) -> Date {
         queuedAt.addingTimeInterval(pendingLifetime)
@@ -91,7 +93,9 @@ final class PlayInstantWorkflow {
             logRejected(reason: "subscriptionUnavailable", episodeID: episodeID)
             return
         }
-        guard subscription.autoArchiveSettings.playInstantEnabled else {
+        guard subscription.autoArchiveSettings.replay?.enabled != true,
+              subscription.autoArchiveSettings.replay?.releases.contains(where: { $0.episode.id == episodeID || subscription.episodes.first(where: { $0.id == episodeID })?.audioURL == $0.episode.audioURL }) != true,
+              subscription.autoArchiveSettings.playInstantEnabled else {
             logRejected(reason: "settingDisabled", episodeID: episodeID, podcast: subscription.title)
             return
         }
@@ -188,14 +192,10 @@ final class PlayInstantWorkflow {
     }
 
     func finishAndAdvance(reason: String) async {
-        playback.activePlayInstantEpisodeID = nil
-        if !playback.playInstantQueue.isEmpty {
-            playWarningTone()
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else { return }
-            await startNextCandidate()
-            return
-        }
+        // Do not chain another interruption or re-trigger it when restoration
+        // publishes active playback. These downloads remain in normal Up Next.
+        playback.playInstantQueue.removeAll()
+        scheduleExpiryCheck()
         await restoreInterruptedSession(reason: reason)
     }
 
@@ -234,7 +234,7 @@ final class PlayInstantWorkflow {
         guard mayInterruptCurrentEpisode else {
             logger.info(
                 "playInstant.awaitingNaturalAdvance",
-                "Kept Play Instant armed because the current episode has 60 seconds or less remaining",
+                "Kept Play Instant armed because the current episode has 120 seconds or less remaining",
                 metadata: currentRuntimeMetadata
             )
             return
@@ -269,7 +269,7 @@ final class PlayInstantWorkflow {
                 self.playback.interruptedSession = nil
                 self.logger.info(
                     "playInstant.deferredAtRuntimeBoundary",
-                    "Kept Play Instant armed after playback reached the final 60 seconds during its warning",
+                    "Kept Play Instant armed after playback reached the final 120 seconds during its warning",
                     metadata: self.currentRuntimeMetadata
                 )
                 self.scheduleExpiryCheck()

@@ -230,7 +230,7 @@ extension TVAppModel {
             let source = subscriptionsByID[item.subscriptionID] != nil ? "source yes" : "source no"
             let title = uniqueEpisodesByNormalizedTitle[normalizedEpisodeTitle(item.title)] != nil ? "title yes" : "title no"
             let keyKind = item.episodeKey.contains("|guid:") ? "GUID" : "legacy key"
-            return "Queue item \(offset + 1): \(keyKind), \(source), \(title)"
+            return "Queue item \(offset + 1): key=\(item.episodeKey), \(keyKind), \(source), \(title), episode=\(item.episode != nil), mediaURL=\(item.episode?.audioURL != nil)"
         }
     }
 
@@ -266,20 +266,25 @@ extension TVAppModel {
                 try? projectionStore?.saveQueue(snapshot)
             }
             let items = QueueModel.resolvedQueueItems(from: snapshot, subscriptions: librarySubscriptions)
-            AppLogger.shared.info("tv.queueProjection", "Queue projection rendered", metadata: [
+            AppLogger.shared.recordState("tv.queueProjection", metadata: [
+                "source": "synced",
                 "schema": "\(snapshot.schemaVersion)",
                 "generation": "\(snapshot.generation)",
                 "epoch": snapshot.authorityEpoch,
                 "entries": "\(snapshot.entries.count)",
                 "unresolved": "\(items.filter { $0.episode == nil }.count)",
-                "ageSeconds": "\(Int(Date().timeIntervalSince(snapshot.updatedAt)))"
-            ], alwaysPersist: true)
+                "updatedAt": "\(snapshot.updatedAt.timeIntervalSince1970)"
+            ])
             return items
         }
         if let cached = try? projectionStore?.loadQueue(), !cached.entries.isEmpty {
-            return QueueModel.resolvedQueueItems(from: cached, subscriptions: librarySubscriptions)
+            let items = QueueModel.resolvedQueueItems(from: cached, subscriptions: librarySubscriptions)
+            AppLogger.shared.recordState("tv.queueProjection", metadata: ["source": "cached", "generation": "\(cached.generation)", "entries": "\(items.count)", "unresolved": "\(items.filter { $0.episode == nil }.count)"])
+            return items
         }
-        return QueueModel.streamableQueue(from: librarySubscriptions).map { episode in
+        let fallback = QueueModel.streamableQueue(from: librarySubscriptions)
+        AppLogger.shared.recordState("tv.queueProjection", metadata: ["source": "localFallback", "entries": "\(fallback.count)"])
+        return fallback.map { episode in
             QueueModel.ResolvedQueueItem(
                 episodeKey: PlaybackPositionStore.key(for: episode),
                 title: episode.title,

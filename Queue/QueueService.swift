@@ -1,6 +1,10 @@
 import Foundation
 
 // AI CONTEXT — Queue/QueueService.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay membership is logical before local download; already downloaded ordinary items remain visible and consume owner-local capacity.
+// Replay returns logical released entries even before local download; callers
+// preserve order and use the existing download-before-play path. Ordinary feeds
+// retain downloaded-only eligibility.
 // Pure, stateless queue-ordering logic — THE core "Priority Stack" rule:
 // walk subscriptions by ascending priorityRank; within each podcast, order
 // episodes oldest-published first; include ONLY episodes that are downloaded
@@ -29,6 +33,14 @@ public final class QueueService: QueueServicing {
                 let episodes = subscription.episodes.isEmpty
                     ? subscription.latestEpisode.map { [$0] } ?? []
                     : subscription.episodes
+                if let replay = subscription.autoArchiveSettings.replay {
+                    let replayKeys = Set(replay.outstanding.map(\.key))
+                    let manual = episodes.filter {
+                        !replayKeys.contains($0.audioURL.absoluteString) &&
+                        $0.downloadState == .downloaded && $0.playedState != .played && $0.playedState != .archived
+                    }
+                    return subscription.replayQueueEpisodes.filter { replay.enabled || $0.downloadState == .downloaded } + manual
+                }
                 return episodes
                     .filter { episode in
                         episode.downloadState == .downloaded &&

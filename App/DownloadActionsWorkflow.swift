@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Expose the shared runtime execution-window decision for watchdog retry timing; never
+// infer foreground-only eligibility independently.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Foundation
 
 // AI CONTEXT — App/DownloadActionsWorkflow.swift
@@ -219,6 +224,10 @@ final class DownloadActionsWorkflow {
             showCompletionMessage: true,
             isAutomatic: false
         )
+    }
+
+    var hasActiveDownloadExecutionWindow: Bool {
+        transferWorkflow.hasActiveDownloadExecutionWindow
     }
 
     func retryWatchdogCancelledDownload(episodeID: UUID) async {

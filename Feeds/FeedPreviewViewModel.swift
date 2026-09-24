@@ -4,7 +4,8 @@ import Foundation
 // View model for AddFeedView (manual RSS URL entry): fetches and parses the
 // typed URL into a ParsedFeed preview state machine (idle/loading/loaded/
 // failed). Subscribe action is handled by the view via AppState/
-// SubscriptionStore, not here.
+// SubscriptionStore, not here. Editing clears the preview so the UI cannot save
+// a previously parsed feed using a newly entered URL. Trim pasted whitespace.
 @MainActor
 final class FeedPreviewViewModel: ObservableObject {
     enum State: Equatable {
@@ -26,10 +27,15 @@ final class FeedPreviewViewModel: ObservableObject {
         self.session = session
     }
 
+    func clearPreview() {
+        state = .idle
+        saveMessage = nil
+    }
+
     func previewFeed() async {
         saveMessage = nil
 
-        guard let url = URL(string: feedURLText), ["http", "https"].contains(url.scheme?.lowercased()) else {
+        guard let url = URL(string: feedURLText.trimmingCharacters(in: .whitespacesAndNewlines)), ["http", "https"].contains(url.scheme?.lowercased()) else {
             state = .failed("Enter a valid RSS feed URL.")
             return
         }
@@ -57,6 +63,6 @@ final class FeedPreviewViewModel: ObservableObject {
     }
 
     var feedURL: URL? {
-        URL(string: feedURLText)
+        URL(string: feedURLText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

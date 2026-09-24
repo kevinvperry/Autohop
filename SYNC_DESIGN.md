@@ -41,9 +41,23 @@ facts, and a field-aware listening-history merge. Do not restore the historical
 UserDefaults identity or whole-entry history-LWW descriptions.
 -->
 
+## Podcast Replay journal — Version 1.7
+
+`Models/PodcastReplay.swift` is a portable session journal embedded in the existing synced `AutoArchiveSettings` JSON value. No CloudKit record type or new database table is required. Legacy optional decode means disabled; absent remote Replay data is not a reset. Ordinary settings still merge fieldwise; Replay combines configuration LWW (edit date plus UUID) with union-by-sequence releases, monotonic resolution, independently stamped pins, and monotonic progress version. A merged value differing from the server stays dirty for upload. Disable remains an explicit configuration value; restart creates a newer session identity. The optional `calendarSchedule` carries validated, sorted unique Calendar weekdays (Sunday=1) and minutes after midnight. Dates are calculated in the stored time zone. When cadence/start differs, merged nextDue comes from the configuration winner rather than an old-cadence cursor; journal reservations/outcomes still merge. Episode Limit uses the same synced field from either editor. Saving an unchanged schedule preserves live progress.
+
+Only the enabling installation allocates releases. Its identifier is stored in a device-only Keychain item; settings edits on another device preserve ownership. Reservations persist before transfer dispatch and act as the durable download outbox. Each reservation includes a portable episode projection, sequence, due time and reservation time; local paths and large descriptions/chapters are stripped. Release identity currently uses enclosure URL, with publication time and URL providing deterministic catalogue order. This assumes stable publisher enclosure identity; publisher URL changes and unusually large journals remain validation considerations.
+
+The shared journal determines Replay queue membership even before each device downloads media. Replay pin edits carry independent timestamps/tie-break IDs and are applied before the existing queue projection. Priority ordering remains the existing subscription-order mechanism. Optional `QueueSnapshotEntry.replaySessionID` prevents historical played state hiding a fresh Replay pass. Local readiness updates do not change membership. Ordinary, non-Replay queue membership/pins retain their existing behaviour.
+
+Apple TV remains subscription-state read-only. Its existing EpisodeSyncState completion/archive events resolve a reservation on iOS when their event time is at or after reservation time. Older historical events cannot resolve a new pass. TV also resolves its local journal immediately so its stale queue snapshot cannot resurrect the just-finished item. The owner later publishes the converged journal and queue. Out-of-order arrivals are reconciled against episode interaction timestamps. Normal active-player-wins behaviour is retained.
+
+**Operational boundaries:** the owner must be available to issue releases. There is no automatic election, lease handover or server-side transaction. iCloud must be enabled on devices that are expected to converge; an offline device cannot promise instantaneous awareness of another device's edits. Older clients cannot honour this additive policy; the editor recommends updating every installation, without requiring an acknowledgement toggle. No capability-negotiation protocol is implemented. Media files, download retries, local notifications and draft editor state remain local. Real two-device/TV CloudKit behaviour requires release validation in addition to merge tests.
+
 Design + status for opt-in iCloud (CloudKit) sync across devices. Derived from a
 review of the Pocket Casts iOS sync engine — its conflict-resolution discipline
 applied on top of CloudKit.
+
+Binge Mode is an optional Boolean configuration field (missing means off). Each release carries an optional `startedAt`, merged by earliest non-nil timestamp independently of configuration edits, so replaying a start or resuming cannot create extra successors. Successful iOS starts author this evidence through SubscriptionStore; tvOS authors its playing state only after engine success and forwards start evidence. Existing EpisodeSyncState `.playing` plus post-reservation lastPlayedAt can reconstruct the event on the scheduling installation. Pre-reservation history and unreleased episodes cannot trigger prefetch. Only the fixed owner reserves the successor; followers consume the same journal. Binge bypasses calendar deadlines and discounts only one started outstanding episode from capacity. It does not reorder the queue or introduce device failover.
 
 ## Guiding principles
 1. **Enabled for new users by default** (`AppSettings.iCloudSyncEnabled`) so the
@@ -783,3 +797,21 @@ tvOS projections. When the TV scene is inactive, notification-driven projection
 refreshes collapse into one deferred request. Activation drains that request
 through the normal duty-cycle scheduler and logs aggregate deferred/coalesced
 counts rather than one line per callback.
+
+## Diagnostic correlation — Version 1.7
+
+Recording-session IDs separate launches. TV queue source/model/Home state events and capture-time export snapshots supplement existing CloudKit cycle IDs. Inspect resolution/playability after fetch success. These events are diagnostic evidence only and do not change sync or queue arbitration.
+
+## TV recovery ordering (Version 1.7)
+
+After deferred local load and the existing dirty-default repair, start the engine, store observation and foreground polling. Survival-kit RSS recovery runs independently and updates projections progressively; targeted queue/history priming is no longer gated by the feed sweep. Recovered subscription settings still adopt remote projections or clean defaults. Physical tvOS uses Caches for SQLite/stats because Application Support was denied on the affected device.
+
+## Diagnostic investigation follow-up — 20 September 2026
+
+<!-- AI CONTEXT — Notification dedupe is not a change to sync authority. -->
+Only a distinct iCloudSyncEnabled value invokes the settings-driven start/stop
+reaction. Foreign subscription identities are still rejected; repeated identical
+rejections use bounded change-driven diagnostics. Stats download checkpoints
+await serial off-main file persistence; lifecycle checkpoints share its write
+ordering and SQLite flush policy is unchanged. See
+[repair record](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md).

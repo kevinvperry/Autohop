@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — App/FeedRefreshItemWorkflow.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay still merges RSS but bypasses normal new-release scheduling and rolling-feed deletion of unresolved releases.
 //
 // PURPOSE / OWNERSHIP:
 // Exclusive transaction for refreshing and merging one podcast feed. It owns
@@ -230,6 +231,7 @@ final class FeedRefreshItemWorkflow {
             )
             if let oldLatest = subscription.latestEpisode,
                latestChanged,
+               subscription.autoArchiveSettings.replay?.contains(oldLatest) != true,
                playback.currentEpisode?.id != oldLatest.id {
                 // AI CONTEXT — Only a one-item rolling feed supersedes its
                 // previous enclosure. Multi-item podcast feeds retain older
@@ -409,6 +411,7 @@ final class FeedRefreshItemWorkflow {
                         .evaluation(for: episode)
                         .isIncluded
             }
+            guard updated.autoArchiveSettings.replay?.enabled != true else { return }
             let candidates = AutomaticDownloadBatchPolicy.candidates(
                 from: newlyDiscovered,
                 episodeLimit: updated.autoArchiveSettings.episodeLimit.rawValue

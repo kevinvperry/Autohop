@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — Queue/QueueModel.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay snapshots preserve historical episodes until the session journal resolves them; the streaming fallback must never expose unreleased backlog.
 // Phase 0 of Docs/TVOS_APP_IMPLEMENTATION_PROPOSAL.md (§4.2 move 2): the pure,
 // platform-neutral Priority Stack composition — base ordering (QueueService)
 // plus the Play Next / Play Last pin overrides that previously lived only in
@@ -63,6 +64,7 @@ public enum QueueModel {
         subscriptions
             .sorted { $0.priorityRank < $1.priorityRank }
             .compactMap { subscription -> Episode? in
+                if subscription.autoArchiveSettings.replay?.enabled == true { return subscription.replayQueueEpisodes.first }
                 let episodes = subscription.episodes.isEmpty
                     ? subscription.latestEpisode.map { [$0] } ?? []
                     : subscription.episodes
@@ -140,10 +142,14 @@ public enum QueueModel {
             }
         }
         return snapshot.entries.compactMap { entry in
-            if let episode = episodesByKey[entry.episodeKey] {
-                guard episode.playedState != .played,
-                      episode.playedState != .archived
+            let replay = subscriptions.first { $0.id == entry.subscriptionID }?.autoArchiveSettings.replay
+            let release = replay?.releases.first { $0.episode.audioURL == entry.streamURL }
+            if let session = entry.replaySessionID, let replay, replay.sessionID == session, release?.resolved == true { return nil }
+            if var episode = episodesByKey[entry.episodeKey] {
+                let activeReplay = entry.replaySessionID != nil && (replay == nil || (replay?.sessionID == entry.replaySessionID && release?.resolved != true))
+                guard activeReplay || (episode.playedState != .played && episode.playedState != .archived)
                 else { return nil } // locally finished → gone from the queue
+                if activeReplay { episode.playedState = .unplayed }
                 return ResolvedQueueItem(
                     episodeKey: entry.episodeKey,
                     title: episode.title,

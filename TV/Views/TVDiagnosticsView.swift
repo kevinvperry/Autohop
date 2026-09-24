@@ -207,6 +207,8 @@ struct TVDiagnosticsView: View {
         exportStatus = "Preparing a privacy-safe report…"
         let startedAt = ContinuousClock.now
         let snapshot = model.diagnosticsSnapshot
+        // Capture BEFORE stitching so the exported file contains the current UI/model state.
+        model.recordDiagnosticSnapshot(reason: "export")
         do {
             let destination = try await Task.detached(priority: .utility) {
                 var destination = try AppLogger.shared.writeRedactedExportBesideLiveLog()

@@ -1,3 +1,9 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Retire paused buffer generations before resume; only real render callbacks set
+// lastRenderedAt. Pause/new Play cancel delayed rebuilds. EOF -39 at the file boundary
+// shares drain/sentinel completion, retaining any final frames.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
@@ -242,6 +248,8 @@ final class PlaybackEngine: PlaybackControlling {
     // MARK: - Play
 
     func play(_ episode: Episode, preference: PlaybackPreference, filter: ChapterFilter) async throws {
+        engineRecoveryTask?.cancel()
+        engineRecoveryTask = nil
         try await startPlayback(episode: episode, preference: preference, filter: filter, resumeAt: nil)
     }
 
@@ -288,6 +296,7 @@ final class PlaybackEngine: PlaybackControlling {
             // this entire branch runs on the caller's actor (main) with no thread hop.
             // That eliminates the data race between startEnginePlayback writing state
             // and the GCD timer reading it on the main thread.
+            try Task.checkCancellation()
             try startEnginePlayback(
                 episode: episode,
                 preference: preference,
@@ -331,6 +340,7 @@ final class PlaybackEngine: PlaybackControlling {
                 )
             }
             resetPlayerAccounting(at: pausedAtSeconds)
+            try Task.checkCancellation()
             newPlayer.playImmediately(atRate: validPlayerRate(preference.speed))
 
             logger.info("playback.started", "AVPlayer playback started", metadata: [
@@ -396,6 +406,9 @@ final class PlaybackEngine: PlaybackControlling {
     // MARK: - Pause / Resume
 
     func pause() {
+        // A user's pause supersedes a delayed graph rebuild for the same episode.
+        engineRecoveryTask?.cancel()
+        engineRecoveryTask = nil
         cancelPendingRouteLossPause(reason: "pause", output: currentOutputPortName())
         routeRestartDeferredByRouteLoss = nil
         cancelPendingRouteRestart()
@@ -462,7 +475,7 @@ final class PlaybackEngine: PlaybackControlling {
     }
 
     func resume() {
-        _ = resume(notifyAfterRebuild: false)
+        _ = resume(notifyAfterRebuild: true)
     }
 
     @discardableResult
@@ -475,18 +488,24 @@ final class PlaybackEngine: PlaybackControlling {
         routeRestartDeferredByRouteLoss = nil
         pausedByRouteChange = false
         if engineUsesEngine {
-            engineReadPaused = false
+            let resumePosition = pausedAtSeconds
+            // Retire paused waits BEFORE starting the engine. Old semaphore
+            // deadlines must never become timeout/recovery requests on resume.
+            engineReadPaused = true
+            audioPlayerNode?.stop()
+            stopEngineBufferLoop()
             // Route changes can stop AVAudioEngine silently. Restart it before resuming the
             // player node, otherwise the node plays but nothing gets rendered.
             if let engine = audioEngine, !engine.isRunning {
+                let stageStartedAt = CFAbsoluteTimeGetCurrent()
                 do {
-                    let stageStartedAt = CFAbsoluteTimeGetCurrent()
                     try engine.start()
                     engineStartMs = (CFAbsoluteTimeGetCurrent() - stageStartedAt) * 1000
                     logger.info("engine.restarted", "AVAudioEngine restarted after route change on resume", metadata: [
                         "episode": currentEpisode?.title ?? "none"
                     ])
                 } catch {
+                    engineStartMs = (CFAbsoluteTimeGetCurrent() - stageStartedAt) * 1000
                     // Reusing the stopped graph can fail repeatedly after a
                     // Core Audio route/interruption transition. Dispose and
                     // rebuild the full session + graph through one serialized
@@ -504,12 +523,11 @@ final class PlaybackEngine: PlaybackControlling {
                     return false
                 }
             }
-            audioPlayerNode?.play()
-            engineIsPlaying = true
+            startEngineBufferLoop(from: resumePosition, shouldPlay: true)
             // Reset watchdog so the 2.5 s silence window starts fresh from this resume.
             let now = CFAbsoluteTimeGetCurrent()
             resumedAt = now
-            lastRenderedAt = now
+            lastRenderedAt = 0
         } else {
             let rate = validPlayerRate(currentPreference?.speed ?? 1.0)
             resetPlayerAccounting(at: currentPlaybackTime())
@@ -941,7 +959,7 @@ final class PlaybackEngine: PlaybackControlling {
         try engine.start()
         let now = CFAbsoluteTimeGetCurrent()
         resumedAt = now
-        lastRenderedAt = now
+        lastRenderedAt = 0
         startEngineBufferLoop(from: pausedAtSeconds, shouldPlay: true)
         startEngineTimer()
 
@@ -955,6 +973,23 @@ final class PlaybackEngine: PlaybackControlling {
         ])
     }
 
+    // AI: Accept documented eofErr only at the file boundary; never hide a
+    // mid-file I/O failure. Kept testable without constructing an audio graph.
+    static func isEndOfAudioFile(_ error: NSError, position: AVAudioFramePosition, length: AVAudioFramePosition) -> Bool {
+        guard position >= length else { return false }
+        return (error.domain == NSOSStatusErrorDomain && error.code == -39)
+            || (error.code == 0 && (error.domain.isEmpty || error.domain == "Foundation._GenericObjCError"))
+    }
+
+#if DEBUG
+    // Narrow hosted-test seams: production pause/recovery methods are exercised
+    // with a temporary silent file, without depending on a real route failure.
+    var _testBufferGeneration: Int { engineBufferGeneration }
+    func _testRequestFullRecovery() {
+        scheduleFullEngineRecovery(reason: "test", error: NSError(domain: "test", code: -50), notifyResumed: true)
+    }
+#endif
+
     // MARK: - Buffer read loop
 
     private func startEngineBufferLoop(from startSeconds: TimeInterval, shouldPlay: Bool) {
@@ -967,6 +1002,8 @@ final class PlaybackEngine: PlaybackControlling {
         engineCurrentFileSeconds = startSeconds
         engineAnchorFileSeconds = startSeconds
         engineReadFinished = false
+        lastRenderedAt = 0
+        resumedAt = CFAbsoluteTimeGetCurrent()
 
         let sem = DispatchSemaphore(value: maxEngineBufferSlots)
         engineBufferSemaphore = sem
@@ -1014,27 +1051,19 @@ final class PlaybackEngine: PlaybackControlling {
                 do {
                     try file.read(into: buffer)
                 } catch {
-                    // AVAudioFile.read(into:) throws at EOF by bridging a nil NSError*. Depending on
-                    // the toolchain this surfaces either as an empty-domain NSError or as
-                    // `Foundation._GenericObjCError`, both with code 0. Treat it as EOF only when we
-                    // are actually at the end of the file — a generic error mid-file is a real failure
-                    // and must still be logged as such.
                     let nsError = error as NSError
-                    let isGenericNilError = nsError.code == 0 &&
-                        (nsError.domain.isEmpty || nsError.domain == "Foundation._GenericObjCError")
-                    let atEndOfFile = file.framePosition >= file.length
-                    if isGenericNilError && atEndOfFile {
-                        self.logger.info("engine.readEOF", "AVAudioFile reached end of file")
-                    } else {
+                    guard Self.isEndOfAudioFile(nsError, position: file.framePosition, length: file.length) else {
                         self.logger.error("engine.readFailed", "AVAudioFile read failed", metadata: [
-                            "error": error.localizedDescription,
-                            "domain": nsError.domain,
-                            "code": String(nsError.code),
-                            "framePosition": String(file.framePosition),
+                            "error": error.localizedDescription, "domain": nsError.domain,
+                            "code": String(nsError.code), "framePosition": String(file.framePosition),
                             "fileLength": String(file.length)
                         ])
+                        break
                     }
-                    break
+                    self.logger.info("engine.readEOF", "AVAudioFile reached end of file")
+                    // Keep any final frames returned alongside EOF. An empty
+                    // buffer uses the same drain/sentinel path as a normal read;
+                    // a non-empty tail is processed before the next EOF read.
                 }
 
                 guard buffer.frameLength > 0 else {
@@ -1274,7 +1303,7 @@ final class PlaybackEngine: PlaybackControlling {
 
     private func engineLastRenderedAge(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) -> TimeInterval? {
         guard lastRenderedAt > 0 else { return nil }
-        return now - max(lastRenderedAt, resumedAt)
+        return now - lastRenderedAt
     }
 
     private func engineLikelyProducingAudio(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) -> Bool {
@@ -1367,7 +1396,7 @@ final class PlaybackEngine: PlaybackControlling {
         let event = engineReadFinished ? "engine.readFinishedSilentRecover" : "engine.silentRecovery"
         logger.warning(
             event,
-            "Engine silent — restarting buffer loop from current position",
+            "Restarting buffer producer after a timeout or render watchdog",
             metadata: engineRecoveryMetadata(reason: reason, position: position, now: now)
         )
 
@@ -1393,7 +1422,7 @@ final class PlaybackEngine: PlaybackControlling {
 
         startEngineBufferLoop(from: position, shouldPlay: true)
         resumedAt = now
-        lastRenderedAt = now
+        lastRenderedAt = 0
     }
 
     /// One terminal recovery path for a stopped AVAudioEngine graph. Route,
@@ -1426,6 +1455,7 @@ final class PlaybackEngine: PlaybackControlling {
             ]
         )
 
+        let scheduledAt = CFAbsoluteTimeGetCurrent()
         engineRecoveryTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(350))
@@ -1459,10 +1489,8 @@ final class PlaybackEngine: PlaybackControlling {
                         "reason": reason,
                         "episode": episode.title,
                         "positionSecs": String(format: "%.1f", position),
-                        "durationMs": String(
-                            format: "%.1f",
-                            (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
-                        )
+                        "durationMs": String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - scheduledAt) * 1_000),
+                        "rebuildMs": String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000)
                     ]
                 )
                 if notifyResumed {
@@ -2231,7 +2259,7 @@ final class PlaybackEngine: PlaybackControlling {
 
         startEngineBufferLoop(from: position, shouldPlay: true)
         resumedAt = now
-        lastRenderedAt = now
+        lastRenderedAt = 0
     }
 
     private func routeChangeReasonLabel(_ reason: AVAudioSession.RouteChangeReason) -> String {

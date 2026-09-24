@@ -1,3 +1,10 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (TopEpisodesView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // AI CONTEXT — Views/TopEpisodesView.swift ("Top Episodes" page — child of
@@ -16,7 +23,7 @@ import SwiftUI
 // viewModel.resolveEpisodePodcast) and pushes PodcastDetailView on the ambient
 // stack via pendingRoute — same routing rule as Discover (real subscription,
 // including Inactive, → episodes; else browse preview). NavRules: pushed page,
-// brand back chevron top-left,
+// shared Back policy top-left,
 // MiniPlayerBar docked. Mirrors heroEpisodeCard styling from DiscoverView.swift.
 // RESPONSIVE: the outer ScrollView remains full width while its centred inner
 // stack uses the same AdaptiveEditorialMetrics vocabulary as Discover. Feature
@@ -66,11 +73,8 @@ struct TopEpisodesView: View {
         }
         .navigationTitle("Top Episodes")
         .responsiveInlineNavigationTitle("Top Episodes")
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton()
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 ChartCountryPicker(selectionCode: $storedCountryCode, fallback: country)
             }

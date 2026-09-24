@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Download stats await the durable snapshot checkpoint; callers must await completion
+// before reporting settlement. Other lifecycle save contracts remain synchronous.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Combine
 import Foundation
 
@@ -247,8 +252,8 @@ final class HistoryStatsCoordinator: ObservableObject {
         )
     }
 
-    func recordDownload(bytes: Int64) {
-        statsStore.recordDownload(bytes: bytes)
+    func recordDownload(bytes: Int64) async {
+        await statsStore.recordDownloadAndSave(bytes: bytes)
     }
 
     func mark(

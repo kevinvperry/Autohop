@@ -5,6 +5,7 @@ import SwiftUI
 // bootstrap and a single service graph; menu construction must not create another one.
 
 // AI CONTEXT — App/AutohopApp.swift
+// REPLAY (Version 1.7, 2026-09-12): Inject the single AppState-owned PodcastReplayCoordinator into navigation environments; never instantiate a scheduler in a view.
 // SwiftUI entry point. It intentionally does NOT bootstrap AppState in
 // AutohopApp.init: a CarPlay-only cold launch must be able to reach
 // CarPlaySceneDelegate.didConnect and set an immediate Loading template before
@@ -50,6 +51,7 @@ private struct AutohopRootBootstrapView: View {
             if let appState {
                 RootView()
                     .appEnvironment(appState)
+                    .task { appState.podcastReplayCoordinator.start() }
                     .task {
                         await appState.startPlaybackOnLaunchIfNeeded()
                     }
@@ -121,6 +123,7 @@ extension View {
     func appEnvironment(_ appState: AppState) -> some View {
         self
             .environmentObject(appState)
+            .environmentObject(appState.podcastReplayCoordinator)
             // 2 Hz playback tick — observed only by the scrubber/mini-player
             // surfaces (PERF-1), so the tick no longer wakes AppState observers.
             .environmentObject(appState.playbackClock)

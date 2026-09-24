@@ -1,3 +1,11 @@
+// AI: Completion updates one downloaded-activity row after re-resolving live media;
+// retain broad projection rebuilds for startup, deletion and reconciliation.
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Await durable off-main stats writes; distinguish elapsed checkpoint time from measured
+// synchronous settlement stages. First active-runtime fallback is prompt, later retries
+// remain bounded.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 //
 //  DownloadCoordinator.swift
 //  Autohop
@@ -73,6 +81,24 @@ final class DownloadCoordinator: ObservableObject {
     // Internal access is limited to typed download/runtime workflows. These
     // values have one storage owner and are not published.
     var pendingQueue: [PendingDownload] = []
+    // A prompt retry must wait for the old workflow's catch/defer, not merely
+    // URLSession cancellation, or old settlement can overwrite new activity.
+    private var settlingEpisodeIDs = Set<UUID>()
+    private var settlementWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+
+    func beginTransferSettlement(_ id: UUID) -> Bool {
+        settlingEpisodeIDs.insert(id).inserted
+    }
+
+    func finishTransferSettlement(_ id: UUID) {
+        settlingEpisodeIDs.remove(id)
+        settlementWaiters.removeValue(forKey: id)?.forEach { $0.resume() }
+    }
+
+    func waitForTransferSettlement(_ id: UUID) async {
+        guard settlingEpisodeIDs.contains(id) else { return }
+        await withCheckedContinuation { settlementWaiters[id, default: []].append($0) }
+    }
     var activeCount = 0
     var failureBackoff: [String: (failures: Int, retryAfter: Date)] = [:]
     var watchdogRetryCounts: [UUID: Int] = [:]
@@ -279,7 +305,10 @@ final class DownloadCoordinator: ObservableObject {
                     return
                 }
 
-                let delay = TimeInterval(30 * (1 << (attempt - 1)))
+                // The first confirmed zero-byte stall may switch sessions now;
+                // later failures retain the bounded backoff ladder.
+                let delay = DownloadManager.watchdogRetryDelay(attempt: attempt,
+                    activeFallbackAvailable: actions.hasActiveDownloadExecutionWindow)
                 let retryAt = Date().addingTimeInterval(delay)
                 self.watchdogRetryDates[episodeID] = retryAt
                 self.activityStore.waitForRetry(
@@ -315,6 +344,9 @@ final class DownloadCoordinator: ObservableObject {
                     guard !Task.isCancelled,
                           self?.watchdogRetryGeneration[episodeID] == generation
                     else { return }
+                    await self?.waitForTransferSettlement(episodeID)
+                    guard !Task.isCancelled,
+                          self?.watchdogRetryGeneration[episodeID] == generation else { return }
                     // Retry-task ownership covers only the delay and handoff.
                     // Retaining this entry while awaiting the replacement
                     // transfer made its later genuine timeout look like a
@@ -633,7 +665,7 @@ final class DownloadCoordinator: ObservableObject {
                 self.progressModel.progress.removeValue(forKey: episodeID)
 
                 let statsStartedAt = CFAbsoluteTimeGetCurrent()
-                historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
+                await historyStatsCoordinator.recordDownload(bytes: downloadedBytes)
                 let statsMs =
                     (CFAbsoluteTimeGetCurrent() - statsStartedAt) * 1_000
 
@@ -667,23 +699,23 @@ final class DownloadCoordinator: ObservableObject {
                     episodeID: episodeID,
                     subscriptionID: subscriptionID
                 )
-                self.rebuildDownloadedActivities(
-                    from: subscriptionStore.subscriptions
-                )
+                self.refreshCompletedDownload(episodeID: episodeID,
+                    currentEpisode: subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID))
                 let effectsMs =
                     (CFAbsoluteTimeGetCurrent() - effectsStartedAt) * 1_000
                 let totalMs =
                     (CFAbsoluteTimeGetCurrent() - settlementStartedAt) * 1_000
-                if totalMs >= 100 {
+                if storeMs + effectsMs >= 100 {
                     AppLogger.shared.warning(
                         "ui.mainActorOperationSlow",
                         "Download completion settlement occupied the main actor",
                         metadata: [
                             "operation": "download.settlement",
-                            "durationMs": String(format: "%.1f", totalMs),
+                            "durationMs": String(format: "%.1f", storeMs + effectsMs),
+                            "settlementElapsedMs": String(format: "%.1f", totalMs),
                             "lookupMs": String(format: "%.1f", lookupMs),
                             "storeAndMediaMs": String(format: "%.1f", storeMs),
-                            "statsMs": String(format: "%.1f", statsMs),
+                            "statsCheckpointElapsedMs": String(format: "%.1f", statsMs),
                             "effectsMs": String(format: "%.1f", effectsMs),
                             "episodeID": episodeID.uuidString,
                             "subscriptionCount": "\(subscriptionStore.subscriptions.count)"
@@ -736,6 +768,17 @@ final class DownloadCoordinator: ObservableObject {
             "failures": "\(failures)",
             "retryAfterMinutes": String(format: "%.0f", cooldownMinutes)
         ])
+    }
+
+    // Completion already wrote an authoritative activity. Update that one row;
+    // broad catalogue rebuilds remain for startup, deletion and reconciliation.
+    func refreshCompletedDownload(episodeID: UUID, currentEpisode: Episode?) {
+        downloadedActivities.removeAll { $0.episodeID == episodeID }
+        guard let currentEpisode, currentEpisode.downloadState == .downloaded,
+              currentEpisode.localFileURL != nil,
+              let activity = activityStore.completedActivities.first(where: { $0.episodeID == episodeID }) else { return }
+        downloadedActivities.append(activity)
+        downloadedActivities.sort { ($0.completedAt ?? $0.updatedAt) > ($1.completedAt ?? $1.updatedAt) }
     }
 
     func rebuildDownloadedActivities(from subscriptions: [Subscription]) {

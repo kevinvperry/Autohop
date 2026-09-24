@@ -57,6 +57,10 @@ struct TVHomeView: View {
                 .padding(.horizontal, 80)
                 .padding(.vertical, 60)
         }
+        .onAppear { model.recordDiagnosticSnapshot(reason: "homeAppeared") }
+        .onChange(of: visibleQueueRows) { _, rows in
+            AppLogger.shared.recordState("tv.home.queueVisible", metadata: ["rows": "\(rows.count)", "playable": "\(rows.filter { $0.isPlayable }.count)"])
+        }
         .tvEpisodeDescriptionSheet(
             item: $descriptionItem,
             resolveEpisode: { await model.episodeWithResolvedDescription($0) }

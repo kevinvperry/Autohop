@@ -3,6 +3,7 @@ import UIKit
 import UserNotifications
 
 // AI CONTEXT — Notifications/NotificationService.swift
+// REPLAY (Version 1.7, 2026-09-12): Podcast Replay has session-qualified Keep/Turn Off actions and a buffered cold-launch route, alongside existing notification categories.
 // Singleton UNUserNotificationCenter wrapper AND the app's notification-center
 // delegate (set in AppDelegate.didFinishLaunching). New-episode notifications
 // fire when the per-podcast toggle (Subscription.notificationsEnabled) is on —
@@ -85,6 +86,17 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// during cold launch from a notification.
     private var pendingListeningRecap: ListeningRecapPeriod?
 
+    // AI CONTEXT — Replay actions carry a session ID; stale actions are rejected
+    // by the coordinator. Buffer cold-launch actions until composition is ready.
+    var onPodcastReplay: ((UUID, UUID, String) -> Void)? {
+        didSet {
+            if let pending = pendingPodcastReplay, let onPodcastReplay {
+                pendingPodcastReplay = nil; onPodcastReplay(pending.0, pending.1, pending.2)
+            }
+        }
+    }
+    private var pendingPodcastReplay: (UUID, UUID, String)?
+
     // MARK: - Permission & setup
 
     /// Installs this object as the notification-center delegate and registers
@@ -108,7 +120,11 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
             intentIdentifiers: [],
             options: []
         )
-        center.setNotificationCategories([category])
+        let replay = UNNotificationCategory(identifier: "podcastReplay", actions: [
+            UNNotificationAction(identifier: "replayKeep", title: "Keep Schedule", options: [.foreground]),
+            UNNotificationAction(identifier: "replayDisable", title: "Turn Off Podcast Replay", options: [.foreground])
+        ], intentIdentifiers: [], options: [])
+        center.setNotificationCategories([category, replay])
     }
 
     /// Requests notification authorization. Call this only in response to a
@@ -172,7 +188,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
-        if let recapPeriod = ListeningRecapPeriod(userInfoValue: userInfo[Self.recapUserInfoKey]) {
+        if let sub = (userInfo["replaySubscriptionID"] as? String).flatMap(UUID.init(uuidString:)),
+           let session = (userInfo["replaySessionID"] as? String).flatMap(UUID.init(uuidString:)) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if let handler = self.onPodcastReplay { handler(sub, session, response.actionIdentifier) }
+                else { self.pendingPodcastReplay = (sub, session, response.actionIdentifier) }
+            }
+        } else if let recapPeriod = ListeningRecapPeriod(userInfoValue: userInfo[Self.recapUserInfoKey]) {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 AppLogger.shared.info("notification.recapTapped", "Listening recap notification tapped", metadata: [

@@ -359,6 +359,7 @@ extension TVAppModel {
         // here so tvOS mirrors the iOS Up Next label immediately.
         let refreshedQueueRows = projectQueueRows(from: upNextItems)
         if refreshedQueueRows != queueRows { queueRows = refreshedQueueRows }
+        AppLogger.shared.recordState("tv.queueModel", metadata: ["rows": "\(queueRows.count)", "playable": "\(queueRows.filter { $0.isPlayable }.count)", "root": String(describing: rootState)])
     }
 
     /// Phase 4 bounded detail loading. The view first receives at most 25

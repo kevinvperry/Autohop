@@ -1,3 +1,16 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (SubscriptionSettingsView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// PRESENTATION: Player passes isPresentationRoot=true only for a modal stack root;
+// retain explicit dismiss there. Children use the default pushed-page policy.
+// SCOPE: Podcast Settings, Episode Detail and Feed Filters share this policy.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
+// AI PRESENTATION CONTRACT (Version 1.7): Keep explanations short and grouped
+// by control. Preserve defaults-versus-existing-podcast scope, safety limits,
+// bindings, option sets and sidebar section IDs when editing this copy.
 import SwiftUI
 import UIKit
 
@@ -11,6 +24,9 @@ import UIKit
 // Keep the show link at its intrinsic text height: a 44-point minimum introduced
 // excessive vertical space. The surrounding header supplies six-point spacing.
 // AI CONTEXT — Views/SubscriptionSettingsView.swift ("Podcast Settings" page,
+// REPLAY DESIGN (Version 1.7, 2026-09-13): Dedicated Replay section precedes
+// Download Feed Filters. Both sidebar mappings include its extra Form section.
+// Episode Detail retains Listen From Here using the real episode identity.
 // gear icon from a podcast's episode list). Per-podcast configuration, all
 // persisted on the Subscription via SubscriptionStore. Sections: Podcast
 // (editable title, numeric priority rank, read-only author; the rank editor's
@@ -51,7 +67,7 @@ import UIKit
 // stored in the same synced automation payload: only a newly auto-downloaded,
 // filter-eligible episode can interrupt active playback; manual downloads cannot.
 // FINAL-MINUTE POLICY (2026-08-14): an arrival remains armed rather than
-// interrupting when the current episode has a known 60 seconds or less left.
+// interrupting when the current episode has a known 120 seconds or less left.
 // PlayInstantWorkflow owns and revalidates this rule; this page only explains it.
 // Version 1.3 footer copy is also a website claim source: keep filter-aware
 // Auto Archive, live chapter changes, and Download Feed Filter integration
@@ -144,6 +160,8 @@ private let namedHTMLEntities: [(String, String)] = [
 
 struct SubscriptionSettingsView: View {
     let subscriptionID: UUID
+    /// A modal stack root still needs its explicit dismiss control.
+    var isPresentationRoot = false
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
@@ -162,7 +180,7 @@ struct SubscriptionSettingsView: View {
     @State private var formScrollRequestID = UUID()
 
     private enum SubscriptionShortcut: String, Hashable {
-        case general, downloadFilters, playback, automation, autoArchive
+        case general, replay, downloadFilters, playback, automation, autoArchive
         case chapters, feed, unsubscribe
     }
 
@@ -173,6 +191,7 @@ struct SubscriptionSettingsView: View {
     private var shortcutItems: [SettingsShortcutItem<SubscriptionShortcut>] {
         var items: [SettingsShortcutItem<SubscriptionShortcut>] = [
             .init(id: .general, title: "Podcast", systemImage: "dot.radiowaves.left.and.right"),
+            .init(id: .replay, title: "Podcast Replay", systemImage: "arrow.counterclockwise"),
             .init(id: .downloadFilters, title: "Download Feed Filters", systemImage: "line.3.horizontal.decrease.circle"),
             .init(id: .playback, title: "Playback", systemImage: "waveform"),
             .init(id: .automation, title: "Automation", systemImage: "bolt.fill"),
@@ -256,12 +275,8 @@ struct SubscriptionSettingsView: View {
         .preferredColorScheme(.dark)
         .navigationTitle(subscription?.title ?? "Subscription")
         .responsiveInlineNavigationTitle(subscription?.title ?? "Subscription")
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton(isPresentationRoot: isPresentationRoot)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
-
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard let subscription else { return }
@@ -340,6 +355,7 @@ struct SubscriptionSettingsView: View {
     private func subscriptionForm(_ sub: Subscription) -> some View {
         Form {
             podcastSection(sub)
+            podcastReplaySection(sub)
             downloadFeedFiltersSection(sub)
             playbackSection(sub)
             automationSection(sub)
@@ -370,13 +386,14 @@ struct SubscriptionSettingsView: View {
         let hasChapters = chapterSettingsEpisode(for: subscription) != nil
         switch shortcut {
         case .general: return 0
-        case .downloadFilters: return 1
-        case .playback: return 2
-        case .automation: return 4
-        case .autoArchive: return 5
-        case .chapters: return 6
-        case .feed: return hasChapters ? 7 : 6
-        case .unsubscribe: return hasChapters ? 8 : 7
+        case .replay: return 1
+        case .downloadFilters: return 2
+        case .playback: return 3
+        case .automation: return 5
+        case .autoArchive: return 6
+        case .chapters: return 7
+        case .feed: return hasChapters ? 8 : 7
+        case .unsubscribe: return hasChapters ? 9 : 8
         }
     }
 
@@ -384,13 +401,14 @@ struct SubscriptionSettingsView: View {
         let hasChapters = chapterSettingsEpisode(for: subscription) != nil
         switch section {
         case 0: return .general
-        case 1: return .downloadFilters
-        case 2...3: return .playback
-        case 4: return .automation
-        case 5: return .autoArchive
-        case 6 where hasChapters: return .chapters
-        case 6: return .feed
-        case 7 where hasChapters: return .feed
+        case 1: return .replay
+        case 2: return .downloadFilters
+        case 3...4: return .playback
+        case 5: return .automation
+        case 6: return .autoArchive
+        case 7 where hasChapters: return .chapters
+        case 7: return .feed
+        case 8 where hasChapters: return .feed
         default: return .unsubscribe
         }
     }
@@ -460,7 +478,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Playback", id: .playback)
         } footer: {
-            Text("Mono Audio centres presenters mixed toward the left or right. Volume Adjustment balances podcasts that are quieter or louder than the rest of your library without changing device volume. Vocal Boost improves speech clarity, while Trim Silence removes quiet gaps (audio episodes only).")
+            Text("Mono Audio centres left- or right-sided voices. Volume Adjustment balances this podcast with your other shows without changing device volume.\n\nVocal Boost makes speech clearer. Trim Silence removes quiet gaps. Audio processing applies to audio episodes only.")
         }
 
         Section {
@@ -498,7 +516,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             Text("Episode Trim")
         } footer: {
-            Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
+            Text("Skip intros and outros automatically. Times refer to the original recording, regardless of playback speed.")
         }
     }
 
@@ -559,7 +577,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Automation", id: .automation)
         } footer: {
-            Text("New episode notifications are controlled independently for this podcast. The global-looking switch in Settings → Release Radar → Notification Settings is only the default for subscriptions added in the future and never overrides this choice.\n\nExcluded podcasts keep their episodes, move to the bottom of the Priority Stack, and are skipped by automatic and Refresh All checks. You can still refresh one explicitly from its podcast page.\n\nPlay Instant interrupts something already playing when a new episode from this podcast finishes downloading automatically. It waits instead if the current episode has 60 seconds or less remaining. If playback or its audio route is temporarily unavailable, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker. A clear warning sounds first; after the Instant episode finishes, Autohop returns to the interrupted episode. Manual downloads never trigger it.")
+            Text("Notifications: choose alerts for this podcast. App Settings only sets the default for future subscriptions.\n\nExclude from Auto Feed Refresh: keep this podcast but move it to the bottom of your priority list. Automatic checks and Refresh All skip it; you can still refresh it from its podcast page.\n\nPlay Instant: when a new episode downloads automatically, a warning sounds before it interrupts playback. Afterwards, listening returns to the interrupted episode. Manual downloads never trigger it.\n\nIt waits if the current episode has two minutes or less remaining. If playback or the audio connection is unavailable, it can wait up to 30 minutes. It will not unexpectedly start through the phone speaker.")
         }
     }
 
@@ -591,7 +609,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Auto Archive", id: .autoArchive)
         } footer: {
-            Text("Played Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. The 30 Minutes option is useful for frequently replaced hourly news bulletins. Episode Limit rotates automatic downloads to keep the newest selected number; manually downloaded and manually positioned Up Next episodes are protected. Changing the limit does not download older episodes. Automatic downloading still follows this podcast's Download Feed Filters.\n\nAuto Archive runs at most every 25 minutes.")
+            Text("Played Episodes: remove downloads after playback, immediately or after a delay.\n\nInactive Episodes: remove unplayed downloads after the chosen time, measured from download. The 30 Minutes option suits frequently updated news bulletins.\n\nEpisode Limit: keep the selected number of automatic downloads. Manual downloads and episodes you manually position in Up Next are protected.\n\nChanging the limit does not download older episodes by itself. Download Feed Filters still apply. Podcast Replay uses this same limit.\n\nAuto Archive runs automatically, no more often than every 25 minutes.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -634,7 +652,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Chapter filter", id: .chapters)
         } footer: {
-            Text("Skips are position-based and apply to future episodes of this podcast. Changes apply to active playback immediately; while this podcast is playing, its current chapter is protected here from accidental deselection.")
+            Text("Choose which chapter positions to play in this and future episodes. Changes take effect immediately.\n\nThe chapter currently playing cannot be deselected here.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -684,7 +702,36 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Feed", id: .feed)
         } footer: {
-            Text("This is the publisher's RSS address used to discover episodes. Copy Link places the complete address on the clipboard.")
+            Text("The publisher’s RSS feed supplies the episode list. Copy Link copies its full address.")
+        }
+        .listRowBackground(sectionRowBackground)
+    }
+
+    // AI CONTEXT — Replay is a first-class settings destination above filters.
+    // Keep sidebar indices aligned with this additional native Form section.
+    private func podcastReplaySection(_ sub: Subscription) -> some View {
+        Section {
+            NavigationLink {
+                PodcastReplayView(subscriptionID: sub.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingsRowLabel(
+                        title: sub.autoArchiveSettings.replay?.enabled == true ? "Manage Podcast Replay" : "Set Up Podcast Replay",
+                        systemImage: "arrow.counterclockwise"
+                    )
+                    Text("Start with an earlier episode. Bring the rest into Up Next at your own pace.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if sub.autoArchiveSettings.replay?.enabled == true {
+                        EpisodeStatusPill(kind: .replay)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .id(SubscriptionShortcut.replay)
+        } header: {
+            shortcutHeader("Podcast Replay", id: .replay)
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -701,7 +748,7 @@ struct SubscriptionSettingsView: View {
         } header: {
             shortcutHeader("Download Feed Filters", id: .downloadFilters)
         } footer: {
-            Text("Control which new episodes Autohop downloads automatically from this podcast's feed. Duration, title, and description rules can skip episodes you do not want; manual actions still work. Skipped episodes do not train Release Radar or count as drifting, and the rules sync when iCloud Sync is enabled.")
+            Text("Choose automatic downloads by episode length, title or description. You can still download any episode manually.\n\nRules sync with iCloud Sync. Skipped episodes do not affect Release Radar learning or inactivity tracking.")
         }
         .listRowBackground(sectionRowBackground)
     }
@@ -862,12 +909,22 @@ private struct EditPrioritySheet: View {
     }
 }
 
+// AI CONTEXT — Download Feed Filters guided editor, Version 1.7 (2026-09-13).
+// Match Replay's glass cards/purple controls; hide OFF group editors without
+// deleting their rules. All controls write the existing settings immediately.
+// Preserve All/Any include semantics, exclude precedence, contains/not-contains,
+// 1–300 minute boundaries, multiple rules and manual-download bypass. Preview
+// caches feed Episodes, evaluates CURRENT settings on every render, and never
+// downloads media or alters subscriptions. Keep mini-player/onboarding scope.
+// Text-rule inputs use explicit plain styling, white text and intrinsic vertical
+// sizing: nested Form cards must not collapse the editable phrase to a black bar.
 struct DownloadFiltersView: View {
     let subscriptionID: UUID
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Environment(\.dismiss) private var dismiss
     @State private var previewState: PreviewState = .idle
+    @State private var showAllPreview = false
 
     private var subscription: Subscription? {
         subscriptionStore.subscription(id: subscriptionID)
@@ -877,10 +934,11 @@ struct DownloadFiltersView: View {
         Group {
             if let sub = subscription {
                 Form {
-                    summarySection(sub)
+                    introduction(sub)
                     durationSection(sub)
                     titleSection(sub)
                     descriptionSection(sub)
+                    summarySection(sub)
                     previewSection(sub)
                 }
             } else {
@@ -888,86 +946,78 @@ struct DownloadFiltersView: View {
             }
         }
         .responsiveListSizing()
-        .listSectionSpacing(36)
+        .listSectionSpacing(AdaptiveLayoutMetrics.settingsSectionSpacing)
         .scrollContentBackground(.hidden)
         .background(Color.black.ignoresSafeArea())
         .tint(.purple)
         .preferredColorScheme(.dark)
         .navigationTitle("Download Feed Filters")
         .responsiveInlineNavigationTitle("Download Feed Filters")
-        .navigationBarBackButtonHidden(true)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
-        }
+        .appNavigationBackButton()
         .onboardingTip(.feedFilters, when: subscription != nil)
         .miniPlayerBar(subscriptionID: subscriptionID)
     }
 
-    @ViewBuilder
-    private func summarySection(_ sub: Subscription) -> some View {
-        Section {
-            Picker(selection: settingsBinding(sub).matchMode) {
-                ForEach(DownloadFilterSettings.MatchMode.allCases, id: \.self) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            } label: {
-                SettingsRowLabel(title: "Match", systemImage: "switch.2")
-            }
-            .pickerStyle(.segmented)
-
-            Text(summaryText(sub.downloadFilterSettings))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } header: {
-            Text("Rules")
+    private func introduction(_ sub: Subscription) -> some View {
+        card("More of what you enjoy", explanation: sub.title, icon: "line.3.horizontal.decrease.circle") {
+            Text("Choose which episodes Autohop downloads automatically. Turn on just the filters you need.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Label(sub.downloadFilterSettings.hasActiveFilters ? "Filters are active" : "No active rules — all episodes can match", systemImage: "checkmark.circle")
+                .font(.subheadline).foregroundStyle(.purple)
+            Text("Changes save automatically. These rules also apply to Podcast Replay and Binge Mode. You can still download any episode manually.")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .listRowBackground(sectionBackground)
     }
 
-    @ViewBuilder
+    private func summarySection(_ sub: Subscription) -> some View {
+        card("How your rules work together", explanation: "Include rules describe what you want. Exclude rules describe what to skip.", icon: "switch.2") {
+            Picker("Include rules must match", selection: settingsBinding(sub).matchMode) {
+                Text("All rules").tag(DownloadFilterSettings.MatchMode.all)
+                Text("Any rule").tag(DownloadFilterSettings.MatchMode.any)
+            }.pickerStyle(.segmented)
+            Text(sub.downloadFilterSettings.matchMode == .all
+                 ? "All rules: an episode must meet every enabled Include rule. For example, it must be longer than 40 minutes AND contain your chosen title text."
+                 : "Any rule: an episode needs to meet just one enabled Include rule. For example, it can be longer than 40 minutes OR contain your chosen title text.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Exclude always wins. If an episode matches any Exclude rule, it is skipped. With only Exclude rules, everything else can match.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(summaryText(sub.downloadFilterSettings)).font(.caption).foregroundStyle(.purple)
+        }
+    }
+
     private func durationSection(_ sub: Subscription) -> some View {
         let binding = settingsBinding(sub)
-        Section {
+        return card("Episode length", explanation: "Find longer listens or skip shorter episodes. For example, include episodes longer than 40 minutes.", icon: "clock") {
             Toggle(isOn: binding.durationEnabled) {
-                SettingsRowLabel(title: "Duration filters", systemImage: "clock")
+                SettingsRowLabel(title: "Filter by episode length", systemImage: "clock")
             }
-            ForEach(binding.durationRules) { $rule in
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("Behavior", selection: $rule.behavior) {
-                        ForEach(DownloadFilterSettings.RuleBehavior.allCases, id: \.self) { behavior in
-                            Text(behavior.title).tag(behavior)
+            if binding.durationEnabled.wrappedValue {
+                ForEach(binding.durationRules) { $rule in
+                    rulePanel {
+                        behaviourPicker($rule.behavior)
+                        Picker("Episode length", selection: $rule.comparison) {
+                            ForEach(DownloadFilterSettings.DurationRule.Comparison.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.pickerStyle(.menu)
+                        Stepper(value: $rule.minutes, in: 1...300) {
+                            Text("\(rule.minutes) minutes").monospacedDigit()
                         }
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack(spacing: 10) {
-                        Picker("Comparison", selection: $rule.comparison) {
-                            ForEach(DownloadFilterSettings.DurationRule.Comparison.allCases, id: \.self) { comparison in
-                                Text(comparison.title).tag(comparison)
-                            }
-                        }
-                        Stepper(value: $rule.minutes, in: 1...300, step: 1) {
-                            Text("\(rule.minutes) min")
-                                .monospacedDigit()
+                        Text("\(rule.behavior.title) episodes \(rule.comparison.title.lowercased()) \(rule.minutes) minutes.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        removeRuleButton {
+                            binding.durationRules.wrappedValue.removeAll { $0.id == rule.id }
                         }
                     }
                 }
-            }
-            .onDelete { offsets in
-                var settings = sub.downloadFilterSettings
-                settings.durationRules.remove(atOffsets: offsets)
-                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
-            }
-            addRuleButton("Add Duration Rule", systemImage: "plus.circle") {
-                var settings = sub.downloadFilterSettings
-                settings.durationEnabled = true
-                settings.durationRules.append(.init())
-                subscriptionStore.updateDownloadFilterSettings(subscriptionID: sub.id, settings: settings)
+                if binding.durationRules.wrappedValue.isEmpty {
+                    Text("Add a rule to choose an episode length.").font(.caption).foregroundStyle(.secondary)
+                }
+                addRuleButton("Add Length Rule", systemImage: "plus.circle") {
+                    binding.durationRules.wrappedValue.append(.init())
+                }
+            } else {
+                Text("Off — saved length rules are kept for later.").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .listRowBackground(sectionBackground)
     }
 
     @ViewBuilder
@@ -1021,37 +1071,88 @@ struct DownloadFiltersView: View {
         add: @escaping () -> Void,
         delete: @escaping (IndexSet) -> Void
     ) -> some View {
-        Section {
+        card("Episode \(title.lowercased())", explanation: title == "Title"
+             ? "Include or skip episodes with particular words in their title."
+             : "Include or skip episodes with particular words in their show notes.", icon: icon) {
             Toggle(isOn: enabled) {
-                SettingsRowLabel(title: "\(title) filters", systemImage: icon)
+                SettingsRowLabel(title: "Filter by \(title.lowercased())", systemImage: icon)
             }
-            ForEach(rules) { $rule in
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("Behavior", selection: $rule.behavior) {
-                        ForEach(DownloadFilterSettings.RuleBehavior.allCases, id: \.self) { behavior in
-                            Text(behavior.title).tag(behavior)
+            if enabled.wrappedValue {
+                ForEach(rules) { $rule in
+                    rulePanel {
+                        behaviourPicker($rule.behavior)
+                        Picker("Match", selection: $rule.operation) {
+                            ForEach(DownloadFilterSettings.TextRule.Operation.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.pickerStyle(.menu)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Words or phrase")
+                                .font(.caption).foregroundStyle(.secondary)
+                            TextField("Enter words or a phrase", text: $rule.term, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1...6)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .padding(.horizontal, 12).padding(.vertical, 4)
+                                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.purple.opacity(0.45)))
+                                .accessibilityLabel("\(title) words or phrase")
+                        }
+                        if rule.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Blank rules are ignored.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        removeRuleButton {
+                            if let index = rules.wrappedValue.firstIndex(where: { $0.id == rule.id }) { delete(IndexSet(integer: index)) }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    Picker("Match", selection: $rule.operation) {
-                        ForEach(DownloadFilterSettings.TextRule.Operation.allCases, id: \.self) { operation in
-                            Text(operation.title).tag(operation)
-                        }
-                    }
-                    TextField("Text", text: $rule.term)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
                 }
+                if rules.wrappedValue.isEmpty {
+                    Text("Add a rule to choose the text to match.").font(.caption).foregroundStyle(.secondary)
+                }
+                addRuleButton("Add \(title) Rule", systemImage: "plus.circle", action: add)
+            } else {
+                Text("Off — saved \(title.lowercased()) rules are kept for later.").font(.caption).foregroundStyle(.secondary)
             }
-            .onDelete(perform: delete)
-            addRuleButton("Add \(title) Rule", systemImage: "plus.circle", action: add)
         }
-        .listRowBackground(sectionBackground)
     }
 
-    @ViewBuilder
-    private func previewSection(_ sub: Subscription) -> some View {
+    private func behaviourPicker(_ binding: Binding<DownloadFilterSettings.RuleBehavior>) -> some View {
+        Picker("Rule action", selection: binding) {
+            Text("Include").tag(DownloadFilterSettings.RuleBehavior.include)
+            Text("Exclude").tag(DownloadFilterSettings.RuleBehavior.exclude)
+        }.pickerStyle(.segmented)
+    }
+
+    private func removeRuleButton(action: @escaping () -> Void) -> some View {
+        Button(role: .destructive, action: action) { Label("Remove Rule", systemImage: "minus.circle") }
+            .buttonStyle(.borderless).font(.subheadline)
+    }
+
+    private func rulePanel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14, content: content)
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func card<Content: View>(_ title: String, explanation: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
         Section {
+            VStack(alignment: .leading, spacing: 16) {
+                Label { Text(title) } icon: { Image(systemName: icon).foregroundStyle(.purple) }
+                    .font(.headline).accessibilityAddTraits(.isHeader)
+                Text(explanation).font(.subheadline).foregroundStyle(.secondary)
+                content()
+            }
+            .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .glassCard(cornerRadius: 12)
+            .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+        }
+    }
+
+    private func previewSection(_ sub: Subscription) -> some View {
+        card("Check your matches", explanation: "Try your rules against up to 50 recent feed entries. Previewing does not download episodes; matching does not guarantee a download if other limits apply.", icon: "eye") {
             Button {
                 Task { await loadPreview(sub) }
             } label: {
@@ -1059,30 +1160,34 @@ struct DownloadFiltersView: View {
                     Label("Preview Matches", systemImage: "eye")
                     Spacer()
                     if previewState.isLoading { ProgressView() }
-                }
-            }
-            .disabled(previewState.isLoading)
-
+                }.frame(maxWidth: .infinity).padding(.vertical, 6)
+            }.buttonStyle(.borderedProminent).disabled(previewState.isLoading)
             switch previewState {
             case .idle:
-                EmptyView()
+                Text("See which episodes match before deciding whether to adjust your rules.").font(.caption).foregroundStyle(.secondary)
             case .loading:
-                Text("Fetching latest feed...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("Checking the latest feed…").font(.caption).foregroundStyle(.secondary)
             case .failed:
-                Text("Could not fetch the feed. Try again.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .loaded(let rows):
-                ForEach(rows) { row in
-                    previewRow(row)
+                Text("Could not fetch the feed. Tap Preview Matches to try again.").font(.caption).foregroundStyle(.secondary)
+            case .loaded(let episodes):
+                let included = episodes.filter { sub.downloadFilterSettings.evaluation(for: $0).isIncluded }.count
+                Text("\(included) match · \(episodes.count - included) skipped").font(.subheadline.weight(.semibold))
+                Text("Results update as you edit your rules. Tap Preview Matches again to refresh the feed.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if episodes.isEmpty {
+                    Text("No playable episodes were found in these feed entries.").font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(Array(episodes.prefix(showAllPreview ? episodes.count : 5))) { episode in
+                    Divider()
+                    previewRow(PreviewRow(title: episode.title, publishedAt: episode.publishedAt,
+                        durationSeconds: episode.durationSeconds, skipReason: sub.downloadFilterSettings.evaluation(for: episode).skipReason))
+                }
+                if episodes.count > 5 {
+                    Button(showAllPreview ? "Show Fewer Episodes" : "Show All \(episodes.count) Episodes") { showAllPreview.toggle() }
+                        .buttonStyle(.borderless)
                 }
             }
-        } header: {
-            Text("Preview")
         }
-        .listRowBackground(sectionBackground)
     }
 
     private func previewRow(_ row: PreviewRow) -> some View {
@@ -1090,7 +1195,7 @@ struct DownloadFiltersView: View {
             Text(row.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(row.skipReason == nil ? .primary : .secondary)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 5) {
                 if let publishedAt = row.publishedAt {
                     Text(relativePublishedLabel(publishedAt))
@@ -1102,16 +1207,15 @@ struct DownloadFiltersView: View {
             }
             .font(.caption)
             .foregroundStyle(.tertiary)
+            Label(row.skipReason == nil ? "Matches your rules" : "Skipped", systemImage: row.skipReason == nil ? "checkmark.circle" : "minus.circle")
+                .font(.caption.weight(.semibold)).foregroundStyle(row.skipReason == nil ? Color.purple : Color.secondary)
             if let reason = row.skipReason {
                 Text(reason)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color(white: 0.36).opacity(0.7), in: Capsule())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .opacity(row.skipReason == nil ? 1 : 0.45)
     }
 
     private func addRuleButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -1129,7 +1233,7 @@ struct DownloadFiltersView: View {
 
     private func summaryText(_ settings: DownloadFilterSettings) -> String {
         guard settings.hasActiveFilters else {
-            return "All filter groups are off, so Autohop downloads the next available episode."
+            return "No active rules. Episodes are not restricted by these filters."
         }
         return "Download episodes when \(settings.matchMode == .all ? "all" : "any") enabled include rules match. Exclude rules always skip matching episodes."
     }
@@ -1138,29 +1242,18 @@ struct DownloadFiltersView: View {
         previewState = .loading
         do {
             let feed = try await EpisodeFeedLoader().fetch(feedURL: sub.feedURL, limit: 50)
-            let rows = feed.episodes.compactMap { parsed -> PreviewRow? in
+            let episodes = feed.episodes.compactMap { parsed -> Episode? in
                 guard let audioURL = parsed.audioURL else { return nil }
                 var episode = Episode(subscriptionID: sub.id, guid: parsed.guid, title: parsed.title, audioURL: audioURL, mediaKind: parsed.mediaKind)
                 episode.description = parsed.description
                 episode.publishedAt = parsed.publishedAt
                 episode.durationSeconds = parsed.durationSeconds
-                let evaluation = sub.downloadFilterSettings.evaluation(for: episode)
-                return PreviewRow(
-                    title: parsed.title,
-                    publishedAt: parsed.publishedAt,
-                    durationSeconds: parsed.durationSeconds,
-                    skipReason: evaluation.skipReason
-                )
+                return episode
             }
-            previewState = .loaded(rows)
+            previewState = .loaded(episodes)
         } catch {
             previewState = .failed
         }
-    }
-
-    private var sectionBackground: Color {
-        if #available(iOS 26, *) { return Color.white.opacity(0.05) }
-        return Color.white.opacity(0.08)
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
@@ -1170,7 +1263,7 @@ struct DownloadFiltersView: View {
     private enum PreviewState {
         case idle
         case loading
-        case loaded([PreviewRow])
+        case loaded([Episode])
         case failed
 
         var isLoading: Bool {
@@ -1228,13 +1321,9 @@ struct EpisodeDetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton()
         .preferredColorScheme(.dark)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
-
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showShareSheet = true
@@ -1311,6 +1400,11 @@ struct EpisodeDetailView: View {
                     }
                     .frame(maxWidth: .infinity)
 
+                    if sub.browseDate == nil {
+                        NavigationLink("Listen From Here") {
+                            PodcastReplayView(subscriptionID: sub.id, startingEpisodeID: ep.id)
+                        }.frame(maxWidth: .infinity)
+                    }
                     actionButtons(ep: ep, sub: sub, metrics: metrics)
 
                     if let description = ep.description, !description.isEmpty {

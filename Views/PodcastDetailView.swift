@@ -1,3 +1,12 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (PodcastDetailView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// PRESENTATION: Player passes isPresentationRoot=true only for a modal stack root;
+// retain explicit dismiss there. Children use the default pushed-page policy.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // DESKTOP CONTRACT (2026-09-06): Publish the visible subscription ID through the
@@ -8,6 +17,7 @@ import SwiftUI
 // No nested title/description tap gestures or expansion state. Keep the compact
 // preview and both existing swipeActions unchanged; Up Next is a separate view.
 // AI CONTEXT — Views/PodcastDetailView.swift
+// REPLAY (Version 1.7, 2026-09-12): The Replay pill opens the active schedule; normal subscribe and episode swipe actions are retained.
 // Single "Podcast Detail" page, the merge of the old PodcastPreviewView and
 // SubscriptionEpisodesView. Works for every podcast state:
 //   • a search result not yet subscribed (init(result:))
@@ -69,6 +79,8 @@ import SwiftUI
 // for ID duplicates.
 
 struct PodcastDetailView: View {
+    /// Player also presents this page as the root of a modal navigation stack.
+    private var isPresentationRoot = false
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var playbackCoordinator: PlaybackCoordinator
@@ -125,7 +137,8 @@ struct PodcastDetailView: View {
     }
 
     /// From an existing real subscription ID, including Inactive subscriptions.
-    init(subscriptionID: UUID) {
+    init(subscriptionID: UUID, isPresentationRoot: Bool = false) {
+        self.isPresentationRoot = isPresentationRoot
         self.searchResult = nil
         self.directSubscriptionID = subscriptionID
         _viewModel = StateObject(wrappedValue: PodcastPreviewViewModel(feedURL: nil))
@@ -211,7 +224,7 @@ struct PodcastDetailView: View {
         .onboardingTip(.swipeActions, when: onboardingCoordinator.realSubscriptionCount > 0)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton(isPresentationRoot: isPresentationRoot)
         .preferredColorScheme(.dark)
         .toolbar { toolbarContent }
         .miniPlayerBar(subscriptionID: subscription?.id)
@@ -241,10 +254,6 @@ struct PodcastDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            NavigationBackButton()
-        }
-
         if isRealSubscription {
             // Feed refresh lives above the episode list (see `episodesHeader`), to
             // match the Subscriptions page. The toolbar keeps Share + Settings.
@@ -599,6 +608,11 @@ struct PodcastDetailView: View {
     private var subscribeRow: some View {
         HStack(spacing: AdaptiveEditorialMetrics(containerWidth: contentWidth).scaled(12)) {
             subscribeButton
+            if let sub = subscription, sub.autoArchiveSettings.replay?.enabled == true {
+                NavigationLink { PodcastReplayView(subscriptionID: sub.id) } label: {
+                    HStack { EpisodeStatusPill(kind: .replay); Text("Manage Podcast Replay"); Spacer(); Image(systemName: "chevron.right") }
+                }
+            }
             bellButton
         }
     }

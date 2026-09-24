@@ -1,3 +1,13 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (SettingsView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
+// AI PRESENTATION CONTRACT (Version 1.7): Keep explanations short and grouped
+// by control. Preserve defaults-versus-existing-podcast scope, safety limits,
+// bindings, option sets and sidebar section IDs when editing this copy.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -164,12 +174,7 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Settings")
         .responsiveInlineNavigationTitle("Settings")
-        .navigationBarBackButtonHidden(true)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
-        }
+        .appNavigationBackButton()
         .miniPlayerBar()
         .onboardingTip(.settings)
         .task {
@@ -355,7 +360,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Startup", id: .general)
         } footer: {
-            Text("Choose which screen Autohop opens to each time you launch it — the Player, your Subscriptions, or Discover. New users still see a quick welcome first.")
+            Text("Choose your starting screen: Player, Subscriptions or Discover. New users see a short welcome first.")
         }
         .listRowBackground(cardBackground)
     }
@@ -368,7 +373,7 @@ struct SettingsView: View {
                     Label("Background App Refresh is off", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.orange)
-                    Text("With it off, Autohop can only catch new episodes while you're listening or when you open the app — not on its own in the background. Turn it on so feeds keep updating. (Swiping Autohop closed in the App Switcher also stops background checks.)")
+                    Text("Turn on Background App Refresh to allow feed checks while Autohop is closed. iOS decides when these checks can run.\n\nSwiping Autohop away in the App Switcher also stops background checks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Open iOS Settings") {
@@ -394,7 +399,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Release Radar", id: .releaseRadar)
         } footer: {
-            Text("Autohop automatically adapts each podcast's refresh timing to its learned release schedule, recent empty checks, deferred backlog, network conditions, battery mode and device temperature.\n\nNotification Settings controls which podcasts notify you after Autohop discovers a new episode.")
+            Text("Autohop learns when each podcast releases episodes and adjusts its checks automatically. Network, battery and device conditions can affect timing.\n\nNotification Settings sets the notification default for future subscriptions. Existing podcasts keep their own choice.")
         }
         .listRowBackground(cardBackground)
     }
@@ -457,7 +462,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Auto Archive", id: .automation)
         } footer: {
-            Text("Auto Archive normally runs on its own (at most every 25 minutes). Auto Archive Activity explains every automatic decision. These defaults apply to every new podcast you subscribe to — existing podcasts keep their own settings.\n\nPlayed Episodes archives each episode after it finishes playing (or after a delay). Inactive Episodes archives downloaded-but-unplayed episodes that haven't been played within the set time of being downloaded. Episode Limit rotates automatic downloads while protecting manually downloaded and manually positioned Up Next episodes.")
+            Text("These defaults apply to new subscriptions. Existing podcasts keep their own settings.\n\nPlayed Episodes: remove downloads after playback, immediately or after a delay.\n\nInactive Episodes: remove unplayed downloads after the chosen time, measured from download.\n\nEpisode Limit: limit automatic downloads. Manual downloads and episodes you manually position in Up Next are protected.\n\nAuto Archive runs automatically, no more often than every 25 minutes. Open Auto Archive Activity to see its decisions.")
         }
         .listRowBackground(cardBackground)
     }
@@ -480,7 +485,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Downloading", id: .downloads)
         } footer: {
-            Text("New episodes download automatically so Up Next plays from files already on your device. Downloads use Wi-Fi and cellular by default — turn either network type off here if you want to restrict automatic downloads. Feed checks and transfer starts in the background remain subject to execution time granted by iOS.")
+            Text("New episodes download ahead, ready for Up Next. Choose whether automatic downloads can use Wi-Fi, cellular data or both.\n\nBackground checks and downloads depend on the time iOS allows.")
         }
         .listRowBackground(cardBackground)
     }
@@ -524,7 +529,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Controls", id: .playback)
         } footer: {
-            Text("Keep Screen Awake applies only while an episode is actively playing on the full-screen player. Disable Lock Screen Scrubbing to prevent accidental seeks when your phone is in your pocket. Up Next Badge shows a number on the Autohop app icon counting how many downloaded episodes are ready to play.\n\nSkip durations also apply to the Lock Screen and Control Centre buttons.")
+            Text("Keep Screen Awake: keep the full-screen player awake during playback.\n\nLock Screen Scrubbing: allow dragging the playback position on the Lock Screen. Turn off to avoid accidental skips.\n\nUp Next Badge: show the number of downloaded, ready-to-play episodes on the app icon.\n\nSkip durations also apply on the Lock Screen and in Control Centre.")
         }
         .listRowBackground(cardBackground)
     }
@@ -553,7 +558,7 @@ struct SettingsView: View {
         } header: {
             Text("Default Playback")
         } footer: {
-            Text("These defaults apply to every new subscription and to playback of feeds you haven't subscribed to. Changing them never affects podcasts you've already subscribed to — adjust those from each podcast's own settings.\n\nMono Audio centres presenters that were mixed toward the left or right. Vocal Boost lifts speech above music and background sound; Trim Silence removes quiet gaps. Audio processing options apply to audio episodes only.")
+            Text("Applies to new subscriptions and shows you have not subscribed to. Existing podcasts keep their own playback settings.\n\nMono Audio centres left- or right-sided voices. Vocal Boost makes speech clearer. Trim Silence removes quiet gaps. These processing options work with audio episodes only.")
         }
 
         Section {
@@ -575,7 +580,7 @@ struct SettingsView: View {
         } header: {
             Text("Default Episode Trim")
         } footer: {
-            Text("Start and end skip are measured in real file time, independent of playback speed — use them to jump intros and outros automatically.")
+            Text("Skip intros and outros automatically. Times refer to the original recording, regardless of playback speed.")
         }
     }
 
@@ -589,7 +594,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Sync", id: .sync)
         } footer: {
-            Text("On for new installs so your subscriptions, playback position, per-podcast settings, Up Next order, history and stats can stay current across your devices. Existing installs keep their previous choice.\n\nSync uses your private iCloud database across iPhones signed into the same iCloud account. You can turn it off at any time; downloaded media and global app settings remain on each device.")
+            Text("Keep subscriptions, podcast settings, Up Next order, playback position, history and stats aligned through your private iCloud database. Use the same iCloud account on your devices.\n\nDownloads and global app settings stay on each device. You can turn sync off at any time.\n\nSync starts on for new installs; existing installs keep their saved choice.")
         }
         .listRowBackground(cardBackground)
     }
@@ -614,7 +619,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Diagnostics", id: .diagnostics)
         } footer: {
-            Text("Normal diagnostics retain refresh-cycle summaries, background wakes, backlog, downloads, failures and playback recovery with low routine overhead. Detailed Refresh Trace adds per-feed decisions for short Release Radar investigations and creates a larger log. Disable diagnostics when testing is complete.")
+            Text("Diagnostic Log records refresh, download and playback troubleshooting information.\n\nDetailed Refresh Trace adds individual feed decisions and creates a larger log. Use it for short investigations, then turn diagnostics off.")
         }
         .listRowBackground(cardBackground)
     }
@@ -675,6 +680,8 @@ struct SettingsView: View {
             .disabled(subscriptionStore.subscriptions.isEmpty)
         } header: {
             shortcutHeader("Subscriptions", id: .podcasts)
+        } footer: {
+            Text("Add RSS Feed: subscribe using a podcast feed link.\n\nImport or export OPML to move your subscription list between podcast apps.")
         }
         .listRowBackground(cardBackground)
     }
@@ -707,7 +714,7 @@ struct SettingsView: View {
         } header: {
             shortcutHeader("Contact", id: .support)
         } footer: {
-            Text("Have a question, found a bug, or want to share feedback? Get in touch, or join the TestFlight beta to try prerelease Autohop builds.")
+            Text("Get help or share feedback. Join TestFlight to try upcoming Autohop updates.")
         }
         .listRowBackground(cardBackground)
     }

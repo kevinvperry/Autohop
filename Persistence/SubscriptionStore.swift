@@ -1,7 +1,15 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Foreign-identity rejection remains unchanged; bounded change-driven diagnostics
+// deduplicate repeated encounters per remote identity without deleting remote records.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Combine
 import Foundation
 
+// BINGE (Version 1.7): successful local and synced companion starts add durable
+// per-reservation evidence; normal playback history before a reservation is ignored.
 // AI CONTEXT — Persistence/SubscriptionStore.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay saves are equality-guarded before published mutations. Completion/archive resolve once; remote terminal events predating a reservation cannot resolve the new pass.
 // The single persistent store for ALL subscription + episode data. The current
 // app store is Application Support/Autohop/autohop.sqlite; legacy JSON at
 // subscriptions.json is imported once. The SQLite directory/store is marked
@@ -209,7 +217,12 @@ public final class SubscriptionStore: ObservableObject {
     /// immediately after construction).
     public init(deferredLoadDatabasePath: String?) {
         self.legacyFileURL = nil
-        self.database = try? AutohopDatabase(path: deferredLoadDatabasePath ?? Self.defaultDatabasePath())
+        do {
+            self.database = try AutohopDatabase(path: deferredLoadDatabasePath ?? Self.defaultDatabasePath())
+        } catch {
+            self.database = nil
+            AppLogger.shared.error("storage.databaseOpenFailed", "Deferred library database could not open", metadata: ["error": error.localizedDescription], alwaysPersist: true)
+        }
     }
 
     /// Finishes a deferred-load init: the row fetch + payload decode (the
@@ -464,7 +477,7 @@ public final class SubscriptionStore: ObservableObject {
         healed.playedState = projection.playedState
         healed.wasCompleted = projection.wasCompleted
         healed.lastPlayedAt = projection.lastPlayedAt
-        if projection.playedState == .archived || projection.playedState == .played {
+        if (projection.playedState == .archived || projection.playedState == .played) && subscription(id: subscriptionID)?.autoArchiveSettings.replay?.contains(episode) != true {
             healed.downloadState = .notDownloaded
             healed.localFileURL = nil
             healed.localFileName = nil
@@ -704,8 +717,58 @@ public final class SubscriptionStore: ObservableObject {
 
     public func updateAutoArchiveSettings(subscriptionID: UUID, settings: AutoArchiveSettings) {
         guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        var settings = settings
+        settings.replay = PodcastReplay.merged(subscriptions[index].autoArchiveSettings.replay, settings.replay)
         subscriptions[index].autoArchiveSettings = settings
         save()
+    }
+
+    // AI CONTEXT — Replay journals use the existing durable subscription payload.
+    // Binge starts are recorded only after successful playback; the existing
+    // episode-state channel carries companion starts to the scheduling owner.
+    // Merge rather than replace so remote resolutions/config edits cannot erase
+    // owner progress. Persist before coordinator dispatches any transfer.
+    public func recordPodcastReplayStart(subscriptionID: UUID, episode: Episode, at date: Date = Date()) {
+        guard var replay = subscription(id: subscriptionID)?.autoArchiveSettings.replay else { return }
+        replay.recordStart(of: episode, at: date)
+        updatePodcastReplay(subscriptionID: subscriptionID, replay: replay)
+    }
+
+    public func updatePodcastReplay(subscriptionID: UUID, replay: PodcastReplay) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == subscriptionID }) else { return }
+        let merged = PodcastReplay.merged(subscriptions[index].autoArchiveSettings.replay, replay)
+        let changed = merged != subscriptions[index].autoArchiveSettings.replay
+        let missing = (merged?.outstanding ?? []).filter { release in
+            !subscriptions[index].episodes.contains { $0.audioURL == release.episode.audioURL }
+        }
+        // Equality guard precedes the @Published array mutation: otherwise each
+        // reconciliation schedules another reconciliation forever, even at rest.
+        guard changed || !missing.isEmpty else { return }
+        subscriptions[index].autoArchiveSettings.replay = merged
+        for release in missing {
+            var episode = release.episode; episode.subscriptionID = subscriptionID
+            subscriptions[index].episodes.append(episode)
+        }
+        save()
+    }
+
+    public func setPodcastReplayPin(episode: Episode, pin: QueuePinState?) {
+        guard var replay = subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay,
+              replay.enabled,
+              let index = replay.releases.firstIndex(where: { $0.key == episode.audioURL.absoluteString && !$0.resolved }) else { return }
+        replay.releases[index].pin = pin
+        replay.releases[index].pinEditedAt = Date()
+        replay.releases[index].pinEditID = UUID().uuidString
+        updatePodcastReplay(subscriptionID: episode.subscriptionID, replay: replay)
+    }
+
+    public func resolvePodcastReplay(subscriptionID: UUID, episode: Episode) {
+        guard var replay = subscription(id: subscriptionID)?.autoArchiveSettings.replay,
+              let index = replay.releases.firstIndex(where: { $0.key == episode.audioURL.absoluteString }),
+              !replay.releases[index].resolved else { return }
+        replay.releases[index].resolved = true
+        replay.releases[index].resolvedAt = Date()
+        updatePodcastReplay(subscriptionID: subscriptionID, replay: replay)
     }
 
     /// Creates an inactive, browse-only subscription from a search preview.
@@ -1073,12 +1136,15 @@ public final class SubscriptionStore: ObservableObject {
         localFileURL: URL,
         protectFromEpisodeLimit: Bool = false
     ) {
+        let isReplay = subscription(id: subscriptionID).flatMap { sub in
+            sub.episodes.first { $0.id == episodeID }.map { sub.autoArchiveSettings.replay?.contains($0) == true }
+        } ?? false
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.downloadState = .downloaded
             $0.localFileURL = localFileURL
             $0.localFileName = localFileURL.lastPathComponent
             $0.playedState = .unplayed
-            $0.wasCompleted = false
+            if !isReplay { $0.wasCompleted = false }
             if $0.downloadedAt == nil { $0.downloadedAt = Date() }
             // Automatic retries/repairs must not erase an earlier explicit
             // user decision. Protection ends only when the file is disposed.
@@ -1125,6 +1191,9 @@ public final class SubscriptionStore: ObservableObject {
             // auto-archive inactivity clock wants (it resets on recent play).
             // Syncs via EpisodeSyncState.lastPlayedAt.
             $0.lastPlayedAt = now
+        }
+        if let episode = episode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            recordPodcastReplayStart(subscriptionID: subscriptionID, episode: episode, at: now)
         }
     }
 
@@ -1174,6 +1243,9 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func markEpisodePlayed(subscriptionID: UUID, episodeID: UUID) {
+        if let episode = episode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            resolvePodcastReplay(subscriptionID: subscriptionID, episode: episode)
+        }
         let now = Date()
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.downloadState = .notDownloaded
@@ -1195,6 +1267,7 @@ public final class SubscriptionStore: ObservableObject {
         _ companionEpisode: Episode,
         preferredSubscriptionID: UUID
     ) -> Bool {
+        resolvePodcastReplay(subscriptionID: preferredSubscriptionID, episode: companionEpisode)
         guard let location = companionEpisodeLocation(
             for: companionEpisode,
             preferredSubscriptionID: preferredSubscriptionID
@@ -1234,6 +1307,7 @@ public final class SubscriptionStore: ObservableObject {
         _ companionEpisode: Episode,
         preferredSubscriptionID: UUID
     ) -> Bool {
+        resolvePodcastReplay(subscriptionID: preferredSubscriptionID, episode: companionEpisode)
         guard let location = companionEpisodeLocation(
             for: companionEpisode,
             preferredSubscriptionID: preferredSubscriptionID
@@ -1250,6 +1324,7 @@ public final class SubscriptionStore: ObservableObject {
         episode.localFileURL = nil
         episode.localFileName = nil
         episode.playedState = .archived
+        if subscriptions[location.subscription].autoArchiveSettings.replay != nil { episode.lastPlayedAt = Date() }
         episode.wasCompleted = false
         episode.isManualDownloadProtected = false
         subscriptions[location.subscription].episodes[location.episode] = episode
@@ -1632,6 +1707,9 @@ public final class SubscriptionStore: ObservableObject {
     }
 
     public func markEpisodeArchived(subscriptionID: UUID, episodeID: UUID) {
+        if let episode = episode(subscriptionID: subscriptionID, episodeID: episodeID) {
+            resolvePodcastReplay(subscriptionID: subscriptionID, episode: episode)
+        }
         updateEpisode(subscriptionID: subscriptionID, episodeID: episodeID) {
             $0.downloadState = .notDownloaded
             $0.localFileURL = nil
@@ -1866,6 +1944,23 @@ public final class SubscriptionStore: ObservableObject {
         episode.wasCompleted = merged.wasCompleted
         episode.lastPlayedAt = merged.lastPlayedAt
 
+        if episode.playedState == .playing, let started = episode.lastPlayedAt {
+            recordPodcastReplayStart(subscriptionID: subscriptions[location.sub].id, episode: episode, at: started)
+        }
+
+        // Replay completion can be authored by TV's existing episode-state channel.
+        // Never mistake pre-reservation listening history for this new pass.
+        if let replay = subscriptions[location.sub].autoArchiveSettings.replay,
+           let release = replay.outstanding.first(where: { $0.key == episode.audioURL.absoluteString }),
+           episode.playedState == .played || episode.playedState == .archived {
+            let eventDate = max(remote.$playedState.modifiedAt ?? .distantPast, remote.lastPlayedAt ?? .distantPast)
+            if eventDate >= (release.reservedAt ?? replay.createdAt) {
+                resolvePodcastReplay(subscriptionID: subscriptions[location.sub].id, episode: episode)
+            } else {
+                episode.playedState = originalEpisode.playedState
+            }
+        }
+
         // A remote played/archived merge means the episode finished on another
         // device; discard this device's local download to match the local
         // markEpisodePlayed/markEpisodeArchived paths and the self-heal branch in
@@ -1875,7 +1970,8 @@ public final class SubscriptionStore: ObservableObject {
         // onEpisodeFileShouldDelete (installed by DownloadCoordinator) since the
         // store can't reach DownloadManager directly — mirroring the active
         // player identity provider.
-        if merged.playedState == .played || merged.playedState == .archived {
+        if (merged.playedState == .played || merged.playedState == .archived)
+            && subscriptions[location.sub].autoArchiveSettings.replay?.contains(episode) != true {
             let hadLocalDownload = episode.downloadState == .downloaded
                 || episode.localFileURL != nil
                 || episode.localFileName != nil
@@ -1959,15 +2055,14 @@ public final class SubscriptionStore: ObservableObject {
         // between identities. Otherwise query order lets an obsolete record reset
         // every field on the active subscription at each launch/foreground prime.
         if identityIndex == nil, let feedIndex {
-            AppLogger.shared.warning(
+            AppLogger.shared.recordState(
                 "subscriptions.foreignIdentitySettingsIgnored",
-                "Ignored subscription settings from a different identity for an existing feed",
                 metadata: [
                     "activeSubscriptionID": subscriptions[feedIndex].id.uuidString,
                     "remoteSubscriptionID": remote.subscriptionID.uuidString,
                     "feedHost": remote.feedURL.host ?? "unknown"
                 ],
-                alwaysPersist: true
+                identity: remote.subscriptionID.uuidString
             )
             return .unchanged
         }
@@ -2436,33 +2531,13 @@ public final class SubscriptionStore: ObservableObject {
     /// ordering. This deliberately excludes titles, artwork, descriptions,
     /// playback preferences, refresh stats, and other broad store mutations.
     private func queueAffectingSignature() -> [String] {
-        subscriptions
-            .sorted { $0.priorityRank < $1.priorityRank }
-            .flatMap { subscription in
-                let episodes = subscription.episodes.isEmpty
-                    ? subscription.latestEpisode.map { [$0] } ?? []
-                    : subscription.episodes
-                return episodes
-                    .filter {
-                        $0.downloadState == .downloaded
-                            && ($0.localFileURL != nil || $0.localFileName != nil)
-                            && $0.playedState != .played
-                            && $0.playedState != .archived
-                    }
-                    .map { episode in
-                    [
-                        subscription.id.uuidString,
-                        "\(subscription.priorityRank)",
-                        episode.id.uuidString,
-                        episode.title,
-                        episode.downloadState.rawValue,
-                        episode.localFileURL?.path ?? "",
-                        episode.localFileName ?? "",
-                        episode.playedState.rawValue,
-                        "\(episode.publishedAt?.timeIntervalSince1970 ?? 0)"
-                    ].joined(separator: "|")
-                    }
-            }
+        QueueService().downloadedQueue(from: subscriptions).map { episode in
+            [episode.subscriptionID.uuidString, episode.id.uuidString,
+             episode.downloadState.rawValue, episode.playedState.rawValue,
+             episode.localFileName ?? "",
+             subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay?.sessionID.uuidString ?? "",
+             subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay?.releases.first(where: { $0.key == episode.audioURL.absoluteString }).map { "\($0.pin?.rawValue ?? "")|\($0.pinEditedAt?.timeIntervalSince1970 ?? 0)" } ?? ""].joined(separator: "|")
+        }
     }
 
     private func membershipSignature() -> [String] {

@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Verify field-aware route/GUID pseudonyms, correlation and repeated-export idempotence
+// alongside credential protections.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 // AI CONTEXT — Tests/LogRedactionTests.swift. Covers AppLogger.redactSensitiveText
 // (AH-P2-015): signed query strings, URL user-info/fragments, key=value
 // credentials, and bearer tokens must be stripped from diagnostic log text.
@@ -11,7 +16,37 @@ import XCTest
 @testable import Autohop
 #endif
 
+// AI: Export must contain a snapshot queued before capture; identical state is bounded.
 final class LogRedactionTests: XCTestCase {
+    func testStateCapturePrecedesExportAndDeduplicates() {
+        let logger = AppLogger()
+        let event = "test.snapshot." + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        logger.recordState(event, metadata: ["rows": "0"])
+        logger.recordState(event, metadata: ["rows": "0"])
+        logger.recordState(event, metadata: ["rows": "2"])
+        let report = logger.redactedContents()
+        XCTAssertEqual(report.components(separatedBy: event).count - 1, 2)
+        XCTAssertTrue(report.contains("Logger health"))
+        XCTAssertTrue(report.contains("writeFailures="))
+        XCTAssertTrue(report.contains("rows=2"))
+        logger.recordState(event, metadata: ["rows": "3"], identity: "first")
+        logger.recordState(event, metadata: ["rows": "3"], identity: "second")
+        logger.recordState(event, metadata: ["rows": "3"], identity: "first")
+        XCTAssertEqual(logger.redactedContents().components(separatedBy: event + ":").count - 1, 4)
+    }
+
+
+    func testRouteNamesAndNonUUIDGUIDsAreStableAndExportIsIdempotent() {
+        let raw = "audioSessionOutput=Alex’s AirPods Pro #2 audioSessionOutputType=BluetoothA2DPOutput guid=Publisher-Private-123 name=history:[id:abc]|guid:Publisher-Private-123"
+        let once = AppLogger.redactSensitiveText(raw)
+        XCTAssertFalse(once.contains("Alex"))
+        XCTAssertFalse(once.contains("Publisher-Private-123"))
+        XCTAssertTrue(once.contains("audioSessionOutputType=BluetoothA2DPOutput"))
+        XCTAssertEqual(once, AppLogger.redactSensitiveText(once))
+        let guidParts = once.components(separatedBy: "[guid:")
+        XCTAssertEqual(guidParts.count, 3)
+        XCTAssertEqual(guidParts[1].components(separatedBy: "]")[0], guidParts[2].components(separatedBy: "]")[0])
+    }
 
     func testStripsQueryString() {
         let out = AppLogger.redactSensitiveText("GET https://cdn.example.com/a.mp3?token=secret123&exp=999 ok")

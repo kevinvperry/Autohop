@@ -1,3 +1,8 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Observe distinct iCloudSyncEnabled values separately from general settings changes.
+// Other settings still refresh diagnostics and Sleep Schedule normally.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Combine
 import Foundation
 import UIKit
@@ -436,6 +441,21 @@ final class AppRuntimeWorkflow {
 
     private func installSettingsReactions() {
         settingsCoordinator.$appSettings
+            .map(\.iCloudSyncEnabled)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] enabled in
+                // @Published emits before SettingsViewModel writes through.
+                // Keep the existing deferred lifecycle boundary so start() sees
+                // the committed store value, and discard superseded toggles.
+                self?.lifecycle.runMaintenance { [weak self] in
+                    guard let self, self.settingsStore.appSettings.iCloudSyncEnabled == enabled else { return }
+                    self.syncCoordinator.syncEnabledChanged(enabled)
+                }
+            }
+            .store(in: &settingsCancellables)
+
+        settingsCoordinator.$appSettings
             .dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -443,9 +463,6 @@ final class AppRuntimeWorkflow {
                     guard let self else { return }
                     self.syncDiagnosticLogging()
                     self.syncSleepScheduleConfig()
-                    self.syncCoordinator.syncEnabledChanged(
-                        self.settingsStore.appSettings.iCloudSyncEnabled
-                    )
                 }
             }
             .store(in: &settingsCancellables)

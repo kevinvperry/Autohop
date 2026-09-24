@@ -1,7 +1,13 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Expose pin identity sets to AutoArchiveCoordinator; protection reads must not scan
+// catalogues or modify ordering.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 import Combine
 import Foundation
 
 // AI CONTEXT — App/QueueCoordinator.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay pins merge from shared release records before local overrides. Refresh availability even when IDs are unchanged; publish session identity with queue snapshots.
 //
 // PURPOSE / OWNERSHIP:
 // Stage 4 owner of the iPhone downloaded Priority Stack projection. It owns the
@@ -40,6 +46,7 @@ final class QueueCoordinator: ObservableObject {
     private let showBadge: () -> Bool
     private let logger: AppLogger
     private let pinsFileURL: URL?
+    private var lastPublishedReplaySessions: [UUID: UUID] = [:]
     private var lastPublishedIDs: [UUID] = []
     private var lastPublishedPinStates: [UUID: QueuePinState] = [:]
     private var recomputeTask: Task<Void, Never>?
@@ -145,6 +152,12 @@ final class QueueCoordinator: ObservableObject {
         pins.playLastIDs.contains(episode.id)
     }
 
+    // AI: Read live pin identities directly; archive passes must not scan every
+    // catalogue to reconstruct this set for each subscription.
+    var episodeLimitProtectedIDs: Set<UUID> {
+        Set(pins.playNextIDs).union(pins.playLastIDs)
+    }
+
     func isProtectedFromEpisodeLimit(_ episodeID: UUID) -> Bool {
         pins.playNextIDs.contains(episodeID)
             || pins.playLastIDs.contains(episodeID)
@@ -153,6 +166,7 @@ final class QueueCoordinator: ObservableObject {
     func playNext(_ episode: Episode) {
         let current = currentEpisode()
         guard current?.id != episode.id else { return }
+        subscriptionStore.setPodcastReplayPin(episode: episode, pin: .playNext)
         pins.playLastIDs.removeAll { $0 == episode.id }
         pins.playNextIDs.removeAll { $0 == episode.id }
         pins.playNextIDs.insert(episode.id, at: 0)
@@ -171,6 +185,7 @@ final class QueueCoordinator: ObservableObject {
     func playLast(_ episode: Episode) {
         let current = currentEpisode()
         guard current?.id != episode.id else { return }
+        subscriptionStore.setPodcastReplayPin(episode: episode, pin: .playLast)
         pins.playNextIDs.removeAll { $0 == episode.id }
         pins.playLastIDs.removeAll { $0 == episode.id }
         pins.playLastIDs.append(episode.id)
@@ -192,6 +207,7 @@ final class QueueCoordinator: ObservableObject {
             wasNext: pins.playNextIDs.contains(episode.id),
             wasLast: pins.playLastIDs.contains(episode.id)
         )
+        subscriptionStore.setPodcastReplayPin(episode: episode, pin: nil)
         guard result.wasNext || result.wasLast else { return result }
         pins.playNextIDs.removeAll { $0 == episode.id }
         pins.playLastIDs.removeAll { $0 == episode.id }
@@ -209,6 +225,9 @@ final class QueueCoordinator: ObservableObject {
     }
 
     func removePins(for episodeID: UUID) {
+        if let episode = episodes.first(where: { $0.id == episodeID }) {
+            subscriptionStore.setPodcastReplayPin(episode: episode, pin: nil)
+        }
         let previous = pins
         pins.playNextIDs.removeAll { $0 == episodeID }
         pins.playLastIDs.removeAll { $0 == episodeID }
@@ -229,6 +248,19 @@ final class QueueCoordinator: ObservableObject {
     func recompute(reason: String) {
         let operationStartedAt = CFAbsoluteTimeGetCurrent()
         let base = queueService.downloadedQueue(from: subscriptionStore.subscriptions)
+        // Shared Replay pins replace installation-local pin values by media identity.
+        let released = subscriptionStore.subscriptions.flatMap { sub -> [(Episode, PodcastReplay.Release)] in
+            guard let replay = sub.autoArchiveSettings.replay, replay.enabled else { return [] }
+            return sub.replayQueueEpisodes.compactMap { ep in replay.outstanding.first { $0.key == ep.audioURL.absoluteString }.map { (ep, $0) } }
+        }
+        let replayIDs = Set(released.map { $0.0.id })
+        pins.playNextIDs.removeAll { replayIDs.contains($0) }
+        pins.playLastIDs.removeAll { replayIDs.contains($0) }
+        let sharedPins = released.sorted {
+            ($0.1.pinEditedAt ?? .distantPast, $0.1.pinEditID ?? "") < ($1.1.pinEditedAt ?? .distantPast, $1.1.pinEditID ?? "")
+        }
+        pins.playNextIDs.insert(contentsOf: sharedPins.reversed().filter { $0.1.pin == .playNext }.map { $0.0.id }, at: 0)
+        pins.playLastIDs.append(contentsOf: sharedPins.filter { $0.1.pin == .playLast }.map { $0.0.id })
         let computed = QueueModel.applyPins(base, pins: pins)
         let computedIDs = computed.map(\.id)
         var computedPinStates: [UUID: QueuePinState] = [:]
@@ -239,7 +271,12 @@ final class QueueCoordinator: ObservableObject {
                 computedPinStates[episode.id] = .playLast
             }
         }
-        let compositionChanged = computedIDs != lastPublishedIDs
+        let replaySessions = Dictionary(uniqueKeysWithValues: computed.compactMap { episode -> (UUID, UUID)? in
+            guard let replay = subscriptionStore.subscription(id: episode.subscriptionID)?.autoArchiveSettings.replay,
+                  replay.contains(episode) else { return nil }
+            return (episode.id, replay.sessionID)
+        })
+        let compositionChanged = replaySessions != lastPublishedReplaySessions || computedIDs != lastPublishedIDs
             || computedPinStates != lastPublishedPinStates
         let resolvedUpNext: Episode? = {
             guard let current = currentEpisode() else { return computed.first }
@@ -247,8 +284,9 @@ final class QueueCoordinator: ObservableObject {
         }()
         let upNextChanged = resolvedUpNext?.id != upNextEpisode?.id
 
+        if episodes != computed { episodes = computed }
         if compositionChanged {
-            episodes = computed
+            lastPublishedReplaySessions = replaySessions
             lastPublishedIDs = computedIDs
             lastPublishedPinStates = computedPinStates
             let subscriptionsByID = Dictionary(
@@ -261,6 +299,7 @@ final class QueueCoordinator: ObservableObject {
                     podcastTitle: subscription?.title,
                     podcastArtworkURL: subscription?.artworkURL
                 )
+                if let replay = subscription?.autoArchiveSettings.replay, replay.contains(episode) { entry.replaySessionID = replay.sessionID }
                 if pins.playNextIDs.contains(episode.id) {
                     entry.pinState = .playNext
                 } else if pins.playLastIDs.contains(episode.id) {
@@ -270,9 +309,7 @@ final class QueueCoordinator: ObservableObject {
             })
             publishBadge()
         }
-        if upNextChanged {
-            upNextEpisode = resolvedUpNext
-        }
+        if upNextEpisode != resolvedUpNext { upNextEpisode = resolvedUpNext }
         if compositionChanged || upNextChanged {
             logger.info("queue.upNextRefresh", "Resolved Up Next episode", metadata: [
                 "reason": reason,

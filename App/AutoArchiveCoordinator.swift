@@ -1,8 +1,15 @@
+// AI CONTEXT — Diagnostic repairs, 20 September 2026.
+// Episode Limit protection reads live pin IDs directly, without per-subscription whole-
+// library scans. Recheck after awaited archives so new pins/current playback remain
+// protected.
+// Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 //
 //  AutoArchiveCoordinator.swift
 //  Autohop
 //
 //  AI CONTEXT
+// REPLAY (Version 1.7, 2026-09-12): Replay uses Episode Limit as admission capacity. Unresolved reservations are protected from both inactivity and count eviction, including retained releases after disable.
 //  Stage 8 AppState decomposition owner for automatic episode archival.
 //  This coordinator is the single owner of the 25-minute execution gate, the
 //  After Playing / Inactive Episodes / Episode Limit rules, active-playback and
@@ -120,6 +127,7 @@ final class AutoArchiveCoordinator: ObservableObject {
         incomingEpisodeID: UUID
     ) async {
         guard let subscription = subscriptionStore.subscription(id: subscriptionID) else { return }
+        guard subscription.autoArchiveSettings.replay?.enabled != true, subscription.autoArchiveSettings.replay?.outstanding.isEmpty != false else { return }
         let limit = subscription.autoArchiveSettings.episodeLimit.rawValue
         guard limit > 0 else { return }
 
@@ -188,7 +196,9 @@ final class AutoArchiveCoordinator: ObservableObject {
 
         for subscription in subscriptions {
             let settings = subscription.autoArchiveSettings
-            let episodes = subscription.episodes.filter { $0.playedState != .archived }
+            let episodes = subscription.episodes.filter {
+                $0.playedState != .archived && settings.replay?.contains($0) != true
+            }
             let cutoff = subscription.subscribedAt
             func isBacklog(_ episode: Episode) -> Bool {
                 guard let cutoff, let published = episode.publishedAt else { return false }
@@ -258,7 +268,7 @@ final class AutoArchiveCoordinator: ObservableObject {
             }
 
             let limit = settings.episodeLimit.rawValue
-            if limit > 0 {
+            if limit > 0 && settings.replay?.enabled != true && settings.replay?.outstanding.isEmpty != false {
                 limitBacklogProtected += subscription.episodes.filter {
                     $0.playedState != .archived && isBacklog($0)
                 }.count
@@ -278,6 +288,8 @@ final class AutoArchiveCoordinator: ObservableObject {
                         || $0.downloadState == .downloaded
                 }.count
                 for episode in candidates {
+                    // Earlier archives may yield; a new pin/current episode wins.
+                    guard !episodeLimitProtectedIDs().contains(episode.id) else { continue }
                     await archive(
                         episode,
                         subscription: subscription,
@@ -364,13 +376,9 @@ final class AutoArchiveCoordinator: ObservableObject {
         if let activeEpisodeID {
             protected.insert(activeEpisodeID)
         }
-        guard let queueCoordinator else { return protected }
-        for subscription in subscriptionStore.subscriptions {
-            for episode in subscription.episodes
-            where queueCoordinator.isProtectedFromEpisodeLimit(episode.id) {
-                protected.insert(episode.id)
-            }
-        }
+        // Read live pins on each call so an awaited archive cannot leave a stale
+        // protection snapshot. Cost depends on pins, not the entire catalogue.
+        protected.formUnion(queueCoordinator?.episodeLimitProtectedIDs ?? [])
         return protected
     }
 

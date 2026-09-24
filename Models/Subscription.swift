@@ -1,6 +1,7 @@
 import Foundation
 
 // AI CONTEXT — Models/Subscription.swift
+// REPLAY (Version 1.7, 2026-09-12): Optional AutoArchiveSettings.replay carries the synced schedule and journal. Missing legacy data decodes disabled. Download Feed Filters now sync (the older local-only note below is historical).
 // Value types and pure refresh intelligence for one subscribed podcast and its
 // per-podcast policies. All persisted by SubscriptionStore except transient
 // scheduling/priority predictions. Contains:
@@ -245,6 +246,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     /// Per-podcast automation stored alongside the other subscription automation
     /// settings so it automatically participates in existing persistence and
     /// CloudKit field-level sync. It is not itself an archive rule.
+    public var replay: PodcastReplay? = nil
     public var playInstantEnabled: Bool
 
     public static let `default` = AutoArchiveSettings(
@@ -267,7 +269,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case afterPlayed, afterInactive, episodeLimit, playInstantEnabled
+        case afterPlayed, afterInactive, episodeLimit, playInstantEnabled, replay
     }
 
     public init(from decoder: Decoder) throws {
@@ -276,6 +278,7 @@ public struct AutoArchiveSettings: Equatable, Codable, Sendable {
         afterInactive = try container.decodeIfPresent(AfterInactive.self, forKey: .afterInactive) ?? .days7
         episodeLimit = try container.decodeIfPresent(EpisodeLimit.self, forKey: .episodeLimit) ?? .one
         playInstantEnabled = try container.decodeIfPresent(Bool.self, forKey: .playInstantEnabled) ?? false
+        replay = try container.decodeIfPresent(PodcastReplay.self, forKey: .replay)
     }
 }
 
@@ -3291,6 +3294,9 @@ public struct Subscription: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
+// AI INVARIANT — Filters are opt-in for new/missing settings. Preserve persisted
+// on/off values and saved rules verbatim; an empty enabled group is not proof
+// that the user never configured it. Do not normalise existing feeds to defaults.
 public struct DownloadFilterSettings: Equatable, Codable, Sendable {
     public var durationEnabled: Bool
     public var titleEnabled: Bool

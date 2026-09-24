@@ -2,6 +2,7 @@
 import PackageDescription
 
 // AI CONTEXT — Package.swift
+// REPLAY (Version 1.7, 2026-09-12): PodcastReplay.swift belongs to the shared AutohopCore source list so TV and iOS decode and merge the same schedule journal.
 // SwiftPM manifest used ONLY for the AutohopCore library + the command-line
 // smoke-test executables (RSSParserSmoke, OPMLSmoke, SubscriptionStoreSmoke,
 // DownloadManagerSmoke, StatsSmoke — run via `swift run <name>`). The iOS app
@@ -81,6 +82,7 @@ let package = Package(
             sources: [
                 "Models/Chapter.swift",
                 "Models/Subscription.swift",
+                "Models/PodcastReplay.swift",
                 "Models/Episode.swift",
                 "Models/AppSettings.swift",
                 "Models/ListeningHistory.swift",

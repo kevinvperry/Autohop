@@ -1,3 +1,10 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (DiscoverView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // CATEGORY ARTWORK CONTRACT (2026-09-06): DiscoverEpisodeHeroCard is shared with
@@ -5,8 +12,8 @@ import SwiftUI
 // CachedArtworkImage, preserving its validation/cache and target-size downsampling.
 // Do not replace download-failure fallback with URL nil-coalescing alone.
 
-// AI CONTEXT — Views/DiscoverView.swift ("Discover" sheet — opened by the +
-// button on the Subscriptions toolbar AND the top Menu item; parent page of
+// AI CONTEXT — Views/DiscoverView.swift ("Discover" pushed page — opened from
+// Subscriptions and the top Menu item, with welcome/widget/desktop routes; parent page of
 // Podcast Search, which is now reachable only through the search shortcut
 // here). Browse-and-explore page for finding
 // new podcasts. FEED ORDER (5 heroes, 19 rails, 4/5/5/5 cadence):
@@ -69,7 +76,8 @@ import SwiftUI
 // and storefront picker consume the same container-width editorial metrics as
 // page content. Phone sizes remain unchanged; wide/expansive windows increase
 // type, symbols and hit targets. Do not revert them to unqualified toolbar
-// defaults or use UIScreen/device-family checks.
+// defaults or use UIScreen/device-family checks. Back now follows the shared
+// iOS 27 compatibility policy; its native sizing is system-owned.
 struct DiscoverView: View {
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @EnvironmentObject private var onboardingCoordinator: OnboardingCoordinator
@@ -238,11 +246,8 @@ struct DiscoverView: View {
         }
         .navigationTitle("Discover")
         .responsiveInlineNavigationTitle("Discover")
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton()
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 ChartCountryPicker(
                     selectionCode: $storedCountryCode,

@@ -1,3 +1,12 @@
+// AI CONTEXT — Shared Back policy, 20 September 2026.
+// PURPOSE: appNavigationBackButton owns both native visibility and custom chrome
+// to avoid the reported iOS 27 double Back. Use native Back for pushed pages on
+// iOS 27+, branded ambient dismiss on older systems and all explicit modal roots.
+// COLLABORATORS: Migrated destinations, Player modal routes, NavigationChromeTests.
+// INVARIANTS: Never pop an outer path for child Back; native-only pages remain
+// native. Subscriptions keeps Menu. Modal roots have no native parent to pop.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md; device gestures remain unverified.
+
 import SwiftUI
 
 // DESKTOP/MINI-PLAYER CONTRACT (2026-09-06): Root owns desktop NavigationPath routes.
@@ -9,6 +18,7 @@ import SwiftUI
 // MILESTONE: Suppress all Quick Tip hosts before presenting first subscription;
 // resume on sheet dismissal. Supply the shared app environment to the sheet.
 // AI CONTEXT — Views/RootView.swift
+// REPLAY (Version 1.7, 2026-09-12): Replay notification routes open the current subscription editor. Session checks occur in the coordinator before notification actions mutate state.
 // Navigation root. KEY ARCHITECTURE: PlayerView is the PERMANENT root of the
 // NavigationStack — it is never torn down, so AVFoundation state survives all
 // navigation; every other page (starting with PodcastsView via AppRoute) is
@@ -73,6 +83,7 @@ import SwiftUI
 enum AppRoute: Hashable {
     case desktop(DesktopDestination)
     case podcasts
+    case podcastReplay(subscriptionID: UUID)
     case stats(ListeningRecapPeriod?)
     case sleepSchedule
     case discover
@@ -121,7 +132,7 @@ extension EnvironmentValues {
 
 }
 
-/// Canonical Back control for pushed iOS-family pages. It always dismisses the
+/// Branded Back control for older systems and modal navigation roots. Dismiss the
 /// nearest SwiftUI navigation destination; it must never mutate RootView's
 /// outer NavigationPath directly because a nearer child path may own the page.
 struct NavigationBackButton: View {
@@ -133,6 +144,36 @@ struct NavigationBackButton: View {
                 .responsiveToolbarBackSymbol()
         }
         .accessibilityLabel("Back")
+    }
+}
+
+/// Keep ownership of Back in one place. iOS 27 can display its native Back
+/// alongside a custom leading item despite navigationBarBackButtonHidden(true).
+/// Use the native navigation control there; retain the existing brand control
+/// on older systems. Modal stack roots retain an explicit dismiss control because
+/// the system has no preceding destination there. Never mutate the outer path.
+private struct AppNavigationBackButtonModifier: ViewModifier {
+    var isPresentationRoot: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27, *), !isPresentationRoot {
+            content.navigationBarBackButtonHidden(false)
+        } else {
+            content
+                .navigationBarBackButtonHidden(true)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        NavigationBackButton()
+                    }
+                }
+        }
+    }
+}
+
+extension View {
+    /// The sole Back policy for pages that previously supplied a custom button.
+    func appNavigationBackButton(isPresentationRoot: Bool = false) -> some View {
+        modifier(AppNavigationBackButtonModifier(isPresentationRoot: isPresentationRoot))
     }
 }
 
@@ -350,7 +391,12 @@ private struct MiniPlayerSkipIntervalIcon: View {
     }
 }
 
-private struct PersistentMiniPlayerSurface: ViewModifier {
+// AI CONTEXT — Continuous bottom glass, 20 September 2026.
+// One background owns material, purple tint AND glass across the bar and bottom
+// container safe area. Glass on controls alone leaves a darker material-only band
+// below progress. Expand the background's layout before rendering its effect;
+// do not offset a patch outside glass bounds or enlarge controls/hit targets.
+struct PersistentMiniPlayerSurface: ViewModifier {
     private let topRoundedShape = UnevenRoundedRectangle(
         cornerRadii: RectangleCornerRadii(
             topLeading: 20,
@@ -362,37 +408,25 @@ private struct PersistentMiniPlayerSurface: ViewModifier {
     )
 
     func body(content: Content) -> some View {
+        content.background {
+            surface
+                .ignoresSafeArea(.container, edges: .bottom)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var backing: some View {
+        topRoundedShape
+            .fill(.regularMaterial)
+            .overlay { topRoundedShape.fill(Color.purple.opacity(0.12)) }
+    }
+
+    @ViewBuilder
+    private var surface: some View {
         if #available(iOS 26, *) {
-            content
-                .background {
-                    topRoundedShape
-                        .fill(.regularMaterial)
-                        .overlay(Color.purple.opacity(0.12))
-                }
-                .background(alignment: .bottom) {
-                    Rectangle()
-                        .fill(.regularMaterial)
-                        .overlay(Color.purple.opacity(0.12))
-                        .frame(height: 64)
-                        .offset(y: 64)
-                        .ignoresSafeArea(edges: .bottom)
-                }
-                .glassEffect(.regular.tint(.purple.opacity(0.12)), in: topRoundedShape)
+            backing.glassEffect(.regular.tint(.purple.opacity(0.12)), in: topRoundedShape)
         } else {
-            content
-                .background {
-                    topRoundedShape
-                        .fill(.regularMaterial)
-                        .overlay(Color.purple.opacity(0.12))
-                }
-                .background(alignment: .bottom) {
-                    Rectangle()
-                        .fill(.regularMaterial)
-                        .overlay(Color.purple.opacity(0.12))
-                        .frame(height: 64)
-                        .offset(y: 64)
-                        .ignoresSafeArea(edges: .bottom)
-                }
+            backing
         }
     }
 }
@@ -467,6 +501,8 @@ struct RootView: View {
                             DiscoverView()
                         case .podcastSearch(let countryCode):
                             PodcastSearchView(countryCode: countryCode)
+                        case .podcastReplay(let subscriptionID):
+                            PodcastReplayView(subscriptionID: subscriptionID)
                         case .podcast(let subscriptionID):
                             PodcastDetailView(subscriptionID: subscriptionID)
                         case .podcastPreview(let result):
@@ -567,6 +603,13 @@ struct RootView: View {
             withAnimation(.easeOut(duration: 0.35)) {
                 showLaunchView = false
             }
+        }
+        .onReceive(appState.podcastReplayCoordinator.$notificationSubscriptionID) { subscriptionID in
+            guard let subscriptionID else { return }
+            handledExplicitLaunchRoute = true
+            showWelcome = false
+            navigationPath.append(AppRoute.podcastReplay(subscriptionID: subscriptionID))
+            appState.podcastReplayCoordinator.notificationSubscriptionID = nil
         }
         .onReceive(appState.routingCoordinator.commands) { command in
             handleRouteCommand(command)

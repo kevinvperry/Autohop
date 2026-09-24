@@ -1,3 +1,10 @@
+// AI CONTEXT — Navigation compatibility, 20 September 2026 (DiagnosticLogView.swift).
+// PURPOSE: Prevent duplicate native/custom Back controls reported on iOS 27.
+// COLLABORATOR: RootView.swift owns appNavigationBackButton: native Back on iOS
+// 27+, branded ambient dismiss on older systems. Do not add a second leading Back
+// or mutate the outer path; preserve the nearest parent and existing mini-player.
+// EVIDENCE: Docs/IOS27_NAVIGATION_BACK_AUDIT.md and NavigationChromeTests.
+
 import SwiftUI
 
 // MINI-PLAYER CONTRACT (2026-09-06): This pushed diagnostic destination owns
@@ -14,6 +21,10 @@ struct DiagnosticLogView: View {
     @ObservedObject private var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss
     @State private var logLines: [String] = []
+    // AI: File reads and redaction stay off MainActor; reject stale results.
+    @State private var refreshID = UUID()
+    @State private var exportError: String?
+    @State private var readingLog = false
     @State private var exportURL: URL?
     @State private var showClearConfirmation = false
 
@@ -55,11 +66,8 @@ struct DiagnosticLogView: View {
         .navigationTitle("Diagnostic Log")
         .responsiveInlineNavigationTitle("Diagnostic Log")
         .miniPlayerBar()
-        .navigationBarBackButtonHidden(true)
+        .appNavigationBackButton()
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationBackButton()
-            }
 
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -84,6 +92,9 @@ struct DiagnosticLogView: View {
                 .disabled(logLines.isEmpty)
             }
         }
+        .alert("Could not prepare diagnostic export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK") { exportError = nil }
+        } message: { Text(exportError ?? "") }
         .confirmationDialog("Clear diagnostic log?", isPresented: $showClearConfirmation) {
             Button("Delete Log History", role: .destructive) {
                 logger.clear()
@@ -100,7 +111,13 @@ struct DiagnosticLogView: View {
     }
 
     private func loadLog() {
-        logLines = logger.recentLines(limit: 500)
+        guard !readingLog else { return }
+        readingLog = true
+        Task {
+            let lines = await Task.detached(priority: .utility) { AppLogger.shared.recentLines(limit: 500) }.value
+            logLines = lines
+            readingLog = false
+        }
     }
 
     /// Reload the visible lines AND regenerate the redacted export file. Kept off the
@@ -109,6 +126,22 @@ struct DiagnosticLogView: View {
     /// log line while this view is open.
     private func refresh() {
         loadLog()
-        exportURL = logger.redactedExportURL()
+        let id = UUID()
+        refreshID = id
+        exportURL = nil
+        Task {
+            do {
+                let url = try await Task.detached(priority: .utility) {
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("autohop-diagnostic-redacted.log")
+                    try AppLogger.shared.writeRedactedExport(to: url)
+                    return url
+                }.value
+                guard refreshID == id else { return }
+                exportURL = url
+            } catch {
+                guard refreshID == id else { return }
+                exportError = error.localizedDescription
+            }
+        }
     }
 }

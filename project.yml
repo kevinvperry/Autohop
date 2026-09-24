@@ -1,3 +1,8 @@
+# AI CONTEXT — Diagnostic repairs, 20 September 2026.
+# AudioRecoveryRegressionTests is included through Tests directory membership; regenerate
+# the Xcode project when membership changes.
+# Evidence and validation limits: Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md.
+
 # ============================================================
 # Autohop — XcodeGen project specification
 # ============================================================
@@ -6,6 +11,14 @@
 # sources are added, removed, moved, or retargeted, update this file first and
 # run `xcodegen generate` so the checked-in project stays reproducible. The
 # AutohopCore package continues to own shared iOS/tvOS persistence and models.
+# NavigationChromeTests (2026-09-20) belongs to the existing Tests directory
+# membership: hosted Back-policy and isolated Sleep Schedule presentation checks.
+# Regenerate project.pbxproj after new test files; keep runtime evidence in the
+# navigation and Sleep Schedule audits, not in generated project comments.
+#
+# Replay (Version 1.7): existing App/Views/Models/Tests directory membership
+# includes the new coordinator, editor, model and regression suite; Package.swift
+# explicitly includes the shared model for tvOS. Build versions stay unchanged.
 #
 # Release contract (2026-09-08): iOS app/widget remain 1.6.1 (17).
 # tvOS app/Top Shelf 1.6.1 (1) submitted, user-confirmed 2026-09-08.
@@ -588,6 +601,7 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
+      # NavigationChromeTests hosts real destinations on iOS 26/27 simulators.
       - path: Tests
         excludes:
           # CLI-style smoke test — uses fatalError top-level code, not XCTest.
