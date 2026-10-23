@@ -1,0 +1,26 @@
+AUTOHOP 1.6.2 - iOS-FAMILY UPDATE
+
+No Autohop account or login is required. Internet access is needed to discover podcasts, retrieve public RSS feeds and download episodes. Downloaded media plays offline. Core local playback does not require iCloud sign-in.
+
+This update adds Podcast Replay and Binge Mode, refreshes Feed Filters, Add RSS Feed and Sleep Schedule, and improves playback recovery, downloads and iOS 27 navigation. It supports iPhone, iPad and compatible Apple-silicon Macs using the Designed-for-iPad app, plus an iPhone/iPad widget. The separate Apple TV binary is not part of this submission.
+
+QUICK TEST PATH
+1. Follow onboarding, open Discover and subscribe to a public podcast with several episodes. Open the show, then its Podcast Settings.
+2. Open Podcast Replay. Choose an older starting episode. Leave filter groups off and select an Episode Limit that allows downloads.
+3. Turn on Binge Mode and tap Enable Podcast Replay. The first eligible episode is prepared when capacity and network policy allow. Start that episode from Up Next; one unstarted successor is prepared. Starting it repeatedly does not download the whole catalogue. Existing queue priorities are preserved.
+4. Return to Replay, turn Binge Mode off, select Daily/Weekdays/Choose Days and a release time, then Save Changes. Keep the app foregrounded to check a due slot; iOS controls background execution opportunities. Replay schedules availability, not automatic playback. Turn Off Podcast Replay stops future releases but preserves downloaded episodes.
+5. Open Download Feed Filters. Enable a group, add a rule and inspect the preview. Changes save immediately; disabling a group preserves its rules. Manual downloads remain available.
+6. Menu > Sleep Schedule: enable it, include now in Active Hours and select the shortest Ask Every interval. Play a downloaded episode. The chime does not immediately pause audio; an unanswered prompt fades out and rewinds. A separate Sleep Timer remains available.
+7. Open Stats or Discover with an episode loaded. Check the single Back control and continuous mini-player background. Open Menu > Support for the updated guide.
+
+REPLAY AND SYNC
+Replay uses the catalogue returned by the publisher's RSS feed. It cannot retrieve removed, paid or restricted episodes. Episode Limit and Feed Filters apply. One installation owns scheduling; compatible updated devices share reservations and playback outcomes through private iCloud. No automatic scheduling-device failover is implemented. Test Replay locally without needing a second device.
+
+CONTENT AND ADVERTISING
+Public podcasts may contain publisher-supplied advertisements or sponsorships. Autohop has no advertising SDK and inserts no developer advertisements. Advertising must remain declared Yes in Age Ratings. Public RSS media downloads directly from the publisher's enclosure URL; the app does not bypass DRM, access login-gated content or redistribute media.
+
+BACKGROUND AND NETWORK ACCESS
+Audio enables locked/background playback. Fetch and processing support feed/download maintenance when iOS permits. Remote notifications carry silent CloudKit updates. Sync is optional and uses the user's private CloudKit database. Broad App Transport Security access supports public and user-supplied RSS, artwork and enclosure hosts, including HTTP-only publishers.
+
+OPEN SOURCE AND DIAGNOSTICS
+Settings > Open Source Acknowledgements identifies MIT and MPL-2.0 components. Diagnostic logs stay local until the user exports/shares them; exports redact identifiers but may retain episode titles and timestamps. No new analytics service is introduced.

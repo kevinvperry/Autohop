@@ -1,3 +1,8 @@
+// AI CONTEXT — 1.6.2 release preparation, 4 October 2026.
+// Customer help uses the requested shipping version, superseding development 1.7.
+// Public website release status remains explicit in the exporter until approval.
+// Play Instant pause preserves an active return point; cancelling its warning
+// or deliberately changing episodes cancels the forced switch/return.
 import SwiftUI
 
 // AI CONTEXT — Views/SupportContent.swift
@@ -373,15 +378,15 @@ enum SupportGuide {
             .heading("Play Instant"),
             .paragraph("Enable Play Instant only for your absolute favourite content. If another episode is actively playing when a new, filter-eligible episode from this podcast finishes downloading automatically, Autohop sounds a clear warning, switches to the new arrival ahead of Up Next, then returns to the interrupted episode at the exact saved position."),
             .paragraph("If playback or its audio route is temporarily unavailable when the automatic download completes, the episode waits safely for up to 30 minutes and triggers when playback resumes. It never starts unexpectedly through the phone speaker; if playback does not resume in time, the episode simply keeps its normal Up Next position."),
-            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. It also waits rather than interrupting when the current episode has 120 seconds or less remaining. If you pause, archive, choose another episode, or skip Next during an active Play Instant interruption, Autohop treats that as a deliberate choice and cancels the automatic return."),
-            .heading("Podcast Replay — Version 1.7"),
+            .paragraph("Play Instant does not trigger for manual downloads, older backlog episodes, or episodes excluded by Download Feed Filters. It also waits rather than interrupting when the current episode has 120 seconds or less remaining. Pausing an active Play Instant episode preserves its return point. Pausing during the warning cancels the pending switch. Archiving, choosing another episode or skipping Next cancels the automatic return."),
+            .heading("Podcast Replay — Version 1.6.2"),
             .paragraph("Open the dedicated Podcast Replay section above Download Feed Filters. See Podcast Replay in this guide for schedules, Binge Mode, limits and sync."),
             .heading("Chapter Filter"),
             .paragraph("When an episode contains chapters, toggle chapter positions that Autohop should skip for this podcast. The choices apply to future episodes with the same chapter positions and update active playback immediately. While this podcast is playing, its current chapter is protected from accidental changes on this settings page."),
             .heading("Download Feed Filters"),
             .paragraph("Choose which new episodes download automatically using duration limits and title or description text rules. Filtered episodes remain visible and can still be downloaded or queued manually."),
             .paragraph("Episodes deliberately excluded by these filters do not train Release Radar and do not count as evidence in Shows You're Drifting From. Filter rules sync with your other per-podcast settings when iCloud Sync is enabled."),
-            .paragraph("In Version 1.7, switch on only the filter groups you need. Add Include or Exclude rules for length, title or description. All rules requires every Include rule; Any rule requires one. Exclude always wins. Blank text rules are ignored. Changes save automatically; switching a group off keeps its saved rules."),
+            .paragraph("In Version 1.6.2, switch on only the filter groups you need. Add Include or Exclude rules for length, title or description. All rules requires every Include rule; Any rule requires one. Exclude always wins. Blank text rules are ignored. Changes save automatically; switching a group off keeps its saved rules."),
             .paragraph("Use Preview Matches to check recent entries without downloading media. Results update as rules change. Five results appear first; Show All reveals the rest. Preview eligibility does not override download limits."),
             .heading("Exclude from auto-refresh"),
             .paragraph("Toggle this on to stop Autohop polling this podcast's RSS feed during automatic/feed-all refreshes. The podcast stays subscribed, moves to the bottom with the Inactive pill, keeps its downloaded episodes and queue eligibility, and can still be manually refreshed from its own podcast page. Turning the setting off restores its saved Priority Stack position."),
@@ -656,23 +661,23 @@ enum SupportGuide {
     )
 
 
-    // AI RELEASE CONTRACT: These workflow sections describe development 1.7.
+    // AI RELEASE CONTRACT: These workflow sections describe the 1.6.2 release candidate.
     // Website export must retain availability labels until that release is live.
     private static let manualRSS = SupportSection(
-        id: "manual-rss", icon: "link", title: "Add RSS Feed — Version 1.7",
+        id: "manual-rss", icon: "link", title: "Add RSS Feed — Version 1.6.2",
         summary: "Subscribe using a publisher’s feed link",
         blocks: [
-            .callout(.note, "Version 1.7 introduces this guided layout. Earlier versions also support manual RSS entry, with different button labels."),
+            .callout(.note, "Version 1.6.2 introduces this guided layout. Earlier versions also support manual RSS entry, with different button labels."),
             .steps(["Open Settings → Subscriptions → Add RSS Feed.", "Paste or type the publisher’s RSS feed link. The example address is only a placeholder.", "Preview Podcast appears once you enter text. Tap it and wait for the preview.", "Check the show title and latest episode, then tap Subscribe."]),
             .paragraph("Look for RSS on the publisher’s website. A normal web page or Apple Podcasts link is usually not a feed. Expand What is an RSS link? for help."),
             .paragraph("If preview fails, check the address and connection, then retry. Editing the link clears the old preview. Nothing is subscribed until you confirm; duplicate or save errors appear on the page.")
         ])
 
     private static let podcastReplay = SupportSection(
-        id: "podcast-replay", icon: "arrow.counterclockwise", title: "Podcast Replay — Version 1.7",
+        id: "podcast-replay", icon: "arrow.counterclockwise", title: "Podcast Replay — Version 1.6.2",
         summary: "Start earlier, schedule episodes or prepare one ahead",
         blocks: [
-            .callout(.note, "Podcast Replay is new in Version 1.7. It is not available in the released 1.6.1 app."),
+            .callout(.note, "Podcast Replay is new in Version 1.6.2. It is not available in the released 1.6.1 app."),
             .steps(["Open a podcast, tap its settings gear, then Set Up Podcast Replay.", "Choose the earlier episode you want to start from.", "Choose Daily, Weekdays or Choose Days, then add the release times you want. For a commute, add a morning and afternoon time.", "Check the upcoming episodes and Episode Limit, then save the Replay setup."]),
             .paragraph("Replay works through matching episodes in release order. Download Feed Filters still apply. While Replay is enabled, it replaces normal automatic new-episode downloading for this podcast. You can still choose episodes manually."),
             .heading("Binge Mode"),

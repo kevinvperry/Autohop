@@ -37,6 +37,7 @@
 		13CA6FD92A6DC4146A360D0E /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4220919178A3ECDE7D03CF /* NotificationSettingsView.swift */; };
 		1566AAE1A6389EDA957F81FF /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBD740613B06C339DC75500D /* DownloadsView.swift */; };
 		15F01955B0771395E99D36EE /* SubscriptionOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B131D23C3B30533443FD646F /* SubscriptionOrder.swift */; };
+		167340F1C97C7ED8FCD15C52 /* WHATS_NEW.txt in Resources */ = {isa = PBXBuildFile; fileRef = 2AF061AD628D3007D67DDB95 /* WHATS_NEW.txt */; };
 		17E26AA871385FD0AFB1EEE8 /* HistoryStatsCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FABBD15E1C5788D17C701FD /* HistoryStatsCoordinator.swift */; };
 		181C95B5EEDF6629A1E958F0 /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5EC50D9547176978BCA9E0E6 /* Media.xcassets */; };
 		193D4CD1B2EB355CDC8D445F /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ECB7A180E647C5441035FA52 /* AppIntents.framework */; };
@@ -66,6 +67,7 @@
 		2AB25E09FA26747391A45377 /* TVSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F091D6A46EB97CFFB402FF7F /* TVSearchView.swift */; };
 		2AC16F20BEC9D3E40167E69B /* TVServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 85206A1758C2676302238932 /* TVServices.framework */; };
 		2B02E6962FD9DB1A14DBC26C /* EpisodeLimitRetentionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26BBC551A3717C76D513D40E /* EpisodeLimitRetentionPolicyTests.swift */; };
+		2BA815DB6002AE9CD71BB7B2 /* KEYWORDS.txt in Resources */ = {isa = PBXBuildFile; fileRef = 126E3C31D2A39783FBA08B67 /* KEYWORDS.txt */; };
 		2C08D04D26931E88AE995F7D /* TVAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 514217BEAB6D8BD0B446E3E7 /* TVAppModel.swift */; };
 		2C47CFE77A7636AE2E7974C6 /* AutohopWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9950D1FFDFA7CBDF0B0109B3 /* AutohopWidgetsBundle.swift */; };
 		2CB94841CBA3715B633E5332 /* RSSParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EE50021DF85C88351E2E401 /* RSSParserTests.swift */; };
@@ -73,6 +75,7 @@
 		2CE7A39C515692E7DC3248AF /* NavigationChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9626F4581FF69E7041914CC9 /* NavigationChromeTests.swift */; };
 		2D4B3832CDDB2950F8413AA6 /* TopShelfContentProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 796A56029B6B01392A9CF690 /* TopShelfContentProvider.swift */; };
 		2EF89FEB74E7C7DBC66EEAF5 /* TVDiscoverFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1497BA03E1611427858D740D /* TVDiscoverFoundationTests.swift */; };
+		2F865FC86FDAE0A649CDA165 /* REVIEW_NOTES.txt in Resources */ = {isa = PBXBuildFile; fileRef = D55BDEDE9605DBF4F422F62F /* REVIEW_NOTES.txt */; };
 		2FAEA2DD5943080B352420D4 /* TVProjectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77826B5DDC567198B9E41AAE /* TVProjectionStore.swift */; };
 		32612A7A83338C90F88DAB66 /* RSSParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3565F21462B26325EB4EB477 /* RSSParser.swift */; };
 		32E406FB5261B9B80D79CBFF /* TVPlayerTransportPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A88456A6F577DC1EA7A91073 /* TVPlayerTransportPolicyTests.swift */; };
@@ -106,7 +109,6 @@
 		43A644288A19F4492CBC69F3 /* TVTopShelfSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1AFD67DE43F17492992CA3E /* TVTopShelfSnapshot.swift */; };
 		44423DE7BFADC81D41465FCD /* PlaybackTransportWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E89B35BA4A244209D2A7B1 /* PlaybackTransportWorkflow.swift */; };
 		44BEB63E377B429766ABA020 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDA523B5BEADDB7ED7CC077 /* SettingsStore.swift */; };
-		45CF98B9D48FFFF39137229F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_404DBDE2-A6F6-4457-8507-F068E9A5DA00" /* Assets.xcassets */; };
 		46B8C385C6BEBED6CFB2BA60 /* ReleaseRadarWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2BCBD90BED59BEB60558E0 /* ReleaseRadarWorkflow.swift */; };
 		48D4BBE905ECB9EA3A78558B /* BackgroundTaskCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EC29E0D6933DB9FB1CD44AA /* BackgroundTaskCoordinator.swift */; };
 		4A2C75D34FF4B58F35FFD9F1 /* CloudSyncEnginePermanentFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E3F96A1548C17BE4B4465A1 /* CloudSyncEnginePermanentFailureTests.swift */; };
@@ -162,6 +164,7 @@
 		744B566F8CB897CF7C806DC6 /* ListeningStatsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E808A5060C4721B470695C1A /* ListeningStatsStore.swift */; };
 		748A2CB01CD3FC52189C79EB /* TVTopShelfSharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631E42897287D849EE7A3C95 /* TVTopShelfSharedStorage.swift */; };
 		74DA4F96EDF7D7BFEC5AEDB7 /* TVEpisodeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EBB40BA11D13F3E295DED10 /* TVEpisodeResolverTests.swift */; };
+		74E171C23A2676BB182BCD6D /* DESCRIPTION.txt in Resources */ = {isa = PBXBuildFile; fileRef = B4581C00DC0C13D0F7C9C98E /* DESCRIPTION.txt */; };
 		75AC7022C84095E1DB26EACC /* TVAppModel+DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E06ED2D3C486D4D174ABB36 /* TVAppModel+DeepLink.swift */; };
 		7664884CB316E11D04BE8D6E /* TVPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB43231FB9D21A066C0F63A0 /* TVPlayerView.swift */; };
 		76CD687F77CB4DCADA6D5D9B /* PodcastDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25554BE74A86787F386D7BC /* PodcastDetailView.swift */; };
@@ -242,6 +245,7 @@
 		AE80D588C2B9F36FCAB9C5B7 /* TVAppModel+History.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C41EBE8D25FE64055F1333D /* TVAppModel+History.swift */; };
 		B0AF83B1F0EB3A7573F5904D /* EpisodeFeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4085481A5FB344177B51FA3 /* EpisodeFeedLoader.swift */; };
 		B0C70D723F8B0C235389E0EA /* AutohopCore in Frameworks */ = {isa = PBXBuildFile; productRef = 07EBEE7316995923E56B8766 /* AutohopCore */; };
+		B17AE1A7A36AA8FD1B6C4AC3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_B2C1B91E-4F7B-42B0-B773-FE7B7ABB3688" /* Assets.xcassets */; };
 		B1EF8D60A62EB949FFC1DB65 /* AutohopWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F02DD69C2901DF131EFB8977 /* AutohopWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B210DB81D2DA8717E99F54FA /* SubscriptionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35748B243B085DB0E3E0076F /* SubscriptionSettingsView.swift */; };
 		B2A3348C83E70CD82C174C1E /* TVDiscoverModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB6620E4BE347A50B534D86 /* TVDiscoverModels.swift */; };
@@ -281,10 +285,13 @@
 		CB5EF9927FAA9298615894FE /* PlaybackPositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F45EBEF8C3E955A384BECEE /* PlaybackPositionStore.swift */; };
 		CD352A8639A1C1984A9BAAF0 /* CloudKitSyncMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B9A4F7DEA726E7CB7EB5506 /* CloudKitSyncMapping.swift */; };
 		CEAD0B9CF8A397F5C283B445 /* CarPlayArtworkProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF40E87CD598A0D7667C434 /* CarPlayArtworkProvider.swift */; };
+		CEDEB9C14255D34D5ECD3FCB /* APP_NAME.txt in Resources */ = {isa = PBXBuildFile; fileRef = 6219E0A918AE1C990B9E4643 /* APP_NAME.txt */; };
+		CF5F80310262B5A8960E2D2F /* PROMOTIONAL_TEXT.txt in Resources */ = {isa = PBXBuildFile; fileRef = 977731F7B41DACC31A375857 /* PROMOTIONAL_TEXT.txt */; };
 		D02BB1CAD64CD8EFDC469A5D /* DownloadRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 687A325FA24EDD40D1D7840D /* DownloadRecoveryPolicy.swift */; };
 		D26E2B997A9791A4790F1DD6 /* SleepTimerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BAF0C68369211734ECE384 /* SleepTimerService.swift */; };
 		D2CA32F60C9624B7E829151F /* QueueModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EC8CB82655A9B66BBDEB8B /* QueueModelTests.swift */; };
 		D2CAB9190F318A02C0A96B72 /* DesktopCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFBB48DA6938EF7F4AF89CF9 /* DesktopCommands.swift */; };
+		D3AED705388EAD9541AB10E1 /* SUBTITLE.txt in Resources */ = {isa = PBXBuildFile; fileRef = BC4491F09FF947EB3C955FBB /* SUBTITLE.txt */; };
 		D421B9A9DA6B41CF68F3D3D4 /* TVAppDecompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5F149C97BEC6456DF35D61 /* TVAppDecompositionTests.swift */; };
 		D57CCF5E63928B012FD3F697 /* PodcastShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80D4C8A1C0969A72A4DB79E /* PodcastShareSheet.swift */; };
 		D603DA4C3D211D59BE885B23 /* TVAppFeatureModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA9BB54F3593785B2F0C6C3 /* TVAppFeatureModels.swift */; };
@@ -427,6 +434,7 @@
 		10DE052AEEE355CE584840FF /* CarPlay.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CarPlay.framework; path = System/Library/Frameworks/CarPlay.framework; sourceTree = SDKROOT; };
 		112BD15C10E34DCF034F864B /* AutoArchiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoArchiveActivity.swift; sourceTree = "<group>"; };
 		116B0991A291DB3826111098 /* PlaybackPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPreference.swift; sourceTree = "<group>"; };
+		126E3C31D2A39783FBA08B67 /* KEYWORDS.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = KEYWORDS.txt; sourceTree = "<group>"; };
 		1497BA03E1611427858D740D /* TVDiscoverFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDiscoverFoundationTests.swift; sourceTree = "<group>"; };
 		14DF66C0C501F07FFA8E90B1 /* SleepTimerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerSheetView.swift; sourceTree = "<group>"; };
 		152B0D52BCB62FC71DA063EC /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
@@ -455,6 +463,7 @@
 		2859FF1A2BC8DD321829104C /* EpisodeDiffPersistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeDiffPersistTests.swift; sourceTree = "<group>"; };
 		2A7E25B19C8E70DF788BDA18 /* SupportContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportContent.swift; sourceTree = "<group>"; };
 		2AC4D3F4FDBF3EF5EEF664A9 /* TVDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDeepLink.swift; sourceTree = "<group>"; };
+		2AF061AD628D3007D67DDB95 /* WHATS_NEW.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = WHATS_NEW.txt; sourceTree = "<group>"; };
 		2D2A8C6F03247B1233AAFF40 /* QueueSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueSnapshot.swift; sourceTree = "<group>"; };
 		30263CCB8DA89216271ECE0A /* AutohopTVTopShelf.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AutohopTVTopShelf.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3027D04C8528CF33139935C8 /* Synced.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Synced.swift; sourceTree = "<group>"; };
@@ -524,6 +533,7 @@
 		600B89E0168E1AF4E2A404DA /* TVAppModel+Queue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TVAppModel+Queue.swift"; sourceTree = "<group>"; };
 		61D592D094DAFD3F96B965CD /* TopShelfContentFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopShelfContentFactory.swift; sourceTree = "<group>"; };
 		61DDFBA259B0D70F2A347345 /* TopPodcastsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopPodcastsView.swift; sourceTree = "<group>"; };
+		6219E0A918AE1C990B9E4643 /* APP_NAME.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = APP_NAME.txt; sourceTree = "<group>"; };
 		622A001458DF192BCA741C88 /* WidgetSharedStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSharedStorageTests.swift; sourceTree = "<group>"; };
 		630F1C0001D35029E3747C0A /* TVHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVHomeView.swift; sourceTree = "<group>"; };
 		631E42897287D849EE7A3C95 /* TVTopShelfSharedStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVTopShelfSharedStorage.swift; sourceTree = "<group>"; };
@@ -593,6 +603,7 @@
 		9722A18CD9E100A7A5763C41 /* DownloadActivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadActivityStore.swift; sourceTree = "<group>"; };
 		972F5B85D493E589CE300EC9 /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
 		97574473029D30B6114FBFFD /* TVAppModel+Bootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TVAppModel+Bootstrap.swift"; sourceTree = "<group>"; };
+		977731F7B41DACC31A375857 /* PROMOTIONAL_TEXT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PROMOTIONAL_TEXT.txt; sourceTree = "<group>"; };
 		9882D711D7C28A1B9E1314C6 /* TVHomeQueueProjectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVHomeQueueProjectorTests.swift; sourceTree = "<group>"; };
 		9950D1FFDFA7CBDF0B0109B3 /* AutohopWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutohopWidgetsBundle.swift; sourceTree = "<group>"; };
 		9AD1CBF719C2B3E4FB4E7525 /* PodcastReplayCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastReplayCoordinator.swift; sourceTree = "<group>"; };
@@ -631,6 +642,7 @@
 		B149DAE12C8188E733045AB9 /* TVTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVTheme.swift; sourceTree = "<group>"; };
 		B1AFD67DE43F17492992CA3E /* TVTopShelfSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVTopShelfSnapshot.swift; sourceTree = "<group>"; };
 		B44E8DFD49F134A17C32F483 /* PlaybackCheckpointWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackCheckpointWorkflow.swift; sourceTree = "<group>"; };
+		B4581C00DC0C13D0F7C9C98E /* DESCRIPTION.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = DESCRIPTION.txt; sourceTree = "<group>"; };
 		B5A1F785B4665FE30DABD78B /* AppCompositionRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCompositionRoot.swift; sourceTree = "<group>"; };
 		B61C5E08C520EEB41450821C /* TVCloudSyncBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVCloudSyncBadge.swift; sourceTree = "<group>"; };
 		B72D093878AABABD9B187755 /* AutoArchiveCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoArchiveCoordinator.swift; sourceTree = "<group>"; };
@@ -640,6 +652,7 @@
 		BA9AE71B854231FD442DA175 /* TVLaunchAccessPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVLaunchAccessPolicy.swift; sourceTree = "<group>"; };
 		BB4220919178A3ECDE7D03CF /* NotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSettingsView.swift; sourceTree = "<group>"; };
 		BB90F51E5083061BC0757076 /* TVAppModel+Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TVAppModel+Diagnostics.swift"; sourceTree = "<group>"; };
+		BC4491F09FF947EB3C955FBB /* SUBTITLE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SUBTITLE.txt; sourceTree = "<group>"; };
 		BCFC591DB2F94F3B9CD1B653 /* AcknowledgementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsView.swift; sourceTree = "<group>"; };
 		BD0197C780B69564FDC543AF /* Autohop */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Autohop; path = .; sourceTree = SOURCE_ROOT; };
 		BD84ED16A2AF973C302F45FC /* FeedRefreshCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedRefreshCoordinator.swift; sourceTree = "<group>"; };
@@ -671,6 +684,7 @@
 		D4085481A5FB344177B51FA3 /* EpisodeFeedLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeFeedLoader.swift; sourceTree = "<group>"; };
 		D4E9D7EB91864505E60BA4EE /* TVPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		D54CE5E93B8D748F0F9A0F2A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D55BDEDE9605DBF4F422F62F /* REVIEW_NOTES.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = REVIEW_NOTES.txt; sourceTree = "<group>"; };
 		D5BAF0C68369211734ECE384 /* SleepTimerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimerService.swift; sourceTree = "<group>"; };
 		D67E15279D119A946B4A8A03 /* TVDiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDiscoverView.swift; sourceTree = "<group>"; };
 		D6A5E1C1FD0369DA50826715 /* WidgetSharedStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSharedStorage.swift; sourceTree = "<group>"; };
@@ -731,12 +745,12 @@
 		FE42D79ECDDA9D6555784A64 /* WidgetSnapshotCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotCoordinator.swift; sourceTree = "<group>"; };
 		FF6BE2BC2069CC319932B58C /* TVDemoSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDemoSessionTests.swift; sourceTree = "<group>"; };
 		FF88E9F919B85877D287F42D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_404DBDE2-A6F6-4457-8507-F068E9A5DA00" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_4189D6E9-95C9-4A71-8F34-B28252ADD71A" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
-		"TEMP_5B9C3B66-5E08-42C2-8556-2ADEED076964" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
-		"TEMP_A0B6959E-EE5A-492D-ACCF-F67DDB1DC6D1" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_AEB00413-5A06-46AF-9613-7DADDF3794B4" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
-		"TEMP_FEA1AF50-EFDD-4442-982A-B671B333D7BF" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
+		"TEMP_1587B7FC-06ED-4774-AC60-99C1E8431DA3" /* Autohop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Autohop.entitlements; sourceTree = "<group>"; };
+		"TEMP_1B3D22C4-8943-4D9C-A9F2-07AF4E7DF63F" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_43A8207E-3C75-4D23-A985-4AFDAA8E990F" /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
+		"TEMP_4655D143-BC94-4867-96D7-D4AAFEBB897E" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
+		"TEMP_A4360080-6A1A-450B-B30E-B32F962A4B53" /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
+		"TEMP_B2C1B91E-4F7B-42B0-B773-FE7B7ABB3688" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1422,6 +1436,20 @@
 			path = Shared;
 			sourceTree = "<group>";
 		};
+		D254F9D7B6D7D30A32FA6F8E /* 1.6.2 */ = {
+			isa = PBXGroup;
+			children = (
+				6219E0A918AE1C990B9E4643 /* APP_NAME.txt */,
+				B4581C00DC0C13D0F7C9C98E /* DESCRIPTION.txt */,
+				126E3C31D2A39783FBA08B67 /* KEYWORDS.txt */,
+				977731F7B41DACC31A375857 /* PROMOTIONAL_TEXT.txt */,
+				D55BDEDE9605DBF4F422F62F /* REVIEW_NOTES.txt */,
+				BC4491F09FF947EB3C955FBB /* SUBTITLE.txt */,
+				2AF061AD628D3007D67DDB95 /* WHATS_NEW.txt */,
+			);
+			path = 1.6.2;
+			sourceTree = "<group>";
+		};
 		D79F29C26632FE7C4D15AA1D /* Chapters */ = {
 			isa = PBXGroup;
 			children = (
@@ -1495,20 +1523,21 @@
 			children = (
 				0A608263858A5121DD71EEB3 /* 1.6.1 */,
 				A288D64DD322903079B2519C /* tvOS-1.6.1 */,
+				D254F9D7B6D7D30A32FA6F8E /* 1.6.2 */,
 			);
 			path = AppStore;
 			sourceTree = "<group>";
 		};
-		"TEMP_7BDB1939-C1FC-402F-B001-38DD54BB97B6" /* . */ = {
+		"TEMP_EF963E7E-0A17-4E07-A26F-931056ACD7F5" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_5B9C3B66-5E08-42C2-8556-2ADEED076964" /* LICENSE */,
-				"TEMP_404DBDE2-A6F6-4457-8507-F068E9A5DA00" /* Assets.xcassets */,
-				"TEMP_4189D6E9-95C9-4A71-8F34-B28252ADD71A" /* NOTICE */,
-				"TEMP_FEA1AF50-EFDD-4442-982A-B671B333D7BF" /* .gitignore */,
+				"TEMP_43A8207E-3C75-4D23-A985-4AFDAA8E990F" /* LICENSE */,
+				"TEMP_B2C1B91E-4F7B-42B0-B773-FE7B7ABB3688" /* Assets.xcassets */,
+				"TEMP_A4360080-6A1A-450B-B30E-B32F962A4B53" /* NOTICE */,
+				"TEMP_4655D143-BC94-4867-96D7-D4AAFEBB897E" /* .gitignore */,
 				8DADDACDF13F7D6B46ED8FB8 /* PrivacyInfo.xcprivacy */,
-				"TEMP_AEB00413-5A06-46AF-9613-7DADDF3794B4" /* Autohop.entitlements */,
-				"TEMP_A0B6959E-EE5A-492D-ACCF-F67DDB1DC6D1" /* Info.plist */,
+				"TEMP_1587B7FC-06ED-4774-AC60-99C1E8431DA3" /* Autohop.entitlements */,
+				"TEMP_1B3D22C4-8943-4D9C-A9F2-07AF4E7DF63F" /* Info.plist */,
 				7012122AF80BE6512A9C2E7C /* Settings */,
 				880172BFC198BC86B5F2126B /* App */,
 				378B9675C08586D4F929F770 /* CarPlay */,
@@ -1756,8 +1785,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A40909F7974CF2794DB1AD9 /* 1.6.1 in Resources */,
-				45CF98B9D48FFFF39137229F /* Assets.xcassets in Resources */,
+				CEDEB9C14255D34D5ECD3FCB /* APP_NAME.txt in Resources */,
+				B17AE1A7A36AA8FD1B6C4AC3 /* Assets.xcassets in Resources */,
+				74E171C23A2676BB182BCD6D /* DESCRIPTION.txt in Resources */,
+				2BA815DB6002AE9CD71BB7B2 /* KEYWORDS.txt in Resources */,
+				CF5F80310262B5A8960E2D2F /* PROMOTIONAL_TEXT.txt in Resources */,
 				07866A46BC9C3D2BD5EA2CED /* PrivacyInfo.xcprivacy in Resources */,
+				2F865FC86FDAE0A649CDA165 /* REVIEW_NOTES.txt in Resources */,
+				D3AED705388EAD9541AB10E1 /* SUBTITLE.txt in Resources */,
+				167340F1C97C7ED8FCD15C52 /* WHATS_NEW.txt in Resources */,
 				906F4BDB719065D83E7D15E7 /* tvOS-1.6.1 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2207,7 +2243,7 @@
 				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
@@ -2216,7 +2252,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -2266,7 +2302,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widgets/AutohopWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Widgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -2275,7 +2311,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.widgets;
 				PRODUCT_NAME = AutohopWidgets;
 				SDKROOT = iphoneos;
@@ -2316,7 +2352,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widgets/AutohopWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Widgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -2325,7 +2361,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop.widgets;
 				PRODUCT_NAME = AutohopWidgets;
 				SDKROOT = iphoneos;
@@ -2343,7 +2379,7 @@
 				CODE_SIGN_ENTITLEMENTS = Autohop.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = QT3N6256FG;
 				INFOPLIST_FILE = Info.plist;
@@ -2352,7 +2388,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinperry.autohop;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

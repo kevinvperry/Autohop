@@ -1,5 +1,19 @@
 # Autohop
 
+
+## Current iOS release candidate — 4 October 2026
+
+<!-- AI CONTEXT — VERSION_1.7.md remains the complete record of ALL changes since
+1.6.1. Its development filename must not override the requested marketing version.
+Historical submission status below is preserved; preparation is not submission. -->
+
+The iOS app and widget are prepared as **1.6.2 (18)**. The public Australian listing
+still shows 1.6.1. [Submission text, listing audit and Archive steps](Docs/AppStore/1.6.2/SUBMISSION.md)
+map the complete [post-1.6.1 ledger](VERSION_1.7.md) to this iOS candidate.
+Separate tvOS/Top Shelf settings remain 1.6.1 (1). Nothing has been uploaded or
+submitted by this preparation. Earlier “Version 1.7” feature headings identify
+development work now included in the 1.6.2 iOS candidate.
+
 <!--
 AI CONTEXT — README.md
 High-level product, feature, documentation, build, and licensing index for AI

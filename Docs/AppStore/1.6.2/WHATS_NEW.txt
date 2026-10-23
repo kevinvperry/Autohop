@@ -1,0 +1,22 @@
+Rediscover a favourite podcast, catch up at your own pace and enjoy smoother everyday listening.
+
+PODCAST REPLAY
+Turn a show's available back catalogue into your own listening schedule. Choose a starting episode, then add matching episodes daily, on weekdays or on selected days, with one or more release times. Replay follows your Download Feed Filters and Episode Limit, while keeping your existing Up Next priorities.
+
+BINGE MODE
+Prefer to keep listening without a timetable? Binge Mode prepares one upcoming episode when you start listening. With Episode Limit set to 1, you can keep the episode you've started plus one ready for next time. It won't download the whole back catalogue or interrupt another show.
+
+CLEARER SETUP AND CONTROLS
+• Refreshed Download Feed Filters with clearer Include/Exclude rules, readable phrase fields and previews that update with your settings.
+• Guided Add RSS Feed flow with clearer link entry, podcast previews and error messages.
+• Redesigned Sleep Schedule with glass cards, a saved-schedule summary and clearer guidance. Your existing settings and options are preserved.
+• Clearer explanations throughout Settings and the in-app guide.
+
+SMOOTHER PLAYBACK
+Play Instant now protects the final two minutes of an episode and returns directly to your interrupted episode when the Instant episode finishes. Improvements to pause/resume recovery, end-of-file handling, download retries and saved download statistics help listening continue more reliably.
+
+INTERFACE REFINEMENTS
+Fixed duplicate Back buttons on iOS 27 and restored a continuous purple glass background beneath the mini-player's progress bar. Improved startup background coverage and made the podcast name on Episode Detail a direct link to the show.
+
+MORE HELPFUL DIAGNOSTICS
+Improved diagnostic exports and recovery information, with additional redaction of personal audio-output names and feed identifiers when sharing logs for support.

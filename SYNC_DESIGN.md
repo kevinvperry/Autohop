@@ -1,5 +1,19 @@
 # Autohop — Cross-Device Sync Design
 
+
+## Current iOS release candidate — 4 October 2026
+
+<!-- AI CONTEXT — VERSION_1.7.md remains the complete record of ALL changes since
+1.6.1. Its development filename must not override the requested marketing version.
+Historical submission status below is preserved; preparation is not submission. -->
+
+The iOS app and widget are prepared as **1.6.2 (18)**. The public Australian listing
+still shows 1.6.1. [Submission text, listing audit and Archive steps](Docs/AppStore/1.6.2/SUBMISSION.md)
+map the complete [post-1.6.1 ledger](VERSION_1.7.md) to this iOS candidate.
+Separate tvOS/Top Shelf settings remain 1.6.1 (1). Nothing has been uploaded or
+submitted by this preparation. Earlier “Version 1.7” feature headings identify
+development work now included in the 1.6.2 iOS candidate.
+
 <!--
 AI CONTEXT — SYNC_DESIGN.md
 Canonical design/status note for Autohop's private iCloud sync layer. Verified
@@ -9,9 +23,9 @@ Persistence/CloudSyncEngine.swift, Persistence/AutohopDatabase.swift,
 Persistence/SubscriptionStore.swift, App/SyncCoordinator.swift and the TV sync
 owners.
 TV reader note: the iPhone remains queue/subscription authority. TV keeps its
-authoritative local database and authored Stats JSON in Application Support;
-only compact render projections and CKSyncEngine transport state remain in
-Caches. TV cannot push subscription, order or full-queue authorship.
+authoritative local database and authored Stats JSON in Caches/Autohop, alongside
+render projections and CKSyncEngine transport state. The September storage repair
+supersedes the unsupported Application Support migration; caches are purgeable. TV cannot push subscription, order or full-queue authorship.
 Episode sync identity is subscription-scoped
 (`subscriptionID|guid:<guid>`), but CloudKit record names are type-namespaced
 (`episode:`, `subscription:`, `subscription-order:`, `history:`, `stats:`)
@@ -393,9 +407,9 @@ shows correct settings immediately. Guarded by
        catalog/enrichment recovery.
     3. **TV listening stats now sync** — TV creates its own
        `ListeningStatsStore` (the original implementation used Caches JSON; the
-       September 2026 durability redesign migrates that authored JSON and the
-       authoritative TV database into Application Support while retaining only
-       render projections/transport state in Caches; public
+       attempted September 2026 Application Support migration was superseded
+       by the storage repair: authored JSON and the TV database remain in
+       Caches/Autohop, with survival-kit and sync recovery after purging; public
        `attachSyncDatabase(from:)` since AutohopDatabase is internal to the
        library), and `TVPlaybackModel` records listening time (speed-aware),
        episode started/completed, and manual skip-forward. DayStats' additive

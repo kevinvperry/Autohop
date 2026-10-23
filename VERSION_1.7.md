@@ -7,6 +7,8 @@ documentation, website and user-visible change after Version 1.6.1 was confirmed
 approved and live on 8 September 2026. Update this ledger and appropriate project
 documents/AI headers in the same task, including small fixes. Record implemented
 work with validation and limitations; do not present proposals as completed.
+4 October 2026: user explicitly requires this ledger to retain ALL changes since
+1.6.1. Keep the filename and history; iOS is being packaged as 1.6.2 (18).
 VERSION_1.6.1.md is closed. Its earlier development label was also 1.7, but its
 entries shipped under 1.6.1 and must not be copied here as new 1.7 features.
 Keep iOS-family and tvOS submission/approval status independent. TV 1.6.1 (1)
@@ -17,10 +19,12 @@ iOS and tvOS code updates share this Version 1.7 ledger; TV 1.6.1 scope is close
 ## Release status
 
 - **Development:** Open; started 8 September 2026 after the 1.6.1 release confirmation.
-- **Submission:** Not submitted.
+- **Submission:** Binary uploaded to Apple; not submitted for review.
 - **Approval:** Not approved.
 - **Release:** Not released.
-- **Build configuration:** No version/build-setting change requested by this documentation transition.
+- **Build configuration:** iOS-family candidate 1.6.2 (18), prepared 4 October 2026; tvOS/Top Shelf remain 1.6.1 (1).
+- **Ledger naming:** Keep this file as the complete record of all changes since 1.6.1, per the user. The 1.7 filename is a development label; the requested App Store version is 1.6.2.
+- **Submission package:** [iOS 1.6.2 preparation](Docs/AppStore/1.6.2/SUBMISSION.md). Build 18 uploaded; not submitted for review, approved or released.
 
 ## Completed changes
 
@@ -56,7 +60,6 @@ iOS and tvOS code updates share this Version 1.7 ledger; TV 1.6.1 scope is close
 - Preserved historical 1.6.1 release material and the separate tvOS status.
 - Validation: checked ledger references and diff whitespace. Documentation-only change.
 
-No new app implementation changes recorded yet.
 
 ## Startup splash coverage — 12 September 2026
 
@@ -322,3 +325,78 @@ return-to-Player behaviour and page inset sizing are unchanged. See
 Build and hosted page/sheet checks passed on iOS 27 and iOS 26.5 simulators;
 all four screenshots were visually inspected. Physical-device validation remains
 outstanding.
+
+
+## iOS 1.6.2 submission preparation — 4 October 2026
+
+<!-- AI CONTEXT — This is the complete post-1.6.1 ledger, even though the shipping
+candidate is named 1.6.2. Preserve TV/website/history entries and distinguish local
+preparation from signed archive, upload, submission, approval and live status. -->
+
+- Audited the live Australian App Store page: 1.6.1 dated 8 September remains
+  public. Recorded name/subtitle, compatibility, privacy/accessibility declarations,
+  screenshots and stale release messaging in the listing audit.
+- Prepared 1.6.2 description, promotional text, What's New, review notes, retained
+  name/subtitle and proposed keywords using the implemented changes in this ledger.
+  Excluded TV-only work, proposals and features already shipped in 1.6.1.
+- Advanced only the iOS app/widget to 1.6.2 (18) through project.yml and regenerated
+  the Xcode project. Retained signing, bundle IDs, deployment targets and separate
+  tvOS/Top Shelf 1.6.1 (1) settings.
+- Updated in-app support version labels and the support exporter release notice.
+  The public website remains unchanged; preparation does not claim 1.6.2 is live.
+- Added the concrete Archive/App Store Connect handover, current field limits,
+  questionnaire checks and the stale Sleep Schedule screenshot replacement brief.
+- Corrected stale Play Instant pause/return guidance in the in-app help and
+  superseded TV Application Support claims in the sync guide; behaviour is unchanged.
+- Preserved every existing ledger entry and removed the obsolete “no changes yet”
+  sentence. Updated living-document release pointers and AI context.
+
+Validation: Release configuration guard and unsigned generic iOS Release build
+passed; built app/widget versions and embedded privacy manifests verified.
+All 104 focused iOS 27 simulator tests passed; metadata lengths, local links,
+ledger preservation and whitespace checks passed. A temporary export of all 23
+support sections passed with preserved anchors. Detailed results are recorded in
+[the submission package](Docs/AppStore/1.6.2/SUBMISSION.md).
+At this preparation stage, no archive, upload, remote metadata change or review
+submission was performed. The later archive upload is recorded below.
+
+## Sleep Schedule store artwork — 4 October 2026
+
+Generated replacement marketing artwork using the supplied current iPhone capture
+and old listing artwork as references. Retained the old headline, subtitle,
+purple/green graphics and phone composition. Saved the PNG and generation/AI
+context record in AppStoreScreenshots/iOS-1.6.2. The final opaque RGB PNG is
+1320 × 2868 with no alpha channel, matching Apple's accepted iPhone 6.9-inch
+portrait specification. Final UI fidelity still requires the owner's review.
+No code or live listing changed.
+
+
+## Submission version correction — 4 October 2026
+
+<!-- AI CONTEXT — User confirmed 1.6.2; the earlier 6.2 preparation was incorrect.
+Keep build 18 and the complete post-1.6.1 ledger in this file. -->
+
+Corrected the iOS app/widget, in-app help, website export notice, release-package
+text, living-document references and screenshot directory to 1.6.2. Retained
+build 18, all feature changes and separate tvOS/Top Shelf 1.6.1 (1). Regenerated
+the Xcode project. Earlier test logs with 6-2 in their names are historical
+evidence, not correctly numbered submission binaries. Corrected Release-build
+validation is recorded in Docs/AppStore/1.6.2/SUBMISSION.md. No upload occurred
+as part of this correction; the later archive upload is recorded below.
+
+Correction validation: final unsigned iOS Release build passed, with both built
+app and widget verified as 1.6.2 (18). Release configuration, metadata lengths,
+document links, support export and whitespace checks passed. No functional code
+changed and the focused regression suite was not rerun for this label correction.
+
+## iOS 1.6.2 archive upload — 4 October 2026
+
+<!-- AI CONTEXT — This confirms binary delivery only. Do not infer App Store
+Connect processing, build selection, metadata save, review submission, approval
+or public release. -->
+
+Used Xcode Organizer with the validated signed Autohop 1.6.2 (18) iOS archive.
+Selected App Store Connect distribution with Xcode's recommended settings. Xcode
+completed the upload and changed the archive status from “Validation succeeded”
+to “Uploaded to Apple” at 7:51 pm. App Store Connect processing, build selection,
+metadata entry and Add for Review remain outstanding.

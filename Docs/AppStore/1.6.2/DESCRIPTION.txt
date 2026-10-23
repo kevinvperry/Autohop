@@ -1,0 +1,47 @@
+Your favourite podcasts. Your order. Always ready to play.
+
+Autohop keeps your listening moving with automatic downloads, a priority-based queue and powerful controls for each show. Enjoy audio and video podcasts, listen offline and spend less time organising what comes next.
+
+SET YOUR PRIORITIES. KEEP LISTENING.
+
+Rank your subscriptions in your preferred order. Your Priority Stack builds Up Next from ready episodes, while Play Next and Play Last let you make exceptions. Download ahead for your commute, a long walk or time away from Wi-Fi.
+
+REPLAY A FAVOURITE. DISCOVER ITS BEGINNING.
+
+Podcast Replay turns a show's available back catalogue into your own listening schedule. Choose a starting episode, then select Daily, Weekdays or Choose Days, with one or more release times. Your Download Feed Filters and Episode Limit still apply.
+
+Prefer to binge? Binge Mode prepares one upcoming episode when you start listening. It keeps your existing queue priorities and doesn't download the entire backlog. Replay uses episodes available in the publisher's feed; it doesn't unlock removed or paid content. Background preparation depends on iOS and network availability.
+
+DISCOVER MORE. FIND FAVOURITES FASTER.
+
+Explore rotating Top 8 Episodes and Top 100 shows in Discover categories. Search podcasts, episodes and publishers, or filter your own subscriptions as you type. Follow a public RSS link through the guided Add RSS Feed preview, then subscribe.
+
+AUTOMATION THAT WORKS YOUR WAY
+
+• Release Radar learns each show's publishing rhythm.
+• Auto Archive manages played and inactive downloads.
+• Play Instant can start an important new episode and return to your interrupted episode, protecting its final two minutes.
+• Download Feed Filters check episode titles, descriptions, duration and type before automatic downloads, with clear rule summaries and previews.
+• Per-show download, notification and playback settings keep you in control.
+
+MAKE EVERY SHOW SOUND RIGHT
+
+Choose playback speed, Trim Silence, Vocal Boost, Volume Adjustment, Mono Audio and custom start/end skips. Shared Listening temporarily applies a shared speed and turns off Trim Silence, then restores your personal settings. Trim Silence is available for audio episodes. Watch video fullscreen and navigate or skip publisher-provided chapters.
+
+FALL ASLEEP WITHOUT LOSING YOUR PLACE
+
+Sleep Schedule checks whether you're still listening during your chosen hours. A chime plays while listening continues; if you don't respond, playback fades out and returns to your last confirmed point. A separate Sleep Timer is available whenever you need it.
+
+AT HOME, ON THE GO, IN THE CAR
+
+Responsive layouts support iPhone, iPad and compatible Apple-silicon Macs using the Designed-for-iPad app. Mac menus and keyboard shortcuts make playback and navigation easier. Now Playing & Up Next widgets keep listening close on iPhone and iPad. CarPlay provides audio-first access to playback, downloaded episodes and subscriptions.
+
+SEE YOUR LISTENING STORY
+
+Explore listening time, top shows, streaks, heatmaps, completed episodes and time saved. Optional listening recaps bring the highlights together. Export Stats as CSV or JSON and inspect Stats Health and historical coverage.
+
+YOUR LIBRARY, YOUR CHOICE
+
+Import or export subscriptions with OPML. No Autohop account, advertising SDKs or behavioural analytics. Optional private iCloud Sync carries your library and supported listening state between your devices. Replay schedules use one scheduling device; use compatible updated apps on participating devices.
+
+Podcast episodes may contain advertisements or sponsorships supplied by their publishers. Autohop is open source under the MIT License, with identified audio-engine components under the Mozilla Public License 2.0.

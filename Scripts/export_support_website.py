@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AI CONTEXT: Export SupportContent to website HTML; never deploy.
 Swift evaluates the real guide model with a display-only Color shim. Keep every
-SupportBlock case covered. Website release notices remain explicit until 1.7 ships.
+SupportBlock case covered. Website release notices remain explicit until 1.6.2 ships.
 Usage: python3 Scripts/export_support_website.py /path/to/kevmarl-site
 """
 import html, json, re, subprocess, sys, tempfile
@@ -53,7 +53,7 @@ start=page.find('<nav aria-label="Guide topics">')
 if start < 0: start=page.index('    <section class="doc-section" id="getting-started">')
 end=page.index('  </main>',start)
 body='''    <!-- GENERATED from Autohop/Views/SupportContent.swift. Run export_support_website.py. -->
-    <aside class="callout"><strong>Version coverage:</strong> This guide includes the released iOS-family 1.6.1 app and clearly labelled previews of Version 1.7, which is not yet released. Version 1.7 instructions and Play Instant’s two-minute protection apply to that upcoming build. Earlier layouts and button labels may differ. Apple TV releases separately.</aside>
+    <aside class="callout"><strong>Version coverage:</strong> This guide includes the released iOS-family 1.6.1 app and clearly labelled previews of Version 1.6.2, which is not yet released. Version 1.6.2 instructions and Play Instant’s two-minute protection apply to that upcoming build. Earlier layouts and button labels may differ. Apple TV releases separately.</aside>
 '''
 body+='\n'.join('    <section class="doc-section" id="'+s['id']+'"><h2>'+text(s['title'])+'</h2>\n'+'\n'.join(render(b) for b in s['blocks'])+'\n</section>' for s in sections)
 # Preserve existing navigation IDs; add new topics to the main content index.
