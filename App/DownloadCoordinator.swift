@@ -644,6 +644,20 @@ final class DownloadCoordinator: ObservableObject {
                 let lookupMs =
                     (CFAbsoluteTimeGetCurrent() - lookupStartedAt) * 1_000
 
+                if DownloadDeliveryReceipt.read(for: localFileURL)?.method == "luxembourg",
+                   resolvedDuration == nil {
+                    try? FileManager.default.removeItem(at: localFileURL)
+                    try? FileManager.default.removeItem(at: DownloadDeliveryReceipt.url(for: localFileURL))
+                    subscriptionStore.markEpisodeDownloadFailed(subscriptionID: subscriptionID, episodeID: episodeID)
+                    self.progressModel.progress.removeValue(forKey: episodeID)
+                    if let episode = subscriptionStore.episode(subscriptionID: subscriptionID, episodeID: episodeID),
+                       let show = subscriptionStore.subscription(id: subscriptionID) {
+                        self.activityStore.fail(episode: episode, podcastTitle: show.title,
+                            error: RelayDownloadError.unavailable.localizedDescription)
+                    }
+                    return
+                }
+
                 let storeStartedAt = CFAbsoluteTimeGetCurrent()
                 subscriptionStore.beginChangeNotificationCoalescing()
                 subscriptionStore.markEpisodeDownloaded(

@@ -476,6 +476,11 @@ struct SettingsView: View {
                 rowLabel("Downloads", systemImage: "arrow.down.circle")
             }
             .id(SettingsShortcut.downloads)
+            NavigationLink {
+                AdReductionSettingsView()
+            } label: {
+                rowLabel("Reduce inserted ads", systemImage: "waveform.badge.minus")
+            }
             Toggle(isOn: wifiBinding) {
                 rowLabel("Download over WiFi", systemImage: "wifi")
             }

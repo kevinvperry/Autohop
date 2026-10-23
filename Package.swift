@@ -71,6 +71,7 @@ let package = Package(
                 "Playback",
                 "README.md",
                 "Scripts",
+                "Relay",
                 "Settings",
                 "SmokeTests",
                 "SubscriptionStoreSmokeTests",
@@ -85,6 +86,7 @@ let package = Package(
                 "Models/PodcastReplay.swift",
                 "Models/Episode.swift",
                 "Models/AppSettings.swift",
+                "Models/AdReductionSettings.swift",
                 "Models/ListeningHistory.swift",
                 "Models/Synced.swift",
                 "Models/SyncState.swift",
@@ -133,6 +135,7 @@ let package = Package(
                 "PlaybackCore/StreamingPlaybackEngine.swift",
                 "Logging/AppLogger.swift",
                 "Downloads/DownloadManager.swift",
+                "Downloads/DownloadDelivery.swift",
                 "Downloads/DownloadRecoveryPolicy.swift"
             ]
         ),

@@ -523,7 +523,7 @@ enum SupportGuide {
             ]),
             .heading("What stays on each device"),
             .paragraph("**Downloaded episode files** stay on each device. Each device fetches its own media using its network settings, which may use mobile data. Global app settings, such as your starting screen, also stay local."),
-            .callout(.note, "**Private by design:** Sync uses your own **private iCloud** (Apple's CloudKit). Your listening is stored in your personal iCloud account — Autohop has no server and the developer can never see your data. There's no separate account to create and no login beyond the iCloud you already use."),
+            .callout(.note, "**Private by design:** Sync uses your own **private iCloud** (Apple's CloudKit). Your listening is stored in your personal iCloud account — Autohop does not operate a listening-data sync server. The optional Luxembourg download relay is separate: if enabled for selected public shows, its operator receives episode URLs and your connection IP. There's no separate account to create and no login beyond the iCloud you already use."),
             .callout(.tip, "**Two devices at once?** Sync is asynchronous. Avoid playing the same episode simultaneously on multiple devices; pause and allow time for sync before switching devices."),
         ]
     )
@@ -630,6 +630,7 @@ enum SupportGuide {
             .heading("Downloading"),
             .table(headers: nil, rows: [
                 ["Downloads", "Navigate to the Downloads page showing active, completed, and recently archived episodes."],
+                ["Reduce inserted ads", "Experimental and off by default. Requires a configured Luxembourg relay and access token, stored in this device’s Keychain. Select only public shows; private and paid feeds must remain unselected. The relay receives episode URLs and your connection IP. Some ads will remain. Applies to future downloads; existing files are unchanged. Relay failures offer Retry and Download normally, with no silent fallback. Completed files identify relay delivery, not verified ad removal."],
                 ["Download over WiFi", "Allow downloads on Wi-Fi networks. On by default."],
                 ["Download over cellular", "Allow downloads over mobile data. On by default — turn off to restrict downloads to Wi-Fi or manual control."],
             ]),

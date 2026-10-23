@@ -228,6 +228,8 @@ private struct ArchivedEpisodeRow: View {
 private struct DownloadActivityRow: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @EnvironmentObject private var settings: SettingsViewModel
+    @State private var confirmReplacement = false
     @Environment(\.adaptiveViewportWidth) private var viewportWidth
     let activity: DownloadActivity
 
@@ -307,9 +309,40 @@ private struct DownloadActivityRow: View {
                     controls
                 }
                 .padding(.leading, artworkSize + metrics.rowSpacing)
+                if relaySelected {
+                    Button("Download normally") {
+                        settings.appSettings.adReduction.normalDownloadEpisodeIDs.insert(activity.episodeID)
+                        Task { await appState.resumeDownload(activity) }
+                    }
+                    .font(.footnote)
+                    .padding(.leading, artworkSize + metrics.rowSpacing)
+                }
             }
         }
         .padding(.vertical, metrics.verticalPadding)
+        .contextMenu {
+            if activity.status == .completed, relaySelected, episode?.mediaKind == .audio {
+                Button("Download again with ad reduction") { confirmReplacement = true }
+            }
+            if activity.status == .failed, relaySelected {
+                Button("Download normally") {
+                    settings.appSettings.adReduction.normalDownloadEpisodeIDs.insert(activity.episodeID)
+                    Task { await appState.resumeDownload(activity) }
+                }
+            }
+        }
+        .confirmationDialog("Replace this download?", isPresented: $confirmReplacement, titleVisibility: .visible) {
+            Button("Replace and download with ad reduction") {
+                if let episode { Task { await appState.redownloadWithAdReduction(episode) } }
+            }
+        } message: {
+            Text("The current file will be removed and playback stopped. Playback position will reset because different ads can change the timeline. Some ads may remain.")
+        }
+    }
+
+    private var relaySelected: Bool {
+        settings.appSettings.adReduction.enabled
+            && settings.appSettings.adReduction.publicSubscriptionIDs.contains(activity.subscriptionID)
     }
 
     private var placeholderArtwork: some View {
@@ -445,7 +478,9 @@ private struct DownloadActivityRow: View {
     private var metadataText: String {
         let date = relativePublishedLabel(activity.updatedAt)
         let size = byteText(activity.expectedBytes)
-        return "\(size) • \(date)"
+        let delivery = episode?.localFileURL.flatMap { DownloadDeliveryReceipt.read(for: $0) }
+        let suffix = delivery?.method == "luxembourg" ? " • Via Luxembourg relay" : ""
+        return "\(size) • \(date)\(suffix)"
     }
 
     private var progressText: String {

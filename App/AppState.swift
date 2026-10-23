@@ -773,6 +773,17 @@ final class AppState: ObservableObject {
         await downloadActionsWorkflow.downloadEpisodeForCarPlayAction(episode)
     }
 
+    func redownloadWithAdReduction(_ episode: Episode) async {
+        guard settingsStore.appSettings.adReduction.enabled,
+              settingsStore.appSettings.adReduction.publicSubscriptionIDs.contains(episode.subscriptionID),
+              episode.mediaKind == .audio else { return }
+        settingsStore.appSettings.adReduction.normalDownloadEpisodeIDs.remove(episode.id)
+        await downloadActionsWorkflow.deleteDownloadedEpisode(episode)
+        playbackPositionStore.clear(for: episode)
+        downloadManager.clearResumeData(episodeID: episode.id)
+        await downloadActionsWorkflow.downloadEpisodeForQueue(episode)
+    }
+
     func deleteDownloadedEpisode(_ episode: Episode) async {
         await downloadActionsWorkflow.deleteDownloadedEpisode(episode)
     }

@@ -73,6 +73,8 @@ public protocol DownloadManaging: AnyObject {
         allowsCellular: Bool,
         executionMode: DownloadExecutionMode
     ) async throws -> URL
+    func download(_ episode: Episode, allowsCellular: Bool,
+                  executionMode: DownloadExecutionMode, delivery: DownloadDelivery) async throws -> URL
     func pauseDownload(episodeID: UUID)
     func cancelDownload(episodeID: UUID)
     /// Discards any stored resume data for the episode so the next download call starts fresh.
@@ -95,6 +97,12 @@ public protocol DownloadManaging: AnyObject {
 }
 
 public extension DownloadManaging {
+    func download(_ episode: Episode, allowsCellular: Bool,
+                  executionMode: DownloadExecutionMode, delivery: DownloadDelivery) async throws -> URL {
+        guard !delivery.isRelay else { throw RelayDownloadError.unsupported }
+        return try await download(episode, allowsCellular: allowsCellular, executionMode: executionMode)
+    }
+
     func download(
         _ episode: Episode,
         allowsCellular: Bool,
@@ -125,6 +133,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // (re-publishes, shared trailers) don't clobber each other's entry on insert
     // or over-remove on completion (B6). Almost always holds exactly one ID.
     private var taskIDByMediaURL: [URL: Set<Int>] = [:]
+    private var relayEpisodeIDs = Set<UUID>()
     private var resumeDataByEpisodeID: [UUID: Data] = [:]
     private var mediaURLByEpisodeID: [UUID: URL] = [:]
     private var lastLoggedProgressBucketByEpisodeID: [UUID: Int] = [:]
@@ -209,7 +218,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         activeConfig.allowsExpensiveNetworkAccess = true
         activeConfig.allowsConstrainedNetworkAccess = true
         PodcastUserAgent.configure(activeConfig)
-        activeRuntimeSession = URLSession(configuration: activeConfig)
+        activeRuntimeSession = URLSession(configuration: activeConfig, delegate: RelayRedirectGuard(), delegateQueue: nil)
         rebuildTaskMapsFromLiveSession()
         startDownloadWatchdog()
     }
@@ -223,6 +232,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                 guard let self else { return }
                 for task in tasks {
                     guard let meta = self.decodeTaskMeta(task.taskDescription) else { continue }
+                    if meta.relay == true { self.relayEpisodeIDs.insert(meta.episodeID) }
                     self.episodeIDByTask[task.taskIdentifier] = meta.episodeID
                     self.taskIDByEpisodeID[meta.episodeID] = task.taskIdentifier
                     self.taskIDByMediaURL[meta.audioURL, default: []].insert(task.taskIdentifier)
@@ -257,6 +267,10 @@ public final class DownloadManager: NSObject, DownloadManaging {
     // MARK: - DownloadManaging
 
     public func download(_ episode: Episode, allowsCellular: Bool) async throws -> URL {
+        try await downloadDurably(episode, allowsCellular: allowsCellular, delivery: .direct)
+    }
+
+    private func downloadDurably(_ episode: Episode, allowsCellular: Bool, delivery: DownloadDelivery) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -268,7 +282,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
                 guard !suspectedTaskIDs.isEmpty else {
                     // No in-memory map entry — safe to start immediately.
-                    self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
+                    self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, delivery: delivery, continuation: continuation)
                     return
                 }
 
@@ -296,7 +310,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
                             for staleTaskID in suspectedTaskIDs {
                                 self.clearZombieMapEntries(taskID: staleTaskID, episodeID: episode.id, audioURL: episode.audioURL)
                             }
-                            self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, continuation: continuation)
+                            self.startDownloadTask(episode: episode, allowsCellular: allowsCellular, delivery: delivery, continuation: continuation)
                         }
                     }
                 }
@@ -304,18 +318,19 @@ public final class DownloadManager: NSObject, DownloadManaging {
         }
     }
 
-    public func download(
-        _ episode: Episode,
-        allowsCellular: Bool,
-        executionMode: DownloadExecutionMode
-    ) async throws -> URL {
+    public func download(_ episode: Episode, allowsCellular: Bool,
+                         executionMode: DownloadExecutionMode) async throws -> URL {
+        try await download(episode, allowsCellular: allowsCellular, executionMode: executionMode, delivery: .direct)
+    }
+
+    public func download(_ episode: Episode, allowsCellular: Bool,
+                         executionMode: DownloadExecutionMode, delivery: DownloadDelivery) async throws -> URL {
+        // Never resume an upstream DAI representation through a new relay fetch.
+        if delivery.isRelay { clearResumeData(episodeID: episode.id) }
         guard executionMode == .activeRuntimeFallback else {
-            return try await download(episode, allowsCellular: allowsCellular)
+            return try await downloadDurably(episode, allowsCellular: allowsCellular, delivery: delivery)
         }
-        return try await downloadUsingActiveRuntimeSession(
-            episode,
-            allowsCellular: allowsCellular
-        )
+        return try await downloadUsingActiveRuntimeSession(episode, allowsCellular: allowsCellular, delivery: delivery)
     }
 
     /// Recovery-only transfer path. It deliberately is not durable across process
@@ -324,7 +339,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
     /// background-session first-byte failure pattern measured in Log 23.
     private func downloadUsingActiveRuntimeSession(
         _ episode: Episode,
-        allowsCellular: Bool
+        allowsCellular: Bool,
+        delivery: DownloadDelivery
     ) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async { [weak self] in
@@ -338,8 +354,10 @@ public final class DownloadManager: NSObject, DownloadManaging {
                     return
                 }
 
-                var request = URLRequest(url: episode.audioURL)
-                PodcastUserAgent.identify(&request)
+                let baseRequest: URLRequest
+                do { baseRequest = try delivery.request(for: episode.audioURL) }
+                catch { continuation.resume(throwing: error); return }
+                var request = baseRequest
                 request.allowsCellularAccess = allowsCellular
                 request.timeoutInterval = 90
                 request.networkServiceType = episode.mediaKind == .video
@@ -353,6 +371,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
                         // Intentional pause/cancel sets are main-queue-owned and
                         // are classified below after returning to that queue.
                         result = .failure(error)
+                    } else if delivery.isRelay && !DownloadDelivery.validateRelayResponse(response, requestURL: baseRequest.url) {
+                        result = .failure(RelayDownloadError.unavailable)
                     } else if let status = Self.rejectableHTTPStatus(of: response) {
                         result = .failure(DownloadError.httpStatus(status))
                     } else if let mime = Self.rejectableMIMEType(of: response) {
@@ -363,21 +383,21 @@ public final class DownloadManager: NSObject, DownloadManaging {
                                 forKeys: [.fileSizeKey]
                             )
                             let bytes = Int64(values.fileSize ?? 0)
-                            guard !Self.isImplausiblySmallDownload(
+                            guard !(delivery.isRelay && (response?.expectedContentLength ?? -1) > 0
+                                && bytes != response?.expectedContentLength),
+                                !Self.isImplausiblySmallDownload(
                                 actualBytes: bytes,
-                                expectedBytes: episode.fileSizeBytes
+                                expectedBytes: delivery.isRelay ? nil : episode.fileSizeBytes
                             ) else {
                                 throw DownloadError.incompleteDownload(
                                     actualBytes: bytes,
                                     expectedBytes: episode.fileSizeBytes
                                 )
                             }
-                            result = .success(
-                                try self.storeDownloadedFile(
-                                    from: temporaryURL,
-                                    episode: episode
-                                )
-                            )
+                            let file = try self.storeDownloadedFile(from: temporaryURL, episode: episode)
+                            do { try DownloadDeliveryReceipt.write(for: file, relay: delivery.isRelay) }
+                            catch { try? self.fileManager.removeItem(at: file); throw error }
+                            result = .success(file)
                         } catch {
                             result = .failure(error)
                         }
@@ -442,19 +462,21 @@ public final class DownloadManager: NSObject, DownloadManaging {
         }
     }
 
-    private func startDownloadTask(episode: Episode, allowsCellular: Bool, continuation: CheckedContinuation<URL, Error>) {
+    private func startDownloadTask(episode: Episode, allowsCellular: Bool, delivery: DownloadDelivery, continuation: CheckedContinuation<URL, Error>) {
         let startedAt = Date()
         let firstByteThreshold = effectiveFirstByteWaitThreshold
+        let requestPlan: URLRequest
+        do { requestPlan = try delivery.request(for: episode.audioURL) }
+        catch { continuation.resume(throwing: error); return }
         let task: URLSessionDownloadTask
-        if let resumeData = takeResumeData(for: episode.id) {
+        if !delivery.isRelay, let resumeData = takeResumeData(for: episode.id) {
             task = session.downloadTask(withResumeData: resumeData)
             logger.info("download.taskResumeData", "Resuming download from stored resume data", metadata: [
                 "episode": episode.title,
                 "episodeID": episode.id.uuidString
             ])
         } else {
-            var request = URLRequest(url: episode.audioURL)
-            PodcastUserAgent.identify(&request)
+            var request = requestPlan
             request.allowsCellularAccess = allowsCellular
             request.networkServiceType = episode.mediaKind == .video ? .video : .responsiveData
             task = session.downloadTask(with: request)
@@ -463,9 +485,12 @@ public final class DownloadManager: NSObject, DownloadManaging {
             episodeID: episode.id,
             subscriptionID: episode.subscriptionID,
             audioURL: episode.audioURL,
-            expectedBytes: episode.fileSizeBytes,
-            startedAt: startedAt
+            expectedBytes: delivery.isRelay ? nil : episode.fileSizeBytes,
+            startedAt: startedAt,
+            relay: delivery.isRelay
         )
+        if delivery.isRelay { relayEpisodeIDs.insert(episode.id) }
+        else { relayEpisodeIDs.remove(episode.id) }
         continuations[task.taskIdentifier] = continuation
         episodeIDByTask[task.taskIdentifier] = episode.id
         taskIDByEpisodeID[episode.id] = task.taskIdentifier
@@ -619,6 +644,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
 
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
+            try? fileManager.removeItem(at: DownloadDeliveryReceipt.url(for: destination))
         }
         do {
             try fileManager.moveItem(at: sourceURL, to: destination)
@@ -661,6 +687,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
             return
         }
         try fileManager.removeItem(at: url)
+        try? fileManager.removeItem(at: DownloadDeliveryReceipt.url(for: url))
         logger.info("download.deleteLocalFile", "Local file deleted", metadata: [
             "episode": episode.title,
             "file": url.lastPathComponent
@@ -719,6 +746,7 @@ public final class DownloadManager: NSObject, DownloadManaging {
         /// Optional for backward compatibility with task descriptions written by
         /// builds before absolute watchdog deadlines were persisted.
         var startedAt: Date?
+        var relay: Bool?
     }
 
     private func encodeTaskMeta(
@@ -726,7 +754,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
         subscriptionID: UUID,
         audioURL: URL,
         expectedBytes: Int64?,
-        startedAt: Date
+        startedAt: Date,
+        relay: Bool = false
     ) -> String? {
         guard let data = try? JSONEncoder().encode(
             TaskMeta(
@@ -734,7 +763,8 @@ public final class DownloadManager: NSObject, DownloadManaging {
                 subscriptionID: subscriptionID,
                 audioURL: audioURL,
                 expectedBytes: expectedBytes,
-                startedAt: startedAt
+                startedAt: startedAt,
+                relay: relay
             )
         ) else { return nil }
         return String(data: data, encoding: .utf8)
@@ -832,6 +862,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
             ?? downloadTask.currentRequest?.url
             ?? URL(string: "https://placeholder.invalid")!
 
+        if meta?.relay == true && !DownloadDelivery.validateRelayResponse(downloadTask.response, requestURL: downloadTask.originalRequest?.url) {
+            try? fileManager.removeItem(at: location)
+            let taskID = downloadTask.taskIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearTaskTracking(taskID: taskID)
+                self.continuations.removeValue(forKey: taskID)?.resume(throwing: RelayDownloadError.unavailable)
+            }
+            return
+        }
+
         // Validate the HTTP response before storing anything. A background download task still
         // delivers a body to didFinishDownloadingTo on 4xx/5xx (an HTML error/login/captive-portal
         // page), which must never be stored as episode media and marked downloaded.
@@ -874,7 +915,9 @@ extension DownloadManager: URLSessionDownloadDelegate {
         // Reject implausibly small bodies — a 200 response can still deliver a tiny error/placeholder
         // body (e.g. 17 bytes where the feed declared ~30 MB) that must not be stored as media.
         let actualBytes = ((try? fileManager.attributesOfItem(atPath: location.path))?[.size] as? NSNumber)?.int64Value ?? 0
-        if Self.isImplausiblySmallDownload(actualBytes: actualBytes, expectedBytes: meta?.expectedBytes) {
+        if (meta?.relay == true && (downloadTask.response?.expectedContentLength ?? -1) > 0
+            && actualBytes != downloadTask.response?.expectedContentLength)
+            || Self.isImplausiblySmallDownload(actualBytes: actualBytes, expectedBytes: meta?.expectedBytes) {
             try? fileManager.removeItem(at: location)
             let taskID = downloadTask.taskIdentifier
             let expected = meta?.expectedBytes
@@ -902,7 +945,12 @@ extension DownloadManager: URLSessionDownloadDelegate {
         )
 
         // Move the file synchronously — location is only valid for the duration of this method.
-        let moveResult = Result { try storeDownloadedFile(from: location, episode: placeholder) }
+        let moveResult = Result {
+            let file = try storeDownloadedFile(from: location, episode: placeholder)
+            do { try DownloadDeliveryReceipt.write(for: file, relay: meta?.relay == true) }
+            catch { try? fileManager.removeItem(at: file); throw error }
+            return file
+        }
 
         let taskID = downloadTask.taskIdentifier
         DispatchQueue.main.async { [weak self] in
@@ -1529,6 +1577,9 @@ extension DownloadManager {
     }
 
     private func storeResumeData(_ data: Data, for episodeID: UUID) {
+        // Relay tasks are deliberately restart-only. URLSession resume data may contain
+        // a partial representation and credentials; do not persist it.
+        if relayEpisodeIDs.contains(episodeID) { return }
         resumeDataByEpisodeID[episodeID] = data
         guard let directory = resumeDataDirectory,
               let url = resumeDataURL(for: episodeID) else { return }
@@ -1592,5 +1643,23 @@ extension DownloadManager {
                 "taskID": "\(task.taskIdentifier)"
             ])
         }
+    }
+}
+
+private final class RelayRedirectGuard: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(task.originalRequest?.value(forHTTPHeaderField: "X-Autohop-Source") == nil ? request : nil)
+    }
+}
+
+extension DownloadManager {
+    public func urlSession(_ session: URLSession, task: URLSessionTask,
+                           willPerformHTTPRedirection response: HTTPURLResponse,
+                           newRequest request: URLRequest,
+                           completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(task.originalRequest?.value(forHTTPHeaderField: "X-Autohop-Source") == nil ? request : nil)
     }
 }

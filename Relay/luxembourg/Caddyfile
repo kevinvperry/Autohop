@@ -1,0 +1,8 @@
+{$RELAY_HOST} {
+    # Access logging intentionally disabled: never log tokens or source headers.
+    reverse_proxy relay:8080 {
+        header_up -Forwarded
+        header_up -X-Forwarded-For
+        header_up -X-Real-IP
+    }
+}

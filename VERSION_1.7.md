@@ -400,3 +400,7 @@ Selected App Store Connect distribution with Xcode's recommended settings. Xcode
 completed the upload and changed the archive status from “Validation succeeded”
 to “Uploaded to Apple” at 7:51 pm. App Store Connect processing, build selection,
 metadata entry and Add for Review remain outstanding.
+
+## Experimental Luxembourg ad reduction (2026-10-24)
+
+Implemented optional public-audio relay routing, local setup/consent and Keychain credentials, explicit direct fallback, file delivery receipts, replacement confirmation/reset and a deployable Node relay with TLS deployment configuration and SSRF/limit controls. New and existing users remain opted out. No Luxembourg infrastructure was available during implementation; no production endpoint, geographic verification or ad-reduction result is claimed. Deployment/runbook: Relay/luxembourg/README.md. App Store version/build remain unchanged.

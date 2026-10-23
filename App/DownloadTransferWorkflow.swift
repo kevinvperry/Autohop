@@ -266,15 +266,32 @@ final class DownloadTransferWorkflow {
         BackgroundWakeMonitor.shared.recordDownloadSubmitted()
 
         do {
+            let options = settingsStore.appSettings.adReduction
+            let feedURL = subscriptionStore.subscription(id: subscriptionID)?.feedURL
+            let useRelay = options.enabled && episode.mediaKind == .audio
+                && feedURL?.user == nil && feedURL?.password == nil
+                && options.publicSubscriptionIDs.contains(subscriptionID)
+                && !options.normalDownloadEpisodeIDs.contains(episode.id)
+            let delivery: DownloadDelivery
+            if useRelay {
+                guard let endpoint = URL(string: options.endpoint),
+                      let token = RelayCredentialStore.read() else { throw RelayDownloadError.notConfigured }
+                delivery = .luxembourg(endpoint: endpoint, token: token)
+            } else { delivery = .direct }
             let localFileURL = try await downloadManager.download(
                 episode,
                 allowsCellular: settingsStore.appSettings.downloadOverCellular,
                 executionMode: activeRuntimeFallback
-                    ? .activeRuntimeFallback : .durableBackground
+                    ? .activeRuntimeFallback : .durableBackground,
+                delivery: delivery
             )
             let duration = await mediaWorkflow.localDuration(
                 from: localFileURL
             )
+            if delivery.isRelay && duration == nil {
+                try? await downloadManager.deleteLocalFile(for: episode)
+                throw RelayDownloadError.unavailable
+            }
             let downloadedBytes = await localFileByteCount(
                 at: localFileURL,
                 fallback: episode.fileSizeBytes ?? 0
@@ -594,7 +611,7 @@ final class DownloadTransferWorkflow {
         coordinator.activityStore.fail(
             episode: episode,
             podcastTitle: podcastTitle,
-            error: String(describing: error)
+            error: error.localizedDescription
         )
         logger.error("download.failed", "Episode download failed", metadata: [
             "episode": episode.title,

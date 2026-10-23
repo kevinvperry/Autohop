@@ -1878,3 +1878,7 @@ The persistent mini-player's continuous purple glass background reaches below th
 progress strip to the bottom safe-area edge, without a separate material-only band. Shared
 controls and layout are preserved. Page/sheet screenshots were verified on iOS 27
 and iOS 26.5 simulators; see [the audit](Docs/MINI_PLAYER_AUDIT_2026-09-06.md).
+
+### Experimental regional ad reduction
+
+App Settings → Downloading → Reduce inserted ads configures a Luxembourg audio-download relay. Off by default for new and existing users. The access token remains in this device's Keychain; the endpoint and explicit public-show selections are local settings. Video, unselected shows and enclosures/feed URLs with embedded credentials stay on the normal path. Private tokenised feeds cannot be reliably identified automatically and must remain unselected. Audio is streamed unchanged through the relay; this is regional ad reduction, not guaranteed ad removal. Relay transfers restart rather than resume a potentially changed DAI representation. Failure never silently switches to direct delivery. Delivery receipts identify completed files. Explicit replacement resets playback position. Live hosting and regional efficacy are not yet validated; see Relay/luxembourg/README.md.

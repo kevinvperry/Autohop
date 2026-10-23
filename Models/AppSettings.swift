@@ -52,6 +52,7 @@ enum LaunchScreen: String, Codable, CaseIterable, Identifiable, Sendable {
 // install is treated as a new user, and existing installs decode them as false
 // too (they will be reconciled on first launch by AppState).
 struct AppSettings: Equatable, Codable {
+    var adReduction = AdReductionSettings()
     var podcastPollMinutes: Int
     var downloadOverWifi: Bool
     var downloadOverCellular: Bool
@@ -154,6 +155,7 @@ struct AppSettings: Equatable, Codable {
     )
 
     private enum CodingKeys: String, CodingKey {
+        case adReduction
         case podcastPollMinutes
         case downloadOverWifi
         case downloadOverCellular
@@ -267,6 +269,7 @@ struct AppSettings: Equatable, Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        adReduction = try container.decodeIfPresent(AdReductionSettings.self, forKey: .adReduction) ?? AdReductionSettings()
         podcastPollMinutes = try container.decodeIfPresent(Int.self, forKey: .podcastPollMinutes) ?? Self.default.podcastPollMinutes
         downloadOverWifi = try container.decodeIfPresent(Bool.self, forKey: .downloadOverWifi) ?? Self.default.downloadOverWifi
         downloadOverCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular) ?? Self.default.downloadOverCellular

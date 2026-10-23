@@ -829,3 +829,7 @@ rejections use bounded change-driven diagnostics. Stats download checkpoints
 await serial off-main file persistence; lifecycle checkpoints share its write
 ordering and SQLite flush policy is unchanged. See
 [repair record](Docs/DIAGNOSTIC_REPAIRS_2026-09-20.md).
+
+### Luxembourg relay consent
+
+`AppSettings.adReduction` is device-local, including enabled state, endpoint, explicitly confirmed public subscription IDs and per-episode normal-download choices. It is not synced by CloudKit. Access tokens are stored with `AfterFirstUnlockThisDeviceOnly` Keychain accessibility, outside JSON and exports. `.delivery.json` receipts live beside local media and are deleted with it. No audio is shared through sync and no relay credentials are added to episode identity or sharing URLs. Optional relay use discloses the requested episode URL and connection IP to its operator; it does not change private-iCloud sync.
